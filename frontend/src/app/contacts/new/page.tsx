@@ -111,15 +111,11 @@ export default function AddContactPage() {
       }
 
       const details = result?.details ?? {};
-      const nextName = formData.name?.trim() || details.name || '';
-      const nextEmail = formData.email?.trim() || details.email || '';
-      const nextNotes = formData.notes?.trim() || (details.company ? `Cliente validado: ${details.company}` : '');
-
       setFormData(prev => ({
         ...prev,
-        name: nextName,
-        email: nextEmail,
-        notes: nextNotes,
+        name: details.name || prev.name || '',
+        email: details.email || prev.email || '',
+        notes: details.company ? `Cliente validado: ${details.company}` : prev.notes || '',
       }));
 
       setDocumentMessage(result?.message || 'Documento válido.');

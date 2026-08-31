@@ -114,16 +114,21 @@ transactionSchema.index({ businessId: 1, customerId: 1 });
 transactionSchema.index({ businessId: 1, vendorId: 1 });
 transactionSchema.index({ invoiceNumber: 1 }, { sparse: true });
 
-// Pre-save middleware to calculate totals
+// Pre-save middleware to calculate totals while preserving explicit currency conversions
 transactionSchema.pre('save', function(next) {
-  // Calculate item totals
   this.products.forEach(item => {
-    item.total = item.quantity * item.price;
+    item.total = Number(item.quantity || 0) * Number(item.price || 0);
   });
-  
-  // Calculate total amount
-  this.totalAmount = this.products.reduce((sum, item) => sum + item.total, 0);
-  
+
+  const computedTotal = this.products.reduce((sum, item) => sum + Number(item.total || 0), 0);
+  const explicitTotal = Number(this.totalAmount);
+
+  if (Number.isFinite(explicitTotal) && explicitTotal > 0) {
+    this.totalAmount = explicitTotal;
+  } else {
+    this.totalAmount = computedTotal;
+  }
+
   next();
 });
 

@@ -171,9 +171,10 @@ export default function TransactionDetailPage({ params }: { params: Promise<{ id
 
   const contact = transaction.customerId || transaction.vendorId;
   const contactAddress = formatAddress(contact?.address);
-  const displayCurrency = transaction.currency || 'PEN';
+  const transactionCurrency = transaction.currency || 'PEN';
   const exchangeRate = transaction.exchangeRate ?? 1;
   const originalAmount = transaction.originalAmount ?? transaction.totalAmount;
+  const quoteCurrency = 'PEN';
 
   return (
     <Layout>
@@ -258,17 +259,17 @@ export default function TransactionDetailPage({ params }: { params: Promise<{ id
                   <p className={`text-3xl font-bold ${
                     transaction.type === 'sale' ? 'text-green-600' : 'text-red-600'
                   }`}>
-                    {formatCurrency(transaction.totalAmount, displayCurrency)}
+                    {formatCurrency(transaction.totalAmount, transactionCurrency)}
                   </p>
                 </div>
-
+ 
                 {transaction.originalAmount !== undefined && (
                   <div className="rounded-lg border bg-muted/30 p-3 text-left">
                     <div className="text-xs uppercase tracking-wide text-muted-foreground">Original Amount</div>
-                    <div className="mt-1 font-medium">{formatCurrency(originalAmount, displayCurrency)}</div>
+                    <div className="mt-1 font-medium">{formatCurrency(originalAmount, transactionCurrency)}</div>
                     {transaction.exchangeRate && (
                       <div className="mt-2 text-xs text-muted-foreground">
-                        Exchange rate: 1 USD = {exchangeRate.toFixed(4)} {displayCurrency}
+                        Exchange rate: 1 {transactionCurrency} = {exchangeRate.toFixed(4)} {quoteCurrency}
                       </div>
                     )}
                   </div>
@@ -341,9 +342,9 @@ export default function TransactionDetailPage({ params }: { params: Promise<{ id
                     <TableCell>{item.productId?.sku || 'N/A'}</TableCell>
                     <TableCell>{item.productId?.category || 'N/A'}</TableCell>
                     <TableCell className="text-right">{item.quantity}</TableCell>
-                    <TableCell className="text-right">${item.price.toFixed(2)}</TableCell>
+                    <TableCell className="text-right">{formatCurrency(item.price, transactionCurrency)}</TableCell>
                     <TableCell className="text-right font-medium">
-                      ${item.total.toFixed(2)}
+                      {formatCurrency(item.total, transactionCurrency)}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -358,7 +359,7 @@ export default function TransactionDetailPage({ params }: { params: Promise<{ id
                   <p className={`text-xl font-bold ${
                     transaction.type === 'sale' ? 'text-green-600' : 'text-red-600'
                   }`}>
-                    ${transaction.totalAmount.toLocaleString()}
+                    {formatCurrency(transaction.totalAmount, transactionCurrency)}
                   </p>
                 </div>
               </div>

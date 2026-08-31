@@ -156,9 +156,9 @@ export default function EditContactPage() {
       const details = result?.details ?? {};
       setFormData(prev => ({
         ...prev,
-        name: prev.name?.trim() || details.name || prev.name,
-        email: prev.email?.trim() || details.email || prev.email,
-        notes: prev.notes?.trim() || (details.company ? `Cliente validado: ${details.company}` : prev.notes || ''),
+        name: details.name || prev.name || '',
+        email: details.email || prev.email || '',
+        notes: details.company ? `Cliente validado: ${details.company}` : prev.notes || '',
       }));
 
       setDocumentMessage(result?.message || 'Documento válido.');
