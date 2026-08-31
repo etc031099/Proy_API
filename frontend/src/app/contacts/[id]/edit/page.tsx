@@ -24,13 +24,17 @@ export default function EditContactPage() {
   
   const [loading, setLoading] = useState(false);
   const [loadingContact, setLoadingContact] = useState(true);
+  const [documentLoading, setDocumentLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [documentMessage, setDocumentMessage] = useState('');
   const [contact, setContact] = useState<Contact | null>(null);
 
   const [formData, setFormData] = useState<CreateContactData>({
     name: '',
     phone: '',
+    documentType: 'dni',
+    documentNumber: '',
     email: '',
     address: {
       street: '',
@@ -59,6 +63,8 @@ export default function EditContactPage() {
         setFormData({
           name: contactData.name,
           phone: contactData.phone,
+          documentType: contactData.documentType || 'dni',
+          documentNumber: contactData.documentNumber || '',
           email: contactData.email || '',
           address: contactData.address || {
             street: '',
@@ -107,6 +113,63 @@ export default function EditContactPage() {
     }));
   };
 
+  useEffect(() => {
+    const documentNumber = formData.documentNumber?.trim() || '';
+    if (!documentNumber) {
+      return;
+    }
+
+    const expectedLength = (formData.documentType || 'dni') === 'ruc' ? 11 : 8;
+    if (documentNumber.length < expectedLength) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      handleDocumentLookup();
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [formData.documentType, formData.documentNumber]);
+
+  const handleDocumentLookup = async () => {
+    const documentType = formData.documentType || 'dni';
+    const documentNumber = formData.documentNumber?.trim();
+
+    if (!documentNumber) {
+      setDocumentMessage('Ingrese un DNI o RUC para buscar datos.');
+      return;
+    }
+
+    setDocumentLoading(true);
+    setDocumentMessage('');
+    setError('');
+
+    try {
+      const response = await apiClient.validateDocument(documentType, documentNumber);
+      const result = response?.data?.data ?? response?.data ?? response;
+
+      if (!result?.valid) {
+        setDocumentMessage(result?.message || 'No se pudo validar el documento.');
+        return;
+      }
+
+      const details = result?.details ?? {};
+      setFormData(prev => ({
+        ...prev,
+        name: prev.name?.trim() || details.name || prev.name,
+        email: prev.email?.trim() || details.email || prev.email,
+        notes: prev.notes?.trim() || (details.company ? `Cliente validado: ${details.company}` : prev.notes || ''),
+      }));
+
+      setDocumentMessage(result?.message || 'Documento válido.');
+    } catch (err: any) {
+      const apiError = err.response?.data;
+      setDocumentMessage(apiError?.message || 'No se pudieron completar los datos del documento.');
+    } finally {
+      setDocumentLoading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -114,7 +177,23 @@ export default function EditContactPage() {
     setLoading(true);
 
     try {
-      const response = await apiClient.updateContact(contactId, formData);
+      const payload = {
+        ...formData,
+        documentType: formData.documentType?.trim() || undefined,
+        documentNumber: formData.documentNumber?.trim() || undefined,
+        email: formData.email?.trim() || undefined,
+        notes: formData.notes?.trim() || undefined,
+        address: {
+          ...formData.address,
+          street: formData.address?.street?.trim() || undefined,
+          city: formData.address?.city?.trim() || undefined,
+          state: formData.address?.state?.trim() || undefined,
+          zipCode: formData.address?.zipCode?.trim() || undefined,
+          country: formData.address?.country?.trim() || undefined,
+        }
+      };
+
+      const response = await apiClient.updateContact(contactId, payload);
       if (response.success) {
         setSuccess('Contact updated successfully!');
         setTimeout(() => {
@@ -214,6 +293,14 @@ export default function EditContactPage() {
                     </SlideIn>
                   )}
 
+                  {documentMessage && (
+                    <SlideIn direction="down" duration={0.3}>
+                      <Alert className={documentMessage.toLowerCase().includes('válido') || documentMessage.toLowerCase().includes('valid') ? 'border-green-200 bg-green-50 text-green-800' : 'border-blue-200 bg-blue-50 text-blue-800'}>
+                        <AlertDescription>{documentMessage}</AlertDescription>
+                      </Alert>
+                    </SlideIn>
+                  )}
+
                   {/* Basic Information */}
                   <div className="grid gap-6 md:grid-cols-2">
                     <FormFieldAnimation delay={0.2}>
@@ -270,6 +357,50 @@ export default function EditContactPage() {
                     </FormFieldAnimation>
 
                     <FormFieldAnimation delay={0.5}>
+                      <div className="space-y-2">
+                        <Label htmlFor="documentType">Document Type</Label>
+                        <Select
+                          value={formData.documentType || 'dni'}
+                          onValueChange={(value) => setFormData(prev => ({ ...prev, documentType: value as 'dni' | 'ruc' }))}
+                        >
+                          <SelectTrigger className="transition-all duration-300 focus:scale-105">
+                            <SelectValue placeholder="Select type" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="dni">DNI</SelectItem>
+                            <SelectItem value="ruc">RUC</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </FormFieldAnimation>
+
+                    <FormFieldAnimation delay={0.6}>
+                      <div className="space-y-2">
+                        <Label htmlFor="documentNumber">Document Number</Label>
+                        <div className="flex gap-2">
+                          <Input
+                            id="documentNumber"
+                            name="documentNumber"
+                            type="text"
+                            placeholder={formData.documentType === 'ruc' ? '20123456789' : '12345678'}
+                            value={formData.documentNumber || ''}
+                            onChange={handleChange}
+                            className="transition-all duration-300 focus:scale-105"
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={handleDocumentLookup}
+                            disabled={documentLoading}
+                            className="whitespace-nowrap"
+                          >
+                            {documentLoading ? 'Buscando...' : 'Buscar'}
+                          </Button>
+                        </div>
+                      </div>
+                    </FormFieldAnimation>
+
+                    <FormFieldAnimation delay={0.7}>
                       <div className="space-y-2">
                         <Label htmlFor="email">
                           <Mail className="inline h-4 w-4 mr-1" />

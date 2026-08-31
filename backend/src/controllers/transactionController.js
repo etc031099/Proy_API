@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const { Transaction, Product, Contact } = require('../models');
 const { asyncHandler } = require('../middleware/validation');
+const { validatePaymentMethod, getExchangeRate } = require('../services/externalApiService');
 
 /**
  * @desc    Get all transactions with filters
@@ -107,12 +108,19 @@ const getTransaction = asyncHandler(async (req, res) => {
  * @access  Private
  */
 const createTransaction = asyncHandler(async (req, res) => {
-  const { type, customerId, vendorId, products, paymentMethod, notes } = req.body;
+  const { type, customerId, vendorId, products = [], paymentMethod, notes, currency = 'PEN' } = req.body;
   const businessId = req.businessId;
+
+  if (!Array.isArray(products) || products.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'At least one product is required.'
+    });
+  }
 
   // Start a session for transaction
   const session = await mongoose.startSession();
-  
+
   try {
     session.startTransaction();
 
@@ -131,7 +139,7 @@ const createTransaction = asyncHandler(async (req, res) => {
         type: 'customer',
         isActive: true
       }).session(session);
-      
+
       if (!contact) {
         return res.status(404).json({
           success: false,
@@ -151,7 +159,7 @@ const createTransaction = asyncHandler(async (req, res) => {
         type: 'vendor',
         isActive: true
       }).session(session);
-      
+
       if (!contact) {
         return res.status(404).json({
           success: false,
@@ -162,7 +170,7 @@ const createTransaction = asyncHandler(async (req, res) => {
 
     // Validate and process products
     const processedProducts = [];
-    let totalAmount = 0;
+    let subtotal = 0;
 
     for (const item of products) {
       const product = await Product.findOne({
@@ -178,7 +186,6 @@ const createTransaction = asyncHandler(async (req, res) => {
         });
       }
 
-      // For sales, check if enough stock is available
       if (type === 'sale' && product.stock < item.quantity) {
         return res.status(400).json({
           success: false,
@@ -186,7 +193,6 @@ const createTransaction = asyncHandler(async (req, res) => {
         });
       }
 
-      // Update product stock based on transaction type
       if (type === 'sale') {
         product.stock -= item.quantity;
       } else {
@@ -195,16 +201,34 @@ const createTransaction = asyncHandler(async (req, res) => {
 
       await product.save({ session });
 
-      // Calculate item total
-      const itemTotal = item.quantity * item.price;
-      totalAmount += itemTotal;
+      const itemTotal = Number(item.quantity || 0) * Number(item.price || 0);
+      subtotal += itemTotal;
 
       processedProducts.push({
         productId: product._id,
         productName: product.name,
-        quantity: item.quantity,
-        price: item.price,
+        quantity: Number(item.quantity || 0),
+        price: Number(item.price || 0),
         total: itemTotal
+      });
+    }
+
+    const normalizedCurrency = String(currency || 'PEN').toUpperCase();
+    const baseCurrency = ['PEN', 'USD', 'EUR'].includes(normalizedCurrency) ? normalizedCurrency : 'PEN';
+    const exchangeRateResponse = baseCurrency === 'PEN'
+      ? { rate: 1 }
+      : await getExchangeRate({ base: baseCurrency, target: 'PEN' });
+    const resolvedRate = Number(exchangeRateResponse?.rate) || 1;
+    const totalAmount = Number((subtotal * resolvedRate).toFixed(2));
+    const paymentValidation = await validatePaymentMethod({
+      method: paymentMethod || 'cash',
+      amount: totalAmount
+    });
+
+    if (!paymentValidation.valid || !paymentValidation.supported) {
+      return res.status(400).json({
+        success: false,
+        message: paymentValidation.message || 'Payment method is not supported.'
       });
     }
 
@@ -213,12 +237,14 @@ const createTransaction = asyncHandler(async (req, res) => {
       type,
       products: processedProducts,
       totalAmount,
+      originalAmount: Number(subtotal.toFixed(2)),
       businessId,
+      currency: baseCurrency,
+      exchangeRate: resolvedRate,
       paymentMethod: paymentMethod || 'cash',
       notes
     };
 
-    // Add contact information based on transaction type
     if (type === 'sale') {
       transactionData.customerId = customerId;
       transactionData.customerName = contact.name;
@@ -227,19 +253,15 @@ const createTransaction = asyncHandler(async (req, res) => {
       transactionData.vendorName = contact.name;
     }
 
-    // Create transaction
     const transaction = await Transaction.create([transactionData], { session });
 
-    // Update contact balance if needed
-    if (type === 'sale' && paymentMethod === 'credit') {
+    if (type === 'sale' && (paymentMethod || 'cash') === 'credit') {
       contact.currentBalance += totalAmount;
       await contact.save({ session });
     }
 
-    // Commit the transaction
     await session.commitTransaction();
 
-    // Populate the created transaction
     const populatedTransaction = await Transaction.findById(transaction[0]._id)
       .populate('customerId', 'name phone email')
       .populate('vendorId', 'name phone email')
@@ -252,7 +274,6 @@ const createTransaction = asyncHandler(async (req, res) => {
     });
 
   } catch (error) {
-    // Rollback the transaction
     await session.abortTransaction();
     throw error;
   } finally {

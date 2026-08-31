@@ -57,6 +57,23 @@ const transactionSchema = new mongoose.Schema({
     required: [true, 'Total amount is required'],
     min: [0, 'Total amount cannot be negative']
   },
+  currency: {
+    type: String,
+    enum: ['PEN', 'USD', 'EUR'],
+    default: 'PEN',
+    uppercase: true,
+    trim: true
+  },
+  exchangeRate: {
+    type: Number,
+    default: 1,
+    min: [0.0001, 'Exchange rate must be greater than zero']
+  },
+  originalAmount: {
+    type: Number,
+    default: 0,
+    min: [0, 'Original amount cannot be negative']
+  },
   date: {
     type: Date,
     required: [true, 'Transaction date is required'],

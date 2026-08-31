@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Layout } from '@/components/Layout';
 import { Button } from '@/components/ui/button';
@@ -19,10 +19,21 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
+interface AddressValue {
+  street?: string;
+  city?: string;
+  state?: string;
+  zipCode?: string;
+  country?: string;
+}
+
 interface Transaction {
   _id: string;
   type: 'sale' | 'purchase';
   totalAmount: number;
+  originalAmount?: number;
+  currency?: 'PEN' | 'USD' | 'EUR';
+  exchangeRate?: number;
   date: string;
   status: string;
   customerId?: {
@@ -30,14 +41,14 @@ interface Transaction {
     name: string;
     phone: string;
     email: string;
-    address?: string;
+    address?: string | AddressValue;
   };
   vendorId?: {
     _id: string;
     name: string;
     phone: string;
     email: string;
-    address?: string;
+    address?: string | AddressValue;
   };
   products: Array<{
     productId: {
@@ -53,10 +64,13 @@ interface Transaction {
   }>;
   paymentMethod: string;
   notes?: string;
+  invoiceNumber?: string;
 }
 
-export default function TransactionDetailPage({ params }: { params: { id: string } }) {
+export default function TransactionDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const router = useRouter();
+  const resolvedParams = React.use(params);
+  const transactionId = resolvedParams?.id ?? '';
   const [transaction, setTransaction] = useState<Transaction | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -65,7 +79,7 @@ export default function TransactionDetailPage({ params }: { params: { id: string
     const fetchTransaction = async () => {
       try {
         setLoading(true);
-        const response = await api.getTransaction(params.id);
+        const response = await api.getTransaction(transactionId);
         
         if (response.success) {
           setTransaction(response.data.transaction);
@@ -80,10 +94,10 @@ export default function TransactionDetailPage({ params }: { params: { id: string
       }
     };
 
-    if (params.id) {
+    if (transactionId) {
       fetchTransaction();
     }
-  }, [params.id]);
+  }, [transactionId]);
 
   const getTypeColor = (type: string) => {
     return type === 'sale' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800';
@@ -96,6 +110,32 @@ export default function TransactionDetailPage({ params }: { params: { id: string
       case 'cancelled': return 'bg-red-100 text-red-800';
       default: return 'bg-gray-100 text-gray-800';
     }
+  };
+
+  const formatAddress = (address?: string | AddressValue) => {
+    if (!address) return '';
+    if (typeof address === 'string') return address;
+
+    return [address.street, address.city, address.state, address.zipCode, address.country]
+      .filter(Boolean)
+      .join(', ');
+  };
+
+  const formatCurrency = (value: number, currency = 'PEN') => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(Number(value || 0));
+  };
+
+  const formatPaymentMethod = (value?: string) => {
+    if (!value) return 'Not specified';
+    return value
+      .split('_')
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
   };
 
   if (loading) {
@@ -130,6 +170,10 @@ export default function TransactionDetailPage({ params }: { params: { id: string
   }
 
   const contact = transaction.customerId || transaction.vendorId;
+  const contactAddress = formatAddress(contact?.address);
+  const displayCurrency = transaction.currency || 'PEN';
+  const exchangeRate = transaction.exchangeRate ?? 1;
+  const originalAmount = transaction.originalAmount ?? transaction.totalAmount;
 
   return (
     <Layout>
@@ -186,8 +230,16 @@ export default function TransactionDetailPage({ params }: { params: { id: string
                 <div className="flex items-center gap-2">
                   <CreditCard className="h-4 w-4 text-muted-foreground" />
                   <span className="text-sm text-muted-foreground">Payment Method:</span>
-                  <span className="font-medium capitalize">{transaction.paymentMethod}</span>
+                  <span className="font-medium">{formatPaymentMethod(transaction.paymentMethod)}</span>
                 </div>
+
+                {transaction.invoiceNumber && (
+                  <div className="flex items-center gap-2">
+                    <FileText className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-sm text-muted-foreground">Invoice:</span>
+                    <span className="font-medium">{transaction.invoiceNumber}</span>
+                  </div>
+                )}
 
                 {transaction.notes && (
                   <div className="flex items-start gap-2">
@@ -200,15 +252,27 @@ export default function TransactionDetailPage({ params }: { params: { id: string
                 )}
               </div>
 
-              <div className="space-y-4">
-                <div className="text-right">
+              <div className="space-y-4 text-right">
+                <div>
                   <p className="text-sm text-muted-foreground">Total Amount</p>
                   <p className={`text-3xl font-bold ${
                     transaction.type === 'sale' ? 'text-green-600' : 'text-red-600'
                   }`}>
-                    ${transaction.totalAmount.toLocaleString()}
+                    {formatCurrency(transaction.totalAmount, displayCurrency)}
                   </p>
                 </div>
+
+                {transaction.originalAmount !== undefined && (
+                  <div className="rounded-lg border bg-muted/30 p-3 text-left">
+                    <div className="text-xs uppercase tracking-wide text-muted-foreground">Original Amount</div>
+                    <div className="mt-1 font-medium">{formatCurrency(originalAmount, displayCurrency)}</div>
+                    {transaction.exchangeRate && (
+                      <div className="mt-2 text-xs text-muted-foreground">
+                        Exchange rate: 1 USD = {exchangeRate.toFixed(4)} {displayCurrency}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </CardContent>
@@ -230,7 +294,7 @@ export default function TransactionDetailPage({ params }: { params: { id: string
                   <div className="space-y-1 text-sm text-muted-foreground">
                     <p>{contact.phone}</p>
                     <p>{contact.email}</p>
-                    {contact.address && <p>{contact.address}</p>}
+                    {contactAddress && <p>{contactAddress}</p>}
                   </div>
                 </div>
               </div>

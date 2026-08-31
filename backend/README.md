@@ -309,6 +309,28 @@ Content-Type: application/json
 }
 ```
 
+## 🌐 External API Integrations
+
+### Exchange Rate
+```http
+GET /api/external/exchange-rate?base=USD&target=PEN
+Authorization: ******
+```
+
+### Validate Document
+```http
+GET /api/external/document/validate?type=dni&number=12345678
+Authorization: ******
+```
+
+### Validate Payment Method
+```http
+GET /api/external/payment-method/validate?method=card&amount=1500
+Authorization: ******
+```
+
+These endpoints use external public APIs when available and automatically fall back to safe local demo values when the upstream service is unavailable.
+
 ## 💰 Transaction Management Endpoints
 
 ### Get All Transactions

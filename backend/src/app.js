@@ -14,6 +14,7 @@ const productRoutes = require('./routes/products');
 const contactRoutes = require('./routes/contacts');
 const transactionRoutes = require('./routes/transactions');
 const reportRoutes = require('./routes/reports');
+const externalRoutes = require('./routes/external');
 
 // Import middleware
 const { authenticate } = require('./middleware/auth');
@@ -108,6 +109,7 @@ app.use('/api/products', productRoutes);
 app.use('/api/contacts', contactRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/api/external', externalRoutes);
 
 // Welcome route
 app.get('/', (req, res) => {

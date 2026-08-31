@@ -26,8 +26,11 @@ import { api } from '@/lib/api';
 // Form validation schema
 const purchaseFormSchema = z.object({
   vendorId: z.string().min(1, 'Vendor is required'),
-  paymentMethod: z.enum(['cash', 'credit', 'card'], {
+  paymentMethod: z.enum(['cash', 'credit', 'card', 'bank_transfer', 'crypto', 'bitcoin', 'tether', 'wallet'], {
     required_error: 'Payment method is required',
+  }),
+  currency: z.enum(['PEN', 'USD', 'EUR'], {
+    required_error: 'Currency is required',
   }),
   notes: z.string().optional(),
   products: z.array(z.object({
@@ -68,6 +71,7 @@ export default function AddPurchasePage() {
     defaultValues: {
       vendorId: '',
       paymentMethod: 'cash',
+      currency: 'PEN',
       notes: '',
       products: [{ productId: '', quantity: 1, price: 0 }],
     },
@@ -129,6 +133,7 @@ export default function AddPurchasePage() {
         vendorId: data.vendorId,
         products: data.products,
         paymentMethod: data.paymentMethod,
+        currency: data.currency,
         notes: data.notes,
       };
 
@@ -230,8 +235,37 @@ export default function AddPurchasePage() {
                           </FormControl>
                           <SelectContent>
                             <SelectItem value="cash">Cash</SelectItem>
-                            <SelectItem value="credit">Credit</SelectItem>
                             <SelectItem value="card">Card</SelectItem>
+                            <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
+                            <SelectItem value="credit">Credit</SelectItem>
+                            <SelectItem value="bitcoin">Bitcoin</SelectItem>
+                            <SelectItem value="tether">Tether</SelectItem>
+                            <SelectItem value="wallet">Digital Wallet</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <FormField
+                    control={form.control}
+                    name="currency"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Currency *</FormLabel>
+                        <Select onValueChange={field.onChange} defaultValue={field.value}>
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Select currency" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            <SelectItem value="PEN">PEN</SelectItem>
+                            <SelectItem value="USD">USD</SelectItem>
+                            <SelectItem value="EUR">EUR</SelectItem>
                           </SelectContent>
                         </Select>
                         <FormMessage />

@@ -172,11 +172,23 @@ const createContactValidation = [
     .trim()
     .notEmpty()
     .withMessage('Phone number is required')
-    .matches(/^\+?[\d\s\-\(\)]{10,}$/)
+    .matches(/^\+?[\d\s\-\(\)]{7,20}$/)
     .withMessage('Please enter a valid phone number'),
     
+  body('documentType')
+    .optional({ checkFalsy: true })
+    .trim()
+    .isIn(['dni', 'ruc'])
+    .withMessage('Document type must be dni or ruc'),
+
+  body('documentNumber')
+    .optional({ checkFalsy: true })
+    .trim()
+    .isLength({ min: 8, max: 20 })
+    .withMessage('Document number must be between 8 and 20 characters'),
+
   body('email')
-    .optional()
+    .optional({ checkFalsy: true })
     .trim()
     .isEmail()
     .normalizeEmail()
@@ -189,43 +201,43 @@ const createContactValidation = [
     .withMessage('Type must be either customer or vendor'),
     
   body('address.street')
-    .optional()
+    .optional({ checkFalsy: true })
     .trim()
     .isLength({ max: 200 })
     .withMessage('Street address cannot exceed 200 characters'),
     
   body('address.city')
-    .optional()
+    .optional({ checkFalsy: true })
     .trim()
     .isLength({ max: 50 })
     .withMessage('City cannot exceed 50 characters'),
     
   body('address.state')
-    .optional()
+    .optional({ checkFalsy: true })
     .trim()
     .isLength({ max: 50 })
     .withMessage('State cannot exceed 50 characters'),
     
   body('address.zipCode')
-    .optional()
+    .optional({ checkFalsy: true })
     .trim()
     .isLength({ max: 20 })
     .withMessage('Zip code cannot exceed 20 characters'),
     
   body('address.country')
-    .optional()
+    .optional({ checkFalsy: true })
     .trim()
     .isLength({ max: 50 })
     .withMessage('Country cannot exceed 50 characters'),
     
   body('notes')
-    .optional()
+    .optional({ checkFalsy: true })
     .trim()
     .isLength({ max: 500 })
     .withMessage('Notes cannot exceed 500 characters'),
     
   body('creditLimit')
-    .optional()
+    .optional({ checkFalsy: true })
     .isNumeric()
     .withMessage('Credit limit must be a number')
     .isFloat({ min: 0 })
@@ -234,67 +246,79 @@ const createContactValidation = [
 
 const updateContactValidation = [
   body('name')
-    .optional()
+    .optional({ checkFalsy: true })
     .trim()
     .isLength({ min: 2, max: 100 })
     .withMessage('Name must be between 2 and 100 characters'),
     
   body('phone')
-    .optional()
+    .optional({ checkFalsy: true })
     .trim()
-    .matches(/^\+?[\d\s\-\(\)]{10,}$/)
+    .matches(/^\+?[\d\s\-\(\)]{7,20}$/)
     .withMessage('Please enter a valid phone number'),
     
+  body('documentType')
+    .optional({ checkFalsy: true })
+    .trim()
+    .isIn(['dni', 'ruc'])
+    .withMessage('Document type must be dni or ruc'),
+
+  body('documentNumber')
+    .optional({ checkFalsy: true })
+    .trim()
+    .isLength({ min: 8, max: 20 })
+    .withMessage('Document number must be between 8 and 20 characters'),
+
   body('email')
-    .optional()
+    .optional({ checkFalsy: true })
     .trim()
     .isEmail()
     .normalizeEmail()
     .withMessage('Please enter a valid email address'),
     
   body('type')
-    .optional()
+    .optional({ checkFalsy: true })
     .isIn(['customer', 'vendor'])
     .withMessage('Type must be either customer or vendor'),
     
   body('address.street')
-    .optional()
+    .optional({ checkFalsy: true })
     .trim()
     .isLength({ max: 200 })
     .withMessage('Street address cannot exceed 200 characters'),
     
   body('address.city')
-    .optional()
+    .optional({ checkFalsy: true })
     .trim()
     .isLength({ max: 50 })
     .withMessage('City cannot exceed 50 characters'),
     
   body('address.state')
-    .optional()
+    .optional({ checkFalsy: true })
     .trim()
     .isLength({ max: 50 })
     .withMessage('State cannot exceed 50 characters'),
     
   body('address.zipCode')
-    .optional()
+    .optional({ checkFalsy: true })
     .trim()
     .isLength({ max: 20 })
     .withMessage('Zip code cannot exceed 20 characters'),
     
   body('address.country')
-    .optional()
+    .optional({ checkFalsy: true })
     .trim()
     .isLength({ max: 50 })
     .withMessage('Country cannot exceed 50 characters'),
     
   body('notes')
-    .optional()
+    .optional({ checkFalsy: true })
     .trim()
     .isLength({ max: 500 })
     .withMessage('Notes cannot exceed 500 characters'),
     
   body('creditLimit')
-    .optional()
+    .optional({ checkFalsy: true })
     .isNumeric()
     .withMessage('Credit limit must be a number')
     .isFloat({ min: 0 })
@@ -354,8 +378,15 @@ const createTransactionValidation = [
     
   body('paymentMethod')
     .optional()
-    .isIn(['cash', 'card', 'bank_transfer', 'credit', 'other'])
+    .isIn(['cash', 'card', 'bank_transfer', 'credit', 'other', 'crypto', 'bitcoin', 'tether', 'wallet'])
     .withMessage('Invalid payment method'),
+
+  body('currency')
+    .optional()
+    .trim()
+    .toUpperCase()
+    .isIn(['PEN', 'USD', 'EUR'])
+    .withMessage('Currency must be one of: PEN, USD, EUR'),
     
   body('notes')
     .optional()

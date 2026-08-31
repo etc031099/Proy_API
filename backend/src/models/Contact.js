@@ -10,8 +10,18 @@ const contactSchema = new mongoose.Schema({
   phone: {
     type: String,
     required: [true, 'Phone number is required'],
+    trim: true
+  },
+  documentType: {
+    type: String,
+    enum: ['dni', 'ruc'],
+    lowercase: true,
+    trim: true
+  },
+  documentNumber: {
+    type: String,
     trim: true,
-    match: [/^\+?[\d\s\-\(\)]{10,}$/, 'Please enter a valid phone number']
+    maxlength: [20, 'Document number cannot exceed 20 characters']
   },
   email: {
     type: String,
@@ -54,7 +64,8 @@ const contactSchema = new mongoose.Schema({
   businessId: {
     type: String,
     required: [true, 'Business ID is required'],
-    trim: true
+    trim: true,
+    default: '20765432101'
   },
   isActive: {
     type: Boolean,

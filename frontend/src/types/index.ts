@@ -53,6 +53,8 @@ export interface Contact {
   _id: string;
   name: string;
   phone: string;
+  documentType?: 'dni' | 'ruc';
+  documentNumber?: string;
   email?: string;
   address: {
     street?: string;
@@ -76,6 +78,8 @@ export interface Contact {
 export interface CreateContactData {
   name: string;
   phone: string;
+  documentType?: 'dni' | 'ruc';
+  documentNumber?: string;
   email?: string;
   address?: {
     street?: string;
@@ -107,6 +111,9 @@ export interface Transaction {
   vendorName?: string;
   products: TransactionItem[];
   totalAmount: number;
+  originalAmount?: number;
+  currency?: 'PEN' | 'USD' | 'EUR';
+  exchangeRate?: number;
   date: string;
   businessId: string;
   status: 'pending' | 'completed' | 'cancelled';
@@ -128,6 +135,9 @@ export interface CreateTransactionData {
   }[];
   paymentMethod?: string;
   notes?: string;
+  currency?: 'PEN' | 'USD' | 'EUR';
+  originalAmount?: number;
+  exchangeRate?: number;
 }
 
 // Report types

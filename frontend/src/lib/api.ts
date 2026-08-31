@@ -184,6 +184,22 @@ class ApiClient {
     return response.data;
   }
 
+  // External integrations
+  async getExchangeRate(base = 'USD', target = 'PEN'): Promise<ApiResponse> {
+    const response = await this.instance.get('/external/exchange-rate', { params: { base, target } });
+    return response.data;
+  }
+
+  async validateDocument(type: 'dni' | 'ruc' | string, number: string): Promise<ApiResponse> {
+    const response = await this.instance.get('/external/document/validate', { params: { type, number } });
+    return response.data;
+  }
+
+  async validatePaymentMethod(method: string, amount = 0): Promise<ApiResponse> {
+    const response = await this.instance.get('/external/payment-method/validate', { params: { method, amount } });
+    return response.data;
+  }
+
   // Transaction methods
   async getTransactions(params?: {
     type?: string;

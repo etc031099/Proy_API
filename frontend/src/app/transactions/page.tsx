@@ -99,11 +99,14 @@ export default function TransactionsPage() {
       if (endDate) params.endDate = endDate;
 
       const response = await api.getTransactionSummary(params);
-      if (response.success) {
+      if (response?.success && response?.data?.summary) {
         setSummary(response.data.summary);
+      } else {
+        setSummary(null);
       }
     } catch (err) {
       console.error('Error fetching summary:', err);
+      setSummary(null);
     }
   };
 
@@ -178,10 +181,10 @@ export default function TransactionsPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-green-500">
-                  ${summary.sales.totalAmount.toLocaleString()}
+                  ${((summary?.sales?.totalAmount) ?? 0).toLocaleString()}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {summary.sales.transactionCount} transactions
+                  {(summary?.sales?.transactionCount) ?? 0} transactions
                 </p>
               </CardContent>
             </Card>
@@ -193,10 +196,10 @@ export default function TransactionsPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-red-500">
-                  ${summary.purchases.totalAmount.toLocaleString()}
+                  ${((summary?.purchases?.totalAmount) ?? 0).toLocaleString()}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {summary.purchases.transactionCount} transactions
+                  {(summary?.purchases?.transactionCount) ?? 0} transactions
                 </p>
               </CardContent>
             </Card>
@@ -204,14 +207,14 @@ export default function TransactionsPage() {
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">Profit/Loss</CardTitle>
-                <DollarSign className={`h-4 w-4 ${summary.profitLoss >= 0 ? 'text-green-500' : 'text-red-500'}`} />
+                <DollarSign className={`h-4 w-4 ${(summary?.profitLoss ?? 0) >= 0 ? 'text-green-500' : 'text-red-500'}`} />
               </CardHeader>
               <CardContent>
-                <div className={`text-2xl font-bold ${summary.profitLoss >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                  ${summary.profitLoss.toLocaleString()}
+                <div className={`text-2xl font-bold ${(summary?.profitLoss ?? 0) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                  ${((summary?.profitLoss) ?? 0).toLocaleString()}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {summary.profitLoss >= 0 ? 'Profit' : 'Loss'}
+                  {(summary?.profitLoss ?? 0) >= 0 ? 'Profit' : 'Loss'}
                 </p>
               </CardContent>
             </Card>
@@ -223,7 +226,7 @@ export default function TransactionsPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-blue-500">
-                  ${summary.sales.averageAmount.toLocaleString()}
+                  ${((summary?.sales?.averageAmount) ?? 0).toLocaleString()}
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Per transaction

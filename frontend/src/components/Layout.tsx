@@ -19,7 +19,8 @@ import {
   BarChart3, 
   LogOut, 
   User,
-  Menu
+  Menu,
+  Globe
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -29,6 +30,7 @@ const navigation = [
   { name: 'Contacts', href: '/contacts', icon: Users },
   { name: 'Transactions', href: '/transactions', icon: Receipt },
   { name: 'Reports', href: '/reports', icon: BarChart3 },
+  { name: 'Integrations', href: '/integrations', icon: Globe },
 ];
 
 interface LayoutProps {
