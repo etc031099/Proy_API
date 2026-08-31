@@ -115,11 +115,32 @@ export default function AddSalePage() {
     }
   };
 
-  // Calculate total amount
+  const getCurrencyRate = (currency: 'PEN' | 'USD' | 'EUR') => {
+    switch (currency) {
+      case 'PEN':
+        return 3.7;
+      case 'EUR':
+        return 0.92;
+      case 'USD':
+      default:
+        return 1;
+    }
+  };
+
+  const convertAmountToSelectedCurrency = (value: number) => {
+    const selectedCurrency = form.watch('currency');
+    const rate = getCurrencyRate(selectedCurrency);
+    return value * rate;
+  };
+
+  // Calculate total amount in the selected transaction currency.
+  // Product prices are treated as USD by default and converted for display/settlement.
   const calculateTotal = () => {
     const products = form.watch('products');
     return products.reduce((total, product) => {
-      return total + (product.quantity * product.price);
+      const numericPrice = Number(product.price || 0);
+      const numericQuantity = Number(product.quantity || 0);
+      return total + (numericQuantity * numericPrice);
     }, 0);
   };
 
@@ -394,7 +415,13 @@ export default function AddSalePage() {
                       <div className="space-y-2">
                         <Label>Total</Label>
                         <div className="h-10 flex items-center px-3 py-2 border rounded-md bg-muted">
-                          ${(form.watch(`products.${index}.quantity`) * form.watch(`products.${index}.price`)).toFixed(2)}
+                          {(() => {
+                            const currency = form.watch('currency');
+                            const amount = Number(form.watch(`products.${index}.quantity`) || 0) * Number(form.watch(`products.${index}.price`) || 0);
+                            const converted = convertAmountToSelectedCurrency(amount);
+                            const symbol = currency === 'PEN' ? 'S/' : currency === 'EUR' ? '€' : '$';
+                            return `${symbol}${converted.toFixed(2)}`;
+                          })()}
                         </div>
                       </div>
 
@@ -430,7 +457,11 @@ export default function AddSalePage() {
                   <div className="flex justify-between items-center">
                     <span className="text-lg font-medium">Total Amount:</span>
                     <span className="text-2xl font-bold text-green-600">
-                      ${calculateTotal().toFixed(2)}
+                      {(() => {
+                        const currency = form.watch('currency');
+                        const symbol = currency === 'PEN' ? 'S/' : currency === 'EUR' ? '€' : '$';
+                        return `${symbol}${convertAmountToSelectedCurrency(calculateTotal()).toFixed(2)}`;
+                      })()}
                     </span>
                   </div>
                 </div>

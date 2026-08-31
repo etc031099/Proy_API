@@ -91,8 +91,10 @@ const transactionSchema = new mongoose.Schema({
   },
   paymentMethod: {
     type: String,
-    enum: ['cash', 'card', 'bank_transfer', 'credit', 'other'],
-    default: 'cash'
+    enum: ['cash', 'card', 'bank_transfer', 'credit', 'crypto', 'bitcoin', 'tether', 'wallet', 'other'],
+    default: 'cash',
+    lowercase: true,
+    trim: true
   },
   notes: {
     type: String,

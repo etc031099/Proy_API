@@ -117,7 +117,7 @@ export interface Transaction {
   date: string;
   businessId: string;
   status: 'pending' | 'completed' | 'cancelled';
-  paymentMethod: 'cash' | 'card' | 'bank_transfer' | 'credit' | 'other';
+  paymentMethod: 'cash' | 'card' | 'bank_transfer' | 'credit' | 'crypto' | 'bitcoin' | 'tether' | 'wallet' | 'other';
   notes?: string;
   invoiceNumber?: string;
   createdAt: string;
