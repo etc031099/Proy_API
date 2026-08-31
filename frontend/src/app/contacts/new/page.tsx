@@ -55,12 +55,24 @@ export default function AddContactPage() {
           [addressField]: value
         }
       }));
-    } else {
+      return;
+    }
+
+    if (name === 'documentNumber') {
       setFormData(prev => ({
         ...prev,
-        [name]: name === 'creditLimit' ? Number(value) : value
+        documentNumber: value,
+        name: '',
+        email: '',
+        notes: ''
       }));
+      return;
     }
+
+    setFormData(prev => ({
+      ...prev,
+      [name]: name === 'creditLimit' ? Number(value) : value
+    }));
   };
 
   const handleTypeChange = (value: 'customer' | 'vendor') => {
@@ -106,6 +118,12 @@ export default function AddContactPage() {
       const result = response?.data?.data ?? response?.data ?? response;
 
       if (!result?.valid) {
+        setFormData(prev => ({
+          ...prev,
+          name: '',
+          email: '',
+          notes: ''
+        }));
         setDocumentMessage(result?.message || 'No se pudo validar el documento.');
         return;
       }
@@ -113,14 +131,20 @@ export default function AddContactPage() {
       const details = result?.details ?? {};
       setFormData(prev => ({
         ...prev,
-        name: details.name || prev.name || '',
-        email: details.email || prev.email || '',
-        notes: details.company ? `Cliente validado: ${details.company}` : prev.notes || '',
+        name: details.name || '',
+        email: details.email || '',
+        notes: details.company ? `Cliente validado: ${details.company}` : '',
       }));
 
       setDocumentMessage(result?.message || 'Documento válido.');
     } catch (err: any) {
       const apiError = err.response?.data;
+      setFormData(prev => ({
+        ...prev,
+        name: '',
+        email: '',
+        notes: ''
+      }));
       setDocumentMessage(apiError?.message || 'No se pudieron completar los datos del documento.');
     } finally {
       setDocumentLoading(false);
@@ -290,7 +314,14 @@ export default function AddContactPage() {
                         <div className="flex gap-2">
                           <Select
                             value={formData.documentType || 'dni'}
-                            onValueChange={(value) => setFormData(prev => ({ ...prev, documentType: value as 'dni' | 'ruc' }))}
+                            onValueChange={(value) => setFormData(prev => ({
+                              ...prev,
+                              documentType: value as 'dni' | 'ruc',
+                              documentNumber: '',
+                              name: '',
+                              email: '',
+                              notes: ''
+                            }))}
                           >
                             <SelectTrigger className="transition-all duration-300 focus:scale-105">
                               <SelectValue placeholder="Select type" />
