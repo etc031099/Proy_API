@@ -91,7 +91,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setUser(null);
       localStorage.removeItem('token');
-      router.push('/login');
+      router.replace('/login');
+      router.refresh();
     }
   };
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
@@ -20,12 +20,27 @@ export default function RegisterPage() {
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const { register, user } = useAuth();
+  const { register, user, loading: authLoading } = useAuth();
   const router = useRouter();
 
-  // Redirect if already logged in
+  useEffect(() => {
+    if (user && !authLoading) {
+      router.replace('/dashboard');
+    }
+  }, [user, authLoading, router]);
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-muted/50 p-4">
+        <div className="flex items-center space-x-2">
+          <div className="h-5 w-5 animate-spin rounded-full border-b-2 border-primary"></div>
+          <span>Loading...</span>
+        </div>
+      </div>
+    );
+  }
+
   if (user) {
-    router.push('/dashboard');
     return null;
   }
 

@@ -91,29 +91,42 @@ export function Navigation() {
             </ScaleOnHover>
             
             {user ? (
-              <ScaleOnHover>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" className="relative h-8 w-8 rounded-full hover:bg-accent">
-                      <User className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent className="w-56" align="end" forceMount>
-                    <div className="flex items-center justify-start gap-2 p-2">
-                      <div className="flex flex-col space-y-1 leading-none">
-                        <p className="font-medium">{user.name}</p>
-                        <p className="w-[200px] truncate text-sm text-muted-foreground">
-                          {user.email}
-                        </p>
+              <>
+                <ScaleOnHover>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={logout}
+                    className="hidden sm:inline-flex"
+                  >
+                    <LogOut className="mr-2 h-4 w-4" />
+                    Log out
+                  </Button>
+                </ScaleOnHover>
+                <ScaleOnHover>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" className="relative h-8 w-8 rounded-full hover:bg-accent">
+                        <User className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent className="w-56" align="end" forceMount>
+                      <div className="flex items-center justify-start gap-2 p-2">
+                        <div className="flex flex-col space-y-1 leading-none">
+                          <p className="font-medium">{user.name}</p>
+                          <p className="w-[200px] truncate text-sm text-muted-foreground">
+                            {user.email}
+                          </p>
+                        </div>
                       </div>
-                    </div>
-                    <DropdownMenuItem onClick={logout} className="hover:bg-destructive/10 hover:text-destructive">
-                      <LogOut className="mr-2 h-4 w-4" />
-                      Log out
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </ScaleOnHover>
+                      <DropdownMenuItem onClick={logout} className="hover:bg-destructive/10 hover:text-destructive">
+                        <LogOut className="mr-2 h-4 w-4" />
+                        Log out
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </ScaleOnHover>
+              </>
             ) : (
               <div className="flex items-center space-x-2">
                 <ScaleOnHover>

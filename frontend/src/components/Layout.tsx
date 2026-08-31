@@ -52,6 +52,17 @@ export function Layout({ children }: LayoutProps) {
 
           <div className="ml-auto flex items-center space-x-4">
             <ThemeToggle />
+            {user && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={logout}
+                className="hidden sm:inline-flex"
+              >
+                <LogOut className="mr-2 h-4 w-4" />
+                Cerrar sesión
+              </Button>
+            )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" className="relative h-8 w-8 rounded-full">
