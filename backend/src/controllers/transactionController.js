@@ -214,10 +214,9 @@ const createTransaction = asyncHandler(async (req, res) => {
     }
 
     const normalizedCurrency = String(currency || 'PEN').toUpperCase();
-    const baseCurrency = ['PEN', 'USD', 'EUR'].includes(normalizedCurrency) ? normalizedCurrency : 'PEN';
-    const exchangeRateResponse = baseCurrency === 'PEN'
-      ? { rate: 1 }
-      : await getExchangeRate({ base: baseCurrency, target: 'PEN' });
+    const targetCurrency = ['PEN', 'USD', 'EUR'].includes(normalizedCurrency) ? normalizedCurrency : 'PEN';
+    const baseCurrency = 'USD';
+    const exchangeRateResponse = await getExchangeRate({ base: baseCurrency, target: targetCurrency });
     const resolvedRate = Number(exchangeRateResponse?.rate) || 1;
     const totalAmount = Number((subtotal * resolvedRate).toFixed(2));
     const paymentValidation = await validatePaymentMethod({
@@ -239,7 +238,7 @@ const createTransaction = asyncHandler(async (req, res) => {
       totalAmount,
       originalAmount: Number(subtotal.toFixed(2)),
       businessId,
-      currency: baseCurrency,
+      currency: targetCurrency,
       exchangeRate: resolvedRate,
       paymentMethod: paymentMethod || 'cash',
       notes

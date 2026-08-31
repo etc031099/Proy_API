@@ -174,7 +174,8 @@ export default function TransactionDetailPage({ params }: { params: Promise<{ id
   const transactionCurrency = transaction.currency || 'PEN';
   const exchangeRate = transaction.exchangeRate ?? 1;
   const originalAmount = transaction.originalAmount ?? transaction.totalAmount;
-  const quoteCurrency = 'PEN';
+  const showConvertedBaseCurrency = transactionCurrency !== 'USD' && exchangeRate > 1;
+  const displayOriginalCurrency = showConvertedBaseCurrency ? 'USD' : transactionCurrency;
 
   return (
     <Layout>
@@ -266,10 +267,10 @@ export default function TransactionDetailPage({ params }: { params: Promise<{ id
                 {transaction.originalAmount !== undefined && (
                   <div className="rounded-lg border bg-muted/30 p-3 text-left">
                     <div className="text-xs uppercase tracking-wide text-muted-foreground">Original Amount</div>
-                    <div className="mt-1 font-medium">{formatCurrency(originalAmount, transactionCurrency)}</div>
+                    <div className="mt-1 font-medium">{formatCurrency(originalAmount, displayOriginalCurrency)}</div>
                     {transaction.exchangeRate && (
                       <div className="mt-2 text-xs text-muted-foreground">
-                        Exchange rate: 1 {transactionCurrency} = {exchangeRate.toFixed(4)} {quoteCurrency}
+                        Exchange rate: 1 USD = {exchangeRate.toFixed(4)} {transactionCurrency}
                       </div>
                     )}
                   </div>
