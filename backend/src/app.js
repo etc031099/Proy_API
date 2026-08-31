@@ -56,23 +56,11 @@ const authLimiter = rateLimit({
   }
 });
 
-// CORS configuration with debugging
+// CORS configuration
+// For a demo/prototype environment, allow the frontend when deployed on Vercel,
+// localhost during development, and any other valid browser origin used for testing.
 const corsOptions = {
-  origin: function (origin, callback) {
-    const allowedOrigins = process.env.NODE_ENV === 'production' 
-      ? ['https://inventory-billing-management-system.vercel.app'] 
-      : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:3003', 'http://localhost:3004'];
-    
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
-    
-    if (allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      console.log(`CORS blocked origin: ${origin}`);
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
+  origin: true,
   credentials: true,
   optionsSuccessStatus: 200,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
@@ -80,6 +68,7 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
