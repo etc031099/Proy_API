@@ -29,6 +29,17 @@ const getExchangeRate = async ({ base = 'USD', target = 'PEN' } = {}) => {
   const normalizedBase = String(base || 'USD').toUpperCase();
   const normalizedTarget = String(target || 'PEN').toUpperCase();
 
+  if (normalizedBase === normalizedTarget) {
+    return {
+      success: true,
+      source: 'direct',
+      base: normalizedBase,
+      target: normalizedTarget,
+      rate: 1,
+      message: `1 ${normalizedBase} = 1 ${normalizedTarget}`
+    };
+  }
+
   try {
     const data = await fetchJson(`https://api.exchangerate-api.com/v4/latest/${normalizedBase}`);
     const rate = Number(data?.rates?.[normalizedTarget]);

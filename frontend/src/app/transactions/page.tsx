@@ -27,6 +27,7 @@ interface Transaction {
   _id: string;
   type: 'sale' | 'purchase';
   totalAmount: number;
+  currency?: 'PEN' | 'USD' | 'EUR';
   date: string;
   status: string;
   customerName?: string;
@@ -136,6 +137,16 @@ export default function TransactionsPage() {
       case 'cancelled': return 'bg-red-100 text-red-800';
       default: return 'bg-gray-100 text-gray-800';
     }
+  };
+
+  const formatMoney = (value: number, currency: string = 'USD') => {
+    const normalizedCurrency = ['PEN', 'USD', 'EUR'].includes(currency) ? currency : 'USD';
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: normalizedCurrency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(Number(value || 0));
   };
 
   return (
@@ -370,7 +381,7 @@ export default function TransactionsPage() {
                           <span className={`font-medium ${
                             transaction.type === 'sale' ? 'text-green-600' : 'text-red-600'
                           }`}>
-                            ${transaction.totalAmount.toLocaleString()}
+                            {formatMoney(transaction.totalAmount, transaction.currency || 'USD')}
                           </span>
                         </TableCell>
                         <TableCell>
