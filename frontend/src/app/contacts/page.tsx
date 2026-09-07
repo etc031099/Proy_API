@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { Layout } from '@/components/Layout';
+import { useLanguage } from '@/contexts/LanguageContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -15,6 +16,7 @@ import { Plus, Search, Edit, Trash2, Phone, Mail } from 'lucide-react';
 import Link from 'next/link';
 
 export default function ContactsPage() {
+  const { t } = useLanguage();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -60,11 +62,11 @@ export default function ContactsPage() {
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>Name</TableHead>
-          <TableHead>Type</TableHead>
-          <TableHead>Contact Info</TableHead>
-          <TableHead>Balance</TableHead>
-          <TableHead>Actions</TableHead>
+          <TableHead>{t('contacts.name')}</TableHead>
+          <TableHead>{t('contacts.type')}</TableHead>
+          <TableHead>{t('contacts.contactInfo')}</TableHead>
+          <TableHead>{t('contacts.balance')}</TableHead>
+          <TableHead>{t('contacts.actions')}</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -146,27 +148,27 @@ export default function ContactsPage() {
         <div className="space-y-6">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-3xl font-bold">Contacts</h1>
-              <p className="text-muted-foreground">Manage your customers and vendors</p>
+              <h1 className="text-3xl font-bold">{t('contacts.title')}</h1>
+              <p className="text-muted-foreground">{t('contacts.manage')}</p>
             </div>
             <Link href="/contacts/new">
               <Button>
                 <Plus className="mr-2 h-4 w-4" />
-                Add Contact
+                {t('contacts.add')}
               </Button>
             </Link>
           </div>
 
           <Card>
             <CardHeader>
-              <CardTitle>Contact Management</CardTitle>
-              <CardDescription>All your customers and vendors</CardDescription>
+              <CardTitle>{t('contacts.management')}</CardTitle>
+              <CardDescription>{t('contacts.allDescription')}</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="flex items-center space-x-2 mb-4">
                 <Search className="h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="Search contacts..."
+                  placeholder={t('contacts.search')}
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   className="max-w-sm"
@@ -175,9 +177,9 @@ export default function ContactsPage() {
 
               <Tabs value={activeTab} onValueChange={setActiveTab}>
                 <TabsList>
-                  <TabsTrigger value="all">All Contacts</TabsTrigger>
-                  <TabsTrigger value="customers">Customers</TabsTrigger>
-                  <TabsTrigger value="vendors">Vendors</TabsTrigger>
+                  <TabsTrigger value="all">{t('contacts.all')}</TabsTrigger>
+                  <TabsTrigger value="customers">{t('contacts.customers')}</TabsTrigger>
+                  <TabsTrigger value="vendors">{t('contacts.vendors')}</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="all" className="mt-4">

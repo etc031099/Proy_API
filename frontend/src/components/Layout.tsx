@@ -23,14 +23,16 @@ import {
   Globe
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { LanguageSelector } from '@/components/LanguageSelector';
 
 const navigation = [
-  { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-  { name: 'Products', href: '/products', icon: Package },
-  { name: 'Contacts', href: '/contacts', icon: Users },
-  { name: 'Transactions', href: '/transactions', icon: Receipt },
-  { name: 'Reports', href: '/reports', icon: BarChart3 },
-  { name: 'Integrations', href: '/integrations', icon: Globe },
+  { key: 'dashboard', href: '/dashboard', icon: LayoutDashboard },
+  { key: 'products', href: '/products', icon: Package },
+  { key: 'contacts', href: '/contacts', icon: Users },
+  { key: 'transactions', href: '/transactions', icon: Receipt },
+  { key: 'reports', href: '/reports', icon: BarChart3 },
+  { key: 'integrations', href: '/integrations', icon: Globe },
 ];
 
 interface LayoutProps {
@@ -39,6 +41,7 @@ interface LayoutProps {
 
 export function Layout({ children }: LayoutProps) {
   const { user, logout } = useAuth();
+  const { t } = useLanguage();
   const pathname = usePathname();
 
   return (
@@ -47,11 +50,12 @@ export function Layout({ children }: LayoutProps) {
       <header className="border-b">
         <div className="flex h-16 items-center px-4">
           <div className="flex items-center space-x-4">
-            <h1 className="text-xl font-bold">Inventory & Billing</h1>
+            <h1 className="text-xl font-bold">{t('common.appName')}</h1>
           </div>
 
           <div className="ml-auto flex items-center space-x-4">
             <ThemeToggle />
+            <LanguageSelector />
             {user && (
               <Button
                 variant="outline"
@@ -60,7 +64,7 @@ export function Layout({ children }: LayoutProps) {
                 className="hidden sm:inline-flex"
               >
                 <LogOut className="mr-2 h-4 w-4" />
-                Cerrar sesión
+                {t('common.logout')}
               </Button>
             )}
             <DropdownMenu>
@@ -80,7 +84,7 @@ export function Layout({ children }: LayoutProps) {
                 </div>
                 <DropdownMenuItem onClick={logout}>
                   <LogOut className="mr-2 h-4 w-4" />
-                  <span>Log out</span>
+                  <span>{t('common.logout')}</span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -98,7 +102,7 @@ export function Layout({ children }: LayoutProps) {
               
               return (
                 <Link
-                  key={item.name}
+                  key={item.key}
                   href={item.href}
                   className={cn(
                     'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',
@@ -108,7 +112,7 @@ export function Layout({ children }: LayoutProps) {
                   )}
                 >
                   <Icon className="h-4 w-4" />
-                  {item.name}
+                  {t(`navigation.${item.key}`)}
                 </Link>
               );
             })}

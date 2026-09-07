@@ -55,6 +55,16 @@ const contactSchema = new mongoose.Schema({
       default: 'India'
     }
   },
+  latitude: {
+    type: Number,
+    min: [-90, 'Latitude must be at least -90'],
+    max: [90, 'Latitude cannot exceed 90']
+  },
+  longitude: {
+    type: Number,
+    min: [-180, 'Longitude must be at least -180'],
+    max: [180, 'Longitude cannot exceed 180']
+  },
   type: {
     type: String,
     required: [true, 'Contact type is required'],

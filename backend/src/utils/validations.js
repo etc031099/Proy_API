@@ -229,6 +229,16 @@ const createContactValidation = [
     .trim()
     .isLength({ max: 50 })
     .withMessage('Country cannot exceed 50 characters'),
+
+  body('latitude')
+    .optional({ checkFalsy: true })
+    .isFloat({ min: -90, max: 90 })
+    .withMessage('Latitude must be a number between -90 and 90'),
+
+  body('longitude')
+    .optional({ checkFalsy: true })
+    .isFloat({ min: -180, max: 180 })
+    .withMessage('Longitude must be a number between -180 and 180'),
     
   body('notes')
     .optional({ checkFalsy: true })
@@ -310,6 +320,16 @@ const updateContactValidation = [
     .trim()
     .isLength({ max: 50 })
     .withMessage('Country cannot exceed 50 characters'),
+
+  body('latitude')
+    .optional({ checkFalsy: true })
+    .isFloat({ min: -90, max: 90 })
+    .withMessage('Latitude must be a number between -90 and 90'),
+
+  body('longitude')
+    .optional({ checkFalsy: true })
+    .isFloat({ min: -180, max: 180 })
+    .withMessage('Longitude must be a number between -180 and 180'),
     
   body('notes')
     .optional({ checkFalsy: true })

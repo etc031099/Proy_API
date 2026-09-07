@@ -27,19 +27,22 @@ import {
   Globe
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { LanguageSelector } from '@/components/LanguageSelector';
 
 const navigation = [
-  { name: 'Home', href: '/', icon: Home },
-  { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-  { name: 'Products', href: '/products', icon: Package },
-  { name: 'Contacts', href: '/contacts', icon: Users },
-  { name: 'Transactions', href: '/transactions', icon: Receipt },
-  { name: 'Reports', href: '/reports', icon: BarChart3 },
-  { name: 'Integrations', href: '/integrations', icon: Globe },
+  { key: 'home', href: '/', icon: Home },
+  { key: 'dashboard', href: '/dashboard', icon: LayoutDashboard },
+  { key: 'products', href: '/products', icon: Package },
+  { key: 'contacts', href: '/contacts', icon: Users },
+  { key: 'transactions', href: '/transactions', icon: Receipt },
+  { key: 'reports', href: '/reports', icon: BarChart3 },
+  { key: 'integrations', href: '/integrations', icon: Globe },
 ];
 
 export function Navigation() {
   const { user, logout } = useAuth();
+  const { t } = useLanguage();
   const pathname = usePathname();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -77,7 +80,7 @@ export function Navigation() {
                     )}
                   >
                     <Icon className="h-4 w-4" />
-                    <span>{item.name}</span>
+                    <span>{item.key === 'home' ? t('public.home') : t(`navigation.${item.key}`)}</span>
                   </Link>
                 </FadeIn>
               );
@@ -89,6 +92,7 @@ export function Navigation() {
             <ScaleOnHover>
               <ThemeToggle />
             </ScaleOnHover>
+            <LanguageSelector />
             
             {user ? (
               <>
@@ -100,7 +104,7 @@ export function Navigation() {
                     className="hidden sm:inline-flex"
                   >
                     <LogOut className="mr-2 h-4 w-4" />
-                    Log out
+                    {t('common.logout')}
                   </Button>
                 </ScaleOnHover>
                 <ScaleOnHover>
@@ -121,7 +125,7 @@ export function Navigation() {
                       </div>
                       <DropdownMenuItem onClick={logout} className="hover:bg-destructive/10 hover:text-destructive">
                         <LogOut className="mr-2 h-4 w-4" />
-                        Log out
+                        {t('common.logout')}
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -131,12 +135,12 @@ export function Navigation() {
               <div className="flex items-center space-x-2">
                 <ScaleOnHover>
                   <Button variant="ghost" asChild className="hover:bg-accent">
-                    <Link href="/login">Sign In</Link>
+                    <Link href="/login">{t('public.signIn')}</Link>
                   </Button>
                 </ScaleOnHover>
                 <ScaleOnHover>
                   <Button asChild className="hover:bg-primary/90">
-                    <Link href="/register">Sign Up</Link>
+                    <Link href="/register">{t('public.signUp')}</Link>
                   </Button>
                 </ScaleOnHover>
               </div>
@@ -181,7 +185,7 @@ export function Navigation() {
                           onClick={() => setMobileMenuOpen(false)}
                         >
                           <Icon className="h-4 w-4" />
-                          <span>{item.name}</span>
+                          <span>{item.key === 'home' ? t('public.home') : t(`navigation.${item.key}`)}</span>
                         </Link>
                       </StaggerItem>
                     );

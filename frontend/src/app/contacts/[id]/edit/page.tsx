@@ -16,6 +16,10 @@ import { apiClient } from '@/lib/api';
 import { Contact, CreateContactData } from '@/types';
 import { ArrowLeft, Save, User, Phone, Mail, MapPin, CreditCard, FileText } from 'lucide-react';
 import { FadeIn, SlideIn, FormFieldAnimation, ScaleOnHover } from '@/components/animations';
+import { APIProvider } from '@vis.gl/react-google-maps';
+import { AddressAutocomplete, AddressSelection } from '@/components/maps/AddressAutocomplete';
+import { GoogleMap } from '@/components/maps/GoogleMap';
+import { useLanguage } from '@/contexts/LanguageContext';
 
 export default function EditContactPage() {
   const router = useRouter();
@@ -45,8 +49,12 @@ export default function EditContactPage() {
     },
     type: 'customer',
     creditLimit: 0,
-    notes: ''
+    notes: '',
+    latitude: undefined,
+    longitude: undefined
   });
+  const googleMapsApiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
+  const { t } = useLanguage();
 
   useEffect(() => {
     if (contactId) {
@@ -75,7 +83,9 @@ export default function EditContactPage() {
           },
           type: contactData.type,
           creditLimit: contactData.creditLimit || 0,
-          notes: contactData.notes || ''
+          notes: contactData.notes || '',
+          latitude: contactData.latitude,
+          longitude: contactData.longitude
         });
       } else {
         setError('Failed to load contact');
@@ -122,6 +132,36 @@ export default function EditContactPage() {
     setFormData(prev => ({
       ...prev,
       type: value
+    }));
+  };
+
+  const handleAddressSelection = (selection: AddressSelection) => {
+    setFormData(prev => ({
+      ...prev,
+      address: {
+        ...prev.address,
+        ...selection.addressComponents
+      },
+      latitude: selection.latitude,
+      longitude: selection.longitude
+    }));
+  };
+
+  const handleMapLocationChange = (latitude: number, longitude: number) => {
+    setFormData(prev => ({ ...prev, latitude, longitude }));
+  };
+
+  const handleMapAddressChange = (address: AddressSelection['addressComponents']) => {
+    setFormData(prev => ({
+      ...prev,
+      address: {
+        ...prev.address,
+        street: address.street,
+        city: address.city,
+        state: address.state,
+        zipCode: address.zipCode,
+        country: address.country,
+      },
     }));
   };
 
@@ -240,7 +280,7 @@ export default function EditContactPage() {
           <div className="flex items-center justify-center min-h-[400px]">
             <div className="text-center">
               <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-primary mx-auto mb-4"></div>
-              <p className="text-muted-foreground">Loading contact details...</p>
+              <p className="text-muted-foreground">{t('contacts.loading')}</p>
             </div>
           </div>
         </Layout>
@@ -282,8 +322,8 @@ export default function EditContactPage() {
                 </ScaleOnHover>
               </Link>
               <div>
-                <h1 className="text-3xl font-bold">Edit Contact</h1>
-                <p className="text-muted-foreground">Update contact information</p>
+                <h1 className="text-3xl font-bold">{t('contacts.editTitle')}</h1>
+                <p className="text-muted-foreground">{t('contacts.editSubtitle')}</p>
               </div>
             </div>
           </FadeIn>
@@ -293,7 +333,7 @@ export default function EditContactPage() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <User className="h-5 w-5" />
-                  Contact Information
+                  {t('contacts.information')}
                 </CardTitle>
                 <CardDescription>
                   Update the details for {contact.name}
@@ -331,13 +371,13 @@ export default function EditContactPage() {
                       <div className="space-y-2">
                         <Label htmlFor="name">
                           <User className="inline h-4 w-4 mr-1" />
-                          Full Name *
+                          {t('contacts.fullName')} *
                         </Label>
                         <Input
                           id="name"
                           name="name"
                           type="text"
-                          placeholder="Enter full name"
+                          placeholder={t('placeholders.fullName')}
                           value={formData.name}
                           onChange={handleChange}
                           required
@@ -348,14 +388,14 @@ export default function EditContactPage() {
 
                     <FormFieldAnimation delay={0.3}>
                       <div className="space-y-2">
-                        <Label htmlFor="type">Contact Type *</Label>
+                        <Label htmlFor="type">{t('contacts.type')} *</Label>
                         <Select value={formData.type} onValueChange={handleTypeChange}>
                           <SelectTrigger className="transition-all duration-300 focus:scale-105">
-                            <SelectValue placeholder="Select contact type" />
+                            <SelectValue placeholder={t('contacts.selectType')} />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="customer">Customer</SelectItem>
-                            <SelectItem value="vendor">Vendor</SelectItem>
+                            <SelectItem value="customer">{t('contacts.customer')}</SelectItem>
+                            <SelectItem value="vendor">{t('contacts.vendor')}</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -365,13 +405,13 @@ export default function EditContactPage() {
                       <div className="space-y-2">
                         <Label htmlFor="phone">
                           <Phone className="inline h-4 w-4 mr-1" />
-                          Phone Number *
+                          {t('contacts.phone')} *
                         </Label>
                         <Input
                           id="phone"
                           name="phone"
                           type="tel"
-                          placeholder="Enter phone number"
+                          placeholder={t('placeholders.phone')}
                           value={formData.phone}
                           onChange={handleChange}
                           required
@@ -382,7 +422,7 @@ export default function EditContactPage() {
 
                     <FormFieldAnimation delay={0.5}>
                       <div className="space-y-2">
-                        <Label htmlFor="documentType">Document Type</Label>
+                        <Label htmlFor="documentType">{t('contacts.documentType')}</Label>
                         <Select
                           value={formData.documentType || 'dni'}
                           onValueChange={(value) => setFormData(prev => ({
@@ -395,7 +435,7 @@ export default function EditContactPage() {
                           }))}
                         >
                           <SelectTrigger className="transition-all duration-300 focus:scale-105">
-                            <SelectValue placeholder="Select type" />
+                            <SelectValue placeholder={t('contacts.selectDocumentType')} />
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="dni">DNI</SelectItem>
@@ -407,7 +447,7 @@ export default function EditContactPage() {
 
                     <FormFieldAnimation delay={0.6}>
                       <div className="space-y-2">
-                        <Label htmlFor="documentNumber">Document Number</Label>
+                        <Label htmlFor="documentNumber">{t('contacts.documentNumber')}</Label>
                         <div className="flex gap-2">
                           <Input
                             id="documentNumber"
@@ -435,13 +475,13 @@ export default function EditContactPage() {
                       <div className="space-y-2">
                         <Label htmlFor="email">
                           <Mail className="inline h-4 w-4 mr-1" />
-                          Email Address
+                          {t('contacts.email')}
                         </Label>
                         <Input
                           id="email"
                           name="email"
                           type="email"
-                          placeholder="Enter email address"
+                          placeholder={t('placeholders.email')}
                           value={formData.email}
                           onChange={handleChange}
                           className="transition-all duration-300 focus:scale-105"
@@ -455,17 +495,47 @@ export default function EditContactPage() {
                     <div className="space-y-4">
                       <div className="flex items-center gap-2">
                         <MapPin className="h-4 w-4" />
-                        <Label className="text-base font-semibold">Address</Label>
+                        <Label className="text-base font-semibold">{t('contacts.address')}</Label>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="google-address-search">{t('maps.searchAddress')}</Label>
+                        {googleMapsApiKey ? (
+                          <APIProvider apiKey={googleMapsApiKey} libraries={['places']}>
+                            <AddressAutocomplete
+                              value={formData.address?.street || ''}
+                              onChange={(value) => setFormData(prev => ({
+                                ...prev,
+                                address: { ...prev.address, street: value }
+                              }))}
+                              onPlaceSelect={handleAddressSelection}
+                              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                            />
+                          </APIProvider>
+                        ) : (
+                          <Input
+                            id="google-address-search"
+                            placeholder={t('maps.manualAddress')}
+                            value={formData.address?.street || ''}
+                            onChange={(event) => setFormData(prev => ({
+                              ...prev,
+                              address: { ...prev.address, street: event.target.value }
+                            }))}
+                          />
+                        )}
+                        <p className="text-xs text-muted-foreground">
+                          {t('maps.optionalManual')}
+                        </p>
                       </div>
                       
                       <div className="grid gap-4 md:grid-cols-2">
                         <div className="space-y-2">
-                          <Label htmlFor="address.street">Street Address</Label>
+                          <Label htmlFor="address.street">{t('contacts.streetAddress')}</Label>
                           <Input
                             id="address.street"
                             name="address.street"
                             type="text"
-                            placeholder="Enter street address"
+                            placeholder={t('placeholders.street')}
                             value={formData.address?.street || ''}
                             onChange={handleChange}
                             className="transition-all duration-300 focus:scale-105"
@@ -473,12 +543,12 @@ export default function EditContactPage() {
                         </div>
 
                         <div className="space-y-2">
-                          <Label htmlFor="address.city">City</Label>
+                          <Label htmlFor="address.city">{t('contacts.city')}</Label>
                           <Input
                             id="address.city"
                             name="address.city"
                             type="text"
-                            placeholder="Enter city"
+                            placeholder={t('placeholders.city')}
                             value={formData.address?.city || ''}
                             onChange={handleChange}
                             className="transition-all duration-300 focus:scale-105"
@@ -486,12 +556,12 @@ export default function EditContactPage() {
                         </div>
 
                         <div className="space-y-2">
-                          <Label htmlFor="address.state">State/Province</Label>
+                          <Label htmlFor="address.state">{t('contacts.state')}</Label>
                           <Input
                             id="address.state"
                             name="address.state"
                             type="text"
-                            placeholder="Enter state or province"
+                            placeholder={t('placeholders.state')}
                             value={formData.address?.state || ''}
                             onChange={handleChange}
                             className="transition-all duration-300 focus:scale-105"
@@ -499,12 +569,12 @@ export default function EditContactPage() {
                         </div>
 
                         <div className="space-y-2">
-                          <Label htmlFor="address.zipCode">ZIP/Postal Code</Label>
+                          <Label htmlFor="address.zipCode">{t('contacts.zipCode')}</Label>
                           <Input
                             id="address.zipCode"
                             name="address.zipCode"
                             type="text"
-                            placeholder="Enter ZIP or postal code"
+                            placeholder={t('placeholders.zipCode')}
                             value={formData.address?.zipCode || ''}
                             onChange={handleChange}
                             className="transition-all duration-300 focus:scale-105"
@@ -512,18 +582,25 @@ export default function EditContactPage() {
                         </div>
 
                         <div className="space-y-2">
-                          <Label htmlFor="address.country">Country</Label>
+                          <Label htmlFor="address.country">{t('contacts.country')}</Label>
                           <Input
                             id="address.country"
                             name="address.country"
                             type="text"
-                            placeholder="Enter country"
+                            placeholder={t('placeholders.country')}
                             value={formData.address?.country || ''}
                             onChange={handleChange}
                             className="transition-all duration-300 focus:scale-105"
                           />
                         </div>
                       </div>
+
+                      <GoogleMap
+                        latitude={formData.latitude}
+                        longitude={formData.longitude}
+                        onLocationChange={handleMapLocationChange}
+                        onAddressChange={handleMapAddressChange}
+                      />
                     </div>
                   </FormFieldAnimation>
 
@@ -533,13 +610,13 @@ export default function EditContactPage() {
                       <div className="space-y-2">
                         <Label htmlFor="creditLimit">
                           <CreditCard className="inline h-4 w-4 mr-1" />
-                          Credit Limit
+                          {t('contacts.creditLimit')}
                         </Label>
                         <Input
                           id="creditLimit"
                           name="creditLimit"
                           type="number"
-                          placeholder="Enter credit limit"
+                          placeholder={t('placeholders.creditLimit')}
                           value={formData.creditLimit}
                           onChange={handleChange}
                           min="0"
@@ -553,12 +630,12 @@ export default function EditContactPage() {
                       <div className="space-y-2">
                         <Label htmlFor="notes">
                           <FileText className="inline h-4 w-4 mr-1" />
-                          Notes
+                          {t('contacts.notes')}
                         </Label>
                         <Textarea
                           id="notes"
                           name="notes"
-                          placeholder="Enter any additional notes"
+                          placeholder={t('placeholders.additionalNotes')}
                           value={formData.notes}
                           onChange={handleChange}
                           className="transition-all duration-300 focus:scale-105"

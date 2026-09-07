@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { FadeIn, SlideIn, FormFieldAnimation, AnimatedButton, LoadingSpinner } from '@/components/animations';
+import { useLanguage } from '@/contexts/LanguageContext';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -18,6 +19,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const { login, user, loading: authLoading } = useAuth();
   const router = useRouter();
+  const { t } = useLanguage();
 
   // Redirect if already logged in
   useEffect(() => {
@@ -32,7 +34,7 @@ export default function LoginPage() {
       <div className="min-h-screen flex items-center justify-center bg-muted/50 p-4">
         <div className="flex items-center space-x-2">
           <LoadingSpinner size={24} />
-          <span>Loading...</span>
+          <span>{t('common.loading')}</span>
         </div>
       </div>
     );
@@ -65,11 +67,11 @@ export default function LoginPage() {
           <Card className="w-full max-w-md shadow-lg hover:shadow-xl transition-shadow duration-300">
             <CardHeader className="space-y-1">
               <FadeIn delay={0.4}>
-                <CardTitle className="text-2xl text-center">Sign in</CardTitle>
+                <CardTitle className="text-2xl text-center">{t('auth.signIn')}</CardTitle>
               </FadeIn>
               <FadeIn delay={0.5}>
                 <CardDescription className="text-center">
-                  Enter your email and password to access your account
+                  {t('auth.enterCredentials')}
                 </CardDescription>
               </FadeIn>
             </CardHeader>
@@ -85,7 +87,7 @@ export default function LoginPage() {
                 
                 <FormFieldAnimation delay={0.6}>
                   <div className="space-y-2">
-                    <Label htmlFor="email">Email</Label>
+                    <Label htmlFor="email">{t('auth.email')}</Label>
                     <Input
                       id="email"
                       type="email"
@@ -100,7 +102,7 @@ export default function LoginPage() {
                 
                 <FormFieldAnimation delay={0.7}>
                   <div className="space-y-2">
-                    <Label htmlFor="password">Password</Label>
+                    <Label htmlFor="password">{t('auth.password')}</Label>
                     <Input
                       id="password"
                       type="password"
@@ -121,10 +123,10 @@ export default function LoginPage() {
                     {loading ? (
                       <div className="flex items-center space-x-2">
                         <LoadingSpinner size={16} />
-                        <span>Signing in...</span>
+                        <span>{t('auth.signingIn')}</span>
                       </div>
                     ) : (
-                      'Sign in'
+                      t('auth.signIn')
                     )}
                   </Button>
                 </FormFieldAnimation>
@@ -132,9 +134,9 @@ export default function LoginPage() {
               
               <FadeIn delay={0.9}>
                 <div className="mt-4 text-center text-sm">
-                  Don&apos;t have an account?{' '}
+                  {t('auth.noAccount')}{' '}
                   <Link href="/register" className="text-primary hover:underline transition-colors duration-300 hover:scale-105 inline-block">
-                    Sign up
+                    {t('auth.signUp')}
                   </Link>
                 </div>
               </FadeIn>

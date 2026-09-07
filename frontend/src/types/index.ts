@@ -63,6 +63,8 @@ export interface Contact {
     zipCode?: string;
     country?: string;
   };
+  latitude?: number;
+  longitude?: number;
   type: 'customer' | 'vendor';
   businessId: string;
   creditLimit: number;
@@ -88,6 +90,8 @@ export interface CreateContactData {
     zipCode?: string;
     country?: string;
   };
+  latitude?: number;
+  longitude?: number;
   type: 'customer' | 'vendor';
   creditLimit?: number;
   notes?: string;
