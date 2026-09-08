@@ -1,5 +1,58 @@
-const { Product } = require('../models');
+const { Product, Contact } = require('../models');
 const { asyncHandler } = require('../middleware/validation');
+const { notifyLowStock } = require('../services/telegramService');
+
+const validateSupplierPrices = async (supplierPrices, businessId) => {
+  if (supplierPrices === undefined) return undefined;
+  if (!Array.isArray(supplierPrices)) {
+    const error = new Error('Supplier prices must be an array');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const entries = supplierPrices.filter(entry => entry && entry.supplierId);
+  const supplierIds = [...new Set(entries.map(entry => String(entry.supplierId)))];
+  const validSuppliers = await Contact.find({
+    _id: { $in: supplierIds },
+    businessId,
+    type: 'vendor',
+    isActive: true
+  }).select('_id');
+  if (validSuppliers.length !== supplierIds.length) {
+    const error = new Error('Supplier prices must reference active vendors in this business');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return entries.map(entry => ({
+    supplierId: entry.supplierId,
+    purchasePrice: Number(entry.purchasePrice)
+  }));
+};
+
+const validatePreferredSupplier = async (preferredSupplierId, supplierPrices, businessId) => {
+  if (!preferredSupplierId) return null;
+  const isConfigured = (supplierPrices || []).some(
+    entry => String(entry.supplierId) === String(preferredSupplierId),
+  );
+  if (!isConfigured) {
+    const error = new Error('Preferred supplier must have a configured purchase price');
+    error.statusCode = 400;
+    throw error;
+  }
+  const supplier = await Contact.findOne({
+    _id: preferredSupplierId,
+    businessId,
+    type: 'vendor',
+    isActive: true,
+  }).select('_id');
+  if (!supplier) {
+    const error = new Error('Preferred supplier must be an active vendor in this business');
+    error.statusCode = 400;
+    throw error;
+  }
+  return preferredSupplierId;
+};
 
 /**
  * @desc    Get all products with search and filter
@@ -90,9 +143,17 @@ const getProduct = asyncHandler(async (req, res) => {
  * @access  Private
  */
 const createProduct = asyncHandler(async (req, res) => {
+  const supplierPrices = await validateSupplierPrices(req.body.supplierPrices, req.businessId);
+  const preferredSupplierId = await validatePreferredSupplier(
+    req.body.preferredSupplierId,
+    supplierPrices || [],
+    req.businessId,
+  );
   const productData = {
     ...req.body,
-    businessId: req.businessId
+    businessId: req.businessId,
+    ...(supplierPrices ? { supplierPrices } : {}),
+    preferredSupplierId,
   };
 
   // Check if SKU already exists (if provided)
@@ -127,7 +188,24 @@ const createProduct = asyncHandler(async (req, res) => {
  */
 const updateProduct = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const updateData = req.body;
+  const updateData = { ...req.body };
+  const existingProduct = await Product.findOne({ _id: id, businessId: req.businessId, isActive: true })
+    .select('supplierPrices');
+  if (!existingProduct) {
+    return res.status(404).json({
+      success: false,
+      message: 'Product not found'
+    });
+  }
+  const supplierPrices = await validateSupplierPrices(updateData.supplierPrices, req.businessId);
+  if (supplierPrices) updateData.supplierPrices = supplierPrices;
+  if (updateData.preferredSupplierId !== undefined) {
+    updateData.preferredSupplierId = await validatePreferredSupplier(
+      updateData.preferredSupplierId,
+      supplierPrices || existingProduct.supplierPrices,
+      req.businessId,
+    );
+  }
 
   // Check if SKU already exists (if being updated)
   if (updateData.sku) {
@@ -271,6 +349,7 @@ const updateProductStock = asyncHandler(async (req, res) => {
     });
   }
 
+  const previousStock = product.stock;
   let newStock;
   switch (operation) {
     case 'add':
@@ -287,13 +366,16 @@ const updateProductStock = asyncHandler(async (req, res) => {
 
   product.stock = newStock;
   await product.save();
+  Promise.resolve()
+    .then(() => notifyLowStock(req.businessId, product, previousStock))
+    .catch((error) => console.error('[Telegram] low-stock notification failed:', error.message));
 
   res.json({
     success: true,
     message: 'Product stock updated successfully',
     data: {
       product,
-      previousStock: operation === 'set' ? null : (operation === 'add' ? product.stock - quantity : product.stock + quantity),
+      previousStock,
       newStock,
       operation
     }

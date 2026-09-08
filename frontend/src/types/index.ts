@@ -27,6 +27,9 @@ export interface Product {
   name: string;
   description?: string;
   price: number;
+  costPrice?: number;
+  supplierPrices?: SupplierPrice[];
+  preferredSupplierId?: string | null;
   stock: number;
   category: string;
   sku?: string;
@@ -42,10 +45,18 @@ export interface CreateProductData {
   name: string;
   description?: string;
   price: number;
+  costPrice?: number;
+  supplierPrices?: SupplierPrice[];
+  preferredSupplierId?: string | null;
   stock: number;
   category: string;
   sku?: string;
   minStockLevel?: number;
+}
+
+export interface SupplierPrice {
+  supplierId: string;
+  purchasePrice: number;
 }
 
 // Contact types
@@ -103,6 +114,7 @@ export interface TransactionItem {
   productName: string;
   quantity: number;
   price: number;
+  costPrice?: number;
   total: number;
 }
 
@@ -113,6 +125,7 @@ export interface Transaction {
   customerName?: string;
   vendorId?: string;
   vendorName?: string;
+  supplierId?: string;
   products: TransactionItem[];
   totalAmount: number;
   originalAmount?: number;
@@ -136,6 +149,7 @@ export interface CreateTransactionData {
     productId: string;
     quantity: number;
     price: number;
+    costPrice?: number;
   }[];
   paymentMethod?: string;
   notes?: string;

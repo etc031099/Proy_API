@@ -20,6 +20,11 @@ const transactionItemSchema = new mongoose.Schema({
     required: [true, 'Price is required'],
     min: [0, 'Price cannot be negative']
   },
+  // Purchase cost captured at the time of purchase; sale price remains in price.
+  costPrice: {
+    type: Number,
+    min: [0, 'Cost price cannot be negative']
+  },
   total: {
     type: Number,
     required: true
@@ -50,6 +55,11 @@ const transactionSchema = new mongoose.Schema({
   vendorName: {
     type: String,
     required: function() { return this.type === 'purchase'; }
+  },
+  // Alias retained alongside vendorId so purchase records expose their supplier explicitly.
+  supplierId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Contact'
   },
   products: [transactionItemSchema],
   totalAmount: {

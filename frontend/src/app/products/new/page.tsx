@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { Layout } from '@/components/Layout';
@@ -11,15 +11,17 @@ import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { apiClient } from '@/lib/api';
-import { CreateProductData } from '@/types';
+import { CreateProductData, SupplierPrice } from '@/types';
 import { ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
+import { useLanguage } from '@/contexts/LanguageContext';
 
 export default function NewProductPage() {
   const [formData, setFormData] = useState<CreateProductData>({
     name: '',
     description: '',
     price: 0,
+    costPrice: 0,
     stock: 0,
     category: '',
     sku: '',
@@ -27,16 +29,38 @@ export default function NewProductPage() {
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [vendors, setVendors] = useState<{ _id: string; name: string }[]>([]);
+  const [supplierPrices, setSupplierPrices] = useState<SupplierPrice[]>([]);
+  const [preferredSupplierId, setPreferredSupplierId] = useState('');
+  const [markupPercentage, setMarkupPercentage] = useState(30);
   const router = useRouter();
+  const { t } = useLanguage();
+
+  useEffect(() => {
+    apiClient.getVendors({ limit: 100 }).then(response => {
+      if (response.success) setVendors(response.data?.vendors || response.data?.contacts || []);
+    }).catch((error) => {
+      console.error('Error loading suppliers:', error);
+    });
+  }, []);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({
       ...prev,
-      [name]: name === 'price' || name === 'stock' || name === 'minStockLevel' 
+      [name]: name === 'price' || name === 'costPrice' || name === 'stock' || name === 'minStockLevel'
         ? parseFloat(value) || 0 
         : value
     }));
+  };
+
+  const applySuggestedPrice = () => {
+    const configuredSupplierCost = supplierPrices.find(entry => Number(entry.purchasePrice) > 0)?.purchasePrice;
+    const cost = Number(formData.costPrice || configuredSupplierCost || 0);
+    const markup = Math.min(99.99, Math.max(0, Number(markupPercentage) || 0));
+    if (cost > 0) {
+      setFormData(prev => ({ ...prev, price: Number((cost / (1 - markup / 100)).toFixed(2)) }));
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -45,7 +69,7 @@ export default function NewProductPage() {
     setLoading(true);
 
     try {
-      const response = await apiClient.createProduct(formData);
+      const response = await apiClient.createProduct({ ...formData, supplierPrices, preferredSupplierId: preferredSupplierId || null });
       if (response.success) {
         router.push('/products');
       } else {
@@ -69,15 +93,15 @@ export default function NewProductPage() {
               </Button>
             </Link>
             <div>
-              <h1 className="text-3xl font-bold">Add New Product</h1>
-              <p className="text-muted-foreground">Create a new product in your inventory</p>
+              <h1 className="text-3xl font-bold">{t('products.addNew')}</h1>
+              <p className="text-muted-foreground">{t('products.createDescription')}</p>
             </div>
           </div>
 
           <Card className="max-w-2xl">
             <CardHeader>
-              <CardTitle>Product Details</CardTitle>
-              <CardDescription>Enter the product information below</CardDescription>
+              <CardTitle>{t('products.details')}</CardTitle>
+              <CardDescription>{t('products.enterInformation')}</CardDescription>
             </CardHeader>
             <CardContent>
               <form onSubmit={handleSubmit} className="space-y-4">
@@ -89,7 +113,7 @@ export default function NewProductPage() {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="name">Product Name *</Label>
+                    <Label htmlFor="name">{t('products.productName')} *</Label>
                     <Input
                       id="name"
                       name="name"
@@ -99,8 +123,50 @@ export default function NewProductPage() {
                     />
                   </div>
 
+                  <div className="space-y-3">
+                    <Label>{t('products.supplierPrices')}</Label>
+                    <select
+                      className="h-10 w-full min-w-0 rounded-md border bg-background px-3 text-sm"
+                      value={preferredSupplierId}
+                      onChange={e => setPreferredSupplierId(e.target.value)}
+                      disabled={supplierPrices.length === 0}
+                    >
+                      <option value="">{t('products.selectSupplier')}</option>
+                      {vendors
+                        .filter(vendor => supplierPrices.some(entry => entry.supplierId === vendor._id))
+                        .map(vendor => <option key={vendor._id} value={vendor._id}>{vendor.name}</option>)}
+                    </select>
+                    <p className="text-xs text-muted-foreground">{t('products.preferredSupplierHelp')}</p>
+                    {supplierPrices.map((entry, index) => (
+                      <div key={`${entry.supplierId}-${index}`} className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_8rem_auto]">
+                        <select className="h-10 min-w-0 w-full rounded-md border bg-background px-3 text-sm"
+                          value={entry.supplierId}
+                          onChange={e => setSupplierPrices(items => items.map((item, i) =>
+                            i === index ? { ...item, supplierId: e.target.value } : item
+                          ))}>
+                          <option value="">{t('products.selectSupplier')}</option>
+                          {vendors.map(vendor => <option key={vendor._id} value={vendor._id}>{vendor.name}</option>)}
+                        </select>
+                        <Input className="w-32 shrink-0" type="number" min="0" step="0.01" placeholder={t('products.purchaseCost')}
+                          value={entry.purchasePrice}
+                          onChange={e => setSupplierPrices(items => items.map((item, i) =>
+                            i === index ? { ...item, purchasePrice: parseFloat(e.target.value) || 0 } : item
+                          ))} />
+                        <Button type="button" variant="outline" className="w-full sm:w-auto"
+                          onClick={() => {
+                            if (entry.supplierId === preferredSupplierId) setPreferredSupplierId('');
+                            setSupplierPrices(items => items.filter((_, i) => i !== index));
+                          }}>{t('products.remove')}</Button>
+                      </div>
+                    ))}
+                    <Button type="button" variant="outline"
+                      onClick={() => setSupplierPrices(items => [...items, { supplierId: '', purchasePrice: 0 }])}>
+                      {t('products.addSupplierPrice')}
+                    </Button>
+                  </div>
+
                   <div className="space-y-2">
-                    <Label htmlFor="category">Category *</Label>
+                    <Label htmlFor="category">{t('products.category')} *</Label>
                     <Input
                       id="category"
                       name="category"
@@ -111,8 +177,23 @@ export default function NewProductPage() {
                   </div>
                 </div>
 
+                <div className="flex flex-wrap items-end gap-3 rounded-md border p-3">
+                  <div className="space-y-2">
+                    <Label htmlFor="markupPercentage">{t('products.suggestedMargin')}</Label>
+                    <Input id="markupPercentage" type="number" min="0" max="99.99" step="0.01"
+                      value={markupPercentage}
+                      onChange={e => setMarkupPercentage(parseFloat(e.target.value) || 0)} />
+                  </div>
+                  <Button type="button" variant="outline" onClick={applySuggestedPrice}>
+                    {t('products.applySuggestedPrice')}
+                  </Button>
+                  <p className="text-sm text-muted-foreground">
+                    {t('products.marginHelp')}
+                  </p>
+                </div>
+
                 <div className="space-y-2">
-                  <Label htmlFor="description">Description</Label>
+                  <Label htmlFor="description">{t('products.description')}</Label>
                   <Textarea
                     id="description"
                     name="description"
@@ -124,7 +205,7 @@ export default function NewProductPage() {
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="price">Price *</Label>
+                    <Label htmlFor="price">{t('products.salePrice')} *</Label>
                     <Input
                       id="price"
                       name="price"
@@ -138,7 +219,20 @@ export default function NewProductPage() {
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="stock">Stock Quantity *</Label>
+                    <Label htmlFor="costPrice">{t('products.purchaseCost')} (USD)</Label>
+                    <Input
+                      id="costPrice"
+                      name="costPrice"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={formData.costPrice}
+                      onChange={handleChange}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="stock">{t('products.stockQuantity')} *</Label>
                     <Input
                       id="stock"
                       name="stock"
@@ -151,7 +245,7 @@ export default function NewProductPage() {
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="minStockLevel">Min Stock Level</Label>
+                    <Label htmlFor="minStockLevel">{t('products.minStock')}</Label>
                     <Input
                       id="minStockLevel"
                       name="minStockLevel"
@@ -164,7 +258,7 @@ export default function NewProductPage() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="sku">SKU (Optional)</Label>
+                  <Label htmlFor="sku">{t('products.sku')}</Label>
                   <Input
                     id="sku"
                     name="sku"
@@ -176,11 +270,11 @@ export default function NewProductPage() {
 
                 <div className="flex space-x-2">
                   <Button type="submit" disabled={loading}>
-                    {loading ? 'Creating...' : 'Create Product'}
+                    {loading ? t('products.creating') : t('products.create')}
                   </Button>
                   <Link href="/products">
                     <Button type="button" variant="outline">
-                      Cancel
+                      {t('common.cancel')}
                     </Button>
                   </Link>
                 </div>

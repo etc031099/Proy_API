@@ -1,6 +1,16 @@
 const { Product, Transaction, Contact } = require('../models');
 const { asyncHandler } = require('../middleware/validation');
 
+const getBaseAmount = (transaction) => {
+  const originalAmount = Number(transaction.originalAmount);
+  if (Number.isFinite(originalAmount) && originalAmount > 0) return originalAmount;
+  const totalAmount = Number(transaction.totalAmount) || 0;
+  const exchangeRate = Number(transaction.exchangeRate);
+  return transaction.currency !== 'USD' && exchangeRate > 0
+    ? totalAmount / exchangeRate
+    : totalAmount;
+};
+
 /**
  * @desc    Get inventory report
  * @route   GET /api/reports/inventory
@@ -82,7 +92,7 @@ const getTransactionReport = asyncHandler(async (req, res) => {
   const businessId = req.businessId;
 
   // Build filter
-  const filter = { businessId };
+  const filter = { businessId, status: 'completed' };
 
   if (startDate || endDate) {
     filter.date = {};
@@ -124,10 +134,10 @@ const getTransactionReport = asyncHandler(async (req, res) => {
     
     if (transaction.type === 'sale') {
       acc[key].sales.count++;
-      acc[key].sales.amount += transaction.totalAmount;
+      acc[key].sales.amount += getBaseAmount(transaction);
     } else {
       acc[key].purchases.count++;
-      acc[key].purchases.amount += transaction.totalAmount;
+      acc[key].purchases.amount += getBaseAmount(transaction);
     }
     
     acc[key].transactions.push(transaction);
@@ -142,11 +152,11 @@ const getTransactionReport = asyncHandler(async (req, res) => {
   // Calculate summary statistics
   const totalSales = transactions
     .filter(t => t.type === 'sale')
-    .reduce((sum, t) => sum + t.totalAmount, 0);
+    .reduce((sum, t) => sum + getBaseAmount(t), 0);
     
   const totalPurchases = transactions
     .filter(t => t.type === 'purchase')
-    .reduce((sum, t) => sum + t.totalAmount, 0);
+    .reduce((sum, t) => sum + getBaseAmount(t), 0);
     
   const salesCount = transactions.filter(t => t.type === 'sale').length;
   const purchasesCount = transactions.filter(t => t.type === 'purchase').length;
@@ -198,6 +208,7 @@ const getCustomerReport = asyncHandler(async (req, res) => {
   // Build transaction filter
   const filter = {
     businessId,
+    status: 'completed',
     customerId: id,
     type: 'sale'
   };
@@ -214,7 +225,7 @@ const getCustomerReport = asyncHandler(async (req, res) => {
     .sort({ date: -1 });
 
   // Calculate statistics
-  const totalPurchases = transactions.reduce((sum, t) => sum + t.totalAmount, 0);
+  const totalPurchases = transactions.reduce((sum, t) => sum + getBaseAmount(t), 0);
   const totalTransactions = transactions.length;
   const averagePurchaseAmount = totalTransactions > 0 ? totalPurchases / totalTransactions : 0;
 
@@ -248,7 +259,7 @@ const getCustomerReport = asyncHandler(async (req, res) => {
       acc[month] = { month, count: 0, amount: 0 };
     }
     acc[month].count++;
-    acc[month].amount += transaction.totalAmount;
+    acc[month].amount += getBaseAmount(transaction);
     return acc;
   }, {});
 
@@ -298,6 +309,7 @@ const getVendorReport = asyncHandler(async (req, res) => {
   // Build transaction filter
   const filter = {
     businessId,
+    status: 'completed',
     vendorId: id,
     type: 'purchase'
   };
@@ -314,7 +326,7 @@ const getVendorReport = asyncHandler(async (req, res) => {
     .sort({ date: -1 });
 
   // Calculate statistics
-  const totalPurchases = transactions.reduce((sum, t) => sum + t.totalAmount, 0);
+  const totalPurchases = transactions.reduce((sum, t) => sum + getBaseAmount(t), 0);
   const totalTransactions = transactions.length;
   const averagePurchaseAmount = totalTransactions > 0 ? totalPurchases / totalTransactions : 0;
 
@@ -381,30 +393,30 @@ const getDashboardSummary = asyncHandler(async (req, res) => {
     Contact.countDocuments({ businessId, type: 'customer', isActive: true }),
     Contact.countDocuments({ businessId, type: 'vendor', isActive: true }),
     Product.findLowStock(businessId),
-    Transaction.find({ businessId, date: { $gte: startOfMonth } }),
-    Transaction.find({ businessId, date: { $gte: startOfYear } })
+    Transaction.find({ businessId, status: 'completed', date: { $gte: startOfMonth } }),
+    Transaction.find({ businessId, status: 'completed', date: { $gte: startOfYear } })
   ]);
 
   // Calculate monthly statistics
   const monthlySales = monthlyTransactions
     .filter(t => t.type === 'sale')
-    .reduce((sum, t) => sum + t.totalAmount, 0);
+    .reduce((sum, t) => sum + getBaseAmount(t), 0);
     
   const monthlyPurchases = monthlyTransactions
     .filter(t => t.type === 'purchase')
-    .reduce((sum, t) => sum + t.totalAmount, 0);
+    .reduce((sum, t) => sum + getBaseAmount(t), 0);
 
   // Calculate yearly statistics  
   const yearlySales = yearlyTransactions
     .filter(t => t.type === 'sale')
-    .reduce((sum, t) => sum + t.totalAmount, 0);
+    .reduce((sum, t) => sum + getBaseAmount(t), 0);
     
   const yearlyPurchases = yearlyTransactions
     .filter(t => t.type === 'purchase')
-    .reduce((sum, t) => sum + t.totalAmount, 0);
+    .reduce((sum, t) => sum + getBaseAmount(t), 0);
 
   // Recent transactions
-  const recentTransactions = await Transaction.find({ businessId })
+  const recentTransactions = await Transaction.find({ businessId, status: 'completed' })
     .populate('customerId', 'name')
     .populate('vendorId', 'name')
     .sort({ date: -1 })
@@ -413,6 +425,7 @@ const getDashboardSummary = asyncHandler(async (req, res) => {
   res.json({
     success: true,
     data: {
+      baseCurrency: 'USD',
       overview: {
         totalProducts,
         totalCustomers,

@@ -2,6 +2,24 @@ const mongoose = require('mongoose');
 const { Transaction, Product, Contact } = require('../models');
 const { asyncHandler } = require('../middleware/validation');
 const { validatePaymentMethod, getExchangeRate } = require('../services/externalApiService');
+const { notifyLowStock } = require('../services/telegramService');
+
+const baseAmountExpression = {
+  $cond: [
+    { $gt: [{ $ifNull: ['$originalAmount', 0] }, 0] },
+    '$originalAmount',
+    {
+      $cond: [
+        { $and: [
+          { $ne: ['$currency', 'USD'] },
+          { $gt: [{ $ifNull: ['$exchangeRate', 0] }, 0] }
+        ] },
+        { $divide: ['$totalAmount', '$exchangeRate'] },
+        '$totalAmount'
+      ]
+    }
+  ]
+};
 
 /**
  * @desc    Get all transactions with filters
@@ -53,6 +71,7 @@ const getTransactions = asyncHandler(async (req, res) => {
   const transactions = await Transaction.find(filter)
     .populate('customerId', 'name phone email')
     .populate('vendorId', 'name phone email')
+    .populate('supplierId', 'name phone email')
     .populate('products.productId', 'name category sku')
     .sort({ date: -1 })
     .limit(limitNum)
@@ -87,6 +106,7 @@ const getTransaction = asyncHandler(async (req, res) => {
   })
     .populate('customerId', 'name phone email address')
     .populate('vendorId', 'name phone email address')
+    .populate('supplierId', 'name phone email address')
     .populate('products.productId', 'name description category sku');
 
   if (!transaction) {
@@ -170,6 +190,7 @@ const createTransaction = asyncHandler(async (req, res) => {
 
     // Validate and process products
     const processedProducts = [];
+    const lowStockNotifications = [];
     let subtotal = 0;
 
     for (const item of products) {
@@ -193,6 +214,7 @@ const createTransaction = asyncHandler(async (req, res) => {
         });
       }
 
+      const previousStock = product.stock;
       if (type === 'sale') {
         product.stock -= item.quantity;
       } else {
@@ -200,15 +222,35 @@ const createTransaction = asyncHandler(async (req, res) => {
       }
 
       await product.save({ session });
+      if (type === 'sale') lowStockNotifications.push({ product, previousStock });
 
-      const itemTotal = Number(item.quantity || 0) * Number(item.price || 0);
+      const matchingSupplierPrice = type === 'purchase'
+        ? product.supplierPrices.find(entry => String(entry.supplierId) === String(vendorId))
+        : null;
+      if (type === 'purchase' && !matchingSupplierPrice) {
+        return res.status(400).json({
+          success: false,
+          message: `Product ${product.name} is not configured for the selected vendor`
+        });
+      }
+      const preferredSupplierPrice = type === 'purchase' && product.preferredSupplierId
+        ? product.supplierPrices.find(entry => String(entry.supplierId) === String(product.preferredSupplierId))
+        : null;
+      const itemCost = type === 'purchase'
+        ? Number(item.costPrice ?? matchingSupplierPrice?.purchasePrice ?? preferredSupplierPrice?.purchasePrice ?? item.price ?? product.costPrice ?? product.price ?? 0)
+        : undefined;
+      const itemPrice = type === 'sale'
+        ? Number(item.price ?? product.price ?? 0)
+        : itemCost;
+      const itemTotal = Number(item.quantity || 0) * itemPrice;
       subtotal += itemTotal;
 
       processedProducts.push({
         productId: product._id,
         productName: product.name,
         quantity: Number(item.quantity || 0),
-        price: Number(item.price || 0),
+        price: itemPrice,
+        ...(type === 'purchase' ? { costPrice: itemCost } : {}),
         total: itemTotal
       });
     }
@@ -249,6 +291,7 @@ const createTransaction = asyncHandler(async (req, res) => {
       transactionData.customerName = contact.name;
     } else {
       transactionData.vendorId = vendorId;
+      transactionData.supplierId = vendorId;
       transactionData.vendorName = contact.name;
     }
 
@@ -261,9 +304,16 @@ const createTransaction = asyncHandler(async (req, res) => {
 
     await session.commitTransaction();
 
+    for (const notification of lowStockNotifications) {
+      Promise.resolve()
+        .then(() => notifyLowStock(businessId, notification.product, notification.previousStock))
+        .catch((error) => console.error('[Telegram] low-stock notification failed:', error.message));
+    }
+
     const populatedTransaction = await Transaction.findById(transaction[0]._id)
       .populate('customerId', 'name phone email')
       .populate('vendorId', 'name phone email')
+      .populate('supplierId', 'name phone email')
       .populate('products.productId', 'name category');
 
     res.status(201).json({
@@ -383,22 +433,82 @@ const updateTransactionStatus = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
 
-  const transaction = await Transaction.findOneAndUpdate(
-    { _id: id, businessId: req.businessId },
-    { status },
-    { new: true, runValidators: true }
-  );
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  let transaction;
+  try {
+    transaction = await Transaction.findOne({
+      _id: id,
+      businessId: req.businessId
+    }).session(session);
 
-  if (!transaction) {
-    return res.status(404).json({
-      success: false,
-      message: 'Transaction not found'
-    });
+    if (!transaction) {
+      await session.abortTransaction();
+      return res.status(404).json({ success: false, message: 'Transaction not found' });
+    }
+
+    if (transaction.status === status) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: `Transaction is already ${status}`
+      });
+    }
+
+    if (status === 'cancelled') {
+      if (transaction.status === 'cancelled') {
+        await session.abortTransaction();
+        return res.status(400).json({ success: false, message: 'Transaction is already cancelled' });
+      }
+
+      for (const item of transaction.products) {
+        const product = await Product.findOne({
+          _id: item.productId,
+          businessId: req.businessId
+        }).session(session);
+
+        if (!product) {
+          throw Object.assign(new Error(`Product ${item.productName} is no longer available`), { statusCode: 409 });
+        }
+
+        const reversal = transaction.type === 'purchase' ? -item.quantity : item.quantity;
+        if (transaction.type === 'purchase' && product.stock < item.quantity) {
+          throw Object.assign(
+            new Error(`Cannot cancel this purchase because ${product.name} no longer has enough stock to remove it`),
+            { statusCode: 409 },
+          );
+        }
+        product.stock += reversal;
+        await product.save({ session });
+      }
+
+      if (transaction.type === 'sale' && transaction.paymentMethod === 'credit' && transaction.customerId) {
+        const customer = await Contact.findOne({
+          _id: transaction.customerId,
+          businessId: req.businessId
+        }).session(session);
+        if (customer) {
+          customer.currentBalance = Math.max(0, Number(customer.currentBalance || 0) - transaction.totalAmount);
+          await customer.save({ session });
+        }
+      }
+    }
+
+    transaction.status = status;
+    await transaction.save({ session });
+    await session.commitTransaction();
+  } catch (error) {
+    await session.abortTransaction();
+    throw error;
+  } finally {
+    await session.endSession();
   }
 
   res.json({
     success: true,
-    message: 'Transaction status updated successfully',
+    message: status === 'cancelled'
+      ? 'Transaction cancelled and inventory reversed successfully'
+      : 'Transaction status updated successfully',
     data: { transaction }
   });
 });
@@ -422,12 +532,13 @@ const getTransactionSummary = asyncHandler(async (req, res) => {
 
   const summary = await Transaction.aggregate([
     { $match: matchStage },
+    { $addFields: { baseAmount: baseAmountExpression } },
     {
       $group: {
         _id: '$type',
-        totalAmount: { $sum: '$totalAmount' },
+        totalAmount: { $sum: '$baseAmount' },
         transactionCount: { $sum: 1 },
-        averageAmount: { $avg: '$totalAmount' }
+        averageAmount: { $avg: '$baseAmount' }
       }
     }
   ]);
@@ -467,7 +578,7 @@ const getTransactionSummary = asyncHandler(async (req, res) => {
 
   res.json({
     success: true,
-    data: { summary: result }
+    data: { summary: { ...result, currency: 'USD' } }
   });
 });
 

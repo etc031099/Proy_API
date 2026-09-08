@@ -26,6 +26,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { FadeIn, SlideIn, StaggerContainer, StaggerItem } from '@/components/animations';
+import { useLanguage } from '@/contexts/LanguageContext';
 
 interface ContactReportData {
   customer?: Contact;
@@ -65,6 +66,7 @@ interface TransactionReportData {
 
 export default function ReportsPage() {
   const { user } = useAuth();
+  const { t, language } = useLanguage();
   const [activeTab, setActiveTab] = useState('inventory');
   const [loading, setLoading] = useState(false);
   
@@ -179,16 +181,118 @@ export default function ReportsPage() {
     }
   };
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('en-US', {
+  const formatCurrency = (amount: number, currency = 'USD') => {
+    return new Intl.NumberFormat(language === 'es' ? 'es-PE' : 'en-US', {
       style: 'currency',
-      currency: 'USD'
+      currency
     }).format(amount);
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString();
+    return new Date(dateString).toLocaleDateString(language === 'es' ? 'es-PE' : 'en-US');
   };
+
+  const getExportData = () => {
+    if (activeTab === 'inventory' && inventoryReport) {
+      return {
+        title: t('reports.inventoryReport'),
+        headers: [t('reports.product'), 'SKU', t('reports.category'), t('reports.price'), t('reports.stock'), t('reports.status')],
+        rows: inventoryReport.products.map((product) => [
+          product.name,
+          product.sku,
+          product.category,
+          product.price,
+          product.stock,
+          product.stock === 0 ? t('reports.outOfStock') : product.stock <= product.minStockLevel ? t('reports.lowStock') : t('products.inStock')
+        ]),
+        summary: `${t('reports.totalProducts')}: ${inventoryReport.statistics.totalProducts} | ${t('reports.totalValue')}: ${formatCurrency(inventoryReport.statistics.totalValue)}`
+      };
+    }
+
+    if (activeTab === 'transactions' && transactionReport) {
+      return {
+        title: t('reports.transactionReport'),
+        headers: [t('reports.date'), t('reports.type'), t('reports.contact'), t('reports.amount'), t('reports.currency')],
+        rows: [
+          [t('reports.totalSales'), transactionReport.summary.totalSales, '', '', ''],
+          [t('reports.totalPurchases'), transactionReport.summary.totalPurchases, '', '', ''],
+          [t('reports.netProfit'), transactionReport.summary.profit, '', '', ''],
+          ...transactionReport.transactions.map((transaction) => [
+            formatDate(transaction.date),
+            transaction.type,
+            transaction.type === 'sale' ? transaction.customerName || '' : transaction.vendorName || '',
+            transaction.totalAmount,
+            transaction.currency || 'USD'
+          ])
+        ],
+        summary: `${t('reports.totalSales')}: ${formatCurrency(transactionReport.summary.totalSales)} | ${t('reports.totalPurchases')}: ${formatCurrency(transactionReport.summary.totalPurchases)} | ${t('reports.netProfit')}: ${formatCurrency(transactionReport.summary.profit)}`
+      };
+    }
+
+    if ((activeTab === 'customers' || activeTab === 'vendors') && contactReport) {
+      const contact = activeTab === 'customers' ? contactReport.customer : contactReport.vendor;
+      return {
+        title: activeTab === 'customers' ? t('reports.customerReports') : t('reports.vendorReports'),
+        headers: [t('reports.product'), t('reports.category'), t('reports.amount'), t('reports.totalTransactions')],
+        rows: (contactReport.topProducts || []).map((item) => [
+          item.product.name,
+          item.product.category,
+          item.totalAmount,
+          item.transactionCount
+        ]),
+        summary: `${contact?.name || ''} - ${t('reports.totalTransactions')}: ${contactReport.statistics.totalTransactions}`
+      };
+    }
+
+    return null;
+  };
+
+  const escapeCsv = (value: unknown) => {
+    const text = String(value ?? '');
+    return `"${text.replace(/"/g, '""')}"`;
+  };
+
+  const exportAsExcel = () => {
+    const report = getExportData();
+    if (!report) {
+      window.alert(t('reports.exportUnavailable'));
+      return;
+    }
+    const csv = [report.headers, ...report.rows]
+      .map((row) => row.map(escapeCsv).join(';'))
+      .join('\r\n');
+    const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${report.title.toLowerCase().replace(/[^a-z0-9]+/gi, '-')}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportAsPdf = () => {
+    const report = getExportData();
+    if (!report) {
+      window.alert(t('reports.exportUnavailable'));
+      return;
+    }
+    const printWindow = window.open('', '_blank', 'width=1100,height=800');
+    if (!printWindow) return;
+    const rows = report.rows.map((row) => `<tr>${row.map((cell) => `<td>${String(cell ?? '').replace(/[<&>"]/g, (char) => ({ '<': '&lt;', '&': '&amp;', '>': '&gt;', '"': '&quot;' }[char] || char))}</td>`).join('')}</tr>`).join('');
+    printWindow.document.write(`
+      <html><head><title>${report.title}</title>
+      <style>body{font-family:Arial,sans-serif;padding:24px;color:#111}h1{font-size:22px}p{color:#555}
+      table{border-collapse:collapse;width:100%;font-size:12px}th,td{border:1px solid #ccc;padding:7px;text-align:left}th{background:#f1f5f9}</style>
+      </head><body><h1>${report.title}</h1><p>${report.summary || ''}</p>
+      <table><thead><tr>${report.headers.map((header) => `<th>${header}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>
+      </body></html>
+    `);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
+  };
+
+  const canExport = Boolean(getExportData());
 
   return (
     <ProtectedRoute>
@@ -197,32 +301,38 @@ export default function ReportsPage() {
           <div className="space-y-6">
             <div className="flex justify-between items-center">
               <div>
-                <h1 className="text-3xl font-bold">Reports & Analytics</h1>
-                <p className="text-muted-foreground">Comprehensive business insights and analytics</p>
+                <h1 className="text-3xl font-bold">{t('reports.title')}</h1>
+                <p className="text-muted-foreground">{t('reports.subtitle')}</p>
               </div>
-              <Button variant="outline" className="gap-2">
-                <Download className="h-4 w-4" />
-                Export
-              </Button>
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button variant="outline" className="gap-2" onClick={exportAsExcel} disabled={!canExport}>
+                  <Download className="h-4 w-4" />
+                  {t('reports.exportExcel')}
+                </Button>
+                <Button variant="outline" className="gap-2" onClick={exportAsPdf} disabled={!canExport}>
+                  <Download className="h-4 w-4" />
+                  {t('reports.exportPdf')}
+                </Button>
+              </div>
             </div>
 
             <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
               <TabsList className="grid w-full grid-cols-4">
                 <TabsTrigger value="inventory" className="gap-2">
                   <Package className="h-4 w-4" />
-                  Inventory
+                  {t('reports.inventory')}
                 </TabsTrigger>
                 <TabsTrigger value="transactions" className="gap-2">
                   <BarChart3 className="h-4 w-4" />
-                  Transactions
+                  {t('reports.transactions')}
                 </TabsTrigger>
                 <TabsTrigger value="customers" className="gap-2">
                   <Users className="h-4 w-4" />
-                  Customers
+                  {t('reports.customers')}
                 </TabsTrigger>
                 <TabsTrigger value="vendors" className="gap-2">
                   <Users className="h-4 w-4" />
-                  Vendors
+                  {t('reports.vendors')}
                 </TabsTrigger>
               </TabsList>
 
@@ -233,20 +343,20 @@ export default function ReportsPage() {
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2">
                         <Package className="h-5 w-5" />
-                        Inventory Report
+                        {t('reports.inventoryReport')}
                       </CardTitle>
                       <CardDescription>
-                        Detailed analysis of your product inventory and stock levels
+                        {t('reports.inventoryDescription')}
                       </CardDescription>
                     </CardHeader>
                     <CardContent>
                       {/* Filters */}
                       <div className="flex gap-4 mb-6 flex-wrap">
                         <div className="space-y-2">
-                          <Label htmlFor="category">Category</Label>
+                          <Label htmlFor="category">{t('reports.category')}</Label>
                           <Input
                             id="category"
-                            placeholder="Filter by category..."
+                            placeholder={t('reports.categoryPlaceholder')}
                             value={inventoryFilters.category}
                             onChange={(e) => setInventoryFilters(prev => ({ ...prev, category: e.target.value }))}
                           />
@@ -273,7 +383,7 @@ export default function ReportsPage() {
                                   <CardContent className="pt-6">
                                     <div className="flex items-center justify-between">
                                       <div>
-                                        <p className="text-sm font-medium text-muted-foreground">Total Products</p>
+                                        <p className="text-sm font-medium text-muted-foreground">{t('reports.totalProducts')}</p>
                                         <p className="text-2xl font-bold">{inventoryReport.statistics.totalProducts}</p>
                                       </div>
                                       <Package className="h-8 w-8 text-blue-500" />
@@ -287,7 +397,7 @@ export default function ReportsPage() {
                                   <CardContent className="pt-6">
                                     <div className="flex items-center justify-between">
                                       <div>
-                                        <p className="text-sm font-medium text-muted-foreground">Total Value</p>
+                                        <p className="text-sm font-medium text-muted-foreground">{t('reports.totalValue')}</p>
                                         <p className="text-2xl font-bold">{formatCurrency(inventoryReport.statistics.totalValue)}</p>
                                       </div>
                                       <DollarSign className="h-8 w-8 text-green-500" />
@@ -301,7 +411,7 @@ export default function ReportsPage() {
                                   <CardContent className="pt-6">
                                     <div className="flex items-center justify-between">
                                       <div>
-                                        <p className="text-sm font-medium text-muted-foreground">Low Stock</p>
+                                        <p className="text-sm font-medium text-muted-foreground">{t('reports.lowStock')}</p>
                                         <p className="text-2xl font-bold text-orange-500">{inventoryReport.statistics.lowStockCount}</p>
                                       </div>
                                       <AlertTriangle className="h-8 w-8 text-orange-500" />
@@ -315,7 +425,7 @@ export default function ReportsPage() {
                                   <CardContent className="pt-6">
                                     <div className="flex items-center justify-between">
                                       <div>
-                                        <p className="text-sm font-medium text-muted-foreground">Out of Stock</p>
+                                        <p className="text-sm font-medium text-muted-foreground">{t('reports.outOfStock')}</p>
                                         <p className="text-2xl font-bold text-red-500">{inventoryReport.statistics.outOfStockCount}</p>
                                       </div>
                                       <TrendingDown className="h-8 w-8 text-red-500" />
@@ -329,17 +439,17 @@ export default function ReportsPage() {
                           {/* Products Table */}
                           <Card>
                             <CardHeader>
-                              <CardTitle>Product Details</CardTitle>
+                              <CardTitle>{t('reports.productDetails')}</CardTitle>
                             </CardHeader>
                             <CardContent>
                               <Table>
                                 <TableHeader>
                                   <TableRow>
-                                    <TableHead>Product</TableHead>
-                                    <TableHead>Category</TableHead>
-                                    <TableHead>Price</TableHead>
-                                    <TableHead>Stock</TableHead>
-                                    <TableHead>Status</TableHead>
+                                    <TableHead>{t('reports.product')}</TableHead>
+                                    <TableHead>{t('reports.category')}</TableHead>
+                                    <TableHead>{t('reports.price')}</TableHead>
+                                    <TableHead>{t('reports.stock')}</TableHead>
+                                    <TableHead>{t('reports.status')}</TableHead>
                                   </TableRow>
                                 </TableHeader>
                                 <TableBody>
@@ -356,11 +466,11 @@ export default function ReportsPage() {
                                       <TableCell>{product.stock}</TableCell>
                                       <TableCell>
                                         {product.stock === 0 ? (
-                                          <Badge variant="destructive">Out of Stock</Badge>
+                                          <Badge variant="destructive">{t('reports.outOfStock')}</Badge>
                                         ) : product.stock <= product.minStockLevel ? (
-                                          <Badge variant="secondary">Low Stock</Badge>
+                                          <Badge variant="secondary">{t('reports.lowStock')}</Badge>
                                         ) : (
-                                          <Badge variant="default">In Stock</Badge>
+                                          <Badge variant="default">{t('products.inStock')}</Badge>
                                         )}
                                       </TableCell>
                                     </TableRow>
@@ -383,7 +493,7 @@ export default function ReportsPage() {
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2">
                         <BarChart3 className="h-5 w-5" />
-                        Transaction Report
+                        {t('reports.transactionReport')}
                       </CardTitle>
                       <CardDescription>
                         Analyze your sales and purchase transactions over time
@@ -393,7 +503,7 @@ export default function ReportsPage() {
                       {/* Filters */}
                       <div className="flex gap-4 mb-6 flex-wrap">
                         <div className="space-y-2">
-                          <Label htmlFor="startDate">Start Date</Label>
+                          <Label htmlFor="startDate">{t('transactions.startDate')}</Label>
                           <Input
                             id="startDate"
                             type="date"
@@ -402,7 +512,7 @@ export default function ReportsPage() {
                           />
                         </div>
                         <div className="space-y-2">
-                          <Label htmlFor="endDate">End Date</Label>
+                          <Label htmlFor="endDate">{t('transactions.endDate')}</Label>
                           <Input
                             id="endDate"
                             type="date"
@@ -413,7 +523,7 @@ export default function ReportsPage() {
                         <div className="flex items-end">
                           <Button onClick={loadTransactionReport} className="gap-2">
                             <RefreshCw className="h-4 w-4" />
-                            Generate Report
+                            {t('reports.generateReport')}
                           </Button>
                         </div>
                       </div>
@@ -430,7 +540,7 @@ export default function ReportsPage() {
                               <CardContent className="pt-6">
                                 <div className="flex items-center justify-between">
                                   <div>
-                                    <p className="text-sm font-medium text-muted-foreground">Total Sales</p>
+                                    <p className="text-sm font-medium text-muted-foreground">{t('reports.totalSales')}</p>
                                     <p className="text-2xl font-bold text-green-600">{formatCurrency(transactionReport.summary.totalSales)}</p>
                                   </div>
                                   <TrendingUp className="h-8 w-8 text-green-500" />
@@ -442,7 +552,7 @@ export default function ReportsPage() {
                               <CardContent className="pt-6">
                                 <div className="flex items-center justify-between">
                                   <div>
-                                    <p className="text-sm font-medium text-muted-foreground">Total Purchases</p>
+                                    <p className="text-sm font-medium text-muted-foreground">{t('reports.totalPurchases')}</p>
                                     <p className="text-2xl font-bold text-red-600">{formatCurrency(transactionReport.summary.totalPurchases)}</p>
                                   </div>
                                   <TrendingDown className="h-8 w-8 text-red-500" />
@@ -454,7 +564,7 @@ export default function ReportsPage() {
                               <CardContent className="pt-6">
                                 <div className="flex items-center justify-between">
                                   <div>
-                                    <p className="text-sm font-medium text-muted-foreground">Net Profit</p>
+                                    <p className="text-sm font-medium text-muted-foreground">{t('reports.netProfit')}</p>
                                     <p className={`text-2xl font-bold ${transactionReport.summary.profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                       {formatCurrency(transactionReport.summary.profit)}
                                     </p>
@@ -468,7 +578,7 @@ export default function ReportsPage() {
                               <CardContent className="pt-6">
                                 <div className="flex items-center justify-between">
                                   <div>
-                                    <p className="text-sm font-medium text-muted-foreground">Avg Sale</p>
+                                    <p className="text-sm font-medium text-muted-foreground">{t('reports.avgSale')}</p>
                                     <p className="text-2xl font-bold">{formatCurrency(transactionReport.summary.averageSaleAmount)}</p>
                                   </div>
                                   <BarChart3 className="h-8 w-8 text-purple-500" />
@@ -480,16 +590,16 @@ export default function ReportsPage() {
                           {/* Recent Transactions */}
                           <Card>
                             <CardHeader>
-                              <CardTitle>Recent Transactions</CardTitle>
+                              <CardTitle>{t('reports.recentTransactions')}</CardTitle>
                             </CardHeader>
                             <CardContent>
                               <Table>
                                 <TableHeader>
                                   <TableRow>
-                                    <TableHead>Date</TableHead>
-                                    <TableHead>Type</TableHead>
-                                    <TableHead>Contact</TableHead>
-                                    <TableHead>Amount</TableHead>
+                                    <TableHead>{t('reports.date')}</TableHead>
+                                    <TableHead>{t('reports.type')}</TableHead>
+                                    <TableHead>{t('reports.contact')}</TableHead>
+                                    <TableHead>{t('reports.amount')}</TableHead>
                                   </TableRow>
                                 </TableHeader>
                                 <TableBody>
@@ -505,7 +615,7 @@ export default function ReportsPage() {
                                         {transaction.type === 'sale' ? transaction.customerName : transaction.vendorName}
                                       </TableCell>
                                       <TableCell className={transaction.type === 'sale' ? 'text-green-600' : 'text-red-600'}>
-                                        {formatCurrency(transaction.totalAmount)}
+                                        {formatCurrency(transaction.totalAmount, transaction.currency || 'PEN')}
                                       </TableCell>
                                     </TableRow>
                                   ))}
@@ -516,7 +626,7 @@ export default function ReportsPage() {
                         </div>
                       ) : (
                         <div className="text-center py-8">
-                          <p className="text-muted-foreground">Click &quot;Generate Report&quot; to view transaction analytics</p>
+                          <p className="text-muted-foreground">{t('reports.generatePrompt')}</p>
                         </div>
                       )}
                     </CardContent>
@@ -531,7 +641,7 @@ export default function ReportsPage() {
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2">
                         <Users className="h-5 w-5" />
-                        Customer Reports
+                        {t('reports.customerReports')}
                       </CardTitle>
                       <CardDescription>
                         Detailed analysis of customer purchase behavior
@@ -540,7 +650,7 @@ export default function ReportsPage() {
                     <CardContent>
                       <div className="space-y-4">
                         <div className="space-y-2">
-                          <Label htmlFor="customer">Select Customer</Label>
+                          <Label htmlFor="customer">{t('reports.selectCustomer')}</Label>
                           <Select
                             value={selectedContact}
                             onValueChange={(value) => {
@@ -549,7 +659,7 @@ export default function ReportsPage() {
                             }}
                           >
                             <SelectTrigger>
-                              <SelectValue placeholder="Choose a customer..." />
+                              <SelectValue placeholder={t('reports.chooseCustomer')} />
                             </SelectTrigger>
                             <SelectContent>
                               {Array.isArray(customers) && customers.map((customer) => (
@@ -567,7 +677,7 @@ export default function ReportsPage() {
                               <Card>
                                 <CardContent className="pt-6">
                                   <div className="text-center">
-                                    <p className="text-sm font-medium text-muted-foreground">Total Purchases</p>
+                                    <p className="text-sm font-medium text-muted-foreground">{t('reports.totalPurchases')}</p>
                                     <p className="text-2xl font-bold text-green-600">
                                       {formatCurrency(contactReport.statistics.totalPurchases)}
                                     </p>
@@ -578,7 +688,7 @@ export default function ReportsPage() {
                               <Card>
                                 <CardContent className="pt-6">
                                   <div className="text-center">
-                                    <p className="text-sm font-medium text-muted-foreground">Total Transactions</p>
+                                    <p className="text-sm font-medium text-muted-foreground">{t('reports.totalTransactions')}</p>
                                     <p className="text-2xl font-bold">{contactReport.statistics.totalTransactions}</p>
                                   </div>
                                 </CardContent>
@@ -587,7 +697,7 @@ export default function ReportsPage() {
                               <Card>
                                 <CardContent className="pt-6">
                                   <div className="text-center">
-                                    <p className="text-sm font-medium text-muted-foreground">Average Purchase</p>
+                                    <p className="text-sm font-medium text-muted-foreground">{t('reports.averagePurchase')}</p>
                                     <p className="text-2xl font-bold">
                                       {formatCurrency(contactReport.statistics.averagePurchaseAmount)}
                                     </p>
@@ -610,7 +720,7 @@ export default function ReportsPage() {
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2">
                         <Users className="h-5 w-5" />
-                        Vendor Reports
+                        {t('reports.vendorReports')}
                       </CardTitle>
                       <CardDescription>
                         Analysis of vendor relationships and purchase patterns
@@ -619,7 +729,7 @@ export default function ReportsPage() {
                     <CardContent>
                       <div className="space-y-4">
                         <div className="space-y-2">
-                          <Label htmlFor="vendor">Select Vendor</Label>
+                          <Label htmlFor="vendor">{t('reports.selectVendor')}</Label>
                           <Select
                             value={selectedContact}
                             onValueChange={(value) => {
@@ -628,7 +738,7 @@ export default function ReportsPage() {
                             }}
                           >
                             <SelectTrigger>
-                              <SelectValue placeholder="Choose a vendor..." />
+                              <SelectValue placeholder={t('reports.chooseVendor')} />
                             </SelectTrigger>
                             <SelectContent>
                               {Array.isArray(vendors) && vendors.map((vendor) => (
@@ -646,7 +756,7 @@ export default function ReportsPage() {
                               <Card>
                                 <CardContent className="pt-6">
                                   <div className="text-center">
-                                    <p className="text-sm font-medium text-muted-foreground">Total Purchases</p>
+                                    <p className="text-sm font-medium text-muted-foreground">{t('reports.totalPurchases')}</p>
                                     <p className="text-2xl font-bold text-red-600">
                                       {formatCurrency(contactReport.statistics.totalPurchases)}
                                     </p>
@@ -657,7 +767,7 @@ export default function ReportsPage() {
                               <Card>
                                 <CardContent className="pt-6">
                                   <div className="text-center">
-                                    <p className="text-sm font-medium text-muted-foreground">Total Transactions</p>
+                                    <p className="text-sm font-medium text-muted-foreground">{t('reports.totalTransactions')}</p>
                                     <p className="text-2xl font-bold">{contactReport.statistics.totalTransactions}</p>
                                   </div>
                                 </CardContent>
@@ -666,7 +776,7 @@ export default function ReportsPage() {
                               <Card>
                                 <CardContent className="pt-6">
                                   <div className="text-center">
-                                    <p className="text-sm font-medium text-muted-foreground">Average Purchase</p>
+                                    <p className="text-sm font-medium text-muted-foreground">{t('reports.averagePurchase')}</p>
                                     <p className="text-2xl font-bold">
                                       {formatCurrency(contactReport.statistics.averagePurchaseAmount)}
                                     </p>

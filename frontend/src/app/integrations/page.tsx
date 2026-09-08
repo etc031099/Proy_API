@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { Layout } from '@/components/Layout';
 import { Button } from '@/components/ui/button';
@@ -20,6 +20,9 @@ export default function IntegrationsPage() {
   const [documentNumber, setDocumentNumber] = useState('12345678');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [telegramConnected, setTelegramConnected] = useState(false);
+  const [telegramConfigured, setTelegramConfigured] = useState(false);
+  const [telegramCode, setTelegramCode] = useState('');
 
   const loadExchangeRate = async () => {
     try {
@@ -60,6 +63,46 @@ export default function IntegrationsPage() {
     }
   };
 
+  const loadTelegramStatus = async () => {
+    try {
+      const response = await apiClient.getTelegramStatus();
+      setTelegramConfigured(Boolean(response.data?.configured));
+      setTelegramConnected(Boolean(response.data?.connected));
+    } catch (err: any) {
+      setError(err.response?.data?.message || t('integrations.telegramError'));
+    }
+  };
+
+  const connectTelegram = async () => {
+    try {
+      setLoading(true);
+      setError('');
+      const response = await apiClient.createTelegramConnectionCode();
+      setTelegramCode(response.data.code);
+    } catch (err: any) {
+      setError(err.response?.data?.message || t('integrations.telegramError'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const disconnectTelegram = async () => {
+    try {
+      setLoading(true);
+      await apiClient.disconnectTelegram();
+      setTelegramConnected(false);
+      setTelegramCode('');
+    } catch (err: any) {
+      setError(err.response?.data?.message || t('integrations.telegramError'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadTelegramStatus();
+  }, []);
+
   return (
     <ProtectedRoute>
       <Layout>
@@ -89,6 +132,37 @@ export default function IntegrationsPage() {
                   <pre className="whitespace-pre-wrap text-xs bg-muted p-3 rounded-md">
                     {JSON.stringify(exchangeRate, null, 2)}
                   </pre>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>{t('integrations.telegramTitle')}</CardTitle>
+                <CardDescription>{t('integrations.telegramDescription')}</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {!telegramConfigured ? (
+                  <p className="text-sm text-muted-foreground">{t('integrations.telegramError')}</p>
+                ) : telegramConnected ? (
+                  <>
+                    <p className="text-sm text-green-600">{t('integrations.telegramConnected')}</p>
+                    <Button variant="outline" onClick={disconnectTelegram} disabled={loading}>
+                      {t('integrations.telegramDisconnect')}
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-sm text-muted-foreground">{t('integrations.telegramDisconnected')}</p>
+                    <Button onClick={connectTelegram} disabled={loading}>{t('integrations.telegramConnect')}</Button>
+                    {telegramCode && (
+                      <div className="rounded-md bg-muted p-3 text-sm">
+                        <p>{t('integrations.telegramInstructions')}</p>
+                        <code className="text-lg font-bold">{telegramCode}</code>
+                        <p className="mt-1 text-xs text-muted-foreground">{t('integrations.telegramCodeExpires')}</p>
+                      </div>
+                    )}
+                  </>
                 )}
               </CardContent>
             </Card>

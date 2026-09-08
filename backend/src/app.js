@@ -15,6 +15,8 @@ const contactRoutes = require('./routes/contacts');
 const transactionRoutes = require('./routes/transactions');
 const reportRoutes = require('./routes/reports');
 const externalRoutes = require('./routes/external');
+const telegramRoutes = require('./routes/telegram');
+const { startPolling } = require('./services/telegramService');
 
 // Import middleware
 const { authenticate } = require('./middleware/auth');
@@ -22,7 +24,7 @@ const { authenticate } = require('./middleware/auth');
 const app = express();
 
 // Connect to database
-connectDB();
+connectDB().then(startPolling);
 
 // Trust proxy (important for rate limiting and getting real IP addresses)
 app.set('trust proxy', 1);
@@ -99,6 +101,7 @@ app.use('/api/contacts', contactRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/external', externalRoutes);
+app.use('/api/telegram', telegramRoutes);
 
 // Welcome route
 app.get('/', (req, res) => {
@@ -115,6 +118,7 @@ app.get('/', (req, res) => {
       reports: '/api/reports'
     }
   });
+
 });
 
 // API documentation endpoint
@@ -170,6 +174,11 @@ app.get('/api/docs', (req, res) => {
         transactions: 'GET /reports/transactions',
         customer: 'GET /reports/customer/:id',
         vendor: 'GET /reports/vendor/:id'
+      },
+      telegram: {
+        status: 'GET /telegram/status',
+        generateConnectionCode: 'POST /telegram/connect/code',
+        disconnect: 'DELETE /telegram/connection'
       }
     },
     authentication: 'Bearer token required for all endpoints except /auth/register and /auth/login'

@@ -54,6 +54,17 @@
     @apply border-border;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
+    background-image: radial-gradient(circle at top right, hsl(var(--primary) / 0.06), transparent 30rem);
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.2);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    * {
+      @apply transition-colors duration-200;
+    }
   }
 }

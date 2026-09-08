@@ -12,11 +12,13 @@ import { apiClient } from '@/lib/api';
 import { Product } from '@/types';
 import { Plus, Search, Edit, Trash2, Package } from 'lucide-react';
 import Link from 'next/link';
+import { useLanguage } from '@/contexts/LanguageContext';
 
 export default function ProductsPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const { t } = useLanguage();
 
   useEffect(() => {
     loadProducts();
@@ -36,7 +38,7 @@ export default function ProductsPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (confirm('Are you sure you want to delete this product?')) {
+    if (confirm(t('products.deleteConfirm'))) {
       try {
         await apiClient.deleteProduct(id);
         loadProducts();
@@ -52,27 +54,27 @@ export default function ProductsPage() {
         <div className="space-y-6">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-3xl font-bold">Products</h1>
-              <p className="text-muted-foreground">Manage your product inventory</p>
+              <h1 className="text-3xl font-bold">{t('products.title')}</h1>
+              <p className="text-muted-foreground">{t('products.subtitle')}</p>
             </div>
             <Link href="/products/new">
               <Button>
                 <Plus className="mr-2 h-4 w-4" />
-                Add Product
+                {t('products.add')}
               </Button>
             </Link>
           </div>
 
           <Card>
             <CardHeader>
-              <CardTitle>Product Inventory</CardTitle>
-              <CardDescription>All products in your inventory</CardDescription>
+              <CardTitle>{t('products.inventory')}</CardTitle>
+              <CardDescription>{t('products.allDescription')}</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="flex items-center space-x-2 mb-4">
                 <Search className="h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="Search products..."
+                  placeholder={t('products.search')}
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   className="max-w-sm"
@@ -87,12 +89,12 @@ export default function ProductsPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Category</TableHead>
-                      <TableHead>Price</TableHead>
-                      <TableHead>Stock</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Actions</TableHead>
+                      <TableHead>{t('products.name')}</TableHead>
+                      <TableHead>{t('products.category')}</TableHead>
+                      <TableHead>{t('products.price')}</TableHead>
+                      <TableHead>{t('products.stock')}</TableHead>
+                      <TableHead>{t('products.status')}</TableHead>
+                      <TableHead>{t('products.actions')}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -117,12 +119,12 @@ export default function ProductsPage() {
                           </div>
                         </TableCell>
                         <TableCell>
-                          {product.stock <= product.minStockLevel ? (
-                            <Badge variant="destructive">Low Stock</Badge>
-                          ) : product.stock === 0 ? (
-                            <Badge variant="destructive">Out of Stock</Badge>
+                          {product.stock === 0 ? (
+                            <Badge variant="destructive">{t('products.outOfStock')}</Badge>
+                          ) : product.stock <= product.minStockLevel ? (
+                            <Badge variant="destructive">{t('products.lowStock')}</Badge>
                           ) : (
-                            <Badge variant="default">In Stock</Badge>
+                            <Badge variant="default">{t('products.inStock')}</Badge>
                           )}
                         </TableCell>
                         <TableCell>
@@ -146,7 +148,7 @@ export default function ProductsPage() {
                     {products.length === 0 && (
                       <TableRow>
                         <TableCell colSpan={6} className="text-center text-muted-foreground">
-                          No products found
+                          {t('products.none')}
                         </TableCell>
                       </TableRow>
                     )}

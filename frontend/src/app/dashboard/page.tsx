@@ -7,10 +7,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { apiClient } from '@/lib/api';
 import { DashboardSummary } from '@/types';
 import { Package, Users, Receipt, TrendingUp, AlertTriangle, DollarSign } from 'lucide-react';
+import { useLanguage } from '@/contexts/LanguageContext';
 
 export default function DashboardPage() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const { language, t } = useLanguage();
 
   useEffect(() => {
     loadDashboardData();
@@ -22,6 +24,7 @@ export default function DashboardPage() {
       if (response.success) {
         setSummary(response.data);
       }
+
     } catch (error) {
       console.error('Failed to load dashboard data:', error);
     } finally {
@@ -41,20 +44,23 @@ export default function DashboardPage() {
     );
   }
 
+  const formatAmount = (amount?: number) =>
+    `$${(amount || 0).toLocaleString(language === 'es' ? 'es-PE' : 'en-US')}`;
+
   return (
     <ProtectedRoute>
       <Layout>
         <div className="space-y-6">
           <div>
-            <h1 className="text-3xl font-bold">Dashboard</h1>
-            <p className="text-muted-foreground">Welcome to your inventory management system</p>
+            <h1 className="text-3xl font-bold">{t('dashboard.title')}</h1>
+            <p className="text-muted-foreground">{t('dashboard.subtitle')}</p>
           </div>
 
           {/* Overview Cards */}
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Total Products</CardTitle>
+                <CardTitle className="text-sm font-medium">{t('dashboard.totalProducts')}</CardTitle>
                 <Package className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
@@ -64,7 +70,7 @@ export default function DashboardPage() {
 
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Customers</CardTitle>
+                <CardTitle className="text-sm font-medium">{t('dashboard.customers')}</CardTitle>
                 <Users className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
@@ -74,7 +80,7 @@ export default function DashboardPage() {
 
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Vendors</CardTitle>
+                <CardTitle className="text-sm font-medium">{t('dashboard.vendors')}</CardTitle>
                 <Users className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
@@ -84,7 +90,7 @@ export default function DashboardPage() {
 
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Low Stock Items</CardTitle>
+                <CardTitle className="text-sm font-medium">{t('dashboard.lowStockItems')}</CardTitle>
                 <AlertTriangle className="h-4 w-4 text-orange-500" />
               </CardHeader>
               <CardContent>
@@ -99,42 +105,58 @@ export default function DashboardPage() {
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Monthly Sales</CardTitle>
+                <CardTitle className="text-sm font-medium">{t('dashboard.monthlySales')}</CardTitle>
                 <DollarSign className="h-4 w-4 text-green-500" />
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-green-500">
-                  ${summary?.monthly.sales?.toLocaleString() || '0'}
+                  {formatAmount(summary?.monthly.sales)} USD
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {summary?.monthly.transactionCount || 0} transactions
+                  {summary?.monthly.transactionCount || 0} {t('dashboard.transactions')}
                 </p>
               </CardContent>
             </Card>
 
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Monthly Purchases</CardTitle>
+                <CardTitle className="text-sm font-medium">{t('dashboard.monthlyPurchases')}</CardTitle>
                 <Receipt className="h-4 w-4 text-red-500" />
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-red-500">
-                  ${summary?.monthly.purchases?.toLocaleString() || '0'}
+                  {formatAmount(summary?.monthly.purchases)} USD
                 </div>
               </CardContent>
             </Card>
 
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Monthly Profit</CardTitle>
+                <CardTitle className="text-sm font-medium">{t('dashboard.monthlyProfit')}</CardTitle>
                 <TrendingUp className="h-4 w-4 text-blue-500" />
               </CardHeader>
               <CardContent>
                 <div className={`text-2xl font-bold ${
                   (summary?.monthly.profit || 0) >= 0 ? 'text-green-500' : 'text-red-500'
                 }`}>
-                  ${summary?.monthly.profit?.toLocaleString() || '0'}
+                  {formatAmount(summary?.monthly.profit)} USD
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">{t('dashboard.yearlyPerformance')}</CardTitle>
+                <TrendingUp className="h-4 w-4 text-purple-500" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-lg font-bold text-purple-500">
+                  {formatAmount(summary?.yearly.sales)} USD
+                </div>
+                <p className="text-xs text-muted-foreground">{t('dashboard.annualSales')}</p>
+                <p className="text-sm text-muted-foreground">
+                  {t('dashboard.annualProfit')}: {formatAmount(summary?.yearly.profit)} USD
+                </p>
               </CardContent>
             </Card>
           </div>
@@ -144,8 +166,8 @@ export default function DashboardPage() {
             {/* Low Stock Products */}
             <Card>
               <CardHeader>
-                <CardTitle>Low Stock Products</CardTitle>
-                <CardDescription>Products that need restocking</CardDescription>
+                <CardTitle>{t('dashboard.lowStockProducts')}</CardTitle>
+                <CardDescription>{t('dashboard.restockingDescription')}</CardDescription>
               </CardHeader>
               <CardContent>
                 {summary?.lowStockProducts && summary.lowStockProducts.length > 0 ? (
@@ -157,14 +179,14 @@ export default function DashboardPage() {
                           <p className="text-sm text-muted-foreground">{product.category}</p>
                         </div>
                         <div className="text-right">
-                          <p className="font-medium text-orange-500">{product.stock} left</p>
-                          <p className="text-sm text-muted-foreground">Min: {product.minStockLevel}</p>
+                          <p className="font-medium text-orange-500">{product.stock} {t('dashboard.itemsLeft')}</p>
+                          <p className="text-sm text-muted-foreground">{t('dashboard.minimum')}: {product.minStockLevel}</p>
                         </div>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <p className="text-muted-foreground">No low stock products</p>
+                  <p className="text-muted-foreground">{t('dashboard.noLowStock')}</p>
                 )}
               </CardContent>
             </Card>
@@ -172,8 +194,8 @@ export default function DashboardPage() {
             {/* Recent Transactions */}
             <Card>
               <CardHeader>
-                <CardTitle>Recent Transactions</CardTitle>
-                <CardDescription>Latest sales and purchases</CardDescription>
+                <CardTitle>{t('dashboard.recentTransactions')}</CardTitle>
+                <CardDescription>{t('dashboard.recentDescription')}</CardDescription>
               </CardHeader>
               <CardContent>
                 {summary?.recentTransactions && summary.recentTransactions.length > 0 ? (
@@ -185,19 +207,19 @@ export default function DashboardPage() {
                             {transaction.type === 'sale' ? transaction.customerName : transaction.vendorName}
                           </p>
                           <p className="text-sm text-muted-foreground">
-                            {transaction.type} • {new Date(transaction.date).toLocaleDateString()}
+                            {(transaction.type === 'sale' ? t('dashboard.sale') : t('dashboard.purchase'))} • {new Date(transaction.date).toLocaleDateString(language === 'es' ? 'es-PE' : 'en-US')}
                           </p>
                         </div>
                         <div className={`font-medium ${
                           transaction.type === 'sale' ? 'text-green-500' : 'text-red-500'
                         }`}>
-                          {transaction.type === 'sale' ? '+' : '-'}${transaction.totalAmount.toLocaleString()}
+                          {transaction.type === 'sale' ? '+' : '-'}{formatAmount(transaction.totalAmount)}
                         </div>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <p className="text-muted-foreground">No recent transactions</p>
+                  <p className="text-muted-foreground">{t('dashboard.noRecentTransactions')}</p>
                 )}
               </CardContent>
             </Card>

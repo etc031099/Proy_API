@@ -1,5 +1,18 @@
 const mongoose = require('mongoose');
 
+const supplierPriceSchema = new mongoose.Schema({
+  supplierId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Contact',
+    required: true
+  },
+  purchasePrice: {
+    type: Number,
+    required: true,
+    min: [0, 'Purchase price cannot be negative']
+  }
+}, { _id: false });
+
 const productSchema = new mongoose.Schema({
   name: {
     type: String,
@@ -16,6 +29,21 @@ const productSchema = new mongoose.Schema({
     type: Number,
     required: [true, 'Price is required'],
     min: [0, 'Price cannot be negative']
+  },
+  costPrice: {
+    type: Number,
+    min: [0, 'Cost price cannot be negative'],
+    default: 0
+  },
+  // Optional supplier-specific prices. costPrice remains the legacy fallback.
+  supplierPrices: {
+    type: [supplierPriceSchema],
+    default: []
+  },
+  preferredSupplierId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Contact',
+    default: null
   },
   stock: {
     type: Number,

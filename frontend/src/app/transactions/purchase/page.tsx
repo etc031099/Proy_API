@@ -22,6 +22,7 @@ import {
   Package 
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { useLanguage } from '@/contexts/LanguageContext';
 
 // Form validation schema
 const purchaseFormSchema = z.object({
@@ -53,9 +54,12 @@ interface Product {
   _id: string;
   name: string;
   price: number;
+  costPrice?: number;
   stock: number;
   category: string;
   sku: string;
+  supplierPrices?: { supplierId: string; purchasePrice: number }[];
+  preferredSupplierId?: string | null;
 }
 
 export default function AddPurchasePage() {
@@ -65,6 +69,7 @@ export default function AddPurchasePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const { t } = useLanguage();
 
   const form = useForm<PurchaseFormValues>({
     resolver: zodResolver(purchaseFormSchema),
@@ -81,18 +86,24 @@ export default function AddPurchasePage() {
     control: form.control,
     name: 'products',
   });
+  const selectedVendorId = form.watch('vendorId');
+  const availableProducts = selectedVendorId
+    ? products.filter(product =>
+        product.supplierPrices?.some(entry => entry.supplierId === selectedVendorId) ?? false,
+      )
+    : [];
 
   // Fetch vendors and products
   useEffect(() => {
     const fetchData = async () => {
       try {
         const [vendorsResponse, productsResponse] = await Promise.all([
-          api.getContacts({ type: 'vendor' }),
+          api.getVendors({ limit: 100 }),
           api.getProducts()
         ]);
 
         if (vendorsResponse.success) {
-          setVendors(vendorsResponse.data.contacts);
+          setVendors(vendorsResponse.data?.vendors || vendorsResponse.data?.contacts || []);
         }
 
         if (productsResponse.success) {
@@ -111,8 +122,35 @@ export default function AddPurchasePage() {
   const handleProductChange = (index: number, productId: string) => {
     const selectedProduct = products.find(p => p._id === productId);
     if (selectedProduct) {
-      form.setValue(`products.${index}.price`, selectedProduct.price);
+      const vendorId = form.getValues('vendorId') || selectedProduct.preferredSupplierId || '';
+      if (!form.getValues('vendorId') && selectedProduct.preferredSupplierId) {
+        form.setValue('vendorId', selectedProduct.preferredSupplierId, { shouldValidate: true });
+      }
+      const supplierPrice = selectedProduct.supplierPrices?.find(
+        entry => entry.supplierId === vendorId
+      )?.purchasePrice;
+      form.setValue(`products.${index}.price`, supplierPrice ?? (
+        selectedProduct.costPrice && selectedProduct.costPrice > 0
+          ? selectedProduct.costPrice
+          : selectedProduct.price
+      ));
     }
+  };
+
+  const handleVendorChange = (vendorId: string) => {
+    form.setValue('vendorId', vendorId);
+    form.getValues('products').forEach((item, index) => {
+      const currentProduct = products.find(product => product._id === item.productId);
+      const remainsAvailable = currentProduct?.supplierPrices?.some(
+        entry => entry.supplierId === vendorId,
+      ) ?? false;
+      if (item.productId && remainsAvailable) {
+        handleProductChange(index, item.productId);
+      } else if (item.productId) {
+        form.setValue(`products.${index}.productId`, '');
+        form.setValue(`products.${index}.price`, 0);
+      }
+    });
   };
 
   const getCurrencyRate = (currency: 'PEN' | 'USD' | 'EUR') => {
@@ -183,12 +221,12 @@ export default function AddPurchasePage() {
         <div className="flex items-center gap-4">
           <Button variant="outline" onClick={() => router.back()}>
             <ArrowLeft className="mr-2 h-4 w-4" />
-            Back
+            {t('transactions.back')}
           </Button>
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">Add Purchase Transaction</h1>
+            <h1 className="text-2xl font-bold tracking-tight">{t('transactions.addPurchaseTitle')}</h1>
             <p className="text-muted-foreground">
-              Record a new purchase transaction
+              {t('transactions.purchaseDescription')}
             </p>
           </div>
         </div>
@@ -210,9 +248,9 @@ export default function AddPurchasePage() {
             {/* Vendor & Payment Info */}
             <Card>
               <CardHeader>
-                <CardTitle>Vendor & Payment Information</CardTitle>
+                <CardTitle>{t('transactions.vendorPayment')}</CardTitle>
                 <CardDescription>
-                  Select the vendor and payment details
+                  {t('transactions.selectVendor')}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -222,11 +260,11 @@ export default function AddPurchasePage() {
                     name="vendorId"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Vendor *</FormLabel>
-                        <Select onValueChange={field.onChange} defaultValue={field.value}>
+                        <FormLabel>{t('transactions.vendor')} *</FormLabel>
+                        <Select onValueChange={handleVendorChange} value={field.value}>
                           <FormControl>
                             <SelectTrigger>
-                              <SelectValue placeholder="Select a vendor" />
+                              <SelectValue placeholder={t('transactions.selectVendorPlaceholder')} />
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
@@ -247,11 +285,11 @@ export default function AddPurchasePage() {
                     name="paymentMethod"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Payment Method *</FormLabel>
+                        <FormLabel>{t('transactions.paymentMethod')} *</FormLabel>
                         <Select onValueChange={field.onChange} defaultValue={field.value}>
                           <FormControl>
                             <SelectTrigger>
-                              <SelectValue placeholder="Select payment method" />
+                              <SelectValue placeholder={t('transactions.selectPayment')} />
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
@@ -276,11 +314,11 @@ export default function AddPurchasePage() {
                     name="currency"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Currency *</FormLabel>
+                        <FormLabel>{t('transactions.currency')} *</FormLabel>
                         <Select onValueChange={field.onChange} defaultValue={field.value}>
                           <FormControl>
                             <SelectTrigger>
-                              <SelectValue placeholder="Select currency" />
+                              <SelectValue placeholder={t('transactions.selectCurrency')} />
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
@@ -300,10 +338,10 @@ export default function AddPurchasePage() {
                   name="notes"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Notes</FormLabel>
+                      <FormLabel>{t('transactions.notes')}</FormLabel>
                       <FormControl>
                         <Textarea
-                          placeholder="Additional notes about this purchase..."
+                          placeholder={t('transactions.purchaseNotes')}
                           {...field}
                         />
                       </FormControl>
@@ -318,7 +356,7 @@ export default function AddPurchasePage() {
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center justify-between">
-                  <span>Products</span>
+                  <span>{t('transactions.products')}</span>
                   <Button
                     type="button"
                     variant="outline"
@@ -326,11 +364,11 @@ export default function AddPurchasePage() {
                     onClick={() => append({ productId: '', quantity: 1, price: 0 })}
                   >
                     <Plus className="mr-2 h-4 w-4" />
-                    Add Product
+                    {t('transactions.addProduct')}
                   </Button>
                 </CardTitle>
                 <CardDescription>
-                  Add products to this purchase transaction (inventory will be increased)
+                  {t('transactions.purchaseProductsDescription')}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -346,27 +384,33 @@ export default function AddPurchasePage() {
                         name={`products.${index}.productId`}
                         render={({ field }) => (
                           <FormItem>
-                            <FormLabel>Product *</FormLabel>
+                            <FormLabel>{t('transactions.product')} *</FormLabel>
                             <Select 
                               onValueChange={(value) => {
                                 field.onChange(value);
                                 handleProductChange(index, value);
                               }} 
-                              defaultValue={field.value}
+                              value={field.value}
                             >
                               <FormControl>
                                 <SelectTrigger>
-                                  <SelectValue placeholder="Select product" />
+                                  <SelectValue placeholder={t('transactions.selectProduct')} />
                                 </SelectTrigger>
                               </FormControl>
                               <SelectContent>
-                                {products.map((product) => (
+                                {availableProducts.map((product) => (
                                   <SelectItem key={product._id} value={product._id}>
                                     {product.name} - Current Stock: {product.stock}
                                   </SelectItem>
                                 ))}
                               </SelectContent>
                             </Select>
+                            {!selectedVendorId && (
+                              <p className="text-xs text-muted-foreground">{t('transactions.selectVendorFirst')}</p>
+                            )}
+                            {selectedVendorId && availableProducts.length === 0 && (
+                              <p className="text-xs text-muted-foreground">{t('transactions.noProductsForVendor')}</p>
+                            )}
                             <FormMessage />
                           </FormItem>
                         )}
@@ -377,7 +421,7 @@ export default function AddPurchasePage() {
                         name={`products.${index}.quantity`}
                         render={({ field }) => (
                           <FormItem>
-                            <FormLabel>Quantity *</FormLabel>
+                            <FormLabel>{t('transactions.quantity')} *</FormLabel>
                             <FormControl>
                               <Input
                                 type="number"
@@ -396,7 +440,7 @@ export default function AddPurchasePage() {
                         name={`products.${index}.price`}
                         render={({ field }) => (
                           <FormItem>
-                            <FormLabel>Unit Price *</FormLabel>
+                            <FormLabel>{t('transactions.unitCost')} *</FormLabel>
                             <FormControl>
                               <Input
                                 type="number"
@@ -412,7 +456,7 @@ export default function AddPurchasePage() {
                       />
 
                       <div className="space-y-2">
-                        <Label>Total</Label>
+                        <Label>{t('transactions.total')}</Label>
                         <div className="h-10 flex items-center px-3 py-2 border rounded-md bg-muted">
                           {(() => {
                             const currency = form.watch('currency');
@@ -441,10 +485,10 @@ export default function AddPurchasePage() {
                 <div className="bg-blue-50 p-4 rounded-lg">
                   <div className="flex items-center gap-2 mb-2">
                     <Package className="h-4 w-4 text-blue-600" />
-                    <span className="text-sm font-medium text-blue-800">Stock Update Information</span>
+                    <span className="text-sm font-medium text-blue-800">{t('transactions.stockUpdate')}</span>
                   </div>
                   <p className="text-sm text-blue-700">
-                    Purchasing these products will automatically increase your inventory stock levels.
+                    {t('transactions.stockUpdateDescription')}
                   </p>
                   {fields.map((_, index) => {
                     const productId = form.watch(`products.${index}.productId`);
@@ -465,7 +509,7 @@ export default function AddPurchasePage() {
                 {/* Total Amount */}
                 <div className="border-t pt-4">
                   <div className="flex justify-between items-center">
-                    <span className="text-lg font-medium">Total Amount:</span>
+                    <span className="text-lg font-medium">{t('transactions.totalAmount')}:</span>
                     <span className="text-2xl font-bold text-red-600">
                       {(() => {
                         const currency = form.watch('currency');
@@ -485,18 +529,18 @@ export default function AddPurchasePage() {
                 variant="outline"
                 onClick={() => router.back()}
               >
-                Cancel
+                {t('common.cancel')}
               </Button>
               <Button type="submit" disabled={loading}>
                 {loading ? (
                   <>
                     <div className="mr-2 h-4 w-4 animate-spin rounded-full border-b-2 border-white"></div>
-                    Recording Purchase...
+                    {t('transactions.recordingPurchase')}
                   </>
                 ) : (
                   <>
                     <Save className="mr-2 h-4 w-4" />
-                    Record Purchase
+                    {t('transactions.recordPurchase')}
                   </>
                 )}
               </Button>

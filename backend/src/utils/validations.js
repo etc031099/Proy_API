@@ -81,6 +81,13 @@ const createProductValidation = [
     .withMessage('Price must be a number')
     .isFloat({ min: 0 })
     .withMessage('Price cannot be negative'),
+
+  body('costPrice')
+    .optional()
+    .isNumeric()
+    .withMessage('Cost price must be a number')
+    .isFloat({ min: 0 })
+    .withMessage('Cost price cannot be negative'),
     
   body('stock')
     .isInt({ min: 0 })
@@ -124,6 +131,13 @@ const updateProductValidation = [
     .withMessage('Price must be a number')
     .isFloat({ min: 0 })
     .withMessage('Price cannot be negative'),
+
+  body('costPrice')
+    .optional()
+    .isNumeric()
+    .withMessage('Cost price must be a number')
+    .isFloat({ min: 0 })
+    .withMessage('Cost price cannot be negative'),
     
   body('stock')
     .optional()

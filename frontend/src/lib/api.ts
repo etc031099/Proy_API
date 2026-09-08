@@ -7,7 +7,7 @@ class ApiClient {
   constructor() {
     this.instance = axios.create({
       baseURL: process.env.NEXT_PUBLIC_API_URL,
-      timeout: 10000,
+      timeout: 30000,
       headers: {
         'Content-Type': 'application/json',
       },
@@ -200,6 +200,21 @@ class ApiClient {
     return response.data;
   }
 
+  async getTelegramStatus(): Promise<ApiResponse> {
+    const response = await this.instance.get('/telegram/status');
+    return response.data;
+  }
+
+  async createTelegramConnectionCode(): Promise<ApiResponse> {
+    const response = await this.instance.post('/telegram/connect/code');
+    return response.data;
+  }
+
+  async disconnectTelegram(): Promise<ApiResponse> {
+    const response = await this.instance.delete('/telegram/connection');
+    return response.data;
+  }
+
   // Transaction methods
   async getTransactions(params?: {
     type?: string;
@@ -219,6 +234,11 @@ class ApiClient {
 
   async createTransaction(data: any): Promise<ApiResponse> {
     const response = await this.instance.post('/transactions', data);
+    return response.data;
+  }
+
+  async updateTransactionStatus(id: string, status: 'pending' | 'completed' | 'cancelled'): Promise<ApiResponse> {
+    const response = await this.instance.patch(`/transactions/${id}/status`, { status });
     return response.data;
   }
 

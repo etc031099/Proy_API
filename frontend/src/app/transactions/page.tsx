@@ -22,6 +22,7 @@ import {
   TrendingDown 
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { useLanguage } from '@/contexts/LanguageContext';
 
 interface Transaction {
   _id: string;
@@ -67,6 +68,7 @@ export default function TransactionsPage() {
   const [endDate, setEndDate] = useState('');
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const { t, language } = useLanguage();
 
   const fetchTransactions = async () => {
     try {
@@ -141,7 +143,7 @@ export default function TransactionsPage() {
 
   const formatMoney = (value: number, currency: string = 'USD') => {
     const normalizedCurrency = ['PEN', 'USD', 'EUR'].includes(currency) ? currency : 'USD';
-    return new Intl.NumberFormat('en-US', {
+    return new Intl.NumberFormat(language === 'es' ? 'es-PE' : 'en-US', {
       style: 'currency',
       currency: normalizedCurrency,
       minimumFractionDigits: 2,
@@ -155,22 +157,22 @@ export default function TransactionsPage() {
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">Transactions</h1>
+            <h1 className="text-2xl font-bold tracking-tight">{t('transactions.title')}</h1>
             <p className="text-muted-foreground">
-              Manage your sales and purchase transactions
+              {t('transactions.subtitle')}
             </p>
           </div>
           <div className="flex gap-2">
             <Button asChild>
               <Link href="/transactions/sale">
                 <Plus className="mr-2 h-4 w-4" />
-                Add Sale
+                {t('transactions.addSale')}
               </Link>
             </Button>
             <Button variant="outline" asChild>
               <Link href="/transactions/purchase">
                 <Plus className="mr-2 h-4 w-4" />
-                Add Purchase
+                {t('transactions.addPurchase')}
               </Link>
             </Button>
           </div>
@@ -187,57 +189,57 @@ export default function TransactionsPage() {
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Total Sales</CardTitle>
+                <CardTitle className="text-sm font-medium">{t('transactions.totalSales')}</CardTitle>
                 <TrendingUp className="h-4 w-4 text-green-500" />
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-green-500">
-                  ${((summary?.sales?.totalAmount) ?? 0).toLocaleString()}
+                  {formatMoney(summary?.sales?.totalAmount ?? 0, 'USD')}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {(summary?.sales?.transactionCount) ?? 0} transactions
+                  {(summary?.sales?.transactionCount) ?? 0} {t('transactions.transactions')}
                 </p>
               </CardContent>
             </Card>
 
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Total Purchases</CardTitle>
+                <CardTitle className="text-sm font-medium">{t('transactions.totalPurchases')}</CardTitle>
                 <TrendingDown className="h-4 w-4 text-red-500" />
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-red-500">
-                  ${((summary?.purchases?.totalAmount) ?? 0).toLocaleString()}
+                  {formatMoney(summary?.purchases?.totalAmount ?? 0, 'USD')}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {(summary?.purchases?.transactionCount) ?? 0} transactions
+                  {(summary?.purchases?.transactionCount) ?? 0} {t('transactions.transactions')}
                 </p>
               </CardContent>
             </Card>
 
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Profit/Loss</CardTitle>
+                <CardTitle className="text-sm font-medium">{t('transactions.profitLoss')}</CardTitle>
                 <DollarSign className={`h-4 w-4 ${(summary?.profitLoss ?? 0) >= 0 ? 'text-green-500' : 'text-red-500'}`} />
               </CardHeader>
               <CardContent>
                 <div className={`text-2xl font-bold ${(summary?.profitLoss ?? 0) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                  ${((summary?.profitLoss) ?? 0).toLocaleString()}
+                  {formatMoney(summary?.profitLoss ?? 0, 'USD')}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {(summary?.profitLoss ?? 0) >= 0 ? 'Profit' : 'Loss'}
+                  {(summary?.profitLoss ?? 0) >= 0 ? t('transactions.profit') : t('transactions.loss')}
                 </p>
               </CardContent>
             </Card>
 
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Avg Sale Amount</CardTitle>
+                <CardTitle className="text-sm font-medium">{t('transactions.avgSale')}</CardTitle>
                 <ArrowUpDown className="h-4 w-4 text-blue-500" />
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-blue-500">
-                  ${((summary?.sales?.averageAmount) ?? 0).toLocaleString()}
+                  {formatMoney(summary?.sales?.averageAmount ?? 0, 'USD')}
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Per transaction
@@ -250,16 +252,16 @@ export default function TransactionsPage() {
         {/* Filters */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Filters</CardTitle>
+            <CardTitle className="text-lg">{t('transactions.filters')}</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
               <div className="space-y-2">
-                <label className="text-sm font-medium">Search</label>
+                <label className="text-sm font-medium">{t('transactions.search')}</label>
                 <div className="relative">
                   <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                   <Input
-                    placeholder="Search transactions..."
+                    placeholder={t('transactions.searchPlaceholder')}
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     className="pl-8"
@@ -268,36 +270,36 @@ export default function TransactionsPage() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm font-medium">Type</label>
+                <label className="text-sm font-medium">{t('transactions.type')}</label>
                 <Select value={typeFilter} onValueChange={setTypeFilter}>
                   <SelectTrigger>
-                    <SelectValue placeholder="All types" />
+                    <SelectValue placeholder={t('transactions.allTypes')} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All Types</SelectItem>
-                    <SelectItem value="sale">Sales</SelectItem>
-                    <SelectItem value="purchase">Purchases</SelectItem>
+                    <SelectItem value="all">{t('transactions.allTypes')}</SelectItem>
+                    <SelectItem value="sale">{t('transactions.sales')}</SelectItem>
+                    <SelectItem value="purchase">{t('transactions.purchases')}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm font-medium">Status</label>
+                <label className="text-sm font-medium">{t('transactions.status')}</label>
                 <Select value={statusFilter} onValueChange={setStatusFilter}>
                   <SelectTrigger>
-                    <SelectValue placeholder="All statuses" />
+                    <SelectValue placeholder={t('transactions.allStatuses')} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All Statuses</SelectItem>
-                    <SelectItem value="completed">Completed</SelectItem>
-                    <SelectItem value="pending">Pending</SelectItem>
-                    <SelectItem value="cancelled">Cancelled</SelectItem>
+                    <SelectItem value="all">{t('transactions.allStatuses')}</SelectItem>
+                    <SelectItem value="completed">{t('transactions.completed')}</SelectItem>
+                    <SelectItem value="pending">{t('transactions.pending')}</SelectItem>
+                    <SelectItem value="cancelled">{t('transactions.cancelled')}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm font-medium">Start Date</label>
+                <label className="text-sm font-medium">{t('transactions.startDate')}</label>
                 <Input
                   type="date"
                   value={startDate}
@@ -306,7 +308,7 @@ export default function TransactionsPage() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm font-medium">End Date</label>
+                <label className="text-sm font-medium">{t('transactions.endDate')}</label>
                 <Input
                   type="date"
                   value={endDate}
@@ -320,7 +322,7 @@ export default function TransactionsPage() {
         {/* Transactions Table */}
         <Card>
           <CardHeader>
-            <CardTitle>Transaction History</CardTitle>
+            <CardTitle>{t('transactions.history')}</CardTitle>
             <CardDescription>
               {filteredTransactions.length} of {transactions.length} transactions
             </CardDescription>
@@ -328,25 +330,25 @@ export default function TransactionsPage() {
           <CardContent>
             {loading ? (
               <div className="text-center py-8">
-                <p className="text-muted-foreground">Loading transactions...</p>
+                <p className="text-muted-foreground">{t('transactions.loading')}</p>
               </div>
             ) : filteredTransactions.length === 0 ? (
               <div className="text-center py-8">
-                <p className="text-muted-foreground">No transactions found</p>
+                <p className="text-muted-foreground">{t('transactions.none')}</p>
               </div>
             ) : (
               <div className="space-y-4">
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Contact</TableHead>
-                      <TableHead>Products</TableHead>
-                      <TableHead>Amount</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Payment</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
+                      <TableHead>{t('transactions.date')}</TableHead>
+                      <TableHead>{t('transactions.type')}</TableHead>
+                      <TableHead>{t('transactions.contact')}</TableHead>
+                      <TableHead>{t('transactions.products')}</TableHead>
+                      <TableHead>{t('transactions.amount')}</TableHead>
+                      <TableHead>{t('transactions.status')}</TableHead>
+                      <TableHead>{t('transactions.payment')}</TableHead>
+                      <TableHead className="text-right">{t('transactions.actions')}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>

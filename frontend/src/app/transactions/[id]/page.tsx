@@ -18,6 +18,7 @@ import {
   FileText
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { useLanguage } from '@/contexts/LanguageContext';
 
 interface AddressValue {
   street?: string;
@@ -43,6 +44,7 @@ interface Transaction {
     email: string;
     address?: string | AddressValue;
   };
+
   vendorId?: {
     _id: string;
     name: string;
@@ -74,6 +76,26 @@ export default function TransactionDetailPage({ params }: { params: Promise<{ id
   const [transaction, setTransaction] = useState<Transaction | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [cancelling, setCancelling] = useState(false);
+  const { t, language } = useLanguage();
+
+  const cancelTransaction = async () => {
+    if (!transaction || !window.confirm(t('transactions.cancelConfirm'))) return;
+    try {
+      setCancelling(true);
+      setError('');
+      const response = await api.updateTransactionStatus(transaction._id, 'cancelled');
+      if (!response.success) {
+        setError(response.message || t('transactions.cancelError'));
+        return;
+      }
+      setTransaction(response.data.transaction);
+    } catch (err: any) {
+      setError(err.response?.data?.message || t('transactions.cancelError'));
+    } finally {
+      setCancelling(false);
+    }
+  };
 
   useEffect(() => {
     const fetchTransaction = async () => {
@@ -174,7 +196,7 @@ export default function TransactionDetailPage({ params }: { params: Promise<{ id
   const transactionCurrency = transaction.currency || 'USD';
   const exchangeRate = transaction.exchangeRate ?? 1;
   const originalAmount = transaction.originalAmount ?? transaction.totalAmount;
-  const showConvertedBaseCurrency = transactionCurrency !== 'USD' && exchangeRate > 1;
+  const showConvertedBaseCurrency = transactionCurrency !== 'USD';
   const displayOriginalCurrency = showConvertedBaseCurrency ? 'USD' : transactionCurrency;
   const displayExchangeRate = transactionCurrency === 'USD' ? 1 : exchangeRate;
 
@@ -202,6 +224,11 @@ export default function TransactionDetailPage({ params }: { params: Promise<{ id
             <Badge className={getStatusColor(transaction.status)}>
               {transaction.status}
             </Badge>
+            {transaction.status === 'completed' && (
+              <Button variant="destructive" onClick={cancelTransaction} disabled={cancelling}>
+                {cancelling ? t('transactions.cancelling') : t('transactions.cancelTransaction')}
+              </Button>
+            )}
           </div>
         </div>
 
@@ -220,7 +247,7 @@ export default function TransactionDetailPage({ params }: { params: Promise<{ id
                   <Calendar className="h-4 w-4 text-muted-foreground" />
                   <span className="text-sm text-muted-foreground">Date:</span>
                   <span className="font-medium">
-                    {new Date(transaction.date).toLocaleDateString('en-US', {
+                    {new Date(transaction.date).toLocaleDateString(language === 'es' ? 'es-PE' : 'en-US', {
                       year: 'numeric',
                       month: 'long',
                       day: 'numeric',

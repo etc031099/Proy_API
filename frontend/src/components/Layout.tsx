@@ -47,13 +47,16 @@ export function Layout({ children }: LayoutProps) {
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="border-b">
-        <div className="flex h-16 items-center px-4">
-          <div className="flex items-center space-x-4">
-            <h1 className="text-xl font-bold">{t('common.appName')}</h1>
+      <header className="sticky top-0 z-40 border-b bg-background/90 shadow-sm backdrop-blur">
+        <div className="mx-auto flex h-16 max-w-[1600px] items-center px-4 sm:px-6">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
+              <Package className="h-5 w-5" />
+            </div>
+            <h1 className="text-lg font-bold tracking-tight sm:text-xl">{t('common.appName')}</h1>
           </div>
 
-          <div className="ml-auto flex items-center space-x-4">
+          <div className="ml-auto flex items-center gap-2 sm:gap-3">
             <ThemeToggle />
             <LanguageSelector />
             {user && (
@@ -92,27 +95,28 @@ export function Layout({ children }: LayoutProps) {
         </div>
       </header>
 
-      <div className="flex">
+      <div className="mx-auto flex max-w-[1600px]">
         {/* Sidebar */}
-        <aside className="w-64 border-r bg-muted/10">
-          <nav className="flex flex-col gap-2 p-4">
+        <aside className="w-16 shrink-0 border-r bg-muted/20 md:w-64">
+          <nav className="sticky top-16 flex flex-col gap-2 p-2 md:p-4">
             {navigation.map((item) => {
               const Icon = item.icon;
-              const isActive = pathname === item.href;
+              const isActive = pathname === item.href || (item.href !== '/' && pathname.startsWith(`${item.href}/`));
               
               return (
                 <Link
                   key={item.key}
                   href={item.href}
                   className={cn(
-                    'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',
+                    'flex items-center justify-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors md:justify-start',
                     isActive
                       ? 'bg-primary text-primary-foreground'
                       : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
                   )}
+                  title={t(`navigation.${item.key}`)}
                 >
                   <Icon className="h-4 w-4" />
-                  {t(`navigation.${item.key}`)}
+                  <span className="hidden md:inline">{t(`navigation.${item.key}`)}</span>
                 </Link>
               );
             })}
@@ -120,8 +124,10 @@ export function Layout({ children }: LayoutProps) {
         </aside>
 
         {/* Main content */}
-        <main className="flex-1 p-6">
-          {children}
+        <main className="min-w-0 flex-1 p-4 sm:p-6 lg:p-8">
+          <div className="mx-auto max-w-[1400px]">
+            {children}
+          </div>
         </main>
       </div>
     </div>

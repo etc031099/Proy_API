@@ -22,6 +22,7 @@ import {
   ShoppingCart 
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { useLanguage } from '@/contexts/LanguageContext';
 
 // Form validation schema
 const saleFormSchema = z.object({
@@ -65,6 +66,7 @@ export default function AddSalePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const { t } = useLanguage();
 
   const form = useForm<SaleFormValues>({
     resolver: zodResolver(saleFormSchema),
@@ -183,12 +185,12 @@ export default function AddSalePage() {
         <div className="flex items-center gap-4">
           <Button variant="outline" onClick={() => router.back()}>
             <ArrowLeft className="mr-2 h-4 w-4" />
-            Back
+            {t('transactions.back')}
           </Button>
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">Add Sale Transaction</h1>
+            <h1 className="text-2xl font-bold tracking-tight">{t('transactions.addSaleTitle')}</h1>
             <p className="text-muted-foreground">
-              Record a new sale transaction
+              {t('transactions.saleDescription')}
             </p>
           </div>
         </div>
@@ -210,9 +212,9 @@ export default function AddSalePage() {
             {/* Customer & Payment Info */}
             <Card>
               <CardHeader>
-                <CardTitle>Customer & Payment Information</CardTitle>
+                <CardTitle>{t('transactions.customerPayment')}</CardTitle>
                 <CardDescription>
-                  Select the customer and payment details
+                  {t('transactions.selectCustomer')}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -222,11 +224,11 @@ export default function AddSalePage() {
                     name="customerId"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Customer *</FormLabel>
+                        <FormLabel>{t('transactions.customer')} *</FormLabel>
                         <Select onValueChange={field.onChange} defaultValue={field.value}>
                           <FormControl>
                             <SelectTrigger>
-                              <SelectValue placeholder="Select a customer" />
+                              <SelectValue placeholder={t('transactions.selectCustomerPlaceholder')} />
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
@@ -247,11 +249,11 @@ export default function AddSalePage() {
                     name="paymentMethod"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Payment Method *</FormLabel>
+                        <FormLabel>{t('transactions.paymentMethod')} *</FormLabel>
                         <Select onValueChange={field.onChange} defaultValue={field.value}>
                           <FormControl>
                             <SelectTrigger>
-                              <SelectValue placeholder="Select payment method" />
+                              <SelectValue placeholder={t('transactions.selectPayment')} />
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
@@ -276,11 +278,11 @@ export default function AddSalePage() {
                     name="currency"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Currency *</FormLabel>
+                        <FormLabel>{t('transactions.currency')} *</FormLabel>
                         <Select onValueChange={field.onChange} defaultValue={field.value}>
                           <FormControl>
                             <SelectTrigger>
-                              <SelectValue placeholder="Select currency" />
+                              <SelectValue placeholder={t('transactions.selectCurrency')} />
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
@@ -300,10 +302,10 @@ export default function AddSalePage() {
                   name="notes"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Notes</FormLabel>
+                      <FormLabel>{t('transactions.notes')}</FormLabel>
                       <FormControl>
                         <Textarea
-                          placeholder="Additional notes about this sale..."
+                          placeholder={t('transactions.saleNotes')}
                           {...field}
                         />
                       </FormControl>
@@ -318,7 +320,7 @@ export default function AddSalePage() {
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center justify-between">
-                  <span>Products</span>
+                  <span>{t('transactions.products')}</span>
                   <Button
                     type="button"
                     variant="outline"
@@ -326,11 +328,11 @@ export default function AddSalePage() {
                     onClick={() => append({ productId: '', quantity: 1, price: 0 })}
                   >
                     <Plus className="mr-2 h-4 w-4" />
-                    Add Product
+                    {t('transactions.addProduct')}
                   </Button>
                 </CardTitle>
                 <CardDescription>
-                  Add products to this sale transaction
+                  {t('transactions.saleProductsDescription')}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -346,7 +348,7 @@ export default function AddSalePage() {
                         name={`products.${index}.productId`}
                         render={({ field }) => (
                           <FormItem>
-                            <FormLabel>Product *</FormLabel>
+                            <FormLabel>{t('transactions.product')} *</FormLabel>
                             <Select 
                               onValueChange={(value) => {
                                 field.onChange(value);
@@ -356,7 +358,7 @@ export default function AddSalePage() {
                             >
                               <FormControl>
                                 <SelectTrigger>
-                                  <SelectValue placeholder="Select product" />
+                                  <SelectValue placeholder={t('transactions.selectProduct')} />
                                 </SelectTrigger>
                               </FormControl>
                               <SelectContent>
@@ -377,7 +379,7 @@ export default function AddSalePage() {
                         name={`products.${index}.quantity`}
                         render={({ field }) => (
                           <FormItem>
-                            <FormLabel>Quantity *</FormLabel>
+                            <FormLabel>{t('transactions.quantity')} *</FormLabel>
                             <FormControl>
                               <Input
                                 type="number"
@@ -397,7 +399,7 @@ export default function AddSalePage() {
                         name={`products.${index}.price`}
                         render={({ field }) => (
                           <FormItem>
-                            <FormLabel>Price *</FormLabel>
+                            <FormLabel>{t('transactions.unitPrice')} *</FormLabel>
                             <FormControl>
                               <Input
                                 type="number"
@@ -413,7 +415,7 @@ export default function AddSalePage() {
                       />
 
                       <div className="space-y-2">
-                        <Label>Total</Label>
+                        <Label>{t('transactions.total')}</Label>
                         <div className="h-10 flex items-center px-3 py-2 border rounded-md bg-muted">
                           {(() => {
                             const currency = form.watch('currency');
@@ -447,7 +449,7 @@ export default function AddSalePage() {
                 }) && (
                   <Alert variant="destructive">
                     <AlertDescription>
-                      Some products have insufficient stock. Please check the quantities.
+                      {t('transactions.insufficientStock')}
                     </AlertDescription>
                   </Alert>
                 )}
@@ -455,7 +457,7 @@ export default function AddSalePage() {
                 {/* Total Amount */}
                 <div className="border-t pt-4">
                   <div className="flex justify-between items-center">
-                    <span className="text-lg font-medium">Total Amount:</span>
+                    <span className="text-lg font-medium">{t('transactions.totalAmount')}:</span>
                     <span className="text-2xl font-bold text-green-600">
                       {(() => {
                         const currency = form.watch('currency');
@@ -475,18 +477,18 @@ export default function AddSalePage() {
                 variant="outline"
                 onClick={() => router.back()}
               >
-                Cancel
+                {t('common.cancel')}
               </Button>
               <Button type="submit" disabled={loading}>
                 {loading ? (
                   <>
                     <div className="mr-2 h-4 w-4 animate-spin rounded-full border-b-2 border-white"></div>
-                    Recording Sale...
+                    {t('transactions.recordingSale')}
                   </>
                 ) : (
                   <>
                     <Save className="mr-2 h-4 w-4" />
-                    Record Sale
+                    {t('transactions.recordSale')}
                   </>
                 )}
               </Button>
