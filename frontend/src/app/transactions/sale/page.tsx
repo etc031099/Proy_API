@@ -20,14 +20,19 @@ import {
   Save, 
   ArrowLeft,
   ShoppingCart 
+  , UserPlus, Search
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useLanguage } from '@/contexts/LanguageContext';
 
 // Form validation schema
 const saleFormSchema = z.object({
-  customerId: z.string().min(1, 'Customer is required'),
-  paymentMethod: z.enum(['cash', 'credit', 'card', 'bank_transfer', 'crypto', 'bitcoin', 'tether', 'wallet'], {
+  customerId: z.string().optional(),
+  customerName: z.string().optional(),
+  customerPhone: z.string().optional(),
+  customerEmail: z.string().email().optional().or(z.literal('')),
+  saveCustomer: z.boolean().default(false),
+  paymentMethod: z.enum(['cash', 'credit', 'card', 'bank_transfer', 'wallet'], {
     required_error: 'Payment method is required',
   }),
   currency: z.enum(['PEN', 'USD', 'EUR'], {
@@ -39,6 +44,14 @@ const saleFormSchema = z.object({
     quantity: z.number().min(1, 'Quantity must be at least 1'),
     price: z.number().min(0, 'Price must be positive'),
   })).min(1, 'At least one product is required'),
+}).superRefine((data, context) => {
+  if (data.paymentMethod === 'credit' && !data.customerId) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['customerId'],
+      message: 'A registered customer is required for credit sales'
+    });
+  }
 });
 
 type SaleFormValues = z.infer<typeof saleFormSchema>;
@@ -48,12 +61,16 @@ interface Customer {
   name: string;
   email: string;
   phone: string;
+  currentBalance?: number;
+  creditLimit?: number;
+  balancesByCurrency?: { PEN: number; USD: number; EUR: number };
 }
 
 interface Product {
   _id: string;
   name: string;
   price: number;
+  currency?: 'PEN' | 'USD' | 'EUR';
   stock: number;
   category: string;
   sku: string;
@@ -66,12 +83,19 @@ export default function AddSalePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [showNewCustomer, setShowNewCustomer] = useState(false);
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [productSearch, setProductSearch] = useState('');
   const { t } = useLanguage();
 
   const form = useForm<SaleFormValues>({
     resolver: zodResolver(saleFormSchema),
     defaultValues: {
       customerId: '',
+      customerName: '',
+      customerPhone: '',
+      customerEmail: '',
+      saveCustomer: false,
       paymentMethod: 'cash',
       currency: 'PEN',
       notes: '',
@@ -109,11 +133,44 @@ export default function AddSalePage() {
     fetchData();
   }, []);
 
+  useEffect(() => {
+    const savedSale = window.sessionStorage.getItem('repeat-sale');
+    if (!savedSale) return;
+    try {
+      const repeated = JSON.parse(savedSale);
+      form.reset({
+        customerId: repeated.customerId || '',
+        customerName: repeated.customerName || '',
+        customerPhone: '',
+        customerEmail: '',
+        saveCustomer: false,
+        paymentMethod: 'cash',
+        currency: repeated.currency || 'PEN',
+        notes: '',
+        products: repeated.products?.length
+          ? repeated.products
+          : [{ productId: '', quantity: 1, price: 0 }]
+      });
+      window.sessionStorage.removeItem('repeat-sale');
+    } catch {
+      window.sessionStorage.removeItem('repeat-sale');
+    }
+  }, [form]);
+
   // Update price when product is selected
   const handleProductChange = (index: number, productId: string) => {
     const selectedProduct = products.find(p => p._id === productId);
     if (selectedProduct) {
-      form.setValue(`products.${index}.price`, selectedProduct.price);
+      const customerKey = form.getValues('customerId') || 'final-consumer';
+      const savedPrice = window.localStorage.getItem(`sale-price:${customerKey}:${productId}`);
+      form.setValue(`products.${index}.price`, savedPrice ? Number(savedPrice) : selectedProduct.price);
+    }
+  };
+
+  const saveLastPrice = (productId: string, price: number) => {
+    const customerKey = form.getValues('customerId') || 'final-consumer';
+    if (productId && Number.isFinite(price) && price >= 0) {
+      window.localStorage.setItem(`sale-price:${customerKey}:${productId}`, String(price));
     }
   };
 
@@ -129,20 +186,20 @@ export default function AddSalePage() {
     }
   };
 
-  const convertAmountToSelectedCurrency = (value: number) => {
+  const convertAmountToSelectedCurrency = (value: number, sourceCurrency: 'PEN' | 'USD' | 'EUR' = 'USD') => {
     const selectedCurrency = form.watch('currency');
-    const rate = getCurrencyRate(selectedCurrency);
-    return value * rate;
+    return value * getCurrencyRate(selectedCurrency) / getCurrencyRate(sourceCurrency);
   };
 
   // Calculate total amount in the selected transaction currency.
-  // Product prices are treated as USD by default and converted for display/settlement.
   const calculateTotal = () => {
-    const products = form.watch('products');
-    return products.reduce((total, product) => {
+    const lineItems = form.watch('products');
+    return lineItems.reduce((total, product) => {
       const numericPrice = Number(product.price || 0);
       const numericQuantity = Number(product.quantity || 0);
-      return total + (numericQuantity * numericPrice);
+      const selectedProduct = products.find(item => item._id === product.productId);
+      const sourceCurrency = selectedProduct?.currency || 'USD';
+      return total + convertAmountToSelectedCurrency(numericQuantity * numericPrice, sourceCurrency);
     }, 0);
   };
 
@@ -151,14 +208,41 @@ export default function AddSalePage() {
       setLoading(true);
       setError('');
 
+      let customerId = data.customerId || undefined;
+      if (showNewCustomer && data.saveCustomer) {
+        const customerName = data.customerName?.trim();
+        if (!customerName) {
+          setError(t('transactions.customerNameRequired'));
+          return;
+        }
+        if (!data.customerPhone?.trim()) {
+          setError(t('transactions.customerPhoneRequired'));
+          return;
+        }
+        const contactResponse = await api.createContact({
+          name: customerName,
+          phone: data.customerPhone.trim(),
+          email: data.customerEmail?.trim() || undefined,
+          type: 'customer'
+        });
+        if (!contactResponse.success) {
+          setError(contactResponse.message || t('transactions.customerCreateError'));
+          return;
+        }
+        customerId = contactResponse.data.contact._id;
+      }
+
       const saleData = {
         type: 'sale',
-        customerId: data.customerId,
+        customerId,
+        customerName: showNewCustomer ? data.customerName?.trim() : undefined,
         products: data.products,
         paymentMethod: data.paymentMethod,
         currency: data.currency,
         notes: data.notes,
       };
+
+      data.products.forEach((item) => saveLastPrice(item.productId, item.price));
 
       const response = await api.createTransaction(saleData);
 
@@ -172,7 +256,12 @@ export default function AddSalePage() {
       }
     } catch (err: unknown) {
       console.error('Error creating sale:', err);
-      setError((err as any).response?.data?.message || 'Error recording sale');
+      const responseData = (err as any).response?.data;
+      const validationDetails = responseData?.errors
+        ?.map((item: { message?: string }) => item.message)
+        .filter(Boolean)
+        .join(' ');
+      setError(validationDetails || responseData?.message || 'Error recording sale');
     } finally {
       setLoading(false);
     }
@@ -224,15 +313,24 @@ export default function AddSalePage() {
                     name="customerId"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>{t('transactions.customer')} *</FormLabel>
-                        <Select onValueChange={field.onChange} defaultValue={field.value}>
+                        <FormLabel>{t('transactions.customer')}</FormLabel>
+                        <Input
+                          value={customerSearch}
+                          onChange={(event) => setCustomerSearch(event.target.value)}
+                          placeholder={t('transactions.searchCustomers')}
+                          className="mb-2"
+                        />
+                        <Select onValueChange={(value) => field.onChange(value === 'none' ? '' : value)} value={field.value || 'none'}>
                           <FormControl>
                             <SelectTrigger>
                               <SelectValue placeholder={t('transactions.selectCustomerPlaceholder')} />
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            {customers.map((customer) => (
+                            <SelectItem value="none">{t('transactions.finalConsumer')}</SelectItem>
+                            {customers
+                              .filter((customer) => `${customer.name} ${customer.phone}`.toLowerCase().includes(customerSearch.toLowerCase()))
+                              .map((customer) => (
                               <SelectItem key={customer._id} value={customer._id}>
                                 {customer.name} - {customer.phone}
                               </SelectItem>
@@ -240,6 +338,31 @@ export default function AddSalePage() {
                           </SelectContent>
                         </Select>
                         <FormMessage />
+                        {form.watch('paymentMethod') === 'credit' && form.watch('customerId') && (() => {
+                          const customer = customers.find((item) => item._id === form.watch('customerId'));
+                          if (!customer) return null;
+                          const selectedCurrency = form.watch('currency');
+                          const balance = Number(customer.balancesByCurrency?.[selectedCurrency] || (selectedCurrency === 'PEN' ? customer.currentBalance : 0));
+                          const limit = Number(customer.creditLimit || 0);
+                          return (
+                            <div className="rounded-md bg-muted p-3 text-sm">
+                              <div className="font-medium">{t('transactions.currentBalance')}: {selectedCurrency} {balance.toFixed(2)}</div>
+                              {limit > 0 && selectedCurrency === 'PEN' && <div className="text-muted-foreground">{t('transactions.availableCredit')}: PEN {Math.max(0, limit - balance).toFixed(2)}</div>}
+                            </div>
+                          );
+                        })()}
+                        <Button
+                          type="button"
+                          variant="link"
+                          className="h-auto px-0 text-xs"
+                          onClick={() => {
+                            setShowNewCustomer((visible) => !visible);
+                            form.setValue('customerId', '');
+                          }}
+                        >
+                          <UserPlus className="mr-1 h-3.5 w-3.5" />
+                          {t('transactions.registerNewCustomer')}
+                        </Button>
                       </FormItem>
                     )}
                   />
@@ -257,20 +380,70 @@ export default function AddSalePage() {
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            <SelectItem value="cash">Cash</SelectItem>
-                            <SelectItem value="card">Card</SelectItem>
-                            <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
-                            <SelectItem value="credit">Credit</SelectItem>
-                            <SelectItem value="bitcoin">Bitcoin</SelectItem>
-                            <SelectItem value="tether">Tether</SelectItem>
-                            <SelectItem value="wallet">Digital Wallet</SelectItem>
+                            <SelectItem value="cash">{t('transactions.paymentCash')}</SelectItem>
+                            <SelectItem value="card">{t('transactions.paymentCard')}</SelectItem>
+                            <SelectItem value="bank_transfer">{t('transactions.paymentTransfer')}</SelectItem>
+                            <SelectItem value="wallet">{t('transactions.paymentWallet')}</SelectItem>
+                            <SelectItem value="credit">{t('transactions.paymentCredit')}</SelectItem>
                           </SelectContent>
                         </Select>
                         <FormMessage />
+                        <p className="text-xs text-muted-foreground">
+                          {t(`transactions.paymentHelp${form.watch('paymentMethod') === 'credit' ? 'Credit' : form.watch('paymentMethod') === 'bank_transfer' ? 'Transfer' : form.watch('paymentMethod') === 'wallet' ? 'Wallet' : form.watch('paymentMethod') === 'card' ? 'Card' : 'Cash'}`)}
+                        </p>
                       </FormItem>
                     )}
                   />
                 </div>
+
+                {showNewCustomer && (
+                  <div className="rounded-lg border border-dashed p-4 space-y-3">
+                    <FormField
+                      control={form.control}
+                      name="customerName"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t('transactions.customerName')}</FormLabel>
+                          <FormControl>
+                            <Input placeholder={t('transactions.customerNamePlaceholder')} {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <FormField
+                        control={form.control}
+                        name="customerPhone"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('transactions.customerPhone')}</FormLabel>
+                            <FormControl><Input placeholder={t('transactions.customerPhonePlaceholder')} {...field} /></FormControl>
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name="customerEmail"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('transactions.customerEmail')}</FormLabel>
+                            <FormControl><Input type="email" placeholder={t('transactions.customerEmailPlaceholder')} {...field} /></FormControl>
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={form.watch('saveCustomer')}
+                        onChange={(event) => form.setValue('saveCustomer', event.target.checked)}
+                        className="h-4 w-4 rounded border-input accent-primary"
+                      />
+                      {t('transactions.saveCustomer')}
+                    </label>
+                  </div>
+                )}
 
                 <div className="grid gap-4 md:grid-cols-2">
                   <FormField
@@ -349,6 +522,12 @@ export default function AddSalePage() {
                         render={({ field }) => (
                           <FormItem>
                             <FormLabel>{t('transactions.product')} *</FormLabel>
+                            <Input
+                              value={productSearch}
+                              onChange={(event) => setProductSearch(event.target.value)}
+                              placeholder={t('transactions.searchProducts')}
+                              className="mb-2"
+                            />
                             <Select 
                               onValueChange={(value) => {
                                 field.onChange(value);
@@ -362,7 +541,9 @@ export default function AddSalePage() {
                                 </SelectTrigger>
                               </FormControl>
                               <SelectContent>
-                                {products.map((product) => (
+                                {products
+                                  .filter((product) => `${product.name} ${product.sku} ${product.category}`.toLowerCase().includes(productSearch.toLowerCase()))
+                                  .map((product) => (
                                   <SelectItem key={product._id} value={product._id}>
                                     {product.name} - Stock: {product.stock}
                                   </SelectItem>
@@ -387,6 +568,7 @@ export default function AddSalePage() {
                                 max={selectedProduct?.stock || 999}
                                 {...field}
                                 onChange={(e) => field.onChange(Number(e.target.value))}
+                                onBlur={(e) => saveLastPrice(form.getValues(`products.${index}.productId`), Number(e.target.value))}
                               />
                             </FormControl>
                             <FormMessage />
@@ -420,7 +602,7 @@ export default function AddSalePage() {
                           {(() => {
                             const currency = form.watch('currency');
                             const amount = Number(form.watch(`products.${index}.quantity`) || 0) * Number(form.watch(`products.${index}.price`) || 0);
-                            const converted = convertAmountToSelectedCurrency(amount);
+                            const converted = convertAmountToSelectedCurrency(amount, selectedProduct?.currency || 'USD');
                             const symbol = currency === 'PEN' ? 'S/' : currency === 'EUR' ? '€' : '$';
                             return `${symbol}${converted.toFixed(2)}`;
                           })()}
@@ -462,7 +644,7 @@ export default function AddSalePage() {
                       {(() => {
                         const currency = form.watch('currency');
                         const symbol = currency === 'PEN' ? 'S/' : currency === 'EUR' ? '€' : '$';
-                        return `${symbol}${convertAmountToSelectedCurrency(calculateTotal()).toFixed(2)}`;
+                        return `${symbol}${calculateTotal().toFixed(2)}`;
                       })()}
                     </span>
                   </div>

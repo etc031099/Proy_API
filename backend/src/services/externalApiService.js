@@ -1,5 +1,5 @@
 const EXTERNAL_TIMEOUT_MS = 8000;
-const FALLBACK_EXCHANGE_RATE = 3.7;
+const FALLBACK_USD_RATES = { USD: 1, PEN: 3.7, EUR: 0.92 };
 
 const fetchJson = async (url, options = {}) => {
   const controller = new AbortController();
@@ -30,6 +30,10 @@ const getExchangeRate = async ({ base = 'USD', target = 'PEN' } = {}) => {
   const normalizedTarget = String(target || 'PEN').toUpperCase();
 
   if (normalizedBase === normalizedTarget) {
+    const usdToBase = FALLBACK_USD_RATES[normalizedBase] || 1;
+    const usdToTarget = FALLBACK_USD_RATES[normalizedTarget] || 1;
+    const fallbackRate = usdToTarget / usdToBase;
+
     return {
       success: true,
       source: 'direct',
@@ -63,8 +67,8 @@ const getExchangeRate = async ({ base = 'USD', target = 'PEN' } = {}) => {
     source: 'fallback',
     base: normalizedBase,
     target: normalizedTarget,
-    rate: FALLBACK_EXCHANGE_RATE,
-    message: `Fallback rate applied: 1 ${normalizedBase} = ${FALLBACK_EXCHANGE_RATE} ${normalizedTarget}`
+    rate: fallbackRate,
+    message: `Fallback rate applied: 1 ${normalizedBase} = ${fallbackRate} ${normalizedTarget}`
   };
 };
 
@@ -139,9 +143,6 @@ const validatePaymentMethod = async ({ method = 'card', amount = 0 } = {}) => {
     card: { supported: true, label: 'Tarjeta' },
     bank_transfer: { supported: true, label: 'Transferencia bancaria' },
     credit: { supported: true, label: 'Crédito' },
-    crypto: { supported: true, label: 'Criptomoneda' },
-    bitcoin: { supported: true, label: 'Bitcoin' },
-    tether: { supported: true, label: 'Tether' },
     wallet: { supported: true, label: 'Wallet digital' }
   };
 
@@ -154,22 +155,6 @@ const validatePaymentMethod = async ({ method = 'card', amount = 0 } = {}) => {
       supported: true,
       amount
     };
-
-    if (['bitcoin', 'tether', 'crypto'].includes(normalizedMethod)) {
-      try {
-        const data = await fetchJson('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,tether&vs_currencies=pen');
-        result.pricing = {
-          bitcoin: data?.bitcoin?.pen || null,
-          tether: data?.tether?.pen || null
-        };
-      } catch (error) {
-        console.warn('Crypto pricing fallback activated:', error.message);
-        result.pricing = {
-          bitcoin: 250000,
-          tether: 3.7
-        };
-      }
-    }
 
     return result;
   }

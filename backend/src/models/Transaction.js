@@ -41,11 +41,12 @@ const transactionSchema = new mongoose.Schema({
   customerId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Contact',
-    required: function() { return this.type === 'sale'; }
   },
   customerName: {
     type: String,
-    required: function() { return this.type === 'sale'; }
+    required: function() { return this.type === 'sale'; },
+    default: function() { return this.type === 'sale' ? 'Consumidor final' : undefined; },
+    trim: true
   },
   vendorId: {
     type: mongoose.Schema.Types.ObjectId,

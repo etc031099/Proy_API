@@ -54,6 +54,7 @@ interface Product {
   _id: string;
   name: string;
   price: number;
+  currency?: 'PEN' | 'USD' | 'EUR';
   costPrice?: number;
   stock: number;
   category: string;
@@ -165,20 +166,23 @@ export default function AddPurchasePage() {
     }
   };
 
-  const convertAmountToSelectedCurrency = (value: number) => {
+  const convertAmountToSelectedCurrency = (value: number, sourceCurrency: 'PEN' | 'USD' | 'EUR' = 'USD') => {
     const selectedCurrency = form.watch('currency');
-    const rate = getCurrencyRate(selectedCurrency);
-    return value * rate;
+    return value * getCurrencyRate(selectedCurrency) / getCurrencyRate(sourceCurrency);
   };
 
   // Calculate total amount in the selected transaction currency.
   // Product prices are treated as USD by default and converted for display/settlement.
   const calculateTotal = () => {
-    const products = form.watch('products');
-    return products.reduce((total, product) => {
+    const lineItems = form.watch('products');
+    return lineItems.reduce((total, product) => {
       const numericPrice = Number(product.price || 0);
       const numericQuantity = Number(product.quantity || 0);
-      return total + (numericQuantity * numericPrice);
+      const selectedProduct = products.find(item => item._id === product.productId);
+      return total + convertAmountToSelectedCurrency(
+        numericQuantity * numericPrice,
+        selectedProduct?.currency || 'USD',
+      );
     }, 0);
   };
 
@@ -461,7 +465,7 @@ export default function AddPurchasePage() {
                           {(() => {
                             const currency = form.watch('currency');
                             const amount = Number(form.watch(`products.${index}.quantity`) || 0) * Number(form.watch(`products.${index}.price`) || 0);
-                            const converted = convertAmountToSelectedCurrency(amount);
+                            const converted = convertAmountToSelectedCurrency(amount, selectedProduct?.currency || 'USD');
                             const symbol = currency === 'PEN' ? 'S/' : currency === 'EUR' ? '€' : '$';
                             return `${symbol}${converted.toFixed(2)}`;
                           })()}
@@ -514,7 +518,7 @@ export default function AddPurchasePage() {
                       {(() => {
                         const currency = form.watch('currency');
                         const symbol = currency === 'PEN' ? 'S/' : currency === 'EUR' ? '€' : '$';
-                        return `${symbol}${convertAmountToSelectedCurrency(calculateTotal()).toFixed(2)}`;
+                        return `${symbol}${calculateTotal().toFixed(2)}`;
                       })()}
                     </span>
                   </div>

@@ -30,6 +30,13 @@ const productSchema = new mongoose.Schema({
     required: [true, 'Price is required'],
     min: [0, 'Price cannot be negative']
   },
+  currency: {
+    type: String,
+    enum: ['PEN', 'USD', 'EUR'],
+    default: 'USD',
+    uppercase: true,
+    trim: true
+  },
   costPrice: {
     type: Number,
     min: [0, 'Cost price cannot be negative'],

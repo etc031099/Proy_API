@@ -128,8 +128,10 @@ const getTransaction = asyncHandler(async (req, res) => {
  * @access  Private
  */
 const createTransaction = asyncHandler(async (req, res) => {
-  const { type, customerId, vendorId, products = [], paymentMethod, notes, currency = 'PEN' } = req.body;
+  const { type, customerId, customerName, vendorId, products = [], paymentMethod, notes, currency = 'PEN' } = req.body;
   const businessId = req.businessId;
+  const normalizedCurrency = String(currency || 'PEN').toUpperCase();
+  const targetCurrency = ['PEN', 'USD', 'EUR'].includes(normalizedCurrency) ? normalizedCurrency : 'PEN';
 
   if (!Array.isArray(products) || products.length === 0) {
     return res.status(400).json({
@@ -147,24 +149,25 @@ const createTransaction = asyncHandler(async (req, res) => {
     // Validate contact based on transaction type
     let contact;
     if (type === 'sale') {
-      if (!customerId) {
-        return res.status(400).json({
-          success: false,
-          message: 'Customer ID is required for sales'
-        });
-      }
-      contact = await Contact.findOne({
-        _id: customerId,
-        businessId,
-        type: 'customer',
-        isActive: true
-      }).session(session);
+      if (customerId) {
+        contact = await Contact.findOne({
+          _id: customerId,
+          businessId,
+          type: 'customer',
+          isActive: true
+        }).session(session);
 
-      if (!contact) {
-        return res.status(404).json({
-          success: false,
-          message: 'Customer not found'
-        });
+        if (!contact) {
+          return res.status(404).json({
+            success: false,
+            message: 'Customer not found'
+          });
+        }
+      } else if ((paymentMethod || 'cash') === 'credit') {
+        throw Object.assign(
+          new Error('A registered customer is required for credit sales'),
+          { statusCode: 400 },
+        );
       }
     } else if (type === 'purchase') {
       if (!vendorId) {
@@ -239,10 +242,14 @@ const createTransaction = asyncHandler(async (req, res) => {
       const itemCost = type === 'purchase'
         ? Number(item.costPrice ?? matchingSupplierPrice?.purchasePrice ?? preferredSupplierPrice?.purchasePrice ?? item.price ?? product.costPrice ?? product.price ?? 0)
         : undefined;
-      const itemPrice = type === 'sale'
+      const sourcePrice = type === 'sale'
         ? Number(item.price ?? product.price ?? 0)
         : itemCost;
-      const itemTotal = Number(item.quantity || 0) * itemPrice;
+      const productCurrency = ['PEN', 'USD', 'EUR'].includes(product.currency) ? product.currency : 'USD';
+      const itemRateResponse = await getExchangeRate({ base: productCurrency, target: targetCurrency });
+      const itemRate = Number(itemRateResponse?.rate) || 1;
+      const itemPrice = Number((sourcePrice * itemRate).toFixed(2));
+      const itemTotal = Number((Number(item.quantity || 0) * itemPrice).toFixed(2));
       subtotal += itemTotal;
 
       processedProducts.push({
@@ -250,17 +257,17 @@ const createTransaction = asyncHandler(async (req, res) => {
         productName: product.name,
         quantity: Number(item.quantity || 0),
         price: itemPrice,
-        ...(type === 'purchase' ? { costPrice: itemCost } : {}),
+        ...(type === 'purchase' ? { costPrice: itemPrice } : {}),
         total: itemTotal
       });
     }
 
-    const normalizedCurrency = String(currency || 'PEN').toUpperCase();
-    const targetCurrency = ['PEN', 'USD', 'EUR'].includes(normalizedCurrency) ? normalizedCurrency : 'PEN';
     const baseCurrency = 'USD';
     const exchangeRateResponse = await getExchangeRate({ base: baseCurrency, target: targetCurrency });
     const resolvedRate = Number(exchangeRateResponse?.rate) || 1;
-    const totalAmount = Number((subtotal * resolvedRate).toFixed(2));
+    // Item prices and subtotal are already expressed in the selected transaction currency.
+    // Only store the USD equivalent separately for reports; do not convert the subtotal again.
+    const totalAmount = Number(subtotal.toFixed(2));
     const paymentValidation = await validatePaymentMethod({
       method: paymentMethod || 'cash',
       amount: totalAmount
@@ -278,7 +285,7 @@ const createTransaction = asyncHandler(async (req, res) => {
       type,
       products: processedProducts,
       totalAmount,
-      originalAmount: Number(subtotal.toFixed(2)),
+      originalAmount: Number((subtotal / resolvedRate).toFixed(2)),
       businessId,
       currency: targetCurrency,
       exchangeRate: resolvedRate,
@@ -288,7 +295,7 @@ const createTransaction = asyncHandler(async (req, res) => {
 
     if (type === 'sale') {
       transactionData.customerId = customerId;
-      transactionData.customerName = contact.name;
+      transactionData.customerName = contact?.name || String(customerName || 'Consumidor final').trim();
     } else {
       transactionData.vendorId = vendorId;
       transactionData.supplierId = vendorId;
@@ -298,7 +305,19 @@ const createTransaction = asyncHandler(async (req, res) => {
     const transaction = await Transaction.create([transactionData], { session });
 
     if (type === 'sale' && (paymentMethod || 'cash') === 'credit') {
-      contact.currentBalance += totalAmount;
+      const currencyBalance = Number(
+        contact.balancesByCurrency?.[targetCurrency]
+        || (targetCurrency === 'PEN' ? contact.currentBalance : 0)
+      );
+      const newBalance = currencyBalance + totalAmount;
+      if (targetCurrency === 'PEN' && Number(contact.creditLimit || 0) > 0 && newBalance > Number(contact.creditLimit)) {
+        throw Object.assign(
+          new Error(`Credit limit exceeded. Available credit: ${Math.max(0, Number(contact.creditLimit) - currencyBalance).toFixed(2)} PEN`),
+          { statusCode: 400 },
+        );
+      }
+      contact.balancesByCurrency[targetCurrency] = newBalance;
+      if (targetCurrency === 'PEN') contact.currentBalance = newBalance;
       await contact.save({ session });
     }
 
@@ -488,7 +507,13 @@ const updateTransactionStatus = asyncHandler(async (req, res) => {
           businessId: req.businessId
         }).session(session);
         if (customer) {
-          customer.currentBalance = Math.max(0, Number(customer.currentBalance || 0) - transaction.totalAmount);
+          const currency = transaction.currency || 'PEN';
+          const balance = Number(
+            customer.balancesByCurrency?.[currency]
+            || (currency === 'PEN' ? customer.currentBalance : 0)
+          );
+          customer.balancesByCurrency[currency] = Math.max(0, balance - transaction.totalAmount);
+          if (currency === 'PEN') customer.currentBalance = customer.balancesByCurrency.PEN;
           await customer.save({ session });
         }
       }
@@ -521,6 +546,7 @@ const updateTransactionStatus = asyncHandler(async (req, res) => {
 const getTransactionSummary = asyncHandler(async (req, res) => {
   const { startDate, endDate } = req.query;
   const businessId = req.businessId;
+  const reportingCurrency = 'PEN';
 
   const matchStage = { businessId };
   
@@ -530,9 +556,12 @@ const getTransactionSummary = asyncHandler(async (req, res) => {
     if (endDate) matchStage.date.$lte = new Date(endDate);
   }
 
+  const rateResponse = await getExchangeRate({ base: 'USD', target: reportingCurrency });
+  const usdToReportingRate = Number(rateResponse?.rate) || 1;
   const summary = await Transaction.aggregate([
     { $match: matchStage },
     { $addFields: { baseAmount: baseAmountExpression } },
+    { $addFields: { baseAmount: { $multiply: ['$baseAmount', usdToReportingRate] } } },
     {
       $group: {
         _id: '$type',
@@ -578,7 +607,7 @@ const getTransactionSummary = asyncHandler(async (req, res) => {
 
   res.json({
     success: true,
-    data: { summary: { ...result, currency: 'USD' } }
+    data: { summary: { ...result, currency: reportingCurrency } }
   });
 });
 

@@ -43,6 +43,7 @@ interface Transaction {
 }
 
 interface TransactionSummary {
+  currency?: 'PEN' | 'USD' | 'EUR';
   sales: {
     totalAmount: number;
     transactionCount: number;
@@ -151,6 +152,21 @@ export default function TransactionsPage() {
     }).format(Number(value || 0));
   };
 
+  const formatPaymentMethod = (value?: string) => {
+    const labels: Record<string, string> = {
+      cash: t('transactions.paymentCash'),
+      card: t('transactions.paymentCard'),
+      bank_transfer: t('transactions.paymentTransfer'),
+      wallet: t('transactions.paymentWallet'),
+      credit: t('transactions.paymentCredit'),
+      crypto: language === 'es' ? 'Criptomoneda' : 'Cryptocurrency',
+      bitcoin: 'Bitcoin',
+      tether: 'Tether',
+      other: language === 'es' ? 'Otro' : 'Other'
+    };
+    return labels[value || ''] || value || 'N/A';
+  };
+
   return (
     <Layout>
       <div className="space-y-6">
@@ -194,7 +210,7 @@ export default function TransactionsPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-green-500">
-                  {formatMoney(summary?.sales?.totalAmount ?? 0, 'USD')}
+                  {formatMoney(summary?.sales?.totalAmount ?? 0, summary?.currency || 'PEN')}
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {(summary?.sales?.transactionCount) ?? 0} {t('transactions.transactions')}
@@ -209,7 +225,7 @@ export default function TransactionsPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-red-500">
-                  {formatMoney(summary?.purchases?.totalAmount ?? 0, 'USD')}
+                  {formatMoney(summary?.purchases?.totalAmount ?? 0, summary?.currency || 'PEN')}
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {(summary?.purchases?.transactionCount) ?? 0} {t('transactions.transactions')}
@@ -224,7 +240,7 @@ export default function TransactionsPage() {
               </CardHeader>
               <CardContent>
                 <div className={`text-2xl font-bold ${(summary?.profitLoss ?? 0) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                  {formatMoney(summary?.profitLoss ?? 0, 'USD')}
+                  {formatMoney(summary?.profitLoss ?? 0, summary?.currency || 'PEN')}
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {(summary?.profitLoss ?? 0) >= 0 ? t('transactions.profit') : t('transactions.loss')}
@@ -239,7 +255,7 @@ export default function TransactionsPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-blue-500">
-                  {formatMoney(summary?.sales?.averageAmount ?? 0, 'USD')}
+                  {formatMoney(summary?.sales?.averageAmount ?? 0, summary?.currency || 'PEN')}
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Per transaction
@@ -363,7 +379,9 @@ export default function TransactionsPage() {
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          {transaction.customerName || transaction.vendorName || 'N/A'}
+                          {transaction.type === 'sale'
+                            ? transaction.customerName || t('transactions.finalConsumer')
+                            : transaction.vendorName || t('transactions.unknownVendor')}
                         </TableCell>
                         <TableCell>
                           <div className="space-y-1">
@@ -392,7 +410,7 @@ export default function TransactionsPage() {
                           </Badge>
                         </TableCell>
                         <TableCell className="capitalize">
-                          {transaction.paymentMethod}
+                          {formatPaymentMethod(transaction.paymentMethod)}
                         </TableCell>
                         <TableCell className="text-right">
                           <Button variant="ghost" size="sm" asChild>

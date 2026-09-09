@@ -379,11 +379,17 @@ const createTransactionValidation = [
     .withMessage('Type must be either sale or purchase'),
     
   body('customerId')
-    .if(body('type').equals('sale'))
-    .notEmpty()
-    .withMessage('Customer ID is required for sales')
+    .optional({ checkFalsy: true })
     .isMongoId()
     .withMessage('Invalid customer ID'),
+
+  body('customerId')
+    .custom((value, { req }) => {
+      if (req.body.type === 'sale' && req.body.paymentMethod === 'credit' && !value) {
+        throw new Error('A registered customer is required for credit sales');
+      }
+      return true;
+    }),
     
   body('vendorId')
     .if(body('type').equals('purchase'))
@@ -412,7 +418,7 @@ const createTransactionValidation = [
     
   body('paymentMethod')
     .optional()
-    .isIn(['cash', 'card', 'bank_transfer', 'credit', 'other', 'crypto', 'bitcoin', 'tether', 'wallet'])
+    .isIn(['cash', 'card', 'bank_transfer', 'credit', 'wallet'])
     .withMessage('Invalid payment method'),
 
   body('currency')

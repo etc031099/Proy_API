@@ -27,6 +27,7 @@ export interface Product {
   name: string;
   description?: string;
   price: number;
+  currency: 'PEN' | 'USD' | 'EUR';
   costPrice?: number;
   supplierPrices?: SupplierPrice[];
   preferredSupplierId?: string | null;
@@ -45,6 +46,7 @@ export interface CreateProductData {
   name: string;
   description?: string;
   price: number;
+  currency?: 'PEN' | 'USD' | 'EUR';
   costPrice?: number;
   supplierPrices?: SupplierPrice[];
   preferredSupplierId?: string | null;
@@ -80,6 +82,11 @@ export interface Contact {
   businessId: string;
   creditLimit: number;
   currentBalance: number;
+  balancesByCurrency?: {
+    PEN: number;
+    USD: number;
+    EUR: number;
+  };
   isActive: boolean;
   notes?: string;
   fullAddress?: string;
@@ -160,6 +167,7 @@ export interface CreateTransactionData {
 
 // Report types
 export interface DashboardSummary {
+  baseCurrency?: 'PEN' | 'USD' | 'EUR';
   overview: {
     totalProducts: number;
     totalCustomers: number;
@@ -190,6 +198,7 @@ export interface InventoryReport {
     lowStockCount: number;
     outOfStockCount: number;
     categories: number;
+    currency?: 'PEN' | 'USD' | 'EUR';
   };
   lowStockProducts: Product[];
   outOfStockProducts: Product[];

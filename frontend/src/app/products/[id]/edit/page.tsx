@@ -26,6 +26,7 @@ export default function EditProductPage() {
     name: '',
     description: '',
     price: 0,
+    currency: 'USD',
     costPrice: 0,
     stock: 0,
     category: '',
@@ -56,6 +57,7 @@ export default function EditProductPage() {
             name: product.name,
             description: product.description || '',
             price: product.price,
+            currency: product.currency || 'USD',
             costPrice: product.costPrice || 0,
             stock: product.stock,
             category: product.category,
@@ -221,7 +223,22 @@ export default function EditProductPage() {
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="costPrice">{t('products.purchaseCost')} (USD)</Label>
+                    <Label htmlFor="currency">{t('products.currency')} *</Label>
+                    <select
+                      id="currency"
+                      name="currency"
+                      value={formData.currency || 'USD'}
+                      onChange={e => setFormData(prev => ({ ...prev, currency: e.target.value as 'PEN' | 'USD' | 'EUR' }))}
+                      className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                    >
+                      <option value="PEN">{t('transactions.currencyPEN')}</option>
+                      <option value="USD">{t('transactions.currencyUSD')}</option>
+                      <option value="EUR">{t('transactions.currencyEUR')}</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="costPrice">{t('products.purchaseCost')} ({formData.currency || 'USD'})</Label>
                     <Input
                       id="costPrice"
                       name="costPrice"

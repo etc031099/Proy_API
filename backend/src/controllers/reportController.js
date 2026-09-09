@@ -1,5 +1,8 @@
 const { Product, Transaction, Contact } = require('../models');
 const { asyncHandler } = require('../middleware/validation');
+const { getExchangeRate } = require('../services/externalApiService');
+
+const REPORTING_CURRENCY = 'PEN';
 
 const getBaseAmount = (transaction) => {
   const originalAmount = Number(transaction.originalAmount);
@@ -10,6 +13,9 @@ const getBaseAmount = (transaction) => {
     ? totalAmount / exchangeRate
     : totalAmount;
 };
+
+const getReportingAmount = (transaction, usdToReportingRate) =>
+  getBaseAmount(transaction) * usdToReportingRate;
 
 /**
  * @desc    Get inventory report
@@ -39,7 +45,18 @@ const getInventoryReport = asyncHandler(async (req, res) => {
 
   // Calculate inventory statistics
   const totalProducts = products.length;
-  const totalValue = products.reduce((sum, product) => sum + (product.stock * product.price), 0);
+  const productRates = {};
+  for (const product of products) {
+    const currency = ['PEN', 'USD', 'EUR'].includes(product.currency) ? product.currency : 'USD';
+    if (!productRates[currency]) {
+      const response = await getExchangeRate({ base: currency, target: REPORTING_CURRENCY });
+      productRates[currency] = Number(response?.rate) || 1;
+    }
+  }
+  const totalValue = products.reduce((sum, product) => {
+    const currency = ['PEN', 'USD', 'EUR'].includes(product.currency) ? product.currency : 'USD';
+    return sum + (product.stock * product.price * productRates[currency]);
+  }, 0);
   const lowStockProducts = products.filter(product => product.stock <= product.minStockLevel);
   const outOfStockProducts = products.filter(product => product.stock === 0);
 
@@ -54,7 +71,8 @@ const getInventoryReport = asyncHandler(async (req, res) => {
     }
     acc[product.category].count++;
     acc[product.category].totalStock += product.stock;
-    acc[product.category].totalValue += (product.stock * product.price);
+    const currency = ['PEN', 'USD', 'EUR'].includes(product.currency) ? product.currency : 'USD';
+    acc[product.category].totalValue += (product.stock * product.price * productRates[currency]);
     return acc;
   }, {});
 
@@ -65,6 +83,7 @@ const getInventoryReport = asyncHandler(async (req, res) => {
       statistics: {
         totalProducts,
         totalValue,
+        currency: REPORTING_CURRENCY,
         lowStockCount: lowStockProducts.length,
         outOfStockCount: outOfStockProducts.length,
         categories: Object.keys(categoryBreakdown).length
@@ -117,6 +136,9 @@ const getTransactionReport = asyncHandler(async (req, res) => {
     .populate('vendorId', 'name')
     .sort({ date: -1 });
 
+  const rateResponse = await getExchangeRate({ base: 'USD', target: REPORTING_CURRENCY });
+  const usdToReportingRate = Number(rateResponse?.rate) || 1;
+
   // Group transactions by period
   const groupedData = [];
   const groupFormat = getGroupFormat(groupBy);
@@ -134,10 +156,10 @@ const getTransactionReport = asyncHandler(async (req, res) => {
     
     if (transaction.type === 'sale') {
       acc[key].sales.count++;
-      acc[key].sales.amount += getBaseAmount(transaction);
+      acc[key].sales.amount += getReportingAmount(transaction, usdToReportingRate);
     } else {
       acc[key].purchases.count++;
-      acc[key].purchases.amount += getBaseAmount(transaction);
+      acc[key].purchases.amount += getReportingAmount(transaction, usdToReportingRate);
     }
     
     acc[key].transactions.push(transaction);
@@ -152,11 +174,11 @@ const getTransactionReport = asyncHandler(async (req, res) => {
   // Calculate summary statistics
   const totalSales = transactions
     .filter(t => t.type === 'sale')
-    .reduce((sum, t) => sum + getBaseAmount(t), 0);
+    .reduce((sum, t) => sum + getReportingAmount(t, usdToReportingRate), 0);
     
   const totalPurchases = transactions
     .filter(t => t.type === 'purchase')
-    .reduce((sum, t) => sum + getBaseAmount(t), 0);
+    .reduce((sum, t) => sum + getReportingAmount(t, usdToReportingRate), 0);
     
   const salesCount = transactions.filter(t => t.type === 'sale').length;
   const purchasesCount = transactions.filter(t => t.type === 'purchase').length;
@@ -174,7 +196,8 @@ const getTransactionReport = asyncHandler(async (req, res) => {
         purchasesCount,
         totalTransactions: transactions.length,
         averageSaleAmount: salesCount > 0 ? totalSales / salesCount : 0,
-        averagePurchaseAmount: purchasesCount > 0 ? totalPurchases / purchasesCount : 0
+        averagePurchaseAmount: purchasesCount > 0 ? totalPurchases / purchasesCount : 0,
+        currency: REPORTING_CURRENCY
       }
     }
   });
@@ -397,23 +420,26 @@ const getDashboardSummary = asyncHandler(async (req, res) => {
     Transaction.find({ businessId, status: 'completed', date: { $gte: startOfYear } })
   ]);
 
+  const rateResponse = await getExchangeRate({ base: 'USD', target: REPORTING_CURRENCY });
+  const usdToReportingRate = Number(rateResponse?.rate) || 1;
+
   // Calculate monthly statistics
   const monthlySales = monthlyTransactions
     .filter(t => t.type === 'sale')
-    .reduce((sum, t) => sum + getBaseAmount(t), 0);
+    .reduce((sum, t) => sum + getReportingAmount(t, usdToReportingRate), 0);
     
   const monthlyPurchases = monthlyTransactions
     .filter(t => t.type === 'purchase')
-    .reduce((sum, t) => sum + getBaseAmount(t), 0);
+    .reduce((sum, t) => sum + getReportingAmount(t, usdToReportingRate), 0);
 
   // Calculate yearly statistics  
   const yearlySales = yearlyTransactions
     .filter(t => t.type === 'sale')
-    .reduce((sum, t) => sum + getBaseAmount(t), 0);
+    .reduce((sum, t) => sum + getReportingAmount(t, usdToReportingRate), 0);
     
   const yearlyPurchases = yearlyTransactions
     .filter(t => t.type === 'purchase')
-    .reduce((sum, t) => sum + getBaseAmount(t), 0);
+    .reduce((sum, t) => sum + getReportingAmount(t, usdToReportingRate), 0);
 
   // Recent transactions
   const recentTransactions = await Transaction.find({ businessId, status: 'completed' })
@@ -425,7 +451,7 @@ const getDashboardSummary = asyncHandler(async (req, res) => {
   res.json({
     success: true,
     data: {
-      baseCurrency: 'USD',
+      baseCurrency: REPORTING_CURRENCY,
       overview: {
         totalProducts,
         totalCustomers,

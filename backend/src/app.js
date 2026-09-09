@@ -16,6 +16,7 @@ const transactionRoutes = require('./routes/transactions');
 const reportRoutes = require('./routes/reports');
 const externalRoutes = require('./routes/external');
 const telegramRoutes = require('./routes/telegram');
+const creditPaymentRoutes = require('./routes/creditPayments');
 const { startPolling } = require('./services/telegramService');
 
 // Import middleware
@@ -102,6 +103,7 @@ app.use('/api/transactions', transactionRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/external', externalRoutes);
 app.use('/api/telegram', telegramRoutes);
+app.use('/api/credit-payments', creditPaymentRoutes);
 
 // Welcome route
 app.get('/', (req, res) => {
@@ -158,6 +160,10 @@ app.get('/api/docs', (req, res) => {
         vendors: 'GET /contacts/vendors',
         search: 'GET /contacts/search/:term',
         updateBalance: 'PATCH /contacts/:id/balance'
+      },
+      creditPayments: {
+        create: 'POST /credit-payments',
+        customerHistory: 'GET /credit-payments/customer/:customerId'
       },
       transactions: {
         list: 'GET /transactions',

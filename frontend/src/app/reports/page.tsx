@@ -61,6 +61,7 @@ interface TransactionReportData {
     purchasesCount: number;
     averageSaleAmount: number;
     averagePurchaseAmount: number;
+    currency?: 'PEN' | 'USD' | 'EUR';
   };
 }
 
@@ -205,7 +206,7 @@ export default function ReportsPage() {
           product.stock,
           product.stock === 0 ? t('reports.outOfStock') : product.stock <= product.minStockLevel ? t('reports.lowStock') : t('products.inStock')
         ]),
-        summary: `${t('reports.totalProducts')}: ${inventoryReport.statistics.totalProducts} | ${t('reports.totalValue')}: ${formatCurrency(inventoryReport.statistics.totalValue)}`
+        summary: `${t('reports.totalProducts')}: ${inventoryReport.statistics.totalProducts} | ${t('reports.totalValue')}: ${formatCurrency(inventoryReport.statistics.totalValue, inventoryReport.statistics.currency || 'PEN')}`
       };
     }
 
@@ -225,7 +226,7 @@ export default function ReportsPage() {
             transaction.currency || 'USD'
           ])
         ],
-        summary: `${t('reports.totalSales')}: ${formatCurrency(transactionReport.summary.totalSales)} | ${t('reports.totalPurchases')}: ${formatCurrency(transactionReport.summary.totalPurchases)} | ${t('reports.netProfit')}: ${formatCurrency(transactionReport.summary.profit)}`
+        summary: `${t('reports.totalSales')}: ${formatCurrency(transactionReport.summary.totalSales, transactionReport.summary.currency || 'PEN')} | ${t('reports.totalPurchases')}: ${formatCurrency(transactionReport.summary.totalPurchases, transactionReport.summary.currency || 'PEN')} | ${t('reports.netProfit')}: ${formatCurrency(transactionReport.summary.profit, transactionReport.summary.currency || 'PEN')}`
       };
     }
 
@@ -398,7 +399,7 @@ export default function ReportsPage() {
                                     <div className="flex items-center justify-between">
                                       <div>
                                         <p className="text-sm font-medium text-muted-foreground">{t('reports.totalValue')}</p>
-                                        <p className="text-2xl font-bold">{formatCurrency(inventoryReport.statistics.totalValue)}</p>
+                                        <p className="text-2xl font-bold">{formatCurrency(inventoryReport.statistics.totalValue, inventoryReport.statistics.currency || 'PEN')}</p>
                                       </div>
                                       <DollarSign className="h-8 w-8 text-green-500" />
                                     </div>
@@ -462,7 +463,7 @@ export default function ReportsPage() {
                                         </div>
                                       </TableCell>
                                       <TableCell>{product.category}</TableCell>
-                                      <TableCell>{formatCurrency(product.price)}</TableCell>
+                                      <TableCell>{formatCurrency(product.price, product.currency || 'USD')}</TableCell>
                                       <TableCell>{product.stock}</TableCell>
                                       <TableCell>
                                         {product.stock === 0 ? (
@@ -541,7 +542,7 @@ export default function ReportsPage() {
                                 <div className="flex items-center justify-between">
                                   <div>
                                     <p className="text-sm font-medium text-muted-foreground">{t('reports.totalSales')}</p>
-                                    <p className="text-2xl font-bold text-green-600">{formatCurrency(transactionReport.summary.totalSales)}</p>
+                                    <p className="text-2xl font-bold text-green-600">{formatCurrency(transactionReport.summary.totalSales, transactionReport.summary.currency || 'PEN')}</p>
                                   </div>
                                   <TrendingUp className="h-8 w-8 text-green-500" />
                                 </div>
@@ -553,7 +554,7 @@ export default function ReportsPage() {
                                 <div className="flex items-center justify-between">
                                   <div>
                                     <p className="text-sm font-medium text-muted-foreground">{t('reports.totalPurchases')}</p>
-                                    <p className="text-2xl font-bold text-red-600">{formatCurrency(transactionReport.summary.totalPurchases)}</p>
+                                    <p className="text-2xl font-bold text-red-600">{formatCurrency(transactionReport.summary.totalPurchases, transactionReport.summary.currency || 'PEN')}</p>
                                   </div>
                                   <TrendingDown className="h-8 w-8 text-red-500" />
                                 </div>
@@ -566,7 +567,7 @@ export default function ReportsPage() {
                                   <div>
                                     <p className="text-sm font-medium text-muted-foreground">{t('reports.netProfit')}</p>
                                     <p className={`text-2xl font-bold ${transactionReport.summary.profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                      {formatCurrency(transactionReport.summary.profit)}
+                                      {formatCurrency(transactionReport.summary.profit, transactionReport.summary.currency || 'PEN')}
                                     </p>
                                   </div>
                                   <DollarSign className="h-8 w-8 text-blue-500" />
@@ -579,7 +580,7 @@ export default function ReportsPage() {
                                 <div className="flex items-center justify-between">
                                   <div>
                                     <p className="text-sm font-medium text-muted-foreground">{t('reports.avgSale')}</p>
-                                    <p className="text-2xl font-bold">{formatCurrency(transactionReport.summary.averageSaleAmount)}</p>
+                                    <p className="text-2xl font-bold">{formatCurrency(transactionReport.summary.averageSaleAmount, transactionReport.summary.currency || 'PEN')}</p>
                                   </div>
                                   <BarChart3 className="h-8 w-8 text-purple-500" />
                                 </div>

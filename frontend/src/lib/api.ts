@@ -184,6 +184,22 @@ class ApiClient {
     return response.data;
   }
 
+  async createCreditPayment(data: {
+    customerId: string;
+    amount: number;
+    currency: 'PEN' | 'USD' | 'EUR';
+    paymentMethod: 'cash' | 'card' | 'bank_transfer' | 'wallet';
+    notes?: string;
+  }): Promise<ApiResponse> {
+    const response = await this.instance.post('/credit-payments', data);
+    return response.data;
+  }
+
+  async getCreditPayments(customerId: string): Promise<ApiResponse> {
+    const response = await this.instance.get(`/credit-payments/customer/${customerId}`);
+    return response.data;
+  }
+
   // External integrations
   async getExchangeRate(base = 'USD', target = 'PEN'): Promise<ApiResponse> {
     const response = await this.instance.get('/external/exchange-rate', { params: { base, target } });

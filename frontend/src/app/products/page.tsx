@@ -20,6 +20,9 @@ export default function ProductsPage() {
   const [search, setSearch] = useState('');
   const { t } = useLanguage();
 
+  const formatPrice = (price: number, currency: Product['currency'] = 'USD') =>
+    new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(price);
+
   useEffect(() => {
     loadProducts();
   }, [search]);
@@ -111,7 +114,7 @@ export default function ProductsPage() {
                           </div>
                         </TableCell>
                         <TableCell>{product.category}</TableCell>
-                        <TableCell>${product.price.toFixed(2)}</TableCell>
+                        <TableCell>{formatPrice(product.price, product.currency || 'USD')}</TableCell>
                         <TableCell>
                           <div className="flex items-center space-x-2">
                             <Package className="h-4 w-4" />

@@ -95,6 +95,11 @@ const contactSchema = new mongoose.Schema({
   currentBalance: {
     type: Number,
     default: 0
+  },
+  balancesByCurrency: {
+    PEN: { type: Number, default: 0, min: 0 },
+    USD: { type: Number, default: 0, min: 0 },
+    EUR: { type: Number, default: 0, min: 0 }
   }
 }, {
   timestamps: true

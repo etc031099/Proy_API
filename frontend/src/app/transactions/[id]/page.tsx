@@ -16,6 +16,7 @@ import {
   CreditCard,
   Package,
   FileText
+  , Printer, Copy
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useLanguage } from '@/contexts/LanguageContext';
@@ -37,6 +38,8 @@ interface Transaction {
   exchangeRate?: number;
   date: string;
   status: string;
+  customerName?: string;
+  vendorName?: string;
   customerId?: {
     _id: string;
     name: string;
@@ -153,11 +156,63 @@ export default function TransactionDetailPage({ params }: { params: Promise<{ id
   };
 
   const formatPaymentMethod = (value?: string) => {
-    if (!value) return 'Not specified';
-    return value
-      .split('_')
-      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-      .join(' ');
+    const labels: Record<string, string> = {
+      cash: t('transactions.paymentCash'),
+      card: t('transactions.paymentCard'),
+      bank_transfer: t('transactions.paymentTransfer'),
+      wallet: t('transactions.paymentWallet'),
+      credit: t('transactions.paymentCredit'),
+      crypto: language === 'es' ? 'Criptomoneda' : 'Cryptocurrency',
+      bitcoin: 'Bitcoin',
+      tether: 'Tether',
+      other: language === 'es' ? 'Otro' : 'Other'
+    };
+    return labels[value || ''] || value || t('transactions.paymentNotSpecified');
+  };
+
+  const printReceipt = () => {
+    if (!transaction) return;
+    const printWindow = window.open('', '_blank', 'width=800,height=900');
+    if (!printWindow) return;
+    const rows = transaction.products.map((item) => `
+      <tr><td>${item.productName}</td><td>${item.quantity}</td>
+      <td>${formatCurrency(item.price, transactionCurrency)}</td>
+      <td>${formatCurrency(item.total, transactionCurrency)}</td></tr>
+    `).join('');
+    printWindow.document.write(`
+      <html><head><title>${t('transactions.receiptTitle')}</title>
+      <style>body{font-family:Arial,sans-serif;padding:28px;color:#111;max-width:760px;margin:auto}
+      h1{margin-bottom:4px}small{color:#666}table{width:100%;border-collapse:collapse;margin-top:24px}
+      th,td{border-bottom:1px solid #ddd;padding:9px;text-align:left}th{background:#f3f4f6}
+      .total{text-align:right;font-size:18px;font-weight:bold;margin-top:20px}</style></head>
+      <body><h1>${t('transactions.receiptTitle')}</h1>
+      <small>${t('transactions.receiptNumber')}: ${transaction._id}</small><br/>
+      <small>${t('transactions.date')}: ${new Date(transaction.date).toLocaleString(language === 'es' ? 'es-PE' : 'en-US')}</small>
+      <p><strong>${transaction.type === 'sale' ? t('transactions.customer') : t('transactions.vendor')}:</strong>
+      ${transaction.type === 'sale' ? transaction.customerId?.name || t('transactions.finalConsumer') : transaction.vendorId?.name || t('transactions.unknownVendor')}</p>
+      <table><thead><tr><th>${t('transactions.product')}</th><th>${t('transactions.quantity')}</th><th>${t('transactions.unitPrice')}</th><th>${t('transactions.total')}</th></tr></thead>
+      <tbody>${rows}</tbody></table><div class="total">${t('transactions.totalAmount')}: ${formatCurrency(transaction.totalAmount, transactionCurrency)}</div>
+      <p>${t('transactions.paymentMethod')}: ${formatPaymentMethod(transaction.paymentMethod)}</p>
+      </body></html>
+    `);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
+  };
+
+  const repeatSale = () => {
+    if (!transaction || transaction.type !== 'sale') return;
+    sessionStorage.setItem('repeat-sale', JSON.stringify({
+      customerId: transaction.customerId?._id || '',
+      customerName: transaction.customerId?.name || transaction.customerName || '',
+      currency: transaction.currency || 'PEN',
+      products: transaction.products.map((item) => ({
+        productId: item.productId._id,
+        quantity: item.quantity,
+        price: item.price
+      }))
+    }));
+    router.push('/transactions/sale');
   };
 
   if (loading) {
@@ -218,6 +273,16 @@ export default function TransactionDetailPage({ params }: { params: Promise<{ id
             </div>
           </div>
           <div className="flex gap-2">
+            <Button variant="outline" onClick={printReceipt}>
+              <Printer className="mr-2 h-4 w-4" />
+              {t('transactions.printReceipt')}
+            </Button>
+            {transaction.type === 'sale' && transaction.status === 'completed' && (
+              <Button variant="outline" onClick={repeatSale}>
+                <Copy className="mr-2 h-4 w-4" />
+                {t('transactions.repeatSale')}
+              </Button>
+            )}
             <Badge className={getTypeColor(transaction.type)}>
               {transaction.type}
             </Badge>

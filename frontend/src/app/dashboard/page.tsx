@@ -45,7 +45,11 @@ export default function DashboardPage() {
   }
 
   const formatAmount = (amount?: number) =>
-    `$${(amount || 0).toLocaleString(language === 'es' ? 'es-PE' : 'en-US')}`;
+    new Intl.NumberFormat(language === 'es' ? 'es-PE' : 'en-US', {
+      style: 'currency',
+      currency: summary?.baseCurrency || 'PEN',
+      minimumFractionDigits: 2,
+    }).format(amount || 0);
 
   return (
     <ProtectedRoute>
@@ -110,7 +114,7 @@ export default function DashboardPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-green-500">
-                  {formatAmount(summary?.monthly.sales)} USD
+                  {formatAmount(summary?.monthly.sales)}
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {summary?.monthly.transactionCount || 0} {t('dashboard.transactions')}
@@ -125,7 +129,7 @@ export default function DashboardPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-red-500">
-                  {formatAmount(summary?.monthly.purchases)} USD
+                  {formatAmount(summary?.monthly.purchases)}
                 </div>
               </CardContent>
             </Card>
@@ -139,7 +143,7 @@ export default function DashboardPage() {
                 <div className={`text-2xl font-bold ${
                   (summary?.monthly.profit || 0) >= 0 ? 'text-green-500' : 'text-red-500'
                 }`}>
-                  {formatAmount(summary?.monthly.profit)} USD
+                  {formatAmount(summary?.monthly.profit)}
                 </div>
               </CardContent>
             </Card>
@@ -151,11 +155,11 @@ export default function DashboardPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-lg font-bold text-purple-500">
-                  {formatAmount(summary?.yearly.sales)} USD
+                  {formatAmount(summary?.yearly.sales)}
                 </div>
                 <p className="text-xs text-muted-foreground">{t('dashboard.annualSales')}</p>
                 <p className="text-sm text-muted-foreground">
-                  {t('dashboard.annualProfit')}: {formatAmount(summary?.yearly.profit)} USD
+                  {t('dashboard.annualProfit')}: {formatAmount(summary?.yearly.profit)}
                 </p>
               </CardContent>
             </Card>
