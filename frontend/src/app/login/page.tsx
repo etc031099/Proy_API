@@ -54,7 +54,8 @@ export default function LoginPage() {
       await login({ email, password });
     } catch (err: unknown) {
       const error = err as Error;
-      setError(error.message);
+      const isNetworkIssue = /timeout|network/i.test(error.message);
+      setError(isNetworkIssue ? t('auth.serverWakingUp') : error.message);
     } finally {
       setLoading(false);
     }

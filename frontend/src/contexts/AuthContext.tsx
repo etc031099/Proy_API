@@ -14,6 +14,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
 
   useEffect(() => {
+    // Wake a possibly sleeping backend (Render free tier) while the page loads.
+    apiClient.warmUp();
     checkAuth();
   }, []);
 
@@ -31,9 +33,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } else {
         localStorage.removeItem('token');
       }
-    } catch (error) {
-      localStorage.removeItem('token');
-      console.error('Auth check failed:', error);
+    } catch (error: any) {
+      // Only discard the session when the API explicitly rejects the token.
+      // Network failures / cold starts must NOT log the user out.
+      const status = error?.response?.status;
+      if (status === 401 || status === 403) {
+        localStorage.removeItem('token');
+      } else {
+        console.warn('Auth check could not reach the server, keeping session:', error?.message);
+      }
     } finally {
       setLoading(false);
     }
@@ -55,7 +63,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (error: any) {
       const message = error.response?.data?.message || error.message || 'Login failed';
       setError(message);
-      throw new Error(message);
+      const loginError = new Error(message) as Error & { code?: string };
+      loginError.code = error.response?.data?.code;
+      throw loginError;
     } finally {
       setLoading(false);
     }
@@ -77,7 +87,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (error: any) {
       const message = error.response?.data?.message || error.message || 'Registration failed';
       setError(message);
-      throw new Error(message);
+      const registrationError = new Error(message) as Error & { code?: string };
+      registrationError.code = error.response?.data?.code;
+      throw registrationError;
     } finally {
       setLoading(false);
     }

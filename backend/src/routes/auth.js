@@ -1,4 +1,5 @@
 const express = require("express");
+const rateLimit = require("express-rate-limit");
 const {
   register,
   login,
@@ -18,9 +19,29 @@ const {
 
 const router = express.Router();
 
+// Only throttle the public credential endpoints. Authenticated endpoints such as
+// /profile are called on every page load and must NOT be throttled, otherwise a
+// normal user session can be unexpectedly logged out with a 429 response.
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 50, // multiple attempts allowed for a smoother UX
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: "Too many authentication attempts, please try again later.",
+  },
+});
+
 // Public routes
-router.post("/register", registerValidation, validateRequest, register);
-router.post("/login", loginValidation, validateRequest, login);
+router.post(
+  "/register",
+  authLimiter,
+  registerValidation,
+  validateRequest,
+  register
+);
+router.post("/login", authLimiter, loginValidation, validateRequest, login);
 
 // Protected routes
 router.use(authenticate); // All routes below require authentication

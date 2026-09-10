@@ -49,16 +49,6 @@ const limiter = rateLimit({
 
 app.use(limiter);
 
-// Auth rate limiting (relaxed)
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes  
-  max: 50, // Increased from 10 to 50 auth requests per windowMs
-  message: {
-    success: false,
-    message: 'Too many authentication attempts, please try again later.'
-  }
-});
-
 // CORS configuration
 // For a demo/prototype environment, allow the frontend when deployed on Vercel,
 // localhost during development, and any other valid browser origin used for testing.
@@ -96,7 +86,7 @@ app.get('/health', (req, res) => {
 });
 
 // API routes
-app.use('/api/auth', authLimiter, authRoutes);
+app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/contacts', contactRoutes);
 app.use('/api/transactions', transactionRoutes);

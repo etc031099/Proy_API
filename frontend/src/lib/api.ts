@@ -7,7 +7,9 @@ class ApiClient {
   constructor() {
     this.instance = axios.create({
       baseURL: process.env.NEXT_PUBLIC_API_URL,
-      timeout: 30000,
+      // Long timeout so a sleeping backend on Render's free tier (which can take
+      // 50s+ to spin back up) is not aborted mid cold-start.
+      timeout: 90000,
       headers: {
         'Content-Type': 'application/json',
       },
@@ -38,16 +40,46 @@ class ApiClient {
         return response;
       },
       (error: AxiosError) => {
-        if (error.response?.status === 401) {
-          // Token expired or invalid
+        const status = error.response?.status;
+        const requestUrl = error.config?.url || '';
+        const isAuthEndpoint =
+          requestUrl.includes('/auth/login') || requestUrl.includes('/auth/register');
+
+        // A failed login/register attempt must surface the API error on the page.
+        // Forcing a hard redirect here would reload the page and wipe the message
+        // (e.g. "Invalid email or password"), so it is skipped for those endpoints.
+        if (status === 401 && !isAuthEndpoint) {
           this.removeToken();
-          if (typeof window !== 'undefined') {
+          if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
             window.location.href = '/login';
           }
         }
         return Promise.reject(error);
       }
     );
+  }
+
+  /**
+   * Fire-and-forget request to wake up a sleeping backend.
+   * Used by AuthProvider on app load so Render's free instance starts spinning up
+   * before the user actually submits the login/register form.
+   */
+  async warmUp(): Promise<void> {
+    if (typeof window === 'undefined') return;
+    try {
+      await this.instance.get(this.getHealthUrl(), {
+        // Never let the warm-up trigger the global 401 redirect logic.
+        validateStatus: () => true,
+      });
+    } catch {
+      // Ignore: the server may still be cold-starting, the real request will retry it.
+    }
+  }
+
+  private getHealthUrl(): string {
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+    // The health endpoint lives at the server root, not under the /api prefix.
+    return `${baseUrl.replace(/\/api\/?$/, '')}/health`;
   }
 
   private getToken(): string | null {

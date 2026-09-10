@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { useLanguage } from '@/contexts/LanguageContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -20,28 +21,49 @@ export default function RegisterPage() {
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const { register, user, loading: authLoading } = useAuth();
+  const { register, user, loading: authLoading, logout } = useAuth();
   const router = useRouter();
-
-  useEffect(() => {
-    if (user && !authLoading) {
-      router.replace('/dashboard');
-    }
-  }, [user, authLoading, router]);
+  const { t } = useLanguage();
 
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-muted/50 p-4">
         <div className="flex items-center space-x-2">
-          <div className="h-5 w-5 animate-spin rounded-full border-b-2 border-primary"></div>
-          <span>Loading...</span>
+          <LoadingSpinner size={20} />
+          <span>{t('common.loading')}</span>
         </div>
       </div>
     );
   }
 
+  // A signed-in visitor must NOT be silently bounced into the existing session.
+  // Showing an explicit message makes it clear why no new account was created.
   if (user) {
-    return null;
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-muted/50 p-4">
+        <FadeIn delay={0.2}>
+          <Card className="w-full max-w-md shadow-lg">
+            <CardHeader className="space-y-1">
+              <CardTitle className="text-2xl text-center">{t('auth.alreadySignedIn')}</CardTitle>
+              <CardDescription className="text-center">
+                {t('auth.alreadySignedInDesc')}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="rounded-md bg-muted/50 p-3 text-center text-sm">
+                <span className="font-medium">{user.email}</span>
+              </div>
+              <Button className="w-full" onClick={() => router.replace('/dashboard')}>
+                {t('auth.goToDashboard')}
+              </Button>
+              <Button variant="outline" className="w-full" onClick={() => logout()}>
+                {t('common.logout')}
+              </Button>
+            </CardContent>
+          </Card>
+        </FadeIn>
+      </div>
+    );
   }
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -56,11 +78,11 @@ export default function RegisterPage() {
     setError('');
 
     if (formData.password.length < 6) {
-      setError('La contraseña debe tener al menos 6 caracteres.');
+      setError(t('auth.passwordMinError'));
       return;
     }
     if (!/[a-z]/.test(formData.password) || !/[A-Z]/.test(formData.password) || !/\d/.test(formData.password)) {
-      setError('La contraseña debe incluir al menos una letra mayúscula, una minúscula y un número.');
+      setError(t('auth.passwordComplexityError'));
       return;
     }
 
@@ -69,7 +91,15 @@ export default function RegisterPage() {
     try {
       await register(formData);
     } catch (err: any) {
-      setError(err.message);
+      if (err?.code === 'EMAIL_EXISTS') {
+        setError(t('auth.emailExistsError'));
+      } else if (err?.code === 'BUSINESS_EXISTS') {
+        setError(t('auth.businessExistsError'));
+      } else if (/timeout|network/i.test(err?.message || '')) {
+        setError(t('auth.serverWakingUp'));
+      } else {
+        setError(err?.message || 'Registration failed');
+      }
     } finally {
       setLoading(false);
     }
@@ -82,11 +112,11 @@ export default function RegisterPage() {
           <Card className="w-full max-w-md shadow-lg hover:shadow-xl transition-shadow duration-300">
             <CardHeader className="space-y-1">
               <FadeIn delay={0.4}>
-                <CardTitle className="text-2xl text-center">Create an account</CardTitle>
+                <CardTitle className="text-2xl text-center">{t('auth.createTitle')}</CardTitle>
               </FadeIn>
               <FadeIn delay={0.5}>
                 <CardDescription className="text-center">
-                  Enter your details to create your account
+                  {t('auth.createDescription')}
                 </CardDescription>
               </FadeIn>
             </CardHeader>
@@ -102,7 +132,7 @@ export default function RegisterPage() {
                 
                 <FormFieldAnimation delay={0.6}>
                   <div className="space-y-2">
-                    <Label htmlFor="name">Full Name</Label>
+                    <Label htmlFor="name">{t('auth.fullName')}</Label>
                     <Input
                       id="name"
                       name="name"
@@ -118,7 +148,7 @@ export default function RegisterPage() {
                 
                 <FormFieldAnimation delay={0.7}>
                   <div className="space-y-2">
-                    <Label htmlFor="email">Email</Label>
+                    <Label htmlFor="email">{t('auth.email')}</Label>
                     <Input
                       id="email"
                       name="email"
@@ -134,7 +164,7 @@ export default function RegisterPage() {
                 
                 <FormFieldAnimation delay={0.8}>
                   <div className="space-y-2">
-                    <Label htmlFor="password">Password</Label>
+                    <Label htmlFor="password">{t('auth.password')}</Label>
                     <Input
                       id="password"
                       name="password"
@@ -148,19 +178,19 @@ export default function RegisterPage() {
                       className="transition-all duration-300 focus:scale-105"
                     />
                     <div id="password-requirements" className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">
-                      <p className="font-medium text-foreground">Password requirements:</p>
+                      <p className="font-medium text-foreground">{t('auth.passwordTitle')}</p>
                       <ul className="mt-1 list-disc space-y-0.5 pl-4">
                         <li className={formData.password.length >= 6 ? 'text-green-600' : ''}>
-                          At least 6 characters
+                          {t('auth.reqLength')}
                         </li>
                         <li className={/[A-Z]/.test(formData.password) ? 'text-green-600' : ''}>
-                          At least one uppercase letter
+                          {t('auth.reqUpper')}
                         </li>
                         <li className={/[a-z]/.test(formData.password) ? 'text-green-600' : ''}>
-                          At least one lowercase letter
+                          {t('auth.reqLower')}
                         </li>
                         <li className={/\d/.test(formData.password) ? 'text-green-600' : ''}>
-                          At least one number
+                          {t('auth.reqNumber')}
                         </li>
                       </ul>
                     </div>
@@ -169,12 +199,12 @@ export default function RegisterPage() {
                 
                 <FormFieldAnimation delay={0.9}>
                   <div className="space-y-2">
-                    <Label htmlFor="businessId">Business ID</Label>
+                    <Label htmlFor="businessId">{t('auth.businessId')}</Label>
                     <Input
                       id="businessId"
                       name="businessId"
                       type="text"
-                      placeholder="my-business-001"
+                      placeholder={t('auth.businessIdPlaceholder')}
                       value={formData.businessId}
                       onChange={handleChange}
                       required
@@ -192,10 +222,10 @@ export default function RegisterPage() {
                     {loading ? (
                       <div className="flex items-center space-x-2">
                         <LoadingSpinner size={16} />
-                        <span>Creating account...</span>
+                        <span>{t('auth.creatingAccount')}</span>
                       </div>
                     ) : (
-                      'Create account'
+                      t('auth.createAccount')
                     )}
                   </Button>
                 </FormFieldAnimation>
@@ -203,9 +233,9 @@ export default function RegisterPage() {
               
               <FadeIn delay={1.1}>
                 <div className="mt-4 text-center text-sm">
-                  Already have an account?{' '}
+                  {t('auth.haveAccount')}{' '}
                   <Link href="/login" className="text-primary hover:underline transition-colors duration-300 hover:scale-105 inline-block">
-                    Sign in
+                    {t('auth.signIn')}
                   </Link>
                 </div>
               </FadeIn>

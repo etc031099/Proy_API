@@ -8,24 +8,58 @@ const { asyncHandler } = require('../middleware/validation');
  * @access  Public
  */
 const register = asyncHandler(async (req, res) => {
-  const { name, email, password, businessId } = req.body;
+  // Normalize input. Emails are case-insensitive, so always store/compare them
+  // in lowercase to avoid duplicated accounts such as "User@x.com" vs "user@x.com".
+  const name = (req.body.name || '').trim();
+  const email = (req.body.email || '').trim().toLowerCase();
+  const password = req.body.password;
+  const businessId = (req.body.businessId || '').trim();
 
-  // Check if user already exists
+  // Check if a user with this email already exists
   const existingUser = await User.findOne({ email });
   if (existingUser) {
-    return res.status(400).json({
+    return res.status(409).json({
       success: false,
-      message: 'User with this email already exists'
+      code: 'EMAIL_EXISTS',
+      message: 'An account with this email already exists. Please sign in instead.'
     });
   }
 
-  // Create user
-  const user = await User.create({
-    name,
-    email,
-    password,
-    businessId
-  });
+  // Every registration must create its own isolated system. Reject a Business ID
+  // that is already in use so two unrelated accounts never end up sharing data.
+  const existingBusiness = await User.findOne({ businessId });
+  if (existingBusiness) {
+    return res.status(409).json({
+      success: false,
+      code: 'BUSINESS_EXISTS',
+      message: 'This Business ID is already in use. Please choose a different one.'
+    });
+  }
+
+  // Create user. The unique index on email is the final guard against race
+  // conditions (two simultaneous requests for the same email).
+  let user;
+  try {
+    user = await User.create({
+      name,
+      email,
+      password,
+      businessId
+    });
+  } catch (error) {
+    if (error && error.code === 11000) {
+      const duplicateField = Object.keys(error.keyValue || {})[0] || 'field';
+      const isEmail = duplicateField === 'email';
+      return res.status(409).json({
+        success: false,
+        code: isEmail ? 'EMAIL_EXISTS' : 'BUSINESS_EXISTS',
+        message: isEmail
+          ? 'An account with this email already exists. Please sign in instead.'
+          : 'This Business ID is already in use. Please choose a different one.'
+      });
+    }
+    throw error;
+  }
 
   // Generate tokens
   const tokens = generateAuthTokens(user);
@@ -52,15 +86,26 @@ const register = asyncHandler(async (req, res) => {
  * @access  Public
  */
 const login = asyncHandler(async (req, res) => {
-  const { email, password } = req.body;
+  // Normalize the email the same way it is stored (lowercase, trimmed).
+  const email = (req.body.email || '').trim().toLowerCase();
+  const password = req.body.password;
 
   // Check if user exists and include password for comparison
   const user = await User.findOne({ email }).select('+password');
-  
-  if (!user || !user.isActive) {
+
+  if (!user) {
     return res.status(401).json({
       success: false,
+      code: 'INVALID_CREDENTIALS',
       message: 'Invalid email or password'
+    });
+  }
+
+  if (!user.isActive) {
+    return res.status(403).json({
+      success: false,
+      code: 'ACCOUNT_DISABLED',
+      message: 'This account has been disabled. Please contact support.'
     });
   }
 
@@ -69,6 +114,7 @@ const login = asyncHandler(async (req, res) => {
   if (!isPasswordValid) {
     return res.status(401).json({
       success: false,
+      code: 'INVALID_CREDENTIALS',
       message: 'Invalid email or password'
     });
   }
