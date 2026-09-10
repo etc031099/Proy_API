@@ -54,6 +54,16 @@ export default function RegisterPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+
+    if (formData.password.length < 6) {
+      setError('La contraseña debe tener al menos 6 caracteres.');
+      return;
+    }
+    if (!/[a-z]/.test(formData.password) || !/[A-Z]/.test(formData.password) || !/\d/.test(formData.password)) {
+      setError('La contraseña debe incluir al menos una letra mayúscula, una minúscula y un número.');
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -131,9 +141,29 @@ export default function RegisterPage() {
                       type="password"
                       value={formData.password}
                       onChange={handleChange}
+                      minLength={6}
+                      autoComplete="new-password"
+                      aria-describedby="password-requirements"
                       required
                       className="transition-all duration-300 focus:scale-105"
                     />
+                    <div id="password-requirements" className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">
+                      <p className="font-medium text-foreground">Password requirements:</p>
+                      <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                        <li className={formData.password.length >= 6 ? 'text-green-600' : ''}>
+                          At least 6 characters
+                        </li>
+                        <li className={/[A-Z]/.test(formData.password) ? 'text-green-600' : ''}>
+                          At least one uppercase letter
+                        </li>
+                        <li className={/[a-z]/.test(formData.password) ? 'text-green-600' : ''}>
+                          At least one lowercase letter
+                        </li>
+                        <li className={/\d/.test(formData.password) ? 'text-green-600' : ''}>
+                          At least one number
+                        </li>
+                      </ul>
+                    </div>
                   </div>
                 </FormFieldAnimation>
                 

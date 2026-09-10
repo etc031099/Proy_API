@@ -45,7 +45,8 @@ const saleFormSchema = z.object({
     price: z.number().min(0, 'Price must be positive'),
   })).min(1, 'At least one product is required'),
 }).superRefine((data, context) => {
-  if (data.paymentMethod === 'credit' && !data.customerId) {
+  const hasNewCustomerData = data.saveCustomer && Boolean(data.customerName?.trim());
+  if (data.paymentMethod === 'credit' && !data.customerId && !hasNewCustomerData) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['customerId'],
