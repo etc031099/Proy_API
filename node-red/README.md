@@ -184,10 +184,29 @@ Telegram → [Backend: LEE los mensajes] → reenvía los comandos a Node-RED (w
    `TELEGRAM_BOT_TOKEN` = el mismo token del backend.
 2. **Redeploy** de `node-red-billing` y de `proy-api` (el backend ahora reenvía los comandos).
 
-### Uso
+### Uso (sin escribir comandos) — lo más cómodo
 
-1. Abre el bot en Telegram y pulsa **START** (para iniciar el chat).
-2. Escribe `/stock arroz`, `/ventas` o `/deudas`.
-3. El bot te responderá con los datos en tiempo real de tu sistema.
+1. Abre el bot en Telegram y pulsa **START**.
+2. Aparecerá un **teclado de botones** en la parte inferior:
+
+```
+       [ 📦 Stock bajo ]   [ 💰 Ventas de hoy ]
+       [ 🧾 Deudas ]       [ ❓ Ayuda ]
+```
+
+3. Solo **toca un botón** → el bot consulta tu sistema y te responde. ✅
+4. Además aparece el **menú del bot (☰)** junto al campo de texto, con las mismas opciones.
+
+> Para buscar un producto específico (opcional), escribe: `/stock arroz`
+
+### Comandos (alternativa)
+
+| Comando | Respuesta |
+|---------|-----------|
+| `/stock <producto>` | Stock y stock mínimo del producto |
+| `/stock` (sin texto) | Productos con **stock bajo** |
+| `/ventas` | Ventas de hoy + total (S/) |
+| `/deudas` | Clientes con saldo pendiente |
+| `/ayuda` | Muestra el menú
 
 
