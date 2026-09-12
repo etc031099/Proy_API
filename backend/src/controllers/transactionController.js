@@ -3,6 +3,7 @@ const { Transaction, Product, Contact } = require('../models');
 const { asyncHandler } = require('../middleware/validation');
 const { validatePaymentMethod, getExchangeRate } = require('../services/externalApiService');
 const { notifyLowStock } = require('../services/telegramService');
+const { emitEvent } = require('../services/webhookService');
 
 const baseAmountExpression = {
   $cond: [
@@ -328,6 +329,24 @@ const createTransaction = asyncHandler(async (req, res) => {
         .then(() => notifyLowStock(businessId, notification.product, notification.previousStock))
         .catch((error) => console.error('[Telegram] low-stock notification failed:', error.message));
     }
+
+    // Optional real-time event to Node-RED (no-op unless NODE_RED_WEBHOOK_URL is set)
+    emitEvent('transaction.created', {
+      transactionId: transaction[0]._id,
+      businessId,
+      type,
+      totalAmount,
+      currency: targetCurrency,
+      paymentMethod: paymentMethod || 'cash',
+      customerName: transactionData.customerName || null,
+      vendorName: transactionData.vendorName || null,
+      itemCount: processedProducts.length,
+      items: processedProducts.map((item) => ({
+        name: item.productName,
+        quantity: item.quantity,
+        total: item.total
+      }))
+    });
 
     const populatedTransaction = await Transaction.findById(transaction[0]._id)
       .populate('customerId', 'name phone email')

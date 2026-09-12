@@ -1,0 +1,9 @@
+{
+  "name": "billing-node-red",
+  "version": "1.0.0",
+  "description": "Node-RED integration demo for the Inventory & Billing system",
+  "private": true,
+  "dependencies": {
+    "node-red-dashboard": "^3.6.0"
+  }
+}

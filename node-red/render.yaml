@@ -1,0 +1,28 @@
+# Render Blueprint for the Node-RED integration demo.
+# Usage: Render Dashboard > New > Blueprint > select this repo.
+# NOTE: if this file is not at the repository root, create the Web Service
+# manually and set "Root Directory" to the folder that contains this file.
+services:
+  - type: web
+    name: node-red-billing
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    autoDeploy: true
+    envVars:
+      - key: NODE_RED_CREDENTIAL_SECRET
+        generateValue: true
+      # Base URL of your deployed backend API (with /api), e.g. https://xxxx.onrender.com/api
+      - key: API_BASE
+        sync: false
+      # Credentials of an existing user of your system (used by Node-RED to get a JWT)
+      - key: BILLING_EMAIL
+        sync: false
+      - key: BILLING_PASSWORD
+        sync: false
+      # Optional: protect the Node-RED editor with a login
+      - key: NODE_RED_USERNAME
+        sync: false
+      - key: NODE_RED_PASSWORD
+        sync: false

@@ -1,6 +1,7 @@
 const { Product, Contact } = require('../models');
 const { asyncHandler } = require('../middleware/validation');
 const { notifyLowStock } = require('../services/telegramService');
+const { emitEvent } = require('../services/webhookService');
 
 const validateSupplierPrices = async (supplierPrices, businessId) => {
   if (supplierPrices === undefined) return undefined;
@@ -369,6 +370,18 @@ const updateProductStock = asyncHandler(async (req, res) => {
   Promise.resolve()
     .then(() => notifyLowStock(req.businessId, product, previousStock))
     .catch((error) => console.error('[Telegram] low-stock notification failed:', error.message));
+
+  // Optional real-time event to Node-RED (no-op unless NODE_RED_WEBHOOK_URL is set)
+  if (product.stock <= product.minStockLevel) {
+    emitEvent('product.low_stock', {
+      businessId: req.businessId,
+      productId: product._id,
+      name: product.name,
+      stock: product.stock,
+      minStockLevel: product.minStockLevel,
+      previousStock
+    });
+  }
 
   res.json({
     success: true,
