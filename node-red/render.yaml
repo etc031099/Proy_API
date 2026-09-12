@@ -26,3 +26,6 @@ services:
         sync: false
       - key: NODE_RED_PASSWORD
         sync: false
+      # Same Telegram bot token as the backend (Node-RED only REPLIES, no conflict)
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false

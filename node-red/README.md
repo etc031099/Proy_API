@@ -150,3 +150,44 @@ function enviarANodeRed() {
 }
 ```
 
+---
+
+## 8) Bot de Telegram: consultar el sistema desde el celular
+
+Desde tu celular puedes preguntarle al bot y él consulta tu sistema y te responde:
+
+| Comando | Respuesta |
+|---------|-----------|
+| `/stock <producto>` | Stock y stock mínimo de los productos que coincidan |
+| `/ventas` | Cantidad de ventas de hoy y total (S/) |
+| `/deudas` | Clientes con saldo pendiente |
+
+### ¿Cómo funciona con UN SOLO bot? (sin conflictos)
+
+Telegram solo permite que **un** programa lea los mensajes. El reparto es:
+
+```
+Telegram → [Backend: LEE los mensajes] → reenvía los comandos a Node-RED (webhook)
+                                                    ↓
+                                    [Node-RED: consulta tu API y RESPONDE]
+                                                    ↓
+                                    [Node-RED: envía la respuesta a Telegram]
+```
+
+- El **backend sigue siendo el único que LEE** (no rompe el código de conexión).
+- **Node-RED solo RESPONDE** (esto nunca genera conflicto 409).
+- Resultado: **un solo bot**, sin errores ni inconvenientes para el usuario.
+
+### Requisitos
+
+1. En **node-red-billing** (Render) → Environment, agrega:
+   `TELEGRAM_BOT_TOKEN` = el mismo token del backend.
+2. **Redeploy** de `node-red-billing` y de `proy-api` (el backend ahora reenvía los comandos).
+
+### Uso
+
+1. Abre el bot en Telegram y pulsa **START** (para iniciar el chat).
+2. Escribe `/stock arroz`, `/ventas` o `/deudas`.
+3. El bot te responderá con los datos en tiempo real de tu sistema.
+
+
