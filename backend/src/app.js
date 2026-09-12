@@ -74,8 +74,8 @@ if (process.env.NODE_ENV === 'development') {
   app.use(morgan('combined'));
 }
 
-// Health check endpoint
-app.get('/health', (req, res) => {
+// Health check endpoints (public) - available at both /health and /api/health
+const healthHandler = (req, res) => {
   res.status(200).json({
     success: true,
     message: 'Server is running',
@@ -83,7 +83,10 @@ app.get('/health', (req, res) => {
     environment: process.env.NODE_ENV || 'development',
     version: '1.0.0'
   });
-});
+};
+
+app.get('/health', healthHandler);
+app.get('/api/health', healthHandler);
 
 // API routes
 app.use('/api/auth', authRoutes);
