@@ -15,7 +15,9 @@ const { validateRequest } = require('../middleware/validation');
 const {
   createContactValidation,
   updateContactValidation,
-  updateBalanceValidation
+  updateBalanceValidation,
+  paginationValidation,
+  limitValidation
 } = require('../utils/validations');
 
 const router = express.Router();
@@ -25,13 +27,13 @@ router.use(authenticate);
 router.use(checkBusinessAccess);
 
 // Contact CRUD routes
-router.get('/', getContacts);
+router.get('/', paginationValidation, validateRequest, getContacts);
 router.post('/', createContactValidation, validateRequest, createContact);
 
 // Special routes (must come before :id routes)
-router.get('/customers', getCustomers);
-router.get('/vendors', getVendors);
-router.get('/search/:term', searchContacts);
+router.get('/customers', paginationValidation, validateRequest, getCustomers);
+router.get('/vendors', paginationValidation, validateRequest, getVendors);
+router.get('/search/:term', limitValidation, validateRequest, searchContacts);
 
 // Individual contact routes
 router.get('/:id', getContact);

@@ -1,5 +1,6 @@
 const { Contact } = require('../models');
 const { asyncHandler } = require('../middleware/validation');
+const { toFiniteNumber } = require('../utils/numbers');
 
 /**
  * @desc    Get all contacts with search and filter
@@ -26,8 +27,8 @@ const getContacts = asyncHandler(async (req, res) => {
   }
 
   // Calculate pagination
-  const pageNum = parseInt(page);
-  const limitNum = parseInt(limit);
+  const pageNum = page;
+  const limitNum = limit;
   const skip = (pageNum - 1) * limitNum;
 
   // Get contacts with pagination
@@ -235,8 +236,8 @@ const getCustomers = asyncHandler(async (req, res) => {
     ];
   }
 
-  const pageNum = parseInt(page);
-  const limitNum = parseInt(limit);
+  const pageNum = page;
+  const limitNum = limit;
   const skip = (pageNum - 1) * limitNum;
 
   const customers = await Contact.find(filter)
@@ -279,8 +280,8 @@ const getVendors = asyncHandler(async (req, res) => {
     ];
   }
 
-  const pageNum = parseInt(page);
-  const limitNum = parseInt(limit);
+  const pageNum = page;
+  const limitNum = limit;
   const skip = (pageNum - 1) * limitNum;
 
   const vendors = await Contact.find(filter)
@@ -311,7 +312,11 @@ const getVendors = asyncHandler(async (req, res) => {
  */
 const updateContactBalance = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { amount, operation = 'set' } = req.body; // set, add, subtract
+  const { operation = 'set' } = req.body; // set, add, subtract
+  const amount = toFiniteNumber(req.body.amount, {
+    field: 'Amount',
+    min: 0
+  });
 
   const contact = await Contact.findOne({
     _id: id,
@@ -327,7 +332,9 @@ const updateContactBalance = asyncHandler(async (req, res) => {
   }
 
   let newBalance;
-  const previousBalance = contact.currentBalance;
+  const previousBalance = toFiniteNumber(contact.currentBalance, {
+    field: 'Current balance'
+  });
 
   switch (operation) {
     case 'add':
@@ -341,6 +348,10 @@ const updateContactBalance = asyncHandler(async (req, res) => {
       newBalance = amount;
       break;
   }
+
+  newBalance = toFiniteNumber(newBalance, {
+    field: 'Resulting balance'
+  });
 
   contact.currentBalance = newBalance;
   await contact.save();
@@ -374,7 +385,7 @@ const searchContacts = asyncHandler(async (req, res) => {
 
   const contacts = await Contact.searchContacts(req.businessId, term)
     .where(filter)
-    .limit(parseInt(limit));
+    .limit(limit);
 
   res.json({
     success: true,

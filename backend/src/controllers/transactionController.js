@@ -4,6 +4,7 @@ const { asyncHandler } = require('../middleware/validation');
 const { validatePaymentMethod, getExchangeRate } = require('../services/externalApiService');
 const { notifyLowStock } = require('../services/telegramService');
 const { emitEvent } = require('../services/webhookService');
+const { toFiniteNumber } = require('../utils/numbers');
 
 const baseAmountExpression = {
   $cond: [
@@ -64,8 +65,8 @@ const getTransactions = asyncHandler(async (req, res) => {
   }
 
   // Calculate pagination
-  const pageNum = parseInt(page);
-  const limitNum = parseInt(limit);
+  const pageNum = page;
+  const limitNum = limit;
   const skip = (pageNum - 1) * limitNum;
 
   // Get transactions with pagination and populate references
@@ -198,6 +199,11 @@ const createTransaction = asyncHandler(async (req, res) => {
     let subtotal = 0;
 
     for (const item of products) {
+      const itemQuantity = toFiniteNumber(item.quantity, {
+        field: 'Product quantity',
+        min: 1,
+        integer: true
+      });
       const product = await Product.findOne({
         _id: item.productId,
         businessId,
@@ -211,18 +217,22 @@ const createTransaction = asyncHandler(async (req, res) => {
         });
       }
 
-      if (type === 'sale' && product.stock < item.quantity) {
+      if (type === 'sale' && product.stock < itemQuantity) {
         return res.status(400).json({
           success: false,
-          message: `Insufficient stock for product ${product.name}. Available: ${product.stock}, Requested: ${item.quantity}`
+          message: `Insufficient stock for product ${product.name}. Available: ${product.stock}, Requested: ${itemQuantity}`
         });
       }
 
       const previousStock = product.stock;
       if (type === 'sale') {
-        product.stock -= item.quantity;
+        product.stock -= itemQuantity;
       } else {
-        product.stock += item.quantity;
+        product.stock = toFiniteNumber(product.stock + itemQuantity, {
+          field: 'Resulting stock',
+          min: 0,
+          integer: true
+        });
       }
 
       await product.save({ session });
@@ -241,22 +251,37 @@ const createTransaction = asyncHandler(async (req, res) => {
         ? product.supplierPrices.find(entry => String(entry.supplierId) === String(product.preferredSupplierId))
         : null;
       const itemCost = type === 'purchase'
-        ? Number(item.costPrice ?? matchingSupplierPrice?.purchasePrice ?? preferredSupplierPrice?.purchasePrice ?? item.price ?? product.costPrice ?? product.price ?? 0)
+        ? toFiniteNumber(
+          item.costPrice ?? matchingSupplierPrice?.purchasePrice ?? preferredSupplierPrice?.purchasePrice ?? item.price ?? product.costPrice ?? product.price ?? 0,
+          { field: 'Product cost price', min: 0 }
+        )
         : undefined;
       const sourcePrice = type === 'sale'
-        ? Number(item.price ?? product.price ?? 0)
+        ? toFiniteNumber(item.price ?? product.price ?? 0, { field: 'Product price', min: 0 })
         : itemCost;
       const productCurrency = ['PEN', 'USD', 'EUR'].includes(product.currency) ? product.currency : 'USD';
       const itemRateResponse = await getExchangeRate({ base: productCurrency, target: targetCurrency });
-      const itemRate = Number(itemRateResponse?.rate) || 1;
-      const itemPrice = Number((sourcePrice * itemRate).toFixed(2));
-      const itemTotal = Number((Number(item.quantity || 0) * itemPrice).toFixed(2));
-      subtotal += itemTotal;
+      const itemRate = toFiniteNumber(itemRateResponse?.rate, {
+        field: 'Exchange rate',
+        min: Number.EPSILON
+      });
+      const itemPrice = toFiniteNumber(Number((sourcePrice * itemRate).toFixed(2)), {
+        field: 'Converted product price',
+        min: 0
+      });
+      const itemTotal = toFiniteNumber(Number((itemQuantity * itemPrice).toFixed(2)), {
+        field: 'Product total',
+        min: 0
+      });
+      subtotal = toFiniteNumber(subtotal + itemTotal, {
+        field: 'Transaction subtotal',
+        min: 0
+      });
 
       processedProducts.push({
         productId: product._id,
         productName: product.name,
-        quantity: Number(item.quantity || 0),
+        quantity: itemQuantity,
         price: itemPrice,
         ...(type === 'purchase' ? { costPrice: itemPrice } : {}),
         total: itemTotal
@@ -265,7 +290,10 @@ const createTransaction = asyncHandler(async (req, res) => {
 
     const baseCurrency = 'USD';
     const exchangeRateResponse = await getExchangeRate({ base: baseCurrency, target: targetCurrency });
-    const resolvedRate = Number(exchangeRateResponse?.rate) || 1;
+    const resolvedRate = toFiniteNumber(exchangeRateResponse?.rate, {
+      field: 'Exchange rate',
+      min: Number.EPSILON
+    });
     // Item prices and subtotal are already expressed in the selected transaction currency.
     // Only store the USD equivalent separately for reports; do not convert the subtotal again.
     const totalAmount = Number(subtotal.toFixed(2));
@@ -306,11 +334,14 @@ const createTransaction = asyncHandler(async (req, res) => {
     const transaction = await Transaction.create([transactionData], { session });
 
     if (type === 'sale' && (paymentMethod || 'cash') === 'credit') {
-      const currencyBalance = Number(
+      const currencyBalance = toFiniteNumber(
         contact.balancesByCurrency?.[targetCurrency]
-        || (targetCurrency === 'PEN' ? contact.currentBalance : 0)
+        || (targetCurrency === 'PEN' ? contact.currentBalance : 0),
+        { field: 'Current balance' }
       );
-      const newBalance = currencyBalance + totalAmount;
+      const newBalance = toFiniteNumber(currencyBalance + totalAmount, {
+        field: 'Resulting balance'
+      });
       if (targetCurrency === 'PEN' && Number(contact.creditLimit || 0) > 0 && newBalance > Number(contact.creditLimit)) {
         throw Object.assign(
           new Error(`Credit limit exceeded. Available credit: ${Math.max(0, Number(contact.creditLimit) - currencyBalance).toFixed(2)} PEN`),
@@ -389,8 +420,8 @@ const getSales = asyncHandler(async (req, res) => {
     filter.customerId = customerId;
   }
 
-  const pageNum = parseInt(page);
-  const limitNum = parseInt(limit);
+  const pageNum = page;
+  const limitNum = limit;
   const skip = (pageNum - 1) * limitNum;
 
   const sales = await Transaction.find(filter)
@@ -436,8 +467,8 @@ const getPurchases = asyncHandler(async (req, res) => {
     filter.vendorId = vendorId;
   }
 
-  const pageNum = parseInt(page);
-  const limitNum = parseInt(limit);
+  const pageNum = page;
+  const limitNum = limit;
   const skip = (pageNum - 1) * limitNum;
 
   const purchases = await Transaction.find(filter)
@@ -576,7 +607,10 @@ const getTransactionSummary = asyncHandler(async (req, res) => {
   }
 
   const rateResponse = await getExchangeRate({ base: 'USD', target: reportingCurrency });
-  const usdToReportingRate = Number(rateResponse?.rate) || 1;
+  const usdToReportingRate = toFiniteNumber(rateResponse?.rate, {
+    field: 'Reporting exchange rate',
+    min: Number.EPSILON
+  });
   const summary = await Transaction.aggregate([
     { $match: matchStage },
     { $addFields: { baseAmount: baseAmountExpression } },

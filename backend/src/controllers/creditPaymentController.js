@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const { Contact, CreditPayment } = require('../models');
 const { asyncHandler } = require('../middleware/validation');
+const { toFiniteNumber } = require('../utils/numbers');
 
 const getCustomer = (id, businessId, session) => Contact.findOne({
   _id: id,
@@ -18,16 +19,17 @@ const createCreditPayment = asyncHandler(async (req, res) => {
     if (!customer) {
       throw Object.assign(new Error('Customer not found'), { statusCode: 404 });
     }
-    const paymentAmount = Number(amount);
-    if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) {
-      throw Object.assign(new Error('Payment amount must be greater than zero'), { statusCode: 400 });
-    }
+    const paymentAmount = toFiniteNumber(amount, {
+      field: 'Payment amount',
+      min: 0.01
+    });
     if (!['PEN', 'USD', 'EUR'].includes(currency)) {
       throw Object.assign(new Error('Currency must be PEN, USD, or EUR'), { statusCode: 400 });
     }
-    const currencyBalance = Number(
+    const currencyBalance = toFiniteNumber(
       customer.balancesByCurrency?.[currency]
-      || (currency === 'PEN' ? customer.currentBalance : 0)
+      || (currency === 'PEN' ? customer.currentBalance : 0),
+      { field: 'Current balance' }
     );
     if (paymentAmount > currencyBalance) {
       throw Object.assign(new Error('Payment cannot exceed the customer balance'), { statusCode: 400 });
@@ -40,7 +42,11 @@ const createCreditPayment = asyncHandler(async (req, res) => {
       paymentMethod,
       notes
     }], { session });
-    customer.balancesByCurrency[currency] = Math.max(0, currencyBalance - paymentAmount);
+    const resultingBalance = toFiniteNumber(
+      Math.max(0, currencyBalance - paymentAmount),
+      { field: 'Resulting balance' }
+    );
+    customer.balancesByCurrency[currency] = resultingBalance;
     if (currency === 'PEN') customer.currentBalance = customer.balancesByCurrency.PEN;
     await customer.save({ session });
     await session.commitTransaction();

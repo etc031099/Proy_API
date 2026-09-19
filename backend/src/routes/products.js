@@ -15,7 +15,9 @@ const { validateRequest } = require('../middleware/validation');
 const {
   createProductValidation,
   updateProductValidation,
-  updateStockValidation
+  updateStockValidation,
+  paginationValidation,
+  productQueryValidation
 } = require('../utils/validations');
 
 const router = express.Router();
@@ -25,13 +27,13 @@ router.use(authenticate);
 router.use(checkBusinessAccess);
 
 // Product CRUD routes
-router.get('/', getProducts);
+router.get('/', productQueryValidation, validateRequest, getProducts);
 router.post('/', createProductValidation, validateRequest, createProduct);
 
 // Special routes (must come before :id routes)
 router.get('/categories', getCategories);
 router.get('/low-stock', getLowStockProducts);
-router.get('/category/:category', getProductsByCategory);
+router.get('/category/:category', paginationValidation, validateRequest, getProductsByCategory);
 
 // Individual product routes
 router.get('/:id', getProduct);

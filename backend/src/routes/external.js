@@ -1,6 +1,10 @@
 const express = require('express');
 const { authenticate, checkBusinessAccess } = require('../middleware/auth');
-const { asyncHandler } = require('../middleware/validation');
+const { asyncHandler, validateRequest } = require('../middleware/validation');
+const {
+  exchangeRateQueryValidation,
+  paymentMethodQueryValidation
+} = require('../utils/validations');
 const {
   getExchangeRate,
   validateDocument,
@@ -12,7 +16,7 @@ const router = express.Router();
 router.use(authenticate);
 router.use(checkBusinessAccess);
 
-router.get('/exchange-rate', asyncHandler(async (req, res) => {
+router.get('/exchange-rate', exchangeRateQueryValidation, validateRequest, asyncHandler(async (req, res) => {
   const { base, target } = req.query;
   const result = await getExchangeRate({ base, target });
 
@@ -32,11 +36,11 @@ router.get('/document/validate', asyncHandler(async (req, res) => {
   });
 }));
 
-router.get('/payment-method/validate', asyncHandler(async (req, res) => {
+router.get('/payment-method/validate', paymentMethodQueryValidation, validateRequest, asyncHandler(async (req, res) => {
   const { method, amount } = req.query;
   const result = await validatePaymentMethod({
     method,
-    amount: amount === undefined ? 0 : Number(amount)
+    amount: amount === undefined ? 0 : amount
   });
 
   res.json({

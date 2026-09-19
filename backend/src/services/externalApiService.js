@@ -1,5 +1,29 @@
+const { toFiniteNumber } = require('../utils/numbers');
+
 const EXTERNAL_TIMEOUT_MS = 8000;
 const FALLBACK_USD_RATES = { USD: 1, PEN: 3.7, EUR: 0.92 };
+const SUPPORTED_CURRENCIES = Object.freeze(Object.keys(FALLBACK_USD_RATES));
+
+const normalizeCurrency = (value, fieldName) => {
+  const currency = String(value || '').trim().toUpperCase();
+  if (!SUPPORTED_CURRENCIES.includes(currency)) {
+    const error = new Error(
+      `${fieldName} currency must be one of: ${SUPPORTED_CURRENCIES.join(', ')}`
+    );
+    error.statusCode = 400;
+    error.code = 'INVALID_CURRENCY';
+    throw error;
+  }
+  return currency;
+};
+
+const getFallbackRate = (base, target) => {
+  const rate = FALLBACK_USD_RATES[target] / FALLBACK_USD_RATES[base];
+  if (!Number.isFinite(rate) || rate <= 0) {
+    throw new Error(`No valid fallback rate is configured for ${base}/${target}`);
+  }
+  return rate;
+};
 
 const fetchJson = async (url, options = {}) => {
   const controller = new AbortController();
@@ -26,14 +50,11 @@ const fetchJson = async (url, options = {}) => {
 };
 
 const getExchangeRate = async ({ base = 'USD', target = 'PEN' } = {}) => {
-  const normalizedBase = String(base || 'USD').toUpperCase();
-  const normalizedTarget = String(target || 'PEN').toUpperCase();
+  const normalizedBase = normalizeCurrency(base, 'Base');
+  const normalizedTarget = normalizeCurrency(target, 'Target');
+  const fallbackRate = getFallbackRate(normalizedBase, normalizedTarget);
 
   if (normalizedBase === normalizedTarget) {
-    const usdToBase = FALLBACK_USD_RATES[normalizedBase] || 1;
-    const usdToTarget = FALLBACK_USD_RATES[normalizedTarget] || 1;
-    const fallbackRate = usdToTarget / usdToBase;
-
     return {
       success: true,
       source: 'direct',
@@ -46,18 +67,19 @@ const getExchangeRate = async ({ base = 'USD', target = 'PEN' } = {}) => {
 
   try {
     const data = await fetchJson(`https://api.exchangerate-api.com/v4/latest/${normalizedBase}`);
-    const rate = Number(data?.rates?.[normalizedTarget]);
+    const rate = toFiniteNumber(data?.rates?.[normalizedTarget], {
+      field: 'Exchange rate',
+      min: Number.EPSILON
+    });
 
-    if (Number.isFinite(rate) && rate > 0) {
-      return {
-        success: true,
-        source: 'ExchangeRate-API',
-        base: normalizedBase,
-        target: normalizedTarget,
-        rate,
-        message: `1 ${normalizedBase} = ${rate} ${normalizedTarget}`
-      };
-    }
+    return {
+      success: true,
+      source: 'ExchangeRate-API',
+      base: normalizedBase,
+      target: normalizedTarget,
+      rate,
+      message: `1 ${normalizedBase} = ${rate} ${normalizedTarget}`
+    };
   } catch (error) {
     console.warn('Exchange rate fallback activated:', error.message);
   }
@@ -138,6 +160,10 @@ const validateDocument = async ({ type = 'dni', number = '' } = {}) => {
 
 const validatePaymentMethod = async ({ method = 'card', amount = 0 } = {}) => {
   const normalizedMethod = String(method || 'card').toLowerCase();
+  const normalizedAmount = toFiniteNumber(amount, {
+    field: 'Payment amount',
+    min: 0
+  });
   const paymentMethods = {
     cash: { supported: true, label: 'Efectivo' },
     card: { supported: true, label: 'Tarjeta' },
@@ -153,7 +179,7 @@ const validatePaymentMethod = async ({ method = 'card', amount = 0 } = {}) => {
       method: normalizedMethod,
       label: paymentMethods[normalizedMethod].label,
       supported: true,
-      amount
+      amount: normalizedAmount
     };
 
     return result;

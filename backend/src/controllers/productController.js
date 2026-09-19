@@ -2,6 +2,7 @@ const { Product, Contact } = require('../models');
 const { asyncHandler } = require('../middleware/validation');
 const { notifyLowStock } = require('../services/telegramService');
 const { emitEvent } = require('../services/webhookService');
+const { toFiniteNumber } = require('../utils/numbers');
 
 const validateSupplierPrices = async (supplierPrices, businessId) => {
   if (supplierPrices === undefined) return undefined;
@@ -27,7 +28,10 @@ const validateSupplierPrices = async (supplierPrices, businessId) => {
 
   return entries.map(entry => ({
     supplierId: entry.supplierId,
-    purchasePrice: Number(entry.purchasePrice)
+    purchasePrice: toFiniteNumber(entry.purchasePrice, {
+      field: 'Supplier purchase price',
+      min: 0
+    })
   }));
 };
 
@@ -81,13 +85,13 @@ const getProducts = asyncHandler(async (req, res) => {
 
   if (minStock !== undefined || maxStock !== undefined) {
     filter.stock = {};
-    if (minStock !== undefined) filter.stock.$gte = parseInt(minStock);
-    if (maxStock !== undefined) filter.stock.$lte = parseInt(maxStock);
+    if (minStock !== undefined) filter.stock.$gte = minStock;
+    if (maxStock !== undefined) filter.stock.$lte = maxStock;
   }
 
   // Calculate pagination
-  const pageNum = parseInt(page);
-  const limitNum = parseInt(limit);
+  const pageNum = page;
+  const limitNum = limit;
   const skip = (pageNum - 1) * limitNum;
 
   // Get products with pagination
@@ -279,8 +283,8 @@ const getProductsByCategory = asyncHandler(async (req, res) => {
   const { category } = req.params;
   const { page = 1, limit = 10 } = req.query;
 
-  const pageNum = parseInt(page);
-  const limitNum = parseInt(limit);
+  const pageNum = page;
+  const limitNum = limit;
   const skip = (pageNum - 1) * limitNum;
 
   const filter = {
@@ -335,7 +339,12 @@ const getLowStockProducts = asyncHandler(async (req, res) => {
  */
 const updateProductStock = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { quantity, operation = 'set' } = req.body; // set, add, subtract
+  const { operation = 'set' } = req.body; // set, add, subtract
+  const quantity = toFiniteNumber(req.body.quantity, {
+    field: 'Quantity',
+    min: 0,
+    integer: true
+  });
 
   const product = await Product.findOne({
     _id: id,
@@ -354,7 +363,11 @@ const updateProductStock = asyncHandler(async (req, res) => {
   let newStock;
   switch (operation) {
     case 'add':
-      newStock = product.stock + quantity;
+      newStock = toFiniteNumber(product.stock + quantity, {
+        field: 'Resulting stock',
+        min: 0,
+        integer: true
+      });
       break;
     case 'subtract':
       newStock = Math.max(0, product.stock - quantity);

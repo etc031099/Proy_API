@@ -1,4 +1,32 @@
-const { body } = require('express-validator');
+const { body, query } = require('express-validator');
+const { MAX_SAFE_NUMERIC_VALUE, toFiniteNumber } = require('./numbers');
+
+const MAX_PAGE = 10000;
+const MAX_PAGE_SIZE = 100;
+
+const validateNumericInput = (options) => (value) => {
+  toFiniteNumber(value, options);
+  return true;
+};
+
+const limitValidation = [
+  query('limit')
+    .optional()
+    .custom(validateNumericInput({ field: 'Limit', min: 1, max: MAX_PAGE_SIZE, integer: true }))
+    .withMessage(`Limit must be an integer between 1 and ${MAX_PAGE_SIZE}`)
+    .bail()
+    .toInt()
+];
+
+const paginationValidation = [
+  query('page')
+    .optional()
+    .custom(validateNumericInput({ field: 'Page', min: 1, max: MAX_PAGE, integer: true }))
+    .withMessage(`Page must be an integer between 1 and ${MAX_PAGE}`)
+    .bail()
+    .toInt(),
+  ...limitValidation
+];
 
 // Auth validations
 const registerValidation = [
@@ -77,21 +105,29 @@ const createProductValidation = [
     .withMessage('Description cannot exceed 500 characters'),
     
   body('price')
-    .isNumeric()
-    .withMessage('Price must be a number')
-    .isFloat({ min: 0 })
-    .withMessage('Price cannot be negative'),
+    .custom(validateNumericInput({ field: 'Price', min: 0, max: MAX_SAFE_NUMERIC_VALUE }))
+    .bail()
+    .isFloat({ min: 0, max: MAX_SAFE_NUMERIC_VALUE })
+    .withMessage('Price must be a non-negative finite number')
+    .bail()
+    .toFloat(),
 
   body('costPrice')
     .optional()
-    .isNumeric()
-    .withMessage('Cost price must be a number')
-    .isFloat({ min: 0 })
-    .withMessage('Cost price cannot be negative'),
+    .custom(validateNumericInput({ field: 'Cost price', min: 0, max: MAX_SAFE_NUMERIC_VALUE }))
+    .bail()
+    .isFloat({ min: 0, max: MAX_SAFE_NUMERIC_VALUE })
+    .withMessage('Cost price must be a non-negative finite number')
+    .bail()
+    .toFloat(),
     
   body('stock')
-    .isInt({ min: 0 })
-    .withMessage('Stock must be a non-negative integer'),
+    .custom(validateNumericInput({ field: 'Stock', min: 0, max: MAX_SAFE_NUMERIC_VALUE, integer: true }))
+    .bail()
+    .isInt({ min: 0, max: MAX_SAFE_NUMERIC_VALUE })
+    .withMessage('Stock must be a non-negative safe integer')
+    .bail()
+    .toInt(),
     
   body('category')
     .trim()
@@ -108,8 +144,36 @@ const createProductValidation = [
     
   body('minStockLevel')
     .optional()
-    .isInt({ min: 0 })
-    .withMessage('Minimum stock level must be a non-negative integer')
+    .custom(validateNumericInput({ field: 'Minimum stock level', min: 0, max: MAX_SAFE_NUMERIC_VALUE, integer: true }))
+    .bail()
+    .isInt({ min: 0, max: MAX_SAFE_NUMERIC_VALUE })
+    .withMessage('Minimum stock level must be a non-negative safe integer')
+    .bail()
+    .toInt(),
+
+  body('currency')
+    .optional()
+    .trim()
+    .toUpperCase()
+    .isIn(['PEN', 'USD', 'EUR'])
+    .withMessage('Currency must be one of: PEN, USD, EUR'),
+
+  body('supplierPrices')
+    .optional()
+    .isArray()
+    .withMessage('Supplier prices must be an array'),
+
+  body('supplierPrices.*.supplierId')
+    .isMongoId()
+    .withMessage('Supplier price must reference a valid supplier ID'),
+
+  body('supplierPrices.*.purchasePrice')
+    .custom(validateNumericInput({ field: 'Supplier purchase price', min: 0, max: MAX_SAFE_NUMERIC_VALUE }))
+    .bail()
+    .isFloat({ min: 0, max: MAX_SAFE_NUMERIC_VALUE })
+    .withMessage('Supplier purchase price must be a non-negative finite number')
+    .bail()
+    .toFloat()
 ];
 
 const updateProductValidation = [
@@ -127,22 +191,30 @@ const updateProductValidation = [
     
   body('price')
     .optional()
-    .isNumeric()
-    .withMessage('Price must be a number')
-    .isFloat({ min: 0 })
-    .withMessage('Price cannot be negative'),
+    .custom(validateNumericInput({ field: 'Price', min: 0, max: MAX_SAFE_NUMERIC_VALUE }))
+    .bail()
+    .isFloat({ min: 0, max: MAX_SAFE_NUMERIC_VALUE })
+    .withMessage('Price must be a non-negative finite number')
+    .bail()
+    .toFloat(),
 
   body('costPrice')
     .optional()
-    .isNumeric()
-    .withMessage('Cost price must be a number')
-    .isFloat({ min: 0 })
-    .withMessage('Cost price cannot be negative'),
+    .custom(validateNumericInput({ field: 'Cost price', min: 0, max: MAX_SAFE_NUMERIC_VALUE }))
+    .bail()
+    .isFloat({ min: 0, max: MAX_SAFE_NUMERIC_VALUE })
+    .withMessage('Cost price must be a non-negative finite number')
+    .bail()
+    .toFloat(),
     
   body('stock')
     .optional()
-    .isInt({ min: 0 })
-    .withMessage('Stock must be a non-negative integer'),
+    .custom(validateNumericInput({ field: 'Stock', min: 0, max: MAX_SAFE_NUMERIC_VALUE, integer: true }))
+    .bail()
+    .isInt({ min: 0, max: MAX_SAFE_NUMERIC_VALUE })
+    .withMessage('Stock must be a non-negative safe integer')
+    .bail()
+    .toInt(),
     
   body('category')
     .optional()
@@ -158,14 +230,46 @@ const updateProductValidation = [
     
   body('minStockLevel')
     .optional()
-    .isInt({ min: 0 })
-    .withMessage('Minimum stock level must be a non-negative integer')
+    .custom(validateNumericInput({ field: 'Minimum stock level', min: 0, max: MAX_SAFE_NUMERIC_VALUE, integer: true }))
+    .bail()
+    .isInt({ min: 0, max: MAX_SAFE_NUMERIC_VALUE })
+    .withMessage('Minimum stock level must be a non-negative safe integer')
+    .bail()
+    .toInt(),
+
+  body('currency')
+    .optional()
+    .trim()
+    .toUpperCase()
+    .isIn(['PEN', 'USD', 'EUR'])
+    .withMessage('Currency must be one of: PEN, USD, EUR'),
+
+  body('supplierPrices')
+    .optional()
+    .isArray()
+    .withMessage('Supplier prices must be an array'),
+
+  body('supplierPrices.*.supplierId')
+    .isMongoId()
+    .withMessage('Supplier price must reference a valid supplier ID'),
+
+  body('supplierPrices.*.purchasePrice')
+    .custom(validateNumericInput({ field: 'Supplier purchase price', min: 0, max: MAX_SAFE_NUMERIC_VALUE }))
+    .bail()
+    .isFloat({ min: 0, max: MAX_SAFE_NUMERIC_VALUE })
+    .withMessage('Supplier purchase price must be a non-negative finite number')
+    .bail()
+    .toFloat()
 ];
 
 const updateStockValidation = [
   body('quantity')
-    .isInt({ min: 0 })
-    .withMessage('Quantity must be a non-negative integer'),
+    .custom(validateNumericInput({ field: 'Quantity', min: 0, max: MAX_SAFE_NUMERIC_VALUE, integer: true }))
+    .bail()
+    .isInt({ min: 0, max: MAX_SAFE_NUMERIC_VALUE })
+    .withMessage('Quantity must be a non-negative safe integer')
+    .bail()
+    .toInt(),
     
   body('operation')
     .optional()
@@ -245,14 +349,22 @@ const createContactValidation = [
     .withMessage('Country cannot exceed 50 characters'),
 
   body('latitude')
-    .optional({ checkFalsy: true })
-    .isFloat({ min: -90, max: 90 })
-    .withMessage('Latitude must be a number between -90 and 90'),
+    .optional()
+    .custom(validateNumericInput({ field: 'Latitude', min: -90, max: 90, nullable: true }))
+    .withMessage('Latitude must be a number between -90 and 90')
+    .bail()
+    .customSanitizer(value => toFiniteNumber(value, {
+      field: 'Latitude', min: -90, max: 90, nullable: true
+    })),
 
   body('longitude')
-    .optional({ checkFalsy: true })
-    .isFloat({ min: -180, max: 180 })
-    .withMessage('Longitude must be a number between -180 and 180'),
+    .optional()
+    .custom(validateNumericInput({ field: 'Longitude', min: -180, max: 180, nullable: true }))
+    .withMessage('Longitude must be a number between -180 and 180')
+    .bail()
+    .customSanitizer(value => toFiniteNumber(value, {
+      field: 'Longitude', min: -180, max: 180, nullable: true
+    })),
     
   body('notes')
     .optional({ checkFalsy: true })
@@ -261,11 +373,16 @@ const createContactValidation = [
     .withMessage('Notes cannot exceed 500 characters'),
     
   body('creditLimit')
-    .optional({ checkFalsy: true })
-    .isNumeric()
-    .withMessage('Credit limit must be a number')
-    .isFloat({ min: 0 })
-    .withMessage('Credit limit cannot be negative')
+    .optional()
+    // null preserves the previous API contract and represents no configured credit limit.
+    .custom(validateNumericInput({
+      field: 'Credit limit', min: 0, max: MAX_SAFE_NUMERIC_VALUE, nullable: true
+    }))
+    .withMessage('Credit limit must be a non-negative finite number')
+    .bail()
+    .customSanitizer(value => toFiniteNumber(value, {
+      field: 'Credit limit', min: 0, max: MAX_SAFE_NUMERIC_VALUE, nullable: true
+    }))
 ];
 
 const updateContactValidation = [
@@ -336,14 +453,22 @@ const updateContactValidation = [
     .withMessage('Country cannot exceed 50 characters'),
 
   body('latitude')
-    .optional({ checkFalsy: true })
-    .isFloat({ min: -90, max: 90 })
-    .withMessage('Latitude must be a number between -90 and 90'),
+    .optional()
+    .custom(validateNumericInput({ field: 'Latitude', min: -90, max: 90, nullable: true }))
+    .withMessage('Latitude must be a number between -90 and 90')
+    .bail()
+    .customSanitizer(value => toFiniteNumber(value, {
+      field: 'Latitude', min: -90, max: 90, nullable: true
+    })),
 
   body('longitude')
-    .optional({ checkFalsy: true })
-    .isFloat({ min: -180, max: 180 })
-    .withMessage('Longitude must be a number between -180 and 180'),
+    .optional()
+    .custom(validateNumericInput({ field: 'Longitude', min: -180, max: 180, nullable: true }))
+    .withMessage('Longitude must be a number between -180 and 180')
+    .bail()
+    .customSanitizer(value => toFiniteNumber(value, {
+      field: 'Longitude', min: -180, max: 180, nullable: true
+    })),
     
   body('notes')
     .optional({ checkFalsy: true })
@@ -352,17 +477,26 @@ const updateContactValidation = [
     .withMessage('Notes cannot exceed 500 characters'),
     
   body('creditLimit')
-    .optional({ checkFalsy: true })
-    .isNumeric()
-    .withMessage('Credit limit must be a number')
-    .isFloat({ min: 0 })
-    .withMessage('Credit limit cannot be negative')
+    .optional()
+    // null clears the configured limit without being coerced to zero.
+    .custom(validateNumericInput({
+      field: 'Credit limit', min: 0, max: MAX_SAFE_NUMERIC_VALUE, nullable: true
+    }))
+    .withMessage('Credit limit must be a non-negative finite number')
+    .bail()
+    .customSanitizer(value => toFiniteNumber(value, {
+      field: 'Credit limit', min: 0, max: MAX_SAFE_NUMERIC_VALUE, nullable: true
+    }))
 ];
 
 const updateBalanceValidation = [
   body('amount')
-    .isNumeric()
-    .withMessage('Amount must be a number'),
+    .custom(validateNumericInput({ field: 'Amount', min: 0, max: MAX_SAFE_NUMERIC_VALUE }))
+    .bail()
+    .isFloat({ min: 0, max: MAX_SAFE_NUMERIC_VALUE })
+    .withMessage('Amount must be a non-negative finite number')
+    .bail()
+    .toFloat(),
     
   body('operation')
     .optional()
@@ -409,12 +543,31 @@ const createTransactionValidation = [
     .withMessage('Invalid product ID'),
     
   body('products.*.quantity')
-    .isInt({ min: 1 })
-    .withMessage('Quantity must be a positive integer'),
+    .custom(validateNumericInput({
+      field: 'Product quantity', min: 1, max: MAX_SAFE_NUMERIC_VALUE, integer: true
+    }))
+    .bail()
+    .isInt({ min: 1, max: MAX_SAFE_NUMERIC_VALUE })
+    .withMessage('Quantity must be a positive safe integer')
+    .bail()
+    .toInt(),
     
   body('products.*.price')
-    .isFloat({ min: 0 })
-    .withMessage('Price must be a non-negative number'),
+    .custom(validateNumericInput({ field: 'Product price', min: 0, max: MAX_SAFE_NUMERIC_VALUE }))
+    .bail()
+    .isFloat({ min: 0, max: MAX_SAFE_NUMERIC_VALUE })
+    .withMessage('Price must be a non-negative finite number')
+    .bail()
+    .toFloat(),
+
+  body('products.*.costPrice')
+    .optional()
+    .custom(validateNumericInput({ field: 'Product cost price', min: 0, max: MAX_SAFE_NUMERIC_VALUE }))
+    .bail()
+    .isFloat({ min: 0, max: MAX_SAFE_NUMERIC_VALUE })
+    .withMessage('Cost price must be a non-negative finite number')
+    .bail()
+    .toFloat(),
     
   body('paymentMethod')
     .optional()
@@ -443,6 +596,89 @@ const updateTransactionStatusValidation = [
     .withMessage('Status must be one of: pending, completed, cancelled')
 ];
 
+const productQueryValidation = [
+  ...paginationValidation,
+  query('minStock')
+    .optional()
+    .custom(validateNumericInput({
+      field: 'Minimum stock filter', min: 0, max: MAX_SAFE_NUMERIC_VALUE, integer: true
+    }))
+    .bail()
+    .isInt({ min: 0, max: MAX_SAFE_NUMERIC_VALUE })
+    .withMessage('Minimum stock filter must be a non-negative safe integer')
+    .bail()
+    .toInt(),
+  query('maxStock')
+    .optional()
+    .custom(validateNumericInput({
+      field: 'Maximum stock filter', min: 0, max: MAX_SAFE_NUMERIC_VALUE, integer: true
+    }))
+    .bail()
+    .isInt({ min: 0, max: MAX_SAFE_NUMERIC_VALUE })
+    .withMessage('Maximum stock filter must be a non-negative safe integer')
+    .bail()
+    .toInt(),
+  query('maxStock').custom((maxStock, { req }) => {
+    if (maxStock !== undefined && req.query.minStock !== undefined && maxStock < req.query.minStock) {
+      throw new Error('Maximum stock must be greater than or equal to minimum stock');
+    }
+    return true;
+  })
+];
+
+const exchangeRateQueryValidation = [
+  query('base')
+    .optional()
+    .trim()
+    .toUpperCase()
+    .isIn(['PEN', 'USD', 'EUR'])
+    .withMessage('Base currency must be one of: PEN, USD, EUR'),
+  query('target')
+    .optional()
+    .trim()
+    .toUpperCase()
+    .isIn(['PEN', 'USD', 'EUR'])
+    .withMessage('Target currency must be one of: PEN, USD, EUR')
+];
+
+const paymentMethodQueryValidation = [
+  query('amount')
+    .optional()
+    .custom(validateNumericInput({ field: 'Amount', min: 0, max: MAX_SAFE_NUMERIC_VALUE }))
+    .bail()
+    .isFloat({ min: 0, max: MAX_SAFE_NUMERIC_VALUE })
+    .withMessage('Amount must be a non-negative finite number')
+    .bail()
+    .toFloat()
+];
+
+const createCreditPaymentValidation = [
+  body('customerId')
+    .isMongoId()
+    .withMessage('Invalid customer ID'),
+  body('amount')
+    .custom(validateNumericInput({ field: 'Payment amount', min: 0.01, max: MAX_SAFE_NUMERIC_VALUE }))
+    .bail()
+    .isFloat({ min: 0.01, max: MAX_SAFE_NUMERIC_VALUE })
+    .withMessage('Payment amount must be a finite number greater than zero')
+    .bail()
+    .toFloat(),
+  body('currency')
+    .optional()
+    .trim()
+    .toUpperCase()
+    .isIn(['PEN', 'USD', 'EUR'])
+    .withMessage('Currency must be one of: PEN, USD, EUR'),
+  body('paymentMethod')
+    .isIn(['cash', 'card', 'bank_transfer', 'wallet'])
+    .withMessage('Invalid payment method'),
+  body('notes')
+    .optional()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage('Notes cannot exceed 500 characters')
+];
+
 module.exports = {
   // Auth validations
   registerValidation,
@@ -459,5 +695,14 @@ module.exports = {
   updateBalanceValidation,
   // Transaction validations
   createTransactionValidation,
-  updateTransactionStatusValidation
+  updateTransactionStatusValidation,
+  // Query and payment validations
+  paginationValidation,
+  limitValidation,
+  productQueryValidation,
+  exchangeRateQueryValidation,
+  paymentMethodQueryValidation,
+  createCreditPaymentValidation,
+  MAX_PAGE,
+  MAX_PAGE_SIZE
 };

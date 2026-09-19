@@ -1,6 +1,7 @@
 const { Product, Transaction, Contact } = require('../models');
 const { asyncHandler } = require('../middleware/validation');
 const { getExchangeRate } = require('../services/externalApiService');
+const { toFiniteNumber } = require('../utils/numbers');
 
 const REPORTING_CURRENCY = 'PEN';
 
@@ -50,7 +51,10 @@ const getInventoryReport = asyncHandler(async (req, res) => {
     const currency = ['PEN', 'USD', 'EUR'].includes(product.currency) ? product.currency : 'USD';
     if (!productRates[currency]) {
       const response = await getExchangeRate({ base: currency, target: REPORTING_CURRENCY });
-      productRates[currency] = Number(response?.rate) || 1;
+      productRates[currency] = toFiniteNumber(response?.rate, {
+        field: 'Inventory exchange rate',
+        min: Number.EPSILON
+      });
     }
   }
   const totalValue = products.reduce((sum, product) => {
@@ -137,7 +141,10 @@ const getTransactionReport = asyncHandler(async (req, res) => {
     .sort({ date: -1 });
 
   const rateResponse = await getExchangeRate({ base: 'USD', target: REPORTING_CURRENCY });
-  const usdToReportingRate = Number(rateResponse?.rate) || 1;
+  const usdToReportingRate = toFiniteNumber(rateResponse?.rate, {
+    field: 'Reporting exchange rate',
+    min: Number.EPSILON
+  });
 
   // Group transactions by period
   const groupedData = [];
@@ -421,7 +428,10 @@ const getDashboardSummary = asyncHandler(async (req, res) => {
   ]);
 
   const rateResponse = await getExchangeRate({ base: 'USD', target: REPORTING_CURRENCY });
-  const usdToReportingRate = Number(rateResponse?.rate) || 1;
+  const usdToReportingRate = toFiniteNumber(rateResponse?.rate, {
+    field: 'Reporting exchange rate',
+    min: Number.EPSILON
+  });
 
   // Calculate monthly statistics
   const monthlySales = monthlyTransactions
