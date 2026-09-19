@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { Transaction, Product, Contact } = require('../models');
+const { Transaction, Product, Contact, CreditPayment } = require('../models');
 const { asyncHandler } = require('../middleware/validation');
 const { validatePaymentMethod, getExchangeRate } = require('../services/externalApiService');
 const { notifyLowStock } = require('../services/telegramService');
@@ -518,55 +518,101 @@ const updateTransactionStatus = asyncHandler(async (req, res) => {
 
     if (transaction.status === status) {
       await session.abortTransaction();
-      return res.status(400).json({
-        success: false,
-        message: `Transaction is already ${status}`
+      return res.status(200).json({
+        success: true,
+        message: `Transaction is already ${status}; no changes were applied`,
+        data: { transaction }
       });
     }
 
-    if (status === 'cancelled') {
-      if (transaction.status === 'cancelled') {
-        await session.abortTransaction();
-        return res.status(400).json({ success: false, message: 'Transaction is already cancelled' });
+    if (transaction.status !== 'completed' || status !== 'cancelled') {
+      throw Object.assign(
+        new Error(`Transaction cannot transition from ${transaction.status} to ${status}`),
+        { statusCode: 409 }
+      );
+    }
+
+    let creditCustomer = null;
+    let creditBalance = null;
+    let creditAmount = null;
+    const isCreditSale = transaction.type === 'sale'
+      && transaction.paymentMethod === 'credit'
+      && transaction.customerId;
+
+    if (isCreditSale) {
+      creditCustomer = await Contact.findOne({
+        _id: transaction.customerId,
+        businessId: req.businessId
+      }).session(session);
+
+      if (!creditCustomer) {
+        throw Object.assign(
+          new Error('Cannot cancel credit sale because the customer no longer exists'),
+          { statusCode: 409 }
+        );
       }
 
-      for (const item of transaction.products) {
-        const product = await Product.findOne({
-          _id: item.productId,
-          businessId: req.businessId
-        }).session(session);
+      const currency = transaction.currency || 'PEN';
+      const ambiguousPayment = await CreditPayment.exists({
+        customerId: transaction.customerId,
+        businessId: req.businessId,
+        currency,
+        date: { $gte: transaction.date }
+      }).session(session);
 
-        if (!product) {
-          throw Object.assign(new Error(`Product ${item.productName} is no longer available`), { statusCode: 409 });
-        }
-
-        const reversal = transaction.type === 'purchase' ? -item.quantity : item.quantity;
-        if (transaction.type === 'purchase' && product.stock < item.quantity) {
-          throw Object.assign(
-            new Error(`Cannot cancel this purchase because ${product.name} no longer has enough stock to remove it`),
-            { statusCode: 409 },
-          );
-        }
-        product.stock += reversal;
-        await product.save({ session });
+      if (ambiguousPayment) {
+        throw Object.assign(
+          new Error('Cannot cancel credit sale with subsequent payments until a refund policy is defined'),
+          { statusCode: 409 }
+        );
       }
 
-      if (transaction.type === 'sale' && transaction.paymentMethod === 'credit' && transaction.customerId) {
-        const customer = await Contact.findOne({
-          _id: transaction.customerId,
-          businessId: req.businessId
-        }).session(session);
-        if (customer) {
-          const currency = transaction.currency || 'PEN';
-          const balance = Number(
-            customer.balancesByCurrency?.[currency]
-            || (currency === 'PEN' ? customer.currentBalance : 0)
-          );
-          customer.balancesByCurrency[currency] = Math.max(0, balance - transaction.totalAmount);
-          if (currency === 'PEN') customer.currentBalance = customer.balancesByCurrency.PEN;
-          await customer.save({ session });
-        }
+      creditBalance = toFiniteNumber(
+        creditCustomer.balancesByCurrency?.[currency]
+          ?? (currency === 'PEN' ? creditCustomer.currentBalance : 0),
+        { field: 'Current balance' }
+      );
+      creditAmount = toFiniteNumber(transaction.totalAmount, {
+        field: 'Transaction amount',
+        min: 0
+      });
+      if (creditBalance < creditAmount) {
+        throw Object.assign(
+          new Error('Cannot cancel credit sale because its balance can no longer be reversed exactly'),
+          { statusCode: 409 }
+        );
       }
+    }
+
+    for (const item of transaction.products) {
+      const product = await Product.findOne({
+        _id: item.productId,
+        businessId: req.businessId
+      }).session(session);
+
+      if (!product) {
+        throw Object.assign(new Error(`Product ${item.productName} is no longer available`), { statusCode: 409 });
+      }
+
+      const reversal = transaction.type === 'purchase' ? -item.quantity : item.quantity;
+      if (transaction.type === 'purchase' && product.stock < item.quantity) {
+        throw Object.assign(
+          new Error(`Cannot cancel this purchase because ${product.name} no longer has enough stock to remove it`),
+          { statusCode: 409 },
+        );
+      }
+      product.stock += reversal;
+      await product.save({ session });
+    }
+
+    if (creditCustomer) {
+      const currency = transaction.currency || 'PEN';
+      creditCustomer.balancesByCurrency[currency] = toFiniteNumber(
+        creditBalance - creditAmount,
+        { field: 'Resulting balance', min: 0 }
+      );
+      if (currency === 'PEN') creditCustomer.currentBalance = creditCustomer.balancesByCurrency.PEN;
+      await creditCustomer.save({ session });
     }
 
     transaction.status = status;
@@ -598,7 +644,7 @@ const getTransactionSummary = asyncHandler(async (req, res) => {
   const businessId = req.businessId;
   const reportingCurrency = 'PEN';
 
-  const matchStage = { businessId };
+  const matchStage = { businessId, status: 'completed' };
   
   if (startDate || endDate) {
     matchStage.date = {};
