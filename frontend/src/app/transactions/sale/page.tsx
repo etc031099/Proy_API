@@ -42,7 +42,6 @@ const saleFormSchema = z.object({
   products: z.array(z.object({
     productId: z.string().min(1, 'Product is required'),
     quantity: z.number().min(1, 'Quantity must be at least 1'),
-    price: z.number().min(0, 'Price must be positive'),
   })).min(1, 'At least one product is required'),
 }).superRefine((data, context) => {
   const hasNewCustomerData = data.saveCustomer && Boolean(data.customerName?.trim());
@@ -100,7 +99,7 @@ export default function AddSalePage() {
       paymentMethod: 'cash',
       currency: 'PEN',
       notes: '',
-      products: [{ productId: '', quantity: 1, price: 0 }],
+      products: [{ productId: '', quantity: 1 }],
     },
   });
 
@@ -149,31 +148,17 @@ export default function AddSalePage() {
         currency: repeated.currency || 'PEN',
         notes: '',
         products: repeated.products?.length
-          ? repeated.products
-          : [{ productId: '', quantity: 1, price: 0 }]
+          ? repeated.products.map((item: { productId: string; quantity: number }) => ({
+              productId: item.productId,
+              quantity: item.quantity
+            }))
+          : [{ productId: '', quantity: 1 }]
       });
       window.sessionStorage.removeItem('repeat-sale');
     } catch {
       window.sessionStorage.removeItem('repeat-sale');
     }
   }, [form]);
-
-  // Update price when product is selected
-  const handleProductChange = (index: number, productId: string) => {
-    const selectedProduct = products.find(p => p._id === productId);
-    if (selectedProduct) {
-      const customerKey = form.getValues('customerId') || 'final-consumer';
-      const savedPrice = window.localStorage.getItem(`sale-price:${customerKey}:${productId}`);
-      form.setValue(`products.${index}.price`, savedPrice ? Number(savedPrice) : selectedProduct.price);
-    }
-  };
-
-  const saveLastPrice = (productId: string, price: number) => {
-    const customerKey = form.getValues('customerId') || 'final-consumer';
-    if (productId && Number.isFinite(price) && price >= 0) {
-      window.localStorage.setItem(`sale-price:${customerKey}:${productId}`, String(price));
-    }
-  };
 
   const getCurrencyRate = (currency: 'PEN' | 'USD' | 'EUR') => {
     switch (currency) {
@@ -196,11 +181,11 @@ export default function AddSalePage() {
   const calculateTotal = () => {
     const lineItems = form.watch('products');
     return lineItems.reduce((total, product) => {
-      const numericPrice = Number(product.price || 0);
       const numericQuantity = Number(product.quantity || 0);
       const selectedProduct = products.find(item => item._id === product.productId);
       const sourceCurrency = selectedProduct?.currency || 'USD';
-      return total + convertAmountToSelectedCurrency(numericQuantity * numericPrice, sourceCurrency);
+      const canonicalPrice = Number(selectedProduct?.price || 0);
+      return total + convertAmountToSelectedCurrency(numericQuantity * canonicalPrice, sourceCurrency);
     }, 0);
   };
 
@@ -237,13 +222,11 @@ export default function AddSalePage() {
         type: 'sale',
         customerId,
         customerName: showNewCustomer ? data.customerName?.trim() : undefined,
-        products: data.products,
+        products: data.products.map(({ productId, quantity }) => ({ productId, quantity })),
         paymentMethod: data.paymentMethod,
         currency: data.currency,
         notes: data.notes,
       };
-
-      data.products.forEach((item) => saveLastPrice(item.productId, item.price));
 
       const response = await api.createTransaction(saleData);
 
@@ -499,7 +482,7 @@ export default function AddSalePage() {
                     type="button"
                     variant="outline"
                     size="sm"
-                    onClick={() => append({ productId: '', quantity: 1, price: 0 })}
+                    onClick={() => append({ productId: '', quantity: 1 })}
                   >
                     <Plus className="mr-2 h-4 w-4" />
                     {t('transactions.addProduct')}
@@ -532,7 +515,6 @@ export default function AddSalePage() {
                             <Select 
                               onValueChange={(value) => {
                                 field.onChange(value);
-                                handleProductChange(index, value);
                               }} 
                               defaultValue={field.value}
                             >
@@ -569,27 +551,6 @@ export default function AddSalePage() {
                                 max={selectedProduct?.stock || 999}
                                 {...field}
                                 onChange={(e) => field.onChange(Number(e.target.value))}
-                                onBlur={(e) => saveLastPrice(form.getValues(`products.${index}.productId`), Number(e.target.value))}
-                              />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-
-                      <FormField
-                        control={form.control}
-                        name={`products.${index}.price`}
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>{t('transactions.unitPrice')} *</FormLabel>
-                            <FormControl>
-                              <Input
-                                type="number"
-                                step="0.01"
-                                min="0"
-                                {...field}
-                                onChange={(e) => field.onChange(Number(e.target.value))}
                               />
                             </FormControl>
                             <FormMessage />
@@ -598,11 +559,21 @@ export default function AddSalePage() {
                       />
 
                       <div className="space-y-2">
+                        <Label>{t('transactions.unitPrice')} *</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={selectedProduct?.price ?? 0}
+                          readOnly
+                        />
+                      </div>
+
+                      <div className="space-y-2">
                         <Label>{t('transactions.total')}</Label>
                         <div className="h-10 flex items-center px-3 py-2 border rounded-md bg-muted">
                           {(() => {
                             const currency = form.watch('currency');
-                            const amount = Number(form.watch(`products.${index}.quantity`) || 0) * Number(form.watch(`products.${index}.price`) || 0);
+                            const amount = Number(form.watch(`products.${index}.quantity`) || 0) * Number(selectedProduct?.price || 0);
                             const converted = convertAmountToSelectedCurrency(amount, selectedProduct?.currency || 'USD');
                             const symbol = currency === 'PEN' ? 'S/' : currency === 'EUR' ? '€' : '$';
                             return `${symbol}${converted.toFixed(2)}`;

@@ -6,6 +6,8 @@ const { notifyLowStock } = require('../services/telegramService');
 const { emitEvent } = require('../services/webhookService');
 const { toFiniteNumber } = require('../utils/numbers');
 
+const TRANSACTION_CURRENCIES = ['PEN', 'USD', 'EUR'];
+
 const baseAmountExpression = {
   $cond: [
     { $gt: [{ $ifNull: ['$originalAmount', 0] }, 0] },
@@ -133,7 +135,7 @@ const createTransaction = asyncHandler(async (req, res) => {
   const { type, customerId, customerName, vendorId, products = [], paymentMethod, notes, currency = 'PEN' } = req.body;
   const businessId = req.businessId;
   const normalizedCurrency = String(currency || 'PEN').toUpperCase();
-  const targetCurrency = ['PEN', 'USD', 'EUR'].includes(normalizedCurrency) ? normalizedCurrency : 'PEN';
+  const targetCurrency = TRANSACTION_CURRENCIES.includes(normalizedCurrency) ? normalizedCurrency : 'PEN';
 
   if (!Array.isArray(products) || products.length === 0) {
     return res.status(400).json({
@@ -217,6 +219,22 @@ const createTransaction = asyncHandler(async (req, res) => {
         });
       }
 
+      let canonicalSalePrice;
+      let canonicalSaleCurrency;
+      if (type === 'sale') {
+        canonicalSalePrice = toFiniteNumber(product.price, {
+          field: 'Product price',
+          min: 0
+        });
+        canonicalSaleCurrency = String(product.currency || '').trim().toUpperCase();
+        if (!TRANSACTION_CURRENCIES.includes(canonicalSaleCurrency)) {
+          throw Object.assign(
+            new Error(`Product currency must be one of: ${TRANSACTION_CURRENCIES.join(', ')}`),
+            { statusCode: 400, code: 'INVALID_CURRENCY' }
+          );
+        }
+      }
+
       if (type === 'sale' && product.stock < itemQuantity) {
         return res.status(400).json({
           success: false,
@@ -256,10 +274,10 @@ const createTransaction = asyncHandler(async (req, res) => {
           { field: 'Product cost price', min: 0 }
         )
         : undefined;
-      const sourcePrice = type === 'sale'
-        ? toFiniteNumber(item.price ?? product.price ?? 0, { field: 'Product price', min: 0 })
-        : itemCost;
-      const productCurrency = ['PEN', 'USD', 'EUR'].includes(product.currency) ? product.currency : 'USD';
+      const sourcePrice = type === 'sale' ? canonicalSalePrice : itemCost;
+      const productCurrency = type === 'sale'
+        ? canonicalSaleCurrency
+        : (TRANSACTION_CURRENCIES.includes(product.currency) ? product.currency : 'USD');
       const itemRateResponse = await getExchangeRate({ base: productCurrency, target: targetCurrency });
       const itemRate = toFiniteNumber(itemRateResponse?.rate, {
         field: 'Exchange rate',

@@ -553,6 +553,12 @@ const createTransactionValidation = [
     .toInt(),
     
   body('products.*.price')
+    .if(body('type').equals('purchase'))
+    .exists()
+    .withMessage('Product price is required for purchases'),
+
+  body('products.*.price')
+    .optional()
     .custom(validateNumericInput({ field: 'Product price', min: 0, max: MAX_SAFE_NUMERIC_VALUE }))
     .bail()
     .isFloat({ min: 0, max: MAX_SAFE_NUMERIC_VALUE })
