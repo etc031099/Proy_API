@@ -40,6 +40,7 @@ export default function EditProductPage() {
   const [supplierPrices, setSupplierPrices] = useState<SupplierPrice[]>([]);
   const [preferredSupplierId, setPreferredSupplierId] = useState('');
   const [markupPercentage, setMarkupPercentage] = useState(30);
+  const [initialStock, setInitialStock] = useState(0);
 
   useEffect(() => {
     const fetchProduct = async () => {
@@ -66,6 +67,7 @@ export default function EditProductPage() {
           });
           setSupplierPrices(product.supplierPrices || []);
           setPreferredSupplierId(product.preferredSupplierId || '');
+          setInitialStock(product.stock);
         } else {
           setError(response.message || 'Failed to load product');
         }
@@ -110,19 +112,39 @@ export default function EditProductPage() {
     setLoading(true);
 
     try {
+      const editableFields = {
+        name: formData.name,
+        description: formData.description?.trim() || undefined,
+        price: formData.price,
+        currency: formData.currency,
+        costPrice: formData.costPrice,
+        category: formData.category,
+        sku: formData.sku?.trim() || undefined,
+        minStockLevel: formData.minStockLevel
+      };
       const response = await apiClient.updateProduct(productId, {
-        ...formData,
+        ...editableFields,
         supplierPrices,
         preferredSupplierId: preferredSupplierId || null,
-        description: formData.description?.trim() || undefined,
-        sku: formData.sku?.trim() || undefined,
       });
 
-      if (response.success) {
-        router.push('/products');
-      } else {
+      if (!response.success) {
         setError(response.message || 'Failed to update product');
+        return;
       }
+
+      if (formData.stock !== initialStock) {
+        const stockResponse = await apiClient.updateProductStock(productId, {
+          quantity: formData.stock,
+          operation: 'set'
+        });
+        if (!stockResponse.success) {
+          setError(stockResponse.message || 'Product details were updated, but stock could not be updated');
+          return;
+        }
+      }
+
+      router.push('/products');
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to update product');
     } finally {

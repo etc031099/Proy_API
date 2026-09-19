@@ -128,13 +128,6 @@ export default function EditContactPage() {
     }));
   };
 
-  const handleTypeChange = (value: 'customer' | 'vendor') => {
-    setFormData(prev => ({
-      ...prev,
-      type: value
-    }));
-  };
-
   const handleAddressSelection = (selection: AddressSelection) => {
     setFormData(prev => ({
       ...prev,
@@ -242,11 +235,15 @@ export default function EditContactPage() {
 
     try {
       const payload = {
-        ...formData,
+        name: formData.name,
+        phone: formData.phone,
         documentType: formData.documentType?.trim() || undefined,
         documentNumber: formData.documentNumber?.trim() || undefined,
         email: formData.email?.trim() || undefined,
         notes: formData.notes?.trim() || undefined,
+        creditLimit: formData.creditLimit,
+        latitude: formData.latitude,
+        longitude: formData.longitude,
         address: {
           ...formData.address,
           street: formData.address?.street?.trim() || undefined,
@@ -389,7 +386,7 @@ export default function EditContactPage() {
                     <FormFieldAnimation delay={0.3}>
                       <div className="space-y-2">
                         <Label htmlFor="type">{t('contacts.type')} *</Label>
-                        <Select value={formData.type} onValueChange={handleTypeChange}>
+                        <Select value={formData.type} disabled>
                           <SelectTrigger className="transition-all duration-300 focus:scale-105">
                             <SelectValue placeholder={t('contacts.selectType')} />
                           </SelectTrigger>

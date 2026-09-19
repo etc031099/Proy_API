@@ -43,12 +43,11 @@ export default function AddContactPage() {
       country: ''
     },
     type: 'customer',
-    businessId: '20765432102',
     creditLimit: 0,
     notes: '',
     latitude: undefined,
     longitude: undefined
-  } as any);
+  });
   const googleMapsApiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
   const { t } = useLanguage();
 
@@ -201,7 +200,6 @@ export default function AddContactPage() {
         documentType: formData.documentType?.trim() || undefined,
         documentNumber: formData.documentNumber?.trim() || undefined,
         email: formData.email?.trim() || undefined,
-        businessId: '20765432101',
         notes: formData.notes?.trim() || undefined,
         address: {
           ...formData.address,

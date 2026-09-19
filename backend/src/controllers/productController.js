@@ -3,6 +3,14 @@ const { asyncHandler } = require('../middleware/validation');
 const { notifyLowStock } = require('../services/telegramService');
 const { emitEvent } = require('../services/webhookService');
 const { toFiniteNumber } = require('../utils/numbers');
+const { assertAllowedFields, pickAllowedFields } = require('../utils/allowedFields');
+
+const PRODUCT_CREATE_FIELDS = [
+  'name', 'description', 'price', 'currency', 'costPrice', 'stock', 'category',
+  'sku', 'minStockLevel', 'supplierPrices', 'preferredSupplierId'
+];
+const PRODUCT_UPDATE_FIELDS = PRODUCT_CREATE_FIELDS.filter(field => field !== 'stock');
+const SUPPLIER_PRICE_FIELDS = ['supplierId', 'purchasePrice'];
 
 const validateSupplierPrices = async (supplierPrices, businessId) => {
   if (supplierPrices === undefined) return undefined;
@@ -11,6 +19,12 @@ const validateSupplierPrices = async (supplierPrices, businessId) => {
     error.statusCode = 400;
     throw error;
   }
+
+  supplierPrices.forEach((entry, index) => {
+    if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+      assertAllowedFields(entry, SUPPLIER_PRICE_FIELDS, `supplierPrices[${index}]`);
+    }
+  });
 
   const entries = supplierPrices.filter(entry => entry && entry.supplierId);
   const supplierIds = [...new Set(entries.map(entry => String(entry.supplierId)))];
@@ -148,18 +162,16 @@ const getProduct = asyncHandler(async (req, res) => {
  * @access  Private
  */
 const createProduct = asyncHandler(async (req, res) => {
-  const supplierPrices = await validateSupplierPrices(req.body.supplierPrices, req.businessId);
+  const productData = pickAllowedFields(req.body, PRODUCT_CREATE_FIELDS);
+  const supplierPrices = await validateSupplierPrices(productData.supplierPrices, req.businessId);
   const preferredSupplierId = await validatePreferredSupplier(
-    req.body.preferredSupplierId,
+    productData.preferredSupplierId,
     supplierPrices || [],
     req.businessId,
   );
-  const productData = {
-    ...req.body,
-    businessId: req.businessId,
-    ...(supplierPrices ? { supplierPrices } : {}),
-    preferredSupplierId,
-  };
+  productData.businessId = req.businessId;
+  if (supplierPrices) productData.supplierPrices = supplierPrices;
+  productData.preferredSupplierId = preferredSupplierId;
 
   // Check if SKU already exists (if provided)
   if (productData.sku) {
@@ -193,7 +205,7 @@ const createProduct = asyncHandler(async (req, res) => {
  */
 const updateProduct = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const updateData = { ...req.body };
+  const updateData = pickAllowedFields(req.body, PRODUCT_UPDATE_FIELDS);
   const existingProduct = await Product.findOne({ _id: id, businessId: req.businessId, isActive: true })
     .select('supplierPrices');
   if (!existingProduct) {

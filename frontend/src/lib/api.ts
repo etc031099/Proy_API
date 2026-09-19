@@ -160,6 +160,14 @@ class ApiClient {
     return response.data;
   }
 
+  async updateProductStock(
+    id: string,
+    data: { quantity: number; operation: 'set' | 'add' | 'subtract' }
+  ): Promise<ApiResponse> {
+    const response = await this.instance.patch(`/products/${id}/stock`, data);
+    return response.data;
+  }
+
   async deleteProduct(id: string): Promise<ApiResponse> {
     const response = await this.instance.delete(`/products/${id}`);
     return response.data;

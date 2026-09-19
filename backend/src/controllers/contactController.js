@@ -1,6 +1,22 @@
 const { Contact } = require('../models');
 const { asyncHandler } = require('../middleware/validation');
 const { toFiniteNumber } = require('../utils/numbers');
+const { assertAllowedFields, pickAllowedFields } = require('../utils/allowedFields');
+
+const CONTACT_CREATE_FIELDS = [
+  'name', 'phone', 'documentType', 'documentNumber', 'email', 'type', 'address',
+  'latitude', 'longitude', 'notes', 'creditLimit'
+];
+const CONTACT_UPDATE_FIELDS = CONTACT_CREATE_FIELDS.filter(field => field !== 'type');
+const ADDRESS_FIELDS = ['street', 'city', 'state', 'zipCode', 'country'];
+
+const buildContactData = (body, allowedFields) => {
+  const contactData = pickAllowedFields(body, allowedFields);
+  if (contactData.address && typeof contactData.address === 'object' && !Array.isArray(contactData.address)) {
+    assertAllowedFields(contactData.address, ADDRESS_FIELDS, 'address');
+  }
+  return contactData;
+};
 
 /**
  * @desc    Get all contacts with search and filter
@@ -85,10 +101,8 @@ const getContact = asyncHandler(async (req, res) => {
  * @access  Private
  */
 const createContact = asyncHandler(async (req, res) => {
-  const contactData = {
-    ...req.body,
-    businessId: req.businessId
-  };
+  const contactData = buildContactData(req.body, CONTACT_CREATE_FIELDS);
+  contactData.businessId = req.businessId;
 
   // Check if contact with same phone already exists
   const existingContact = await Contact.findOne({
@@ -136,7 +150,7 @@ const createContact = asyncHandler(async (req, res) => {
  */
 const updateContact = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const updateData = req.body;
+  const updateData = buildContactData(req.body, CONTACT_UPDATE_FIELDS);
 
   // Check if phone already exists (if being updated)
   if (updateData.phone) {
