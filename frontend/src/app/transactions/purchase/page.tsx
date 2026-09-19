@@ -37,7 +37,6 @@ const purchaseFormSchema = z.object({
   products: z.array(z.object({
     productId: z.string().min(1, 'Product is required'),
     quantity: z.number().min(1, 'Quantity must be at least 1'),
-    price: z.number().min(0.01, 'Price must be positive'),
   })).min(1, 'At least one product is required'),
 });
 
@@ -53,15 +52,21 @@ interface Vendor {
 interface Product {
   _id: string;
   name: string;
-  price: number;
   currency?: 'PEN' | 'USD' | 'EUR';
-  costPrice?: number;
   stock: number;
   category: string;
   sku: string;
   supplierPrices?: { supplierId: string; purchasePrice: number }[];
-  preferredSupplierId?: string | null;
 }
+
+const getSupplierPurchasePrice = (product: Product | undefined, vendorId: string) => {
+  const purchasePrice = product?.supplierPrices?.find(
+    entry => entry.supplierId === vendorId
+  )?.purchasePrice;
+  return typeof purchasePrice === 'number' && Number.isFinite(purchasePrice) && purchasePrice >= 0
+    ? purchasePrice
+    : undefined;
+};
 
 export default function AddPurchasePage() {
   const router = useRouter();
@@ -79,7 +84,7 @@ export default function AddPurchasePage() {
       paymentMethod: 'cash',
       currency: 'PEN',
       notes: '',
-      products: [{ productId: '', quantity: 1, price: 0 }],
+      products: [{ productId: '', quantity: 1 }],
     },
   });
 
@@ -90,9 +95,12 @@ export default function AddPurchasePage() {
   const selectedVendorId = form.watch('vendorId');
   const availableProducts = selectedVendorId
     ? products.filter(product =>
-        product.supplierPrices?.some(entry => entry.supplierId === selectedVendorId) ?? false,
+        getSupplierPurchasePrice(product, selectedVendorId) !== undefined,
       )
     : [];
+  const unavailableProductCount = selectedVendorId
+    ? products.length - availableProducts.length
+    : 0;
 
   // Fetch vendors and products
   useEffect(() => {
@@ -119,37 +127,13 @@ export default function AddPurchasePage() {
     fetchData();
   }, []);
 
-  // Update price when product is selected
-  const handleProductChange = (index: number, productId: string) => {
-    const selectedProduct = products.find(p => p._id === productId);
-    if (selectedProduct) {
-      const vendorId = form.getValues('vendorId') || selectedProduct.preferredSupplierId || '';
-      if (!form.getValues('vendorId') && selectedProduct.preferredSupplierId) {
-        form.setValue('vendorId', selectedProduct.preferredSupplierId, { shouldValidate: true });
-      }
-      const supplierPrice = selectedProduct.supplierPrices?.find(
-        entry => entry.supplierId === vendorId
-      )?.purchasePrice;
-      form.setValue(`products.${index}.price`, supplierPrice ?? (
-        selectedProduct.costPrice && selectedProduct.costPrice > 0
-          ? selectedProduct.costPrice
-          : selectedProduct.price
-      ));
-    }
-  };
-
   const handleVendorChange = (vendorId: string) => {
     form.setValue('vendorId', vendorId);
     form.getValues('products').forEach((item, index) => {
       const currentProduct = products.find(product => product._id === item.productId);
-      const remainsAvailable = currentProduct?.supplierPrices?.some(
-        entry => entry.supplierId === vendorId,
-      ) ?? false;
-      if (item.productId && remainsAvailable) {
-        handleProductChange(index, item.productId);
-      } else if (item.productId) {
+      const remainsAvailable = getSupplierPurchasePrice(currentProduct, vendorId) !== undefined;
+      if (item.productId && !remainsAvailable) {
         form.setValue(`products.${index}.productId`, '');
-        form.setValue(`products.${index}.price`, 0);
       }
     });
   };
@@ -176,11 +160,11 @@ export default function AddPurchasePage() {
   const calculateTotal = () => {
     const lineItems = form.watch('products');
     return lineItems.reduce((total, product) => {
-      const numericPrice = Number(product.price || 0);
       const numericQuantity = Number(product.quantity || 0);
       const selectedProduct = products.find(item => item._id === product.productId);
+      const canonicalCost = getSupplierPurchasePrice(selectedProduct, selectedVendorId) ?? 0;
       return total + convertAmountToSelectedCurrency(
-        numericQuantity * numericPrice,
+        numericQuantity * canonicalCost,
         selectedProduct?.currency || 'USD',
       );
     }, 0);
@@ -194,7 +178,7 @@ export default function AddPurchasePage() {
       const purchaseData = {
         type: 'purchase',
         vendorId: data.vendorId,
-        products: data.products,
+        products: data.products.map(({ productId, quantity }) => ({ productId, quantity })),
         paymentMethod: data.paymentMethod,
         currency: data.currency,
         notes: data.notes,
@@ -365,7 +349,7 @@ export default function AddPurchasePage() {
                     type="button"
                     variant="outline"
                     size="sm"
-                    onClick={() => append({ productId: '', quantity: 1, price: 0 })}
+                    onClick={() => append({ productId: '', quantity: 1 })}
                   >
                     <Plus className="mr-2 h-4 w-4" />
                     {t('transactions.addProduct')}
@@ -376,9 +360,18 @@ export default function AddPurchasePage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
+                {selectedVendorId && unavailableProductCount > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {t('transactions.missingSupplierPrice')}
+                  </p>
+                )}
                 {fields.map((field, index) => {
                   const selectedProduct = products.find(
                     p => p._id === form.watch(`products.${index}.productId`)
+                  );
+                  const supplierPurchasePrice = getSupplierPurchasePrice(
+                    selectedProduct,
+                    selectedVendorId
                   );
 
                   return (
@@ -390,10 +383,7 @@ export default function AddPurchasePage() {
                           <FormItem>
                             <FormLabel>{t('transactions.product')} *</FormLabel>
                             <Select 
-                              onValueChange={(value) => {
-                                field.onChange(value);
-                                handleProductChange(index, value);
-                              }} 
+                              onValueChange={field.onChange}
                               value={field.value}
                             >
                               <FormControl>
@@ -439,32 +429,22 @@ export default function AddPurchasePage() {
                         )}
                       />
 
-                      <FormField
-                        control={form.control}
-                        name={`products.${index}.price`}
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>{t('transactions.unitCost')} *</FormLabel>
-                            <FormControl>
-                              <Input
-                                type="number"
-                                step="0.01"
-                                min="0"
-                                {...field}
-                                onChange={(e) => field.onChange(Number(e.target.value))}
-                              />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
+                      <div className="space-y-2">
+                        <Label>{t('transactions.unitCost')} *</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={supplierPurchasePrice ?? ''}
+                          readOnly
+                        />
+                      </div>
 
                       <div className="space-y-2">
                         <Label>{t('transactions.total')}</Label>
                         <div className="h-10 flex items-center px-3 py-2 border rounded-md bg-muted">
                           {(() => {
                             const currency = form.watch('currency');
-                            const amount = Number(form.watch(`products.${index}.quantity`) || 0) * Number(form.watch(`products.${index}.price`) || 0);
+                            const amount = Number(form.watch(`products.${index}.quantity`) || 0) * (supplierPurchasePrice ?? 0);
                             const converted = convertAmountToSelectedCurrency(amount, selectedProduct?.currency || 'USD');
                             const symbol = currency === 'PEN' ? 'S/' : currency === 'EUR' ? '€' : '$';
                             return `${symbol}${converted.toFixed(2)}`;

@@ -9,7 +9,8 @@
     "test": "node test/run.js",
     "test:integration": "node test/integration/run.js",
     "test:integration:business": "node test/integration/businessIntegrity.run.js",
-    "test:integration:sale-pricing": "node test/integration/saleCanonicalPrice.run.js"
+    "test:integration:sale-pricing": "node test/integration/saleCanonicalPrice.run.js",
+    "test:integration:purchase-pricing": "node test/integration/purchaseCanonicalCost.run.js"
   },
   "keywords": ["inventory", "billing", "management", "backend", "api", "nodejs", "express", "mongodb"],
   "author": "Siddhartha",

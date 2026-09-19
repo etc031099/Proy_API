@@ -42,7 +42,7 @@ const productSchema = new mongoose.Schema({
     min: [0, 'Cost price cannot be negative'],
     default: 0
   },
-  // Optional supplier-specific prices. costPrice remains the legacy fallback.
+  // Supplier purchase prices are denominated in Product.currency.
   supplierPrices: {
     type: [supplierPriceSchema],
     default: []

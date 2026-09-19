@@ -285,7 +285,7 @@ test('failure after stock, transaction and balance writes rolls the entire sale 
   assert.equal(transactionCount, 0);
 });
 
-test('purchase keeps its previous client cost precedence and validation contract', async () => {
+test('purchase accepts legacy cost fields but supplier price remains canonical', async () => {
   const vendor = await Contact.create({
     name: 'H05A purchase vendor',
     phone: `h05a-vendor-${runId}`,
@@ -315,14 +315,14 @@ test('purchase keeps its previous client cost precedence and validation contract
   const response = await invokeController(createTransaction, { businessId, body: validation.req.body });
   const transaction = response.body.data.transaction;
   assert.equal(response.statusCode, 201);
-  assert.equal(transaction.products[0].price, 30);
-  assert.equal(transaction.products[0].costPrice, 30);
-  assert.equal(transaction.totalAmount, 90);
+  assert.equal(transaction.products[0].price, 25);
+  assert.equal(transaction.products[0].costPrice, 25);
+  assert.equal(transaction.totalAmount, 75);
   assert.equal((await Product.findById(product._id)).stock, 8);
 
   const missingPrice = await runValidation({
     ...requestBody,
-    products: [{ productId: String(product._id), quantity: 1, costPrice: 30 }]
+    products: [{ productId: String(product._id), quantity: 1 }]
   });
-  assert.ok(missingPrice.errors.some(error => error.path === 'products[0].price'));
+  assert.deepEqual(missingPrice.errors, []);
 });

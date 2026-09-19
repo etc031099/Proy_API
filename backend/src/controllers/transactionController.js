@@ -221,6 +221,8 @@ const createTransaction = asyncHandler(async (req, res) => {
 
       let canonicalSalePrice;
       let canonicalSaleCurrency;
+      let canonicalPurchaseCost;
+      let canonicalPurchaseCurrency;
       if (type === 'sale') {
         canonicalSalePrice = toFiniteNumber(product.price, {
           field: 'Product price',
@@ -228,6 +230,27 @@ const createTransaction = asyncHandler(async (req, res) => {
         });
         canonicalSaleCurrency = String(product.currency || '').trim().toUpperCase();
         if (!TRANSACTION_CURRENCIES.includes(canonicalSaleCurrency)) {
+          throw Object.assign(
+            new Error(`Product currency must be one of: ${TRANSACTION_CURRENCIES.join(', ')}`),
+            { statusCode: 400, code: 'INVALID_CURRENCY' }
+          );
+        }
+      } else if (type === 'purchase') {
+        const matchingSupplierPrice = (product.supplierPrices || []).find(
+          entry => String(entry.supplierId) === String(vendorId)
+        );
+        if (!matchingSupplierPrice) {
+          throw Object.assign(
+            new Error(`Product ${product.name} is not configured for the selected vendor`),
+            { statusCode: 400 }
+          );
+        }
+        canonicalPurchaseCost = toFiniteNumber(matchingSupplierPrice.purchasePrice, {
+          field: 'Supplier purchase price',
+          min: 0
+        });
+        canonicalPurchaseCurrency = String(product.currency || '').trim().toUpperCase();
+        if (!TRANSACTION_CURRENCIES.includes(canonicalPurchaseCurrency)) {
           throw Object.assign(
             new Error(`Product currency must be one of: ${TRANSACTION_CURRENCIES.join(', ')}`),
             { statusCode: 400, code: 'INVALID_CURRENCY' }
@@ -256,28 +279,10 @@ const createTransaction = asyncHandler(async (req, res) => {
       await product.save({ session });
       if (type === 'sale') lowStockNotifications.push({ product, previousStock });
 
-      const matchingSupplierPrice = type === 'purchase'
-        ? product.supplierPrices.find(entry => String(entry.supplierId) === String(vendorId))
-        : null;
-      if (type === 'purchase' && !matchingSupplierPrice) {
-        return res.status(400).json({
-          success: false,
-          message: `Product ${product.name} is not configured for the selected vendor`
-        });
-      }
-      const preferredSupplierPrice = type === 'purchase' && product.preferredSupplierId
-        ? product.supplierPrices.find(entry => String(entry.supplierId) === String(product.preferredSupplierId))
-        : null;
-      const itemCost = type === 'purchase'
-        ? toFiniteNumber(
-          item.costPrice ?? matchingSupplierPrice?.purchasePrice ?? preferredSupplierPrice?.purchasePrice ?? item.price ?? product.costPrice ?? product.price ?? 0,
-          { field: 'Product cost price', min: 0 }
-        )
-        : undefined;
-      const sourcePrice = type === 'sale' ? canonicalSalePrice : itemCost;
+      const sourcePrice = type === 'sale' ? canonicalSalePrice : canonicalPurchaseCost;
       const productCurrency = type === 'sale'
         ? canonicalSaleCurrency
-        : (TRANSACTION_CURRENCIES.includes(product.currency) ? product.currency : 'USD');
+        : canonicalPurchaseCurrency;
       const itemRateResponse = await getExchangeRate({ base: productCurrency, target: targetCurrency });
       const itemRate = toFiniteNumber(itemRateResponse?.rate, {
         field: 'Exchange rate',
