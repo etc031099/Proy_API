@@ -1,24 +1,111 @@
-version: '3.8'
+name: inventory-billing
 
 services:
-  # MongoDB service
+  mongo-keyfile-init:
+    image: alpine:3.20
+    restart: "no"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        if [ ! -s /keyfile/mongodb-keyfile ]; then
+          umask 077
+          head -c 756 /dev/urandom | base64 > /keyfile/mongodb-keyfile
+        fi
+        chown 999:999 /keyfile/mongodb-keyfile
+        chmod 400 /keyfile/mongodb-keyfile
+    volumes:
+      - mongodb_keyfile:/keyfile
+
   mongodb:
     image: mongo:7.0
     container_name: inventory_mongo
     restart: unless-stopped
+    command:
+      - mongod
+      - --replSet
+      - rs0
+      - --bind_ip_all
+      - --keyFile
+      - /etc/mongo-keyfile/mongodb-keyfile
     environment:
-      MONGO_INITDB_ROOT_USERNAME: admin
-      MONGO_INITDB_ROOT_PASSWORD: password123
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:?Set MONGO_ROOT_USERNAME in backend/.env}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?Set MONGO_ROOT_PASSWORD in backend/.env}
       MONGO_INITDB_DATABASE: inventory_billing
     ports:
       - "27017:27017"
     volumes:
       - mongodb_data:/data/db
-      - ./init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
+      - mongodb_keyfile:/etc/mongo-keyfile:ro
+    depends_on:
+      mongo-keyfile-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          mongosh --host localhost --port 27017
+          --username "$$MONGO_INITDB_ROOT_USERNAME"
+          --password "$$MONGO_INITDB_ROOT_PASSWORD"
+          --authenticationDatabase admin --quiet
+          --eval "const hello = db.adminCommand({ hello: 1 }); quit(hello.isWritablePrimary ? 0 : 1)"
+      interval: 5s
+      timeout: 5s
+      start_period: 10s
+      retries: 24
     networks:
       - inventory_network
 
-  # Backend API service
+  mongo-init:
+    image: mongo:7.0
+    restart: "no"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:?Set MONGO_ROOT_USERNAME in backend/.env}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?Set MONGO_ROOT_PASSWORD in backend/.env}
+    volumes:
+      - ./init-mongo.js:/scripts/init-mongo.js:ro
+    depends_on:
+      mongodb:
+        condition: service_started
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -euo pipefail
+        mongo_admin() {
+          mongosh --host mongodb --port 27017 \
+            --username "$$MONGO_INITDB_ROOT_USERNAME" \
+            --password "$$MONGO_INITDB_ROOT_PASSWORD" \
+            --authenticationDatabase admin "$$@"
+        }
+
+        until mongo_admin --quiet --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"; do
+          echo "Waiting for MongoDB authentication..."
+          sleep 2
+        done
+
+        mongo_admin --quiet --eval '
+          try {
+            rs.status();
+          } catch (error) {
+            if (error.codeName === "NotYetInitialized" || error.code === 94) {
+              rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "mongodb:27017" }] });
+            } else {
+              throw error;
+            }
+          }
+        '
+
+        until mongo_admin --quiet --eval "const hello = db.adminCommand({ hello: 1 }); quit(hello.isWritablePrimary ? 0 : 1)"; do
+          echo "Waiting for replica set rs0 PRIMARY..."
+          sleep 2
+        done
+
+        mongo_admin --quiet /scripts/init-mongo.js
+        echo "Replica set rs0 initialized and database indexes verified."
+    networks:
+      - inventory_network
+
   api:
     build: .
     container_name: inventory_api
@@ -26,19 +113,22 @@ services:
     environment:
       NODE_ENV: production
       PORT: 5000
-      MONGODB_URI: mongodb://admin:password123@mongodb:27017/inventory_billing?authSource=admin
+      MONGODB_URI: ${MONGODB_URI_DOCKER:?Set MONGODB_URI_DOCKER in backend/.env}
+      MONGODB_REPLICA_SET: rs0
       JWT_SECRET: your_super_secure_jwt_secret_key_for_docker_deployment_at_least_32_chars
       JWT_EXPIRE: 7d
     ports:
       - "5000:5000"
     depends_on:
-      - mongodb
+      mongodb:
+        condition: service_healthy
+      mongo-init:
+        condition: service_completed_successfully
     networks:
       - inventory_network
     volumes:
       - ./logs:/app/logs
 
-  # Nginx reverse proxy (optional)
   nginx:
     image: nginx:alpine
     container_name: inventory_nginx
@@ -50,12 +140,15 @@ services:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./ssl:/etc/nginx/ssl:ro
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     networks:
       - inventory_network
 
 volumes:
   mongodb_data:
+    driver: local
+  mongodb_keyfile:
     driver: local
 
 networks:

@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
-    "test": "node test/run.js"
+    "test": "node test/run.js",
+    "test:integration": "node test/integration/run.js"
   },
   "keywords": ["inventory", "billing", "management", "backend", "api", "nodejs", "express", "mongodb"],
   "author": "Siddhartha",

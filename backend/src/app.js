@@ -3,6 +3,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
+const mongoose = require('mongoose');
 require('dotenv').config();
 
 // Import database connection
@@ -75,14 +76,39 @@ if (process.env.NODE_ENV === 'development') {
 }
 
 // Health check endpoints (public) - available at both /health and /api/health
-const healthHandler = (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: 'Server is running',
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development',
-    version: '1.0.0'
-  });
+const healthHandler = async (req, res) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      throw new Error('MongoDB is not connected');
+    }
+
+    const hello = await mongoose.connection.db.admin().command({ hello: 1 });
+    if (!hello.setName || !hello.isWritablePrimary) {
+      throw new Error('MongoDB replica set has no writable PRIMARY');
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Server and database are ready',
+      timestamp: new Date().toISOString(),
+      environment: process.env.NODE_ENV || 'development',
+      version: '1.0.0',
+      database: {
+        ready: true,
+        replicaSet: hello.setName || null,
+        primary: true
+      }
+    });
+  } catch (error) {
+    res.status(503).json({
+      success: false,
+      message: 'Service is not ready',
+      database: {
+        ready: false,
+        primary: false
+      }
+    });
+  }
 };
 
 app.get('/health', healthHandler);

@@ -117,21 +117,31 @@ npm run dev
 
 ## 🐳 Docker Deployment
 
-For production deployment using Docker:
+The Docker environment uses the single-node MongoDB replica set `rs0`, which is
+required by sales, purchases, cancellations, and credit-payment transactions.
+Configure the Mongo credentials and both host/container MongoDB URIs in
+`backend/.env` using `backend/.env.example` as the template.
 
 ```bash
 # Navigate to backend directory
 cd backend
 
-# Build and start containers
-docker-compose up -d
+# Validate and start MongoDB, replica-set initialization, and the API
+docker compose config
+docker compose up -d mongodb mongo-init api
 
 # View logs
-docker-compose logs -f
+docker compose logs -f mongodb mongo-init api
+
+# Confirm rs0 has a PRIMARY
+docker compose exec mongodb sh -lc 'mongosh --username "$MONGO_INITDB_ROOT_USERNAME" --password "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --quiet --eval "rs.status().members.map(({name,stateStr}) => ({name,stateStr}))"'
 
 # Stop containers
-docker-compose down
+docker compose down
 ```
+
+The persistent `mongodb_data` volume survives normal stops and restarts. Use
+`docker compose down -v` only when intentionally deleting local database data.
 
 ## 📁 Project Structure
 
@@ -178,9 +188,11 @@ Inventory-Billing-Management-System/
 PORT=5000
 NODE_ENV=development
 
-# Database
-MONGODB_URI=mongodb://localhost:27017/inventory_billing
-# For MongoDB Atlas:
+# Database (MongoDB replica set `rs0` running in Docker)
+MONGODB_REPLICA_SET=rs0
+MONGODB_URI=mongodb://user:password@localhost:27017/inventory_billing?authSource=admin&replicaSet=rs0&directConnection=true
+# For MongoDB Atlas, replace the URI and leave MONGODB_REPLICA_SET unset unless
+# it matches the replica-set name reported by Atlas:
 # MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/inventory_billing
 
 # Authentication

@@ -11,11 +11,21 @@ npm install
 
 ## 2. Setup Database
 
-### Option A: Local MongoDB
-1. Install MongoDB locally
-2. Start MongoDB service: `mongod`
+### Option A: Docker MongoDB replica set (recommended for local development)
+1. Copy `.env.example` to `.env` and replace the MongoDB credential placeholders.
+2. Start the single-node replica set named `rs0`:
 
-### Option B: MongoDB Atlas (Recommended)
+```bash
+docker compose up -d mongodb mongo-init
+```
+
+3. Confirm that MongoDB reports a PRIMARY:
+
+```bash
+docker compose exec mongodb sh -lc 'mongosh --username "$MONGO_INITDB_ROOT_USERNAME" --password "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --quiet --eval "rs.status().members.map(({name,stateStr}) => ({name,stateStr}))"'
+```
+
+### Option B: MongoDB Atlas
 1. Go to [MongoDB Atlas](https://cloud.mongodb.com/)
 2. Create free cluster
 3. Get connection string
@@ -54,13 +64,32 @@ curl -X POST http://localhost:5000/api/auth/register \
   -d '{"name":"Test User","email":"test@example.com","password":"Password123","businessId":"test_business"}'
 ```
 
-## 6. Import Postman Collection
+## 6. Test MongoDB Transactions
+
+With `MONGODB_TEST_URI` pointing to the dedicated `inventory_billing_test`
+database on `rs0`:
+
+```bash
+npm test
+npm run test:integration
+```
+
+Stop or restart without deleting data:
+
+```bash
+docker compose restart mongodb
+docker compose down
+```
+
+Use `docker compose down -v` only to intentionally erase the local database.
+
+## 7. Import Postman Collection
 1. Open Postman
 2. Import `Inventory_Billing_API.postman_collection.json`
 3. Import `Inventory_Billing.postman_environment.json`
 4. Start testing all endpoints!
 
-## 7. Deploy to Production
+## 8. Deploy to Production
 See `DEPLOYMENT.md` for detailed deployment instructions to Render.
 
 ---

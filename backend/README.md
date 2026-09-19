@@ -45,9 +45,15 @@ Create a `.env` file in the root directory:
 PORT=5000
 NODE_ENV=development
 
-# Database Configuration
-MONGODB_URI=mongodb://localhost:27017/inventory_billing
-# For MongoDB Atlas:
+# Docker MongoDB replica set (`rs0`)
+MONGO_ROOT_USERNAME=replace_with_local_admin_user
+MONGO_ROOT_PASSWORD=replace_with_a_strong_local_password
+MONGODB_REPLICA_SET=rs0
+MONGODB_URI=mongodb://user:password@localhost:27017/inventory_billing?authSource=admin&replicaSet=rs0&directConnection=true
+MONGODB_URI_DOCKER=mongodb://user:password@mongodb:27017/inventory_billing?authSource=admin&replicaSet=rs0&directConnection=true
+MONGODB_TEST_URI=mongodb://user:password@localhost:27017/inventory_billing_test?authSource=admin&replicaSet=rs0&directConnection=true
+# For MongoDB Atlas, replace the URI and leave MONGODB_REPLICA_SET unset unless
+# it matches the replica-set name reported by Atlas:
 # MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/inventory_billing
 
 # JWT Configuration
@@ -58,7 +64,19 @@ JWT_EXPIRE=7d
 DEFAULT_BUSINESS_ID=default_business_123
 ```
 
-### 3. Run the Application
+### 3. Start MongoDB and the Application
+
+MongoDB transactions require the replica set configured by Docker Compose:
+
+```bash
+docker compose config
+docker compose up -d mongodb mongo-init
+
+# Verify that rs0 has a PRIMARY
+docker compose exec mongodb sh -lc 'mongosh --username "$MONGO_INITDB_ROOT_USERNAME" --password "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --quiet --eval "rs.status().members.map(({name,stateStr}) => ({name,stateStr}))"'
+```
+
+Then start the backend on the host:
 
 ```bash
 # Development mode with auto-restart
@@ -69,6 +87,32 @@ npm start
 ```
 
 The server will start at `http://localhost:5000`
+
+The health endpoints return HTTP 200 only after Mongoose is connected to a
+writable replica-set PRIMARY. During startup or loss of PRIMARY they return 503.
+
+### MongoDB Integration Tests
+
+Integration tests use the real `rs0` instance and require the dedicated
+`inventory_billing_test` database from `MONGODB_TEST_URI`:
+
+```bash
+npm run test:integration
+```
+
+The suite verifies explicit COMMIT and ROLLBACK plus sale, purchase, credit
+payment, and cancellation invariants. Unit tests remain available with
+`npm test`.
+
+Restart or stop the environment without deleting data:
+
+```bash
+docker compose restart mongodb
+docker compose down
+```
+
+To intentionally remove all local MongoDB data and the generated replica-set
+keyfile, use `docker compose down -v`.
 
 ## 📚 API Documentation
 
