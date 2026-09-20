@@ -196,11 +196,19 @@ MONGODB_URI=mongodb://user:password@localhost:27017/inventory_billing?authSource
 # MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/inventory_billing
 
 # Authentication
-JWT_SECRET=your-super-secret-jwt-key-change-this-in-production
+JWT_SECRET=
 JWT_EXPIRE=7d
 
 # CORS
 FRONTEND_URL=http://localhost:3000
+```
+
+`JWT_SECRET` is mandatory and must be a random value of at least 32 characters.
+Generate it locally and store it only in the untracked backend `.env` or the
+deployment secret manager:
+
+```bash
+node -e "console.log(require('node:crypto').randomBytes(48).toString('hex'))"
 ```
 
 ### Frontend Environment Variables

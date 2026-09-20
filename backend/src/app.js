@@ -1,10 +1,16 @@
+require('dotenv').config();
+
+const { validateEnvironment } = require('./config/env');
+
+// Validate critical configuration before opening database or network connections.
+validateEnvironment();
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const mongoose = require('mongoose');
-require('dotenv').config();
 
 // Import database connection
 const connectDB = require('./config/database');

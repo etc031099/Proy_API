@@ -45,24 +45,38 @@ Create a `.env` file in the root directory:
 PORT=5000
 NODE_ENV=development
 
-# Docker MongoDB replica set (`rs0`)
-MONGO_ROOT_USERNAME=replace_with_local_admin_user
-MONGO_ROOT_PASSWORD=replace_with_a_strong_local_password
+# Docker MongoDB replica set (`rs0`); required by Docker Compose
+MONGO_ROOT_USERNAME=
+MONGO_ROOT_PASSWORD=
 MONGODB_REPLICA_SET=rs0
-MONGODB_URI=mongodb://user:password@localhost:27017/inventory_billing?authSource=admin&replicaSet=rs0&directConnection=true
-MONGODB_URI_DOCKER=mongodb://user:password@mongodb:27017/inventory_billing?authSource=admin&replicaSet=rs0&directConnection=true
-MONGODB_TEST_URI=mongodb://user:password@localhost:27017/inventory_billing_test?authSource=admin&replicaSet=rs0&directConnection=true
+MONGODB_URI=
+MONGODB_URI_DOCKER=
+MONGODB_TEST_URI=
 # For MongoDB Atlas, replace the URI and leave MONGODB_REPLICA_SET unset unless
 # it matches the replica-set name reported by Atlas:
 # MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/inventory_billing
 
-# JWT Configuration
-JWT_SECRET=your_super_secret_jwt_key_here_replace_with_secure_random_string
+# JWT Configuration; required, random, and at least 32 characters
+JWT_SECRET=
 JWT_EXPIRE=7d
 
 # Business Configuration
 DEFAULT_BUSINESS_ID=default_business_123
 ```
+
+Generate a new JWT secret locally and copy only its output into your untracked
+`.env` or deployment secret manager:
+
+```bash
+node -e "console.log(require('node:crypto').randomBytes(48).toString('hex'))"
+```
+
+The former Docker JWT secret is considered compromised. Recreating the API
+with a new value invalidates all existing JWTs, which is expected. Never commit
+the generated value.
+
+MongoDB is exposed to the host only on `127.0.0.1:27017` for local integration
+tests. A production deployment should normally omit the host port entirely.
 
 ### 3. Start MongoDB and the Application
 
@@ -596,7 +610,7 @@ GET /api/docs
 NODE_ENV=production
 PORT=5000
 MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/inventory_billing
-JWT_SECRET=your_production_secret_key_very_long_and_secure
+JWT_SECRET=
 JWT_EXPIRE=7d
 ```
 

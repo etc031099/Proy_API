@@ -6,8 +6,15 @@
 NODE_ENV=production
 PORT=5000
 MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/inventory_billing
-JWT_SECRET=your_super_secure_production_jwt_secret_key_at_least_32_characters_long
+JWT_SECRET=
 JWT_EXPIRE=7d
+```
+
+Set `JWT_SECRET` in the deployment secret manager to the output of a local
+command such as the following; never commit the generated value:
+
+```bash
+node -e "console.log(require('node:crypto').randomBytes(48).toString('hex'))"
 ```
 
 ## Render Build Commands
@@ -64,7 +71,7 @@ In Render dashboard, go to Environment tab and add:
 NODE_ENV=production
 PORT=5000
 MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/inventory_billing
-JWT_SECRET=your_super_secure_production_jwt_secret_key_at_least_32_characters_long
+JWT_SECRET=
 JWT_EXPIRE=7d
 ```
 

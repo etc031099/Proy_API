@@ -14,6 +14,7 @@
     "test:integration:mass-assignment": "node test/integration/massAssignment.run.js",
     "test:integration:sku": "node test/integration/skuUniqueness.run.js",
     "test:integration:business-id": "node test/integration/businessIdUniqueness.run.js",
+    "test:security-config": "node test/composeSecurity.test.js",
     "migrate:sku-index": "node scripts/migrate-sku-index.js",
     "migrate:business-id-index": "node scripts/migrate-business-id-index.js"
   },
