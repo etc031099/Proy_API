@@ -28,7 +28,8 @@ const userSchema = new mongoose.Schema({
   businessId: {
     type: String,
     required: [true, 'Business ID is required'],
-    trim: true
+    trim: true,
+    unique: true
   },
   role: {
     type: String,

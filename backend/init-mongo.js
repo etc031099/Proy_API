@@ -9,7 +9,7 @@ function ensureCollection(name) {
 
 ensureCollection('users');
 db.users.createIndex({ email: 1 }, { unique: true });
-db.users.createIndex({ businessId: 1 });
+db.users.createIndex({ businessId: 1 }, { unique: true });
 
 ensureCollection('products');
 db.products.createIndex({ businessId: 1, name: 1 });

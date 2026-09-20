@@ -13,7 +13,9 @@
     "test:integration:purchase-pricing": "node test/integration/purchaseCanonicalCost.run.js",
     "test:integration:mass-assignment": "node test/integration/massAssignment.run.js",
     "test:integration:sku": "node test/integration/skuUniqueness.run.js",
-    "migrate:sku-index": "node scripts/migrate-sku-index.js"
+    "test:integration:business-id": "node test/integration/businessIdUniqueness.run.js",
+    "migrate:sku-index": "node scripts/migrate-sku-index.js",
+    "migrate:business-id-index": "node scripts/migrate-business-id-index.js"
   },
   "keywords": ["inventory", "billing", "management", "backend", "api", "nodejs", "express", "mongodb"],
   "author": "Siddhartha",

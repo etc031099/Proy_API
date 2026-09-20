@@ -2,6 +2,12 @@ const { User } = require('../models');
 const { generateAuthTokens } = require('../utils/jwt');
 const { asyncHandler } = require('../middleware/validation');
 
+const isDuplicateField = (error, field, indexName) => error?.code === 11000 && (
+  error?.index === indexName
+  || error?.keyPattern?.[field] === 1
+  || Object.prototype.hasOwnProperty.call(error?.keyValue || {}, field)
+);
+
 /**
  * @desc    Register new user
  * @route   POST /api/auth/register
@@ -36,8 +42,8 @@ const register = asyncHandler(async (req, res) => {
     });
   }
 
-  // Create user. The unique index on email is the final guard against race
-  // conditions (two simultaneous requests for the same email).
+  // Unique email and businessId indexes are the final guards against races
+  // between simultaneous registration requests.
   let user;
   try {
     user = await User.create({
@@ -47,9 +53,9 @@ const register = asyncHandler(async (req, res) => {
       businessId
     });
   } catch (error) {
-    if (error && error.code === 11000) {
-      const duplicateField = Object.keys(error.keyValue || {})[0] || 'field';
-      const isEmail = duplicateField === 'email';
+    const isEmail = isDuplicateField(error, 'email', 'email_1');
+    const isBusiness = isDuplicateField(error, 'businessId', 'businessId_1');
+    if (isEmail || isBusiness) {
       return res.status(409).json({
         success: false,
         code: isEmail ? 'EMAIL_EXISTS' : 'BUSINESS_EXISTS',
