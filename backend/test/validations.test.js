@@ -55,6 +55,30 @@ test('product validation converts all numeric strings, including supplier prices
   assert.equal(result.req.body.supplierPrices[0].purchasePrice, 7.75);
 });
 
+test('product validation normalizes blank optional SKUs and preserves real SKUs', async () => {
+  const base = { name: 'Product', price: 1, stock: 0, category: 'Category' };
+  const empty = await runValidation(createProductValidation, {
+    body: { ...base, sku: '' }
+  });
+  const whitespace = await runValidation(createProductValidation, {
+    body: { ...base, sku: '   ' }
+  });
+  const real = await runValidation(updateProductValidation, {
+    body: { sku: '  ABC-01  ' }
+  });
+  const invalid = await runValidation(updateProductValidation, {
+    body: { sku: 123 }
+  });
+
+  assert.deepEqual(empty.errors, []);
+  assert.deepEqual(whitespace.errors, []);
+  assert.equal(empty.req.body.sku, null);
+  assert.equal(whitespace.req.body.sku, null);
+  assert.deepEqual(real.errors, []);
+  assert.equal(real.req.body.sku, 'ABC-01');
+  assert.equal(errorFor(invalid, 'sku').msg, 'SKU must be a string');
+});
+
 test('stock and balance adjustments are numbers before addition', async () => {
   const stock = await runValidation(updateStockValidation, {
     body: { quantity: '2', operation: 'add' }

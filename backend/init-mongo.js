@@ -15,7 +15,14 @@ ensureCollection('products');
 db.products.createIndex({ businessId: 1, name: 1 });
 db.products.createIndex({ businessId: 1, category: 1 });
 db.products.createIndex({ businessId: 1, stock: 1 });
-db.products.createIndex({ sku: 1 }, { sparse: true });
+db.products.createIndex(
+  { businessId: 1, sku: 1 },
+  {
+    name: 'businessId_1_sku_1',
+    unique: true,
+    partialFilterExpression: { sku: { $type: 'string', $gt: '' } }
+  }
+);
 
 ensureCollection('contacts');
 db.contacts.createIndex({ businessId: 1, type: 1 });

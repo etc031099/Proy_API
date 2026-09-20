@@ -137,7 +137,15 @@ const createProductValidation = [
     .withMessage('Category must be between 1 and 50 characters'),
     
   body('sku')
-    .optional()
+    .customSanitizer(value => {
+      if (value === undefined || value === null) return value;
+      if (typeof value === 'string' && value.trim() === '') return null;
+      return value;
+    })
+    .optional({ values: 'null' })
+    .isString()
+    .withMessage('SKU must be a string')
+    .bail()
     .trim()
     .isLength({ min: 1, max: 50 })
     .withMessage('SKU must be between 1 and 50 characters'),
@@ -223,7 +231,15 @@ const updateProductValidation = [
     .withMessage('Category must be between 1 and 50 characters'),
     
   body('sku')
-    .optional()
+    .customSanitizer(value => {
+      if (value === undefined || value === null) return value;
+      if (typeof value === 'string' && value.trim() === '') return null;
+      return value;
+    })
+    .optional({ values: 'null' })
+    .isString()
+    .withMessage('SKU must be a string')
+    .bail()
     .trim()
     .isLength({ min: 1, max: 50 })
     .withMessage('SKU must be between 1 and 50 characters'),

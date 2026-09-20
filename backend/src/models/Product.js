@@ -1,4 +1,10 @@
 const mongoose = require('mongoose');
+const {
+  SKU_INDEX_NAME,
+  SKU_INDEX_KEY,
+  SKU_PARTIAL_FILTER,
+  normalizeSku
+} = require('../utils/sku');
 
 const supplierPriceSchema = new mongoose.Schema({
   supplierId: {
@@ -71,9 +77,8 @@ const productSchema = new mongoose.Schema({
   },
   sku: {
     type: String,
-    unique: true,
     trim: true,
-    sparse: true // Allows multiple null values
+    set: normalizeSku
   },
   isActive: {
     type: Boolean,
@@ -92,7 +97,11 @@ const productSchema = new mongoose.Schema({
 productSchema.index({ businessId: 1, name: 1 });
 productSchema.index({ businessId: 1, category: 1 });
 productSchema.index({ businessId: 1, stock: 1 });
-// SKU index is created automatically by unique: true and sparse: true
+productSchema.index(SKU_INDEX_KEY, {
+  name: SKU_INDEX_NAME,
+  unique: true,
+  partialFilterExpression: SKU_PARTIAL_FILTER
+});
 
 // Virtual for low stock indicator
 productSchema.virtual('isLowStock').get(function() {

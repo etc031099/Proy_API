@@ -4,6 +4,7 @@ const { notifyLowStock } = require('../services/telegramService');
 const { emitEvent } = require('../services/webhookService');
 const { toFiniteNumber } = require('../utils/numbers');
 const { assertAllowedFields, pickAllowedFields } = require('../utils/allowedFields');
+const { SKU_INDEX_NAME, normalizeSku } = require('../utils/sku');
 
 const PRODUCT_CREATE_FIELDS = [
   'name', 'description', 'price', 'currency', 'costPrice', 'stock', 'category',
@@ -11,6 +12,23 @@ const PRODUCT_CREATE_FIELDS = [
 ];
 const PRODUCT_UPDATE_FIELDS = PRODUCT_CREATE_FIELDS.filter(field => field !== 'stock');
 const SUPPLIER_PRICE_FIELDS = ['supplierId', 'purchasePrice'];
+
+const normalizeSkuField = (data) => {
+  if (Object.prototype.hasOwnProperty.call(data, 'sku')) {
+    data.sku = normalizeSku(data.sku);
+  }
+};
+
+const isSkuDuplicateKey = (error) => error?.code === 11000 && (
+  error?.index === SKU_INDEX_NAME
+  || error?.keyPattern?.sku === 1
+);
+
+const sendSkuConflict = (res) => res.status(409).json({
+  success: false,
+  code: 'SKU_ALREADY_EXISTS',
+  message: 'Product with this SKU already exists in this business'
+});
 
 const validateSupplierPrices = async (supplierPrices, businessId) => {
   if (supplierPrices === undefined) return undefined;
@@ -163,6 +181,7 @@ const getProduct = asyncHandler(async (req, res) => {
  */
 const createProduct = asyncHandler(async (req, res) => {
   const productData = pickAllowedFields(req.body, PRODUCT_CREATE_FIELDS);
+  normalizeSkuField(productData);
   const supplierPrices = await validateSupplierPrices(productData.supplierPrices, req.businessId);
   const preferredSupplierId = await validatePreferredSupplier(
     productData.preferredSupplierId,
@@ -177,19 +196,21 @@ const createProduct = asyncHandler(async (req, res) => {
   if (productData.sku) {
     const existingProduct = await Product.findOne({
       sku: productData.sku,
-      businessId: req.businessId,
-      isActive: true
+      businessId: req.businessId
     });
 
     if (existingProduct) {
-      return res.status(400).json({
-        success: false,
-        message: 'Product with this SKU already exists'
-      });
+      return sendSkuConflict(res);
     }
   }
 
-  const product = await Product.create(productData);
+  let product;
+  try {
+    product = await Product.create(productData);
+  } catch (error) {
+    if (isSkuDuplicateKey(error)) return sendSkuConflict(res);
+    throw error;
+  }
 
   res.status(201).json({
     success: true,
@@ -206,6 +227,7 @@ const createProduct = asyncHandler(async (req, res) => {
 const updateProduct = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const updateData = pickAllowedFields(req.body, PRODUCT_UPDATE_FIELDS);
+  normalizeSkuField(updateData);
   const existingProduct = await Product.findOne({ _id: id, businessId: req.businessId, isActive: true })
     .select('supplierPrices');
   if (!existingProduct) {
@@ -229,23 +251,25 @@ const updateProduct = asyncHandler(async (req, res) => {
     const existingProduct = await Product.findOne({
       sku: updateData.sku,
       businessId: req.businessId,
-      _id: { $ne: id },
-      isActive: true
+      _id: { $ne: id }
     });
 
     if (existingProduct) {
-      return res.status(400).json({
-        success: false,
-        message: 'Product with this SKU already exists'
-      });
+      return sendSkuConflict(res);
     }
   }
 
-  const product = await Product.findOneAndUpdate(
-    { _id: id, businessId: req.businessId },
-    updateData,
-    { new: true, runValidators: true }
-  );
+  let product;
+  try {
+    product = await Product.findOneAndUpdate(
+      { _id: id, businessId: req.businessId },
+      updateData,
+      { new: true, runValidators: true }
+    );
+  } catch (error) {
+    if (isSkuDuplicateKey(error)) return sendSkuConflict(res);
+    throw error;
+  }
 
   if (!product) {
     return res.status(404).json({
