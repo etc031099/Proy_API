@@ -8,6 +8,7 @@ PORT=5000
 MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/inventory_billing
 JWT_SECRET=
 JWT_EXPIRE=7d
+CORS_ALLOWED_ORIGINS=https://your-frontend.example
 ```
 
 Set `JWT_SECRET` in the deployment secret manager to the output of a local
@@ -90,7 +91,7 @@ Your API will be available at:
 
 1. **JWT Secret**: Use a strong, random secret (at least 32 characters)
 2. **Database**: Use MongoDB Atlas with IP whitelisting
-3. **CORS**: Update CORS origins in production
+3. **CORS**: Configure exact comma-separated frontend origins; wildcards are rejected
 4. **Rate Limiting**: Already configured for production
 5. **HTTPS**: Render provides SSL/TLS certificates automatically
 

@@ -13,7 +13,7 @@ class ApiClient {
       headers: {
         'Content-Type': 'application/json',
       },
-      withCredentials: true, 
+      withCredentials: false,
     });
 
     this.setupInterceptors();

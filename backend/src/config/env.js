@@ -1,6 +1,7 @@
 const ALLOWED_NODE_ENVIRONMENTS = new Set(['development', 'test', 'production']);
 const MIN_JWT_SECRET_LENGTH = 32;
 const MIN_WEBHOOK_SECRET_LENGTH = 32;
+const { parseCorsAllowedOrigins } = require('./cors');
 
 const EXACT_SECRET_PLACEHOLDERS = new Set([
   'secret',
@@ -53,6 +54,11 @@ const validateEnvironment = (environment = process.env, options = {}) => {
   } else if (!ALLOWED_NODE_ENVIRONMENTS.has(nodeEnvironment.trim())) {
     issues.push('NODE_ENV must be development, test, or production');
   }
+
+  const corsConfiguration = parseCorsAllowedOrigins(environment.CORS_ALLOWED_ORIGINS, {
+    required: typeof nodeEnvironment === 'string' && nodeEnvironment.trim() === 'production'
+  });
+  issues.push(...corsConfiguration.issues);
 
   if (environment.PORT !== undefined) {
     const portText = typeof environment.PORT === 'string' ? environment.PORT.trim() : '';
@@ -112,7 +118,8 @@ const validateEnvironment = (environment = process.env, options = {}) => {
   return Object.freeze({
     nodeEnvironment: nodeEnvironment.trim(),
     port: environment.PORT === undefined ? 5000 : Number(environment.PORT.trim()),
-    webhookEnabled: webhookUrlConfigured
+    webhookEnabled: webhookUrlConfigured,
+    corsAllowedOrigins: Object.freeze([...corsConfiguration.origins])
   });
 };
 

@@ -1,9 +1,10 @@
 require('dotenv').config();
 
 const { validateEnvironment } = require('./config/env');
+const { createCorsOptions } = require('./config/cors');
 
 // Validate critical configuration before opening database or network connections.
-validateEnvironment();
+const environmentConfiguration = validateEnvironment();
 
 const express = require('express');
 const cors = require('cors');
@@ -56,19 +57,11 @@ const limiter = rateLimit({
 
 app.use(limiter);
 
-// CORS configuration
-// For a demo/prototype environment, allow the frontend when deployed on Vercel,
-// localhost during development, and any other valid browser origin used for testing.
-const corsOptions = {
-  origin: true,
-  credentials: true,
-  optionsSuccessStatus: 200,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
-};
+// Exact browser origins only. Requests without Origin remain available to
+// server-side clients such as Node-RED, curl and Postman.
+const corsOptions = createCorsOptions(environmentConfiguration.corsAllowedOrigins);
 
 app.use(cors(corsOptions));
-app.options(/^(.*)$/, cors(corsOptions));
 
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));

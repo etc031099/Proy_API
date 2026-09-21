@@ -11,6 +11,7 @@ const validEnvironment = (overrides = {}) => ({
   PORT: '5000',
   MONGODB_URI: 'mongodb://localhost:27017/inventory_billing_test',
   JWT_SECRET: strongSecret(),
+  CORS_ALLOWED_ORIGINS: 'https://test-frontend.example',
   ...overrides
 });
 
@@ -61,6 +62,73 @@ test('environment validation accepts a strong JWT_SECRET', () => {
   assert.equal(result.nodeEnvironment, 'test');
   assert.equal(result.port, 5000);
   assert.equal(result.webhookEnabled, false);
+  assert.deepEqual(result.corsAllowedOrigins, ['https://test-frontend.example']);
+});
+
+test('production rejects missing CORS_ALLOWED_ORIGINS', () => {
+  const environment = validEnvironment({ NODE_ENV: 'production' });
+  delete environment.CORS_ALLOWED_ORIGINS;
+
+  assertConfigurationError(environment, 'CORS_ALLOWED_ORIGINS is required in production');
+});
+
+test('production rejects an empty CORS allowlist', () => {
+  assertConfigurationError(
+    validEnvironment({ NODE_ENV: 'production', CORS_ALLOWED_ORIGINS: '   ' }),
+    'CORS_ALLOWED_ORIGINS is required in production'
+  );
+});
+
+test('CORS allowlist rejects wildcard origins', () => {
+  for (const value of ['*', 'https://*.example.com']) {
+    assertConfigurationError(validEnvironment({ CORS_ALLOWED_ORIGINS: value }), 'wildcard');
+  }
+});
+
+test('CORS allowlist rejects an origin with a path', () => {
+  assertConfigurationError(
+    validEnvironment({ CORS_ALLOWED_ORIGINS: 'https://example.com/path' }),
+    'path, query, or fragment'
+  );
+});
+
+test('CORS allowlist rejects origins with a query or fragment', () => {
+  for (const value of ['https://example.com?preview=true', 'https://example.com#fragment']) {
+    assertConfigurationError(
+      validEnvironment({ CORS_ALLOWED_ORIGINS: value }),
+      'path, query, or fragment'
+    );
+  }
+});
+
+test('CORS allowlist rejects embedded credentials', () => {
+  assertConfigurationError(
+    validEnvironment({ CORS_ALLOWED_ORIGINS: 'https://user:password@example.com' }),
+    'embedded credentials'
+  );
+});
+
+test('CORS allowlist rejects non-HTTP schemes, relative hosts and empty entries', () => {
+  for (const value of [
+    'javascript:alert(1)',
+    'ftp://example.com',
+    'example.com',
+    'https://example.com,'
+  ]) {
+    assertConfigurationError(validEnvironment({ CORS_ALLOWED_ORIGINS: value }), 'CORS_ALLOWED_ORIGINS entry');
+  }
+});
+
+test('development accepts exact configured origins and only trims surrounding spaces', () => {
+  const result = validateEnvironment(validEnvironment({
+    NODE_ENV: 'development',
+    CORS_ALLOWED_ORIGINS: ' http://localhost:3000 , http://127.0.0.1:3000 '
+  }), { warn: () => {} });
+
+  assert.deepEqual(result.corsAllowedOrigins, [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000'
+  ]);
 });
 
 test('environment validation rejects NODE_RED_WEBHOOK_URL without a secret', () => {

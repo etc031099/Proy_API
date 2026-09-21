@@ -24,7 +24,8 @@ const runComposeConfig = (values) => {
       'JWT_SECRET',
       'MONGO_ROOT_USERNAME',
       'MONGO_ROOT_PASSWORD',
-      'MONGODB_URI_DOCKER'
+      'MONGODB_URI_DOCKER',
+      'CORS_ALLOWED_ORIGINS'
     ]) {
       delete environment[key];
     }
@@ -50,7 +51,8 @@ const validComposeEnvironment = () => {
     MONGO_ROOT_USERNAME: 'compose_test_admin',
     MONGO_ROOT_PASSWORD: mongoPassword,
     MONGODB_URI_DOCKER: `mongodb://compose_test_admin:${mongoPassword}@mongodb:27017/inventory_billing?authSource=admin&replicaSet=rs0`,
-    JWT_SECRET: randomBytes(32).toString('hex')
+    JWT_SECRET: randomBytes(32).toString('hex'),
+    CORS_ALLOWED_ORIGINS: 'https://frontend.example.test'
   };
 };
 
@@ -76,6 +78,16 @@ test('Docker Compose rejects a missing JWT_SECRET', () => {
   assert.match(result.stderr, /JWT_SECRET/);
 });
 
+test('Docker Compose rejects missing production CORS origins', () => {
+  const environment = validComposeEnvironment();
+  delete environment.CORS_ALLOWED_ORIGINS;
+
+  const result = runComposeConfig(environment);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /CORS_ALLOWED_ORIGINS/);
+});
+
 test('Docker Compose accepts complete external configuration', () => {
   const result = runComposeConfig(validComposeEnvironment());
 
@@ -93,5 +105,6 @@ test('docker-compose.yml contains no critical secret literal and binds MongoDB t
   assert.match(jwtSecretLines[0].trim(), /^JWT_SECRET:\s*\$\{JWT_SECRET:\?/);
   assert.match(source, /MONGO_INITDB_ROOT_USERNAME:\s*\$\{MONGO_ROOT_USERNAME:\?/);
   assert.match(source, /MONGO_INITDB_ROOT_PASSWORD:\s*\$\{MONGO_ROOT_PASSWORD:\?/);
+  assert.match(source, /CORS_ALLOWED_ORIGINS:\s*\$\{CORS_ALLOWED_ORIGINS:\?/);
   assert.match(source, /127\.0\.0\.1:27017:27017/);
 });

@@ -113,6 +113,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: 5000
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?Set exact comma-separated frontend origins}
       MONGODB_URI: ${MONGODB_URI_DOCKER:?Set MONGODB_URI_DOCKER in backend/.env}
       MONGODB_REPLICA_SET: rs0
       JWT_SECRET: ${JWT_SECRET:?Set a strong JWT_SECRET in backend/.env or the deployment secret manager}

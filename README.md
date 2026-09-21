@@ -199,9 +199,14 @@ MONGODB_URI=mongodb://user:password@localhost:27017/inventory_billing?authSource
 JWT_SECRET=
 JWT_EXPIRE=7d
 
-# CORS
-FRONTEND_URL=http://localhost:3000
+# CORS: exact comma-separated browser origins; no wildcard
+CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 ```
+
+`CORS_ALLOWED_ORIGINS` is mandatory in production. Entries must be exact
+`http` or `https` origins without paths, queries, fragments, embedded
+credentials or wildcards. Requests without `Origin` remain available to
+server-side clients such as Node-RED.
 
 `JWT_SECRET` is mandatory and must be a random value of at least 32 characters.
 Generate it locally and store it only in the untracked backend `.env` or the
