@@ -88,7 +88,9 @@ const productSchema = new mongoose.Schema({
     type: Number,
     default: 0,
     min: [0, 'Minimum stock level cannot be negative']
-  }
+  },
+  scenarioId: { type: String, default: null, trim: true },
+  sourceEventId: { type: String, default: null, trim: true }
 }, {
   timestamps: true
 });
@@ -97,6 +99,14 @@ const productSchema = new mongoose.Schema({
 productSchema.index({ businessId: 1, name: 1 });
 productSchema.index({ businessId: 1, category: 1 });
 productSchema.index({ businessId: 1, stock: 1 });
+productSchema.index({ businessId: 1, scenarioId: 1 });
+productSchema.index(
+  { businessId: 1, scenarioId: 1, sourceEventId: 1 },
+  { unique: true, partialFilterExpression: {
+    scenarioId: { $type: 'string', $gt: '' },
+    sourceEventId: { $type: 'string', $gt: '' }
+  } }
+);
 productSchema.index(SKU_INDEX_KEY, {
   name: SKU_INDEX_NAME,
   unique: true,
@@ -110,16 +120,6 @@ productSchema.virtual('isLowStock').get(function() {
 
 // Ensure virtual fields are included in JSON output
 productSchema.set('toJSON', { virtuals: true });
-
-// Methods
-productSchema.methods.updateStock = function(quantity, operation = 'add') {
-  if (operation === 'add') {
-    this.stock += quantity;
-  } else if (operation === 'subtract') {
-    this.stock = Math.max(0, this.stock - quantity);
-  }
-  return this.save();
-};
 
 // Static methods
 productSchema.statics.findByBusiness = function(businessId) {

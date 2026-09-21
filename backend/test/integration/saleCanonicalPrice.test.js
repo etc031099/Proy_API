@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const mongoose = require('mongoose');
 const { validationResult } = require('express-validator');
 
-const { Product, Contact, Transaction, CreditPayment } = require('../../src/models');
+const { Product, Contact, Transaction, CreditPayment, InventoryMovement } = require('../../src/models');
 const { createTransaction } = require('../../src/controllers/transactionController');
 const { createTransactionValidation } = require('../../src/utils/validations');
 
@@ -82,7 +82,7 @@ test.before(async () => {
   assert.equal(hello.setName, 'rs0');
   assert.equal(hello.isWritablePrimary, true);
   await Promise.all([
-    Product.init(), Contact.init(), Transaction.init(), CreditPayment.init()
+    Product.init(), Contact.init(), Transaction.init(), CreditPayment.init(), InventoryMovement.init()
   ]);
 
   global.fetch = async (url) => {
@@ -101,7 +101,8 @@ test.after(async () => {
       Product.deleteMany({ businessId }),
       Contact.deleteMany({ businessId }),
       Transaction.deleteMany({ businessId }),
-      CreditPayment.deleteMany({ businessId })
+      CreditPayment.deleteMany({ businessId }),
+      InventoryMovement.collection.deleteMany({ businessId })
     ]);
   }
   await mongoose.disconnect();

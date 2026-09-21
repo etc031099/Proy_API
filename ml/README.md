@@ -155,3 +155,38 @@ output.
 ML-R2A does not create suppliers, customers, purchases, stock, credit,
 cancellations or recent operational dates. It never connects to MongoDB and it
 does not train or evaluate a machine-learning model.
+
+## ML-PREP and future cloud model
+
+ML-PREP is operational-history preparation, not feature engineering or model
+training. Its future end-to-end flow is:
+
+```text
+M5 -> Bronze -> operational scenario -> Gold/features -> train -> evaluate
+   -> ml/models/demand_forecast_v1.joblib -> Cloud ML API -> Node backend -> UI
+```
+
+The first forecast model will continue to use M5 demand, lags, rolling statistics,
+calendar, price, events/promotions and category. `InventoryMovement` is an
+operational audit log, not an automatic ML feature. Forecasting returns a
+consultative `predictedDemand7d`; a separate operational rule combines that demand
+with current stock to obtain `recommendedReorderQuantity`.
+
+ML-R4 should persist the complete compatible scikit-learn preprocessing + estimator
+pipeline in `ml/models/demand_forecast_v1.joblib`, plus `model_metadata.json` with
+model version, training time, dataset hashes/version, feature names, target,
+horizon, train/validation/test periods, metrics and library versions.
+
+The initial deployment assumption is reproducible local training and cloud
+inference, while keeping scripts portable enough for later cloud training. The
+cloud service will use Python + FastAPI with conceptual `GET /health`,
+`GET /model-info` and `POST /predict` endpoints. Only Node/Express may call it:
+
+```text
+Frontend -> Node backend -> Cloud ML API + joblib -> Node backend -> Frontend
+```
+
+Forecast failure must never block login, sales, purchases or inventory. A later
+Node integration will use a deterministic baseline when the cloud service is
+unavailable. No `.joblib`, FastAPI service, deployment or fallback implementation
+is part of ML-PREP.

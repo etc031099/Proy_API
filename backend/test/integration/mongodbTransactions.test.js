@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const mongoose = require('mongoose');
 
-const { Product, Contact, Transaction, CreditPayment } = require('../../src/models');
+const { Product, Contact, Transaction, CreditPayment, InventoryMovement } = require('../../src/models');
 const {
   createTransaction,
   updateTransactionStatus
@@ -67,7 +67,8 @@ test.before(async () => {
     Product.init(),
     Contact.init(),
     Transaction.init(),
-    CreditPayment.init()
+    CreditPayment.init(),
+    InventoryMovement.init()
   ]);
   await mongoose.connection.db.createCollection(capabilityCollectionName);
 
@@ -84,7 +85,8 @@ test.after(async () => {
       Product.deleteMany({ businessId }),
       Contact.deleteMany({ businessId }),
       Transaction.deleteMany({ businessId }),
-      CreditPayment.deleteMany({ businessId })
+      CreditPayment.deleteMany({ businessId }),
+      InventoryMovement.collection.deleteMany({ businessId })
     ]);
 
     const collections = await mongoose.connection.db.listCollections(

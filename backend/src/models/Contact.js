@@ -100,7 +100,9 @@ const contactSchema = new mongoose.Schema({
     PEN: { type: Number, default: 0, min: 0 },
     USD: { type: Number, default: 0, min: 0 },
     EUR: { type: Number, default: 0, min: 0 }
-  }
+  },
+  scenarioId: { type: String, default: null, trim: true },
+  sourceEventId: { type: String, default: null, trim: true }
 }, {
   timestamps: true
 });
@@ -110,6 +112,14 @@ contactSchema.index({ businessId: 1, type: 1 });
 contactSchema.index({ businessId: 1, name: 1 });
 contactSchema.index({ phone: 1 });
 contactSchema.index({ email: 1 }, { sparse: true });
+contactSchema.index({ businessId: 1, scenarioId: 1 });
+contactSchema.index(
+  { businessId: 1, scenarioId: 1, sourceEventId: 1 },
+  { unique: true, partialFilterExpression: {
+    scenarioId: { $type: 'string', $gt: '' },
+    sourceEventId: { $type: 'string', $gt: '' }
+  } }
+);
 
 // Virtual for full address
 contactSchema.virtual('fullAddress').get(function() {

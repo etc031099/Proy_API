@@ -5,6 +5,7 @@ const { validatePaymentMethod, getExchangeRate } = require('../services/external
 const { notifyLowStock } = require('../services/telegramService');
 const { emitEvent } = require('../services/webhookService');
 const { toFiniteNumber } = require('../utils/numbers');
+const { applyStockChange, normalizeDate } = require('../services/inventoryService');
 
 const TRANSACTION_CURRENCIES = ['PEN', 'USD', 'EUR'];
 
@@ -136,6 +137,20 @@ const createTransaction = asyncHandler(async (req, res) => {
   const businessId = req.businessId;
   const normalizedCurrency = String(currency || 'PEN').toUpperCase();
   const targetCurrency = TRANSACTION_CURRENCIES.includes(normalizedCurrency) ? normalizedCurrency : 'PEN';
+  const historical = req.historicalContext || null;
+  const transactionId = historical?.transactionId || new mongoose.Types.ObjectId();
+  const transactionDate = historical
+    ? normalizeDate(historical.date, 'transaction date')
+    : new Date();
+  const resolveExchangeRate = async (base, target) => {
+    if (!historical) return getExchangeRate({ base, target });
+    if (base === target) return { rate: 1 };
+    const rate = toFiniteNumber(historical.exchangeRates?.[`${base}/${target}`], {
+      field: `Historical exchange rate ${base}/${target}`,
+      min: Number.EPSILON
+    });
+    return { rate };
+  };
 
   if (!Array.isArray(products) || products.length === 0) {
     return res.status(400).json({
@@ -200,7 +215,7 @@ const createTransaction = asyncHandler(async (req, res) => {
     const lowStockNotifications = [];
     let subtotal = 0;
 
-    for (const item of products) {
+    for (const [itemIndex, item] of products.entries()) {
       const itemQuantity = toFiniteNumber(item.quantity, {
         field: 'Product quantity',
         min: 1,
@@ -266,24 +281,26 @@ const createTransaction = asyncHandler(async (req, res) => {
       }
 
       const previousStock = product.stock;
-      if (type === 'sale') {
-        product.stock -= itemQuantity;
-      } else {
-        product.stock = toFiniteNumber(product.stock + itemQuantity, {
-          field: 'Resulting stock',
-          min: 0,
-          integer: true
-        });
-      }
-
-      await product.save({ session });
+      await applyStockChange({
+        product,
+        quantityDelta: type === 'sale' ? -itemQuantity : itemQuantity,
+        type,
+        transactionId,
+        occurredAt: transactionDate,
+        source: historical ? 'historical_import' : 'api',
+        scenarioId: historical?.scenarioId || null,
+        sourceEventId: historical
+          ? `${historical.sourceEventId}:inventory:${itemIndex}`
+          : null,
+        session
+      });
       if (type === 'sale') lowStockNotifications.push({ product, previousStock });
 
       const sourcePrice = type === 'sale' ? canonicalSalePrice : canonicalPurchaseCost;
       const productCurrency = type === 'sale'
         ? canonicalSaleCurrency
         : canonicalPurchaseCurrency;
-      const itemRateResponse = await getExchangeRate({ base: productCurrency, target: targetCurrency });
+      const itemRateResponse = await resolveExchangeRate(productCurrency, targetCurrency);
       const itemRate = toFiniteNumber(itemRateResponse?.rate, {
         field: 'Exchange rate',
         min: Number.EPSILON
@@ -312,7 +329,7 @@ const createTransaction = asyncHandler(async (req, res) => {
     }
 
     const baseCurrency = 'USD';
-    const exchangeRateResponse = await getExchangeRate({ base: baseCurrency, target: targetCurrency });
+    const exchangeRateResponse = await resolveExchangeRate(baseCurrency, targetCurrency);
     const resolvedRate = toFiniteNumber(exchangeRateResponse?.rate, {
       field: 'Exchange rate',
       min: Number.EPSILON
@@ -334,6 +351,7 @@ const createTransaction = asyncHandler(async (req, res) => {
 
     // Create transaction data
     const transactionData = {
+      _id: transactionId,
       type,
       products: processedProducts,
       totalAmount,
@@ -342,7 +360,15 @@ const createTransaction = asyncHandler(async (req, res) => {
       currency: targetCurrency,
       exchangeRate: resolvedRate,
       paymentMethod: paymentMethod || 'cash',
-      notes
+      notes,
+      date: transactionDate,
+      cancelledAt: null,
+      scenarioId: historical?.scenarioId || null,
+      sourceEventId: historical?.sourceEventId || null,
+      ...(historical?.createdAt ? {
+        createdAt: normalizeDate(historical.createdAt, 'transaction createdAt'),
+        updatedAt: normalizeDate(historical.createdAt, 'transaction createdAt')
+      } : {})
     };
 
     if (type === 'sale') {
@@ -378,14 +404,15 @@ const createTransaction = asyncHandler(async (req, res) => {
 
     await session.commitTransaction();
 
-    for (const notification of lowStockNotifications) {
-      Promise.resolve()
-        .then(() => notifyLowStock(businessId, notification.product, notification.previousStock))
-        .catch((error) => console.error('[Telegram] low-stock notification failed:', error.message));
-    }
+    if (!historical) {
+      for (const notification of lowStockNotifications) {
+        Promise.resolve()
+          .then(() => notifyLowStock(businessId, notification.product, notification.previousStock))
+          .catch((error) => console.error('[Telegram] low-stock notification failed:', error.message));
+      }
 
-    // Optional real-time event to Node-RED (no-op unless NODE_RED_WEBHOOK_URL is set)
-    emitEvent('transaction.created', {
+      // Offline historical imports must not emit current-time operational events.
+      emitEvent('transaction.created', {
       transactionId: transaction[0]._id,
       businessId,
       type,
@@ -400,7 +427,8 @@ const createTransaction = asyncHandler(async (req, res) => {
         quantity: item.quantity,
         total: item.total
       }))
-    });
+      });
+    }
 
     const populatedTransaction = await Transaction.findById(transaction[0]._id)
       .populate('customerId', 'name phone email')
@@ -607,7 +635,18 @@ const updateTransactionStatus = asyncHandler(async (req, res) => {
       }
     }
 
-    for (const item of transaction.products) {
+    const historical = req.historicalContext || null;
+    const cancellationTime = historical
+      ? normalizeDate(historical.cancelledAt, 'cancelledAt')
+      : new Date(Math.max(Date.now(), transaction.createdAt.getTime() + 1));
+    if (cancellationTime <= transaction.createdAt || cancellationTime < transaction.date) {
+      throw Object.assign(
+        new Error('cancelledAt must be after createdAt and not before the transaction date'),
+        { statusCode: 400 }
+      );
+    }
+
+    for (const [itemIndex, item] of transaction.products.entries()) {
       const product = await Product.findOne({
         _id: item.productId,
         businessId: req.businessId
@@ -624,8 +663,19 @@ const updateTransactionStatus = asyncHandler(async (req, res) => {
           { statusCode: 409 },
         );
       }
-      product.stock += reversal;
-      await product.save({ session });
+      await applyStockChange({
+        product,
+        quantityDelta: reversal,
+        type: 'cancellation',
+        transactionId: transaction._id,
+        occurredAt: cancellationTime,
+        source: historical ? 'historical_import' : 'api',
+        scenarioId: historical?.scenarioId || transaction.scenarioId || null,
+        sourceEventId: historical
+          ? `${historical.sourceEventId}:inventory:${itemIndex}`
+          : null,
+        session
+      });
     }
 
     if (creditCustomer) {
@@ -639,6 +689,7 @@ const updateTransactionStatus = asyncHandler(async (req, res) => {
     }
 
     transaction.status = status;
+    transaction.cancelledAt = cancellationTime;
     await transaction.save({ session });
     await session.commitTransaction();
   } catch (error) {

@@ -4,6 +4,8 @@ const Contact = require('./Contact');
 const Transaction = require('./Transaction');
 const TelegramConnection = require('./TelegramConnection');
 const CreditPayment = require('./CreditPayment');
+const InventoryMovement = require('./InventoryMovement');
+const HistoricalScenario = require('./HistoricalScenario');
 
 module.exports = {
   User,
@@ -11,5 +13,7 @@ module.exports = {
   Contact,
   Transaction,
   TelegramConnection,
-  CreditPayment
+  CreditPayment,
+  InventoryMovement,
+  HistoricalScenario
 };

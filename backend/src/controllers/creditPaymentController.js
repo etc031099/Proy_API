@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const { Contact, CreditPayment } = require('../models');
 const { asyncHandler } = require('../middleware/validation');
 const { toFiniteNumber } = require('../utils/numbers');
+const { normalizeDate } = require('../services/inventoryService');
 
 const getCustomer = (id, businessId, session) => Contact.findOne({
   _id: id,
@@ -34,13 +35,22 @@ const createCreditPayment = asyncHandler(async (req, res) => {
     if (paymentAmount > currencyBalance) {
       throw Object.assign(new Error('Payment cannot exceed the customer balance'), { statusCode: 400 });
     }
+    const historical = req.historicalContext || null;
     const [payment] = await CreditPayment.create([{
+      ...(historical?.paymentId ? { _id: historical.paymentId } : {}),
       customerId,
       businessId: req.businessId,
       amount: paymentAmount,
       currency,
       paymentMethod,
-      notes
+      notes,
+      date: historical ? normalizeDate(historical.date, 'payment date') : new Date(),
+      scenarioId: historical?.scenarioId || null,
+      sourceEventId: historical?.sourceEventId || null,
+      ...(historical?.createdAt ? {
+        createdAt: normalizeDate(historical.createdAt, 'payment createdAt'),
+        updatedAt: normalizeDate(historical.createdAt, 'payment createdAt')
+      } : {})
     }], { session });
     const resultingBalance = toFiniteNumber(
       Math.max(0, currencyBalance - paymentAmount),

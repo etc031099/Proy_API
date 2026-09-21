@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const { Product, Contact } = require('../models');
 const { asyncHandler } = require('../middleware/validation');
 const { notifyLowStock } = require('../services/telegramService');
@@ -5,6 +6,7 @@ const { emitEvent } = require('../services/webhookService');
 const { toFiniteNumber } = require('../utils/numbers');
 const { assertAllowedFields, pickAllowedFields } = require('../utils/allowedFields');
 const { SKU_INDEX_NAME, normalizeSku } = require('../utils/sku');
+const { applyStockChange } = require('../services/inventoryService');
 
 const PRODUCT_CREATE_FIELDS = [
   'name', 'description', 'price', 'currency', 'costPrice', 'stock', 'category',
@@ -181,6 +183,7 @@ const getProduct = asyncHandler(async (req, res) => {
  */
 const createProduct = asyncHandler(async (req, res) => {
   const productData = pickAllowedFields(req.body, PRODUCT_CREATE_FIELDS);
+  const historical = req.historicalContext || null;
   normalizeSkuField(productData);
   const supplierPrices = await validateSupplierPrices(productData.supplierPrices, req.businessId);
   const preferredSupplierId = await validatePreferredSupplier(
@@ -189,6 +192,13 @@ const createProduct = asyncHandler(async (req, res) => {
     req.businessId,
   );
   productData.businessId = req.businessId;
+  if (historical) {
+    productData._id = historical.productId;
+    productData.scenarioId = historical.scenarioId;
+    productData.sourceEventId = historical.sourceEventId;
+    productData.createdAt = historical.createdAt;
+    productData.updatedAt = historical.createdAt;
+  }
   if (supplierPrices) productData.supplierPrices = supplierPrices;
   productData.preferredSupplierId = preferredSupplierId;
 
@@ -204,12 +214,36 @@ const createProduct = asyncHandler(async (req, res) => {
     }
   }
 
+  const initialStock = toFiniteNumber(productData.stock ?? 0, {
+    field: 'Stock', min: 0, integer: true
+  });
+  productData.stock = 0;
+  const session = await mongoose.startSession();
   let product;
   try {
-    product = await Product.create(productData);
+    session.startTransaction();
+    [product] = await Product.create([productData], { session });
+    if (initialStock > 0) {
+      await applyStockChange({
+        product,
+        quantityDelta: initialStock,
+        type: 'opening',
+        occurredAt: historical?.createdAt,
+        source: historical ? 'historical_import' : 'api',
+        scenarioId: historical?.scenarioId || null,
+        sourceEventId: historical ? `${historical.sourceEventId}:inventory` : null,
+        session
+      });
+    }
+    await session.commitTransaction();
   } catch (error) {
-    if (isSkuDuplicateKey(error)) return sendSkuConflict(res);
+    await session.abortTransaction();
+    if (isSkuDuplicateKey(error) || (error?.code === 112 && productData.sku)) {
+      return sendSkuConflict(res);
+    }
     throw error;
+  } finally {
+    await session.endSession();
   }
 
   res.status(201).json({
@@ -382,40 +416,53 @@ const updateProductStock = asyncHandler(async (req, res) => {
     integer: true
   });
 
-  const product = await Product.findOne({
-    _id: id,
-    businessId: req.businessId,
-    isActive: true
-  });
-
-  if (!product) {
-    return res.status(404).json({
-      success: false,
-      message: 'Product not found'
-    });
-  }
-
-  const previousStock = product.stock;
+  const session = await mongoose.startSession();
+  let product;
+  let previousStock;
   let newStock;
-  switch (operation) {
-    case 'add':
-      newStock = toFiniteNumber(product.stock + quantity, {
-        field: 'Resulting stock',
-        min: 0,
-        integer: true
-      });
-      break;
-    case 'subtract':
-      newStock = Math.max(0, product.stock - quantity);
-      break;
-    case 'set':
-    default:
-      newStock = quantity;
-      break;
-  }
+  try {
+    session.startTransaction();
+    product = await Product.findOne({
+      _id: id,
+      businessId: req.businessId,
+      isActive: true
+    }).session(session);
 
-  product.stock = newStock;
-  await product.save();
+    if (!product) {
+      await session.abortTransaction();
+      return res.status(404).json({ success: false, message: 'Product not found' });
+    }
+
+    previousStock = product.stock;
+    switch (operation) {
+      case 'add':
+        newStock = toFiniteNumber(product.stock + quantity, {
+          field: 'Resulting stock', min: 0, integer: true
+        });
+        break;
+      case 'subtract':
+        newStock = Math.max(0, product.stock - quantity);
+        break;
+      case 'set':
+      default:
+        newStock = quantity;
+        break;
+    }
+
+    await applyStockChange({
+      product,
+      quantityDelta: newStock - previousStock,
+      type: 'manual_adjustment',
+      source: 'api',
+      session
+    });
+    await session.commitTransaction();
+  } catch (error) {
+    await session.abortTransaction();
+    throw error;
+  } finally {
+    await session.endSession();
+  }
   Promise.resolve()
     .then(() => notifyLowStock(req.businessId, product, previousStock))
     .catch((error) => console.error('[Telegram] low-stock notification failed:', error.message));

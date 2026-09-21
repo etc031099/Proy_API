@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const mongoose = require('mongoose');
 
-const { Product } = require('../../src/models');
+const { Product, InventoryMovement } = require('../../src/models');
 const { createProduct, updateProduct } = require('../../src/controllers/productController');
 const {
   SKU_INDEX_NAME,
@@ -69,12 +69,13 @@ test.before(async () => {
   const hello = await mongoose.connection.db.admin().command({ hello: 1 });
   assert.equal(hello.setName, 'rs0');
   assert.equal(hello.isWritablePrimary, true);
-  await Product.init();
+  await Promise.all([Product.init(), InventoryMovement.init()]);
 });
 
 test.after(async () => {
   if (mongoose.connection.readyState === 1) {
     await Product.deleteMany({ businessId: { $in: [tenantA, tenantB] } });
+    await InventoryMovement.collection.deleteMany({ businessId: { $in: [tenantA, tenantB] } });
     for (const collectionName of [migrationTestCollection, cleanMigrationCollection]) {
       const exists = await mongoose.connection.db.listCollections(
         { name: collectionName },

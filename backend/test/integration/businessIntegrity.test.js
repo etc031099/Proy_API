@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const mongoose = require('mongoose');
 
-const { Product, Contact, Transaction, CreditPayment } = require('../../src/models');
+const { Product, Contact, Transaction, CreditPayment, InventoryMovement } = require('../../src/models');
 const {
   updateTransactionStatus,
   getTransactionSummary
@@ -111,7 +111,7 @@ test.before(async () => {
   assert.equal(hello.setName, 'rs0');
   assert.equal(hello.isWritablePrimary, true);
   await Promise.all([
-    Product.init(), Contact.init(), Transaction.init(), CreditPayment.init()
+    Product.init(), Contact.init(), Transaction.init(), CreditPayment.init(), InventoryMovement.init()
   ]);
   global.fetch = async () => ({
     ok: true,
@@ -127,7 +127,8 @@ test.after(async () => {
       Product.deleteMany({ businessId: businesses }),
       Contact.deleteMany({ businessId: businesses }),
       Transaction.deleteMany({ businessId: businesses }),
-      CreditPayment.deleteMany({ businessId: businesses })
+      CreditPayment.deleteMany({ businessId: businesses }),
+      InventoryMovement.collection.deleteMany({ businessId: businesses })
     ]);
   }
   await mongoose.disconnect();

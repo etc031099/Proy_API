@@ -100,6 +100,12 @@ const transactionSchema = new mongoose.Schema({
     enum: ['pending', 'completed', 'cancelled'],
     default: 'completed'
   },
+  cancelledAt: {
+    type: Date,
+    default: null
+  },
+  scenarioId: { type: String, default: null, trim: true },
+  sourceEventId: { type: String, default: null, trim: true },
   paymentMethod: {
     type: String,
     enum: ['cash', 'card', 'bank_transfer', 'credit', 'crypto', 'bitcoin', 'tether', 'wallet', 'other'],
@@ -125,6 +131,14 @@ transactionSchema.index({ businessId: 1, date: -1 });
 transactionSchema.index({ businessId: 1, type: 1, date: -1 });
 transactionSchema.index({ businessId: 1, customerId: 1 });
 transactionSchema.index({ businessId: 1, vendorId: 1 });
+transactionSchema.index({ businessId: 1, scenarioId: 1 });
+transactionSchema.index(
+  { businessId: 1, scenarioId: 1, sourceEventId: 1 },
+  { unique: true, partialFilterExpression: {
+    scenarioId: { $type: 'string', $gt: '' },
+    sourceEventId: { $type: 'string', $gt: '' }
+  } }
+);
 transactionSchema.index({ invoiceNumber: 1 }, { sparse: true });
 
 // Pre-save middleware to calculate totals while preserving explicit currency conversions
