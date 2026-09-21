@@ -156,6 +156,92 @@ ML-R2A does not create suppliers, customers, purchases, stock, credit,
 cancellations or recent operational dates. It never connects to MongoDB and it
 does not train or evaluate a machine-learning model.
 
+## ML-R2B deterministic operational scenarios
+
+ML-R2B projects a reproducible, operational sample over the real CA_3 demand
+without changing Bronze. It uses no LLM or paid API. The generator reads
+Parquet with DuckDB, keeps only one day of positive demand in memory, writes
+UTF-8 NDJSON incrementally, validates it before publishing the file and creates
+a small manifest with hashes, lineage, volume and resource measurements.
+
+Available profiles are:
+
+| Profile | Products | Source period | Purpose |
+| --- | ---: | --- | --- |
+| `demo` | 120 | 90 days | Fast demonstration and review |
+| `normal` | 600 | 3 years | Operationally representative history |
+| `large` | 1,200 | Full 1,941 days | Broad operational sample; ML Bronze remains all 3,049 products |
+| `smoke` | 5 | 5 days | Importer compatibility only; deliberately elevated credit/cancellation coverage |
+
+The counts are bounded deliberately: the future ML dataset remains the complete
+5.9M product-day Bronze table, while Mongo receives a representative stratified
+sample rather than one document per product-day. Sampling crosses category,
+rotation, intermittent demand and price level, using the configured seed.
+
+Generate and validate a profile from the repository root:
+
+```powershell
+ml/.venv/Scripts/python.exe -m ml.src.scenario.generator --config ml/config/scenario_demo.toml
+ml/.venv/Scripts/python.exe -m ml.src.scenario.validation --config ml/config/scenario_demo.toml
+```
+
+Existing output is never overwritten without `--overwrite`. Generated NDJSON
+under `ml/data/operational/` remains ignored. The versionable manifest is
+written under `ml/reports/` only after validation succeeds.
+
+### Operational policies
+
+- IDs, assignments, tickets and dates are deterministic for identical config
+  and Bronze hashes. `source_date` remains in each M5 sale note and
+  `operational_date` uses a configured whole-week offset, preserving weekday,
+  spacing and seasonality without producing future dates.
+- Suppliers and synthetic customers are created before use. Product activation
+  is progressive, based on first price/sale evidence. Names and phone identifiers
+  are explicitly synthetic and are not real PII.
+- A product starts at stock zero. Initial, planned and emergency receipts are
+  purchase transactions using the configured canonical supplier cost. Internal
+  order dates and lead time are simulation state only because the current app
+  persists a purchase at receipt.
+- Daily M5 units are split into category-affine, multi-line tickets without
+  changing product/day totals. Emergency receipts preserve demand and prevent
+  negative stock.
+- Product price is the median source price in the selected period, converted
+  once from USD to PEN with configured FX. Weekly M5 price remains in Bronze;
+  the current backend has no price-history model, so ML-R2B does not invent one.
+- Costs use a configured rotation-class margin plus a small deterministic
+  supplier variation, always positive and below sale price.
+- Credit is limited to registered credit-enabled customers. Partial payments
+  occur after sales and never exceed debt; some balance intentionally remains
+  open for demonstrations.
+- Cancellations are additional synthetic cash sales followed by a reversal.
+  Therefore completed, non-cancelled M5-labelled sales still reconcile exactly
+  to real demand.
+
+Rotation calculated over the selected simulation period may size operational
+stock. It is labelled future-aware simulation metadata and must never become a
+forecast feature. Future Gold features must be causal and remain principally
+M5-based; synthetic customer/vendor attributes are excluded.
+
+### Validation gate and import
+
+The validator checks causal order, references, supplier relationships, positive
+prices/costs, non-negative stock, credit/payment arithmetic, cancellations,
+ObjectIds, event IDs, timezone-aware timestamps and exact M5 product/day demand.
+Failure returns a non-zero exit and does not publish the temporary NDJSON.
+
+Generation does not connect to MongoDB. After human approval, an isolated smoke
+file may be passed to the existing importer and then reset explicitly:
+
+```powershell
+ml/.venv/Scripts/python.exe -m ml.src.scenario.generator --config ml/config/scenario_smoke.toml
+cd backend
+npm run import:historical-scenario -- --file=../ml/data/operational/scenario_smoke.ndjson --business-id=ML_R2B_SMOKE --scenario-id=m5-ca3-smoke-v1
+npm run reset:historical-scenario -- --business-id=ML_R2B_SMOKE --scenario-id=m5-ca3-smoke-v1
+```
+
+Use only a test replica set for the smoke import. Demo, normal and large are not
+imported automatically.
+
 ## ML-PREP and future cloud model
 
 ML-PREP is operational-history preparation, not feature engineering or model

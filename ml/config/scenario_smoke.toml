@@ -1,0 +1,59 @@
+[scenario]
+scenario_id = "m5-ca3-smoke-v1"
+seed = 2026
+source_store = "CA_3"
+source_start = "2015-01-01"
+source_end = "2015-01-05"
+operational_date_offset_days = 3654
+
+[paths]
+bronze = "ml/data/bronze/m5_store_daily.parquet"
+output = "ml/data/operational/scenario_smoke.ndjson"
+manifest = "ml/reports/scenario_smoke_manifest.json"
+
+[selection]
+product_count = 5
+
+[suppliers]
+count = 2
+max_per_product = 2
+
+[customers]
+count = 5
+anonymous_rate = 0.50
+
+[inventory]
+lead_time_min_days = 2
+lead_time_max_days = 4
+product_setup_lead_days = 5
+initial_stock_low = 5
+initial_stock_medium = 10
+initial_stock_high = 20
+min_stock_low = 2
+min_stock_medium = 4
+min_stock_high = 8
+reorder_point_low = 3
+reorder_point_medium = 7
+reorder_point_high = 14
+
+[pricing]
+usd_to_pen = 3.70
+
+[margins]
+low = 0.22
+medium = 0.28
+high = 0.34
+
+[transactions]
+max_lines_per_ticket = 4
+max_quantity_per_line = 5
+credit_rate = 1.0
+cancellation_rate = 0.25
+credit_payment_delay_days = 2
+credit_payment_fraction = 0.70
+
+[payment_methods]
+cash = 0.52
+card = 0.28
+bank_transfer = 0.12
+credit = 0.08

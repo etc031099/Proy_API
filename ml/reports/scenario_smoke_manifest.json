@@ -1,0 +1,137 @@
+{
+  "version": "ml-r2b-v1",
+  "scenarioId": "m5-ca3-smoke-v1",
+  "seed": 2026,
+  "created_at_utc": "2026-09-21T20:56:21.424263+00:00",
+  "source_dataset": "M5 Forecasting Accuracy",
+  "source_bronze": "ml/data/bronze/m5_store_daily.parquet",
+  "source_bronze_sha256": "3029c1b390d96a2da02c589df9b7e750be458bea5bc04855dc5942e2cc96c8a6",
+  "selected_store": "CA_3",
+  "source_date_range": [
+    "2015-01-01",
+    "2015-01-05"
+  ],
+  "operational_date_range": [
+    "2025-01-02",
+    "2025-01-06"
+  ],
+  "selected_products": [
+    "FOODS_1_137",
+    "FOODS_2_077",
+    "FOODS_2_336",
+    "FOODS_3_499",
+    "FOODS_3_511"
+  ],
+  "counts": {
+    "products": 5,
+    "suppliers": 2,
+    "customers": 5,
+    "purchases": 16,
+    "sales": 45,
+    "m5_sales": 38,
+    "synthetic_cancellation_sales": 7,
+    "payments": 24,
+    "cancellations": 7,
+    "sale_lines": 70,
+    "materialized_m5_units": 267,
+    "events": 104
+  },
+  "volume_comparison": {
+    "full_ml_product_day_observations": 5918109,
+    "mongo_operational_events": 104,
+    "materialized_positive_product_days": 14
+  },
+  "ndjson": "ml/data/operational/scenario_smoke.ndjson",
+  "ndjson_sha256": "32fdfb03c2e39b96c94f4c61928b69743df814b0743ba80bd49079c853b41032",
+  "ndjson_size_bytes": 40508,
+  "config": "ml/config/scenario_smoke.toml",
+  "config_sha256": "91806d89295063b6cb7d813b7c5e7438cf61714c0f38d8820375847cfdbab487",
+  "provenance": {
+    "REAL": [
+      "item_id",
+      "source_date",
+      "units_sold",
+      "sell_price",
+      "cat_id",
+      "dept_id",
+      "calendar events",
+      "SNAP",
+      "temporal pattern"
+    ],
+    "DERIVED": [
+      "operational_date",
+      "price_pen",
+      "rotation_class",
+      "minStockLevel",
+      "reorderPoint",
+      "stock simulation",
+      "aggregations"
+    ],
+    "SYNTHETIC": [
+      "vendors",
+      "customers",
+      "purchases",
+      "lead time",
+      "supplierPrices",
+      "payment methods",
+      "credit",
+      "payments",
+      "cancellations",
+      "names"
+    ],
+    "CONFIGURED": [
+      "seed",
+      "rates",
+      "period",
+      "currency",
+      "margins",
+      "replenishment policy",
+      "credit rate",
+      "cancellation rate"
+    ]
+  },
+  "policies": {
+    "price": "Fixed per-product median M5 USD price converted with configured FX; weekly source prices remain in Bronze.",
+    "stock": "Future-aware rotation stratification is used only for simulation sizing and is forbidden as an ML feature.",
+    "cancellations": "Additional synthetic cash sales are cancelled; non-cancelled M5 sales remain exactly reconciled.",
+    "orders": "Order dates and lead times are simulated internally; Mongo records purchases on receipt."
+  },
+  "validation": {
+    "status": "passed",
+    "checks": [
+      "causal_order",
+      "references",
+      "supplier_relationships",
+      "stock_non_negative",
+      "positive_prices_and_costs",
+      "credit_payments_not_over_debt",
+      "valid_cancellations",
+      "unique_ids",
+      "unique_sourceEventId",
+      "timestamp_timezone",
+      "m5_demand_reconciliation"
+    ],
+    "counts": {
+      "events": 104,
+      "vendors": 2,
+      "customers": 5,
+      "products": 5,
+      "purchase_transactions": 16,
+      "sale_transactions": 45,
+      "sale_lines": 70,
+      "m5_sale_transactions": 38,
+      "materialized_m5_units": 267,
+      "synthetic_cancellation_sales": 7,
+      "credit_payments": 24,
+      "cancellations": 7,
+      "materialized_product_days": 14
+    },
+    "ending_open_credit_pen": 781.6,
+    "minimum_ending_stock": 4
+  },
+  "performance": {
+    "elapsed_seconds": 0.218,
+    "peak_rss_bytes": 78106624,
+    "peak_rss_mb": 74.488
+  }
+}
