@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { apiClient } from '@/lib/api';
+import { openPrintDocument } from '@/lib/print-document';
 import { useAuth } from '@/contexts/AuthContext';
 import { InventoryReport, Contact, Transaction } from '@/types';
 import { 
@@ -277,20 +278,12 @@ export default function ReportsPage() {
       window.alert(t('reports.exportUnavailable'));
       return;
     }
-    const printWindow = window.open('', '_blank', 'width=1100,height=800');
-    if (!printWindow) return;
-    const rows = report.rows.map((row) => `<tr>${row.map((cell) => `<td>${String(cell ?? '').replace(/[<&>"]/g, (char) => ({ '<': '&lt;', '&': '&amp;', '>': '&gt;', '"': '&quot;' }[char] || char))}</td>`).join('')}</tr>`).join('');
-    printWindow.document.write(`
-      <html><head><title>${report.title}</title>
-      <style>body{font-family:Arial,sans-serif;padding:24px;color:#111}h1{font-size:22px}p{color:#555}
-      table{border-collapse:collapse;width:100%;font-size:12px}th,td{border:1px solid #ccc;padding:7px;text-align:left}th{background:#f1f5f9}</style>
-      </head><body><h1>${report.title}</h1><p>${report.summary || ''}</p>
-      <table><thead><tr>${report.headers.map((header) => `<th>${header}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>
-      </body></html>
-    `);
-    printWindow.document.close();
-    printWindow.focus();
-    printWindow.print();
+    openPrintDocument({
+      title: report.title,
+      summary: report.summary,
+      headers: report.headers,
+      rows: report.rows
+    }, 'width=1100,height=800');
   };
 
   const canExport = Boolean(getExportData());

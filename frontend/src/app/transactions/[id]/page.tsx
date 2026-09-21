@@ -19,6 +19,7 @@ import {
   , Printer, Copy
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { openPrintDocument } from '@/lib/print-document';
 import { useLanguage } from '@/contexts/LanguageContext';
 
 interface AddressValue {
@@ -172,32 +173,46 @@ export default function TransactionDetailPage({ params }: { params: Promise<{ id
 
   const printReceipt = () => {
     if (!transaction) return;
-    const printWindow = window.open('', '_blank', 'width=800,height=900');
-    if (!printWindow) return;
-    const rows = transaction.products.map((item) => `
-      <tr><td>${item.productName}</td><td>${item.quantity}</td>
-      <td>${formatCurrency(item.price, transactionCurrency)}</td>
-      <td>${formatCurrency(item.total, transactionCurrency)}</td></tr>
-    `).join('');
-    printWindow.document.write(`
-      <html><head><title>${t('transactions.receiptTitle')}</title>
-      <style>body{font-family:Arial,sans-serif;padding:28px;color:#111;max-width:760px;margin:auto}
-      h1{margin-bottom:4px}small{color:#666}table{width:100%;border-collapse:collapse;margin-top:24px}
-      th,td{border-bottom:1px solid #ddd;padding:9px;text-align:left}th{background:#f3f4f6}
-      .total{text-align:right;font-size:18px;font-weight:bold;margin-top:20px}</style></head>
-      <body><h1>${t('transactions.receiptTitle')}</h1>
-      <small>${t('transactions.receiptNumber')}: ${transaction._id}</small><br/>
-      <small>${t('transactions.date')}: ${new Date(transaction.date).toLocaleString(language === 'es' ? 'es-PE' : 'en-US')}</small>
-      <p><strong>${transaction.type === 'sale' ? t('transactions.customer') : t('transactions.vendor')}:</strong>
-      ${transaction.type === 'sale' ? transaction.customerId?.name || t('transactions.finalConsumer') : transaction.vendorId?.name || t('transactions.unknownVendor')}</p>
-      <table><thead><tr><th>${t('transactions.product')}</th><th>${t('transactions.quantity')}</th><th>${t('transactions.unitPrice')}</th><th>${t('transactions.total')}</th></tr></thead>
-      <tbody>${rows}</tbody></table><div class="total">${t('transactions.totalAmount')}: ${formatCurrency(transaction.totalAmount, transactionCurrency)}</div>
-      <p>${t('transactions.paymentMethod')}: ${formatPaymentMethod(transaction.paymentMethod)}</p>
-      </body></html>
-    `);
-    printWindow.document.close();
-    printWindow.focus();
-    printWindow.print();
+    const contactName = transaction.type === 'sale'
+      ? transaction.customerId?.name || t('transactions.finalConsumer')
+      : transaction.vendorId?.name || t('transactions.unknownVendor');
+
+    openPrintDocument({
+      title: t('transactions.receiptTitle'),
+      metadata: [
+        { label: t('transactions.receiptNumber'), value: transaction._id },
+        {
+          label: t('transactions.date'),
+          value: new Date(transaction.date).toLocaleString(language === 'es' ? 'es-PE' : 'en-US')
+        },
+        {
+          label: transaction.type === 'sale' ? t('transactions.customer') : t('transactions.vendor'),
+          value: contactName
+        }
+      ],
+      headers: [
+        t('transactions.product'),
+        t('transactions.quantity'),
+        t('transactions.unitPrice'),
+        t('transactions.total')
+      ],
+      rows: transaction.products.map((item) => [
+        item.productName,
+        item.quantity,
+        formatCurrency(item.price, transactionCurrency),
+        formatCurrency(item.total, transactionCurrency)
+      ]),
+      footer: [
+        {
+          label: t('transactions.totalAmount'),
+          value: formatCurrency(transaction.totalAmount, transactionCurrency)
+        },
+        {
+          label: t('transactions.paymentMethod'),
+          value: formatPaymentMethod(transaction.paymentMethod)
+        }
+      ]
+    }, 'width=800,height=900');
   };
 
   const repeatSale = () => {

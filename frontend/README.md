@@ -107,6 +107,11 @@ frontend/
 - Automatic token inclusion in API requests
 - Token expiration handling with redirect to login
 
+The `token` remains in `localStorage` for compatibility until S-4B. It is read
+by `src/lib/api.ts` and `src/contexts/AuthContext.tsx`; any successful XSS could
+therefore access it. `app-language` is the only other localStorage value, and
+`repeat-sale` is temporary non-token data kept in sessionStorage.
+
 ## 📱 Pages & Features
 
 ### 🏠 Dashboard (`/dashboard`)
@@ -217,12 +222,27 @@ const { user, login, logout, loading } = useAuth();
 ### Client-Side Security
 - JWT token validation
 - Protected route access control
-- Input sanitization
-- XSS protection
+- Printing builds DOM nodes with `textContent`; API values are never parsed as HTML
+- Content Security Policy and browser hardening headers are emitted by Next.js
+
+### Content Security Policy
+
+The production CSP has no global wildcard or `unsafe-eval`. Google Maps is
+limited to `maps.googleapis.com`, `maps.gstatic.com`, `places.googleapis.com`,
+`streetviewpixels-pa.googleapis.com`, and `lh3.ggpht.com`. Reverse geocoding
+connects only to `nominatim.openstreetmap.org`; API requests add only the origin
+from `NEXT_PUBLIC_API_URL`. Maps typography is limited to styles from
+`fonts.googleapis.com` and font files from `fonts.gstatic.com`.
+
+Next.js bootstrap scripts currently require `script-src 'unsafe-inline'`, and
+runtime component/Maps styles require `style-src 'unsafe-inline'`. Development
+alone adds `unsafe-eval` plus localhost WebSocket endpoints for Next.js HMR.
+Replacing the script exception with per-request nonces is deferred because it
+would force dynamic rendering and is outside this initial CSP iteration.
 
 ### Best Practices
 - Environment variable usage
-- Secure token storage
+- Explicitly documented temporary localStorage token risk pending S-4B
 - API endpoint validation
 - Error message sanitization
 
