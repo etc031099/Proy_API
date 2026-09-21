@@ -22,3 +22,24 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+node-red/EXPLICACION_DOCENTE.md
+node-red/RESUMEN_FINAL.md
+
+.gitignore
+
+# Machine Learning data artifacts (manifests and source code remain versioned)
+ml/data/raw/**
+!ml/data/raw/m5_manifest.json
+ml/data/bronze/**
+!ml/data/bronze/m5_bronze_manifest.json
+ml/data/silver/**
+ml/data/gold/**
+ml/data/operational/**
+ml/models/**
+ml/**/*.duckdb
+ml/**/*.duckdb.wal
+ml/.venv/
+ml/.test-tmp/
+ml/**/__pycache__/
+ml/**/*.py[cod]

@@ -1,0 +1,19 @@
+[dataset]
+source_dataset = "m5"
+source_currency = "USD"
+operational_currency = "PEN"
+selected_store = "CA_3"
+forecast_horizon_days = 7
+seed = 2026
+
+[paths]
+raw_directory = "ml/data/raw/m5"
+manifest = "ml/data/raw/m5_manifest.json"
+profile_report = "ml/reports/m5_profile.json"
+bronze_output = "ml/data/bronze/m5_store_daily.parquet"
+bronze_manifest = "ml/data/bronze/m5_bronze_manifest.json"
+
+[bronze]
+compression = "zstd"
+row_group_size = 250000
+measure_csv_equivalent = true
