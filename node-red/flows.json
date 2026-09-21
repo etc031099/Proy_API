@@ -409,9 +409,9 @@
         "id": "fn_hook",
         "type": "function",
         "z": "tab_billing_main",
-        "name": "Etiquetar evento",
-        "func": "const body = msg.payload || {};\nmsg.event = body.event || 'unknown';\nmsg.data = body.data || {};\nmsg.payload = 'Evento: ' + msg.event;\nreturn msg;",
-        "outputs": 1,
+        "name": "Autenticar y validar evento",
+        "func": "const security = global.get('webhookSecurity');\nif (!security || typeof security.routeMessage !== 'function') {\n  msg.statusCode = 503;\n  msg.headers = { 'Content-Type': 'application/json' };\n  msg.payload = { success: false, code: 'WEBHOOK_SECURITY_UNAVAILABLE' };\n  return [null, msg];\n}\nreturn security.routeMessage(msg);",
+        "outputs": 2,
         "timeout": 0,
         "noerr": 0,
         "initialize": "",
@@ -419,7 +419,7 @@
         "libs": [],
         "x": 420,
         "y": 380,
-        "wires": [["dbg_hook", "res_hook", "sw_event"]]
+        "wires": [["dbg_hook", "res_hook", "sw_event"], ["res_hook_reject"]]
     },
     {
         "id": "sw_event",
@@ -462,6 +462,17 @@
         "headers": {},
         "x": 660,
         "y": 400,
+        "wires": []
+    },
+    {
+        "id": "res_hook_reject",
+        "type": "http response",
+        "z": "tab_billing_main",
+        "name": "Webhook rechazado",
+        "statusCode": "",
+        "headers": {},
+        "x": 670,
+        "y": 440,
         "wires": []
     },
     {
@@ -580,7 +591,7 @@
         "type": "function",
         "z": "tg_tab",
         "name": "Preparar respuesta Telegram",
-        "func": "const token = env.get('TELEGRAM_BOT_TOKEN');\nmsg.url = 'https://api.telegram.org/bot' + token + '/sendMessage';\nmsg.method = 'POST';\nmsg.headers = { 'Content-Type': 'application/json' };\nmsg.payload = {\n  chat_id: msg.chatId,\n  text: msg.tgText || 'Sin respuesta.',\n  reply_markup: {\n    keyboard: [\n      [ { text: '📦 Stock bajo' }, { text: '💰 Ventas de hoy' } ],\n      [ { text: '🧾 Deudas' }, { text: '❓ Ayuda' } ]\n    ],\n    resize_keyboard: true\n  }\n};\nreturn msg;",
+        "func": "const token = env.get('TELEGRAM_BOT_TOKEN');\nif (!token) {\n  node.warn('Telegram integration is not configured');\n  return null;\n}\nmsg.url = 'https://api.telegram.org/bot' + token + '/sendMessage';\nmsg.method = 'POST';\nmsg.headers = { 'Content-Type': 'application/json' };\nmsg.payload = {\n  chat_id: msg.chatId,\n  text: msg.tgText || 'Sin respuesta.',\n  reply_markup: {\n    keyboard: [\n      [ { text: '📦 Stock bajo' }, { text: '💰 Ventas de hoy' } ],\n      [ { text: '🧾 Deudas' }, { text: '❓ Ayuda' } ]\n    ],\n    resize_keyboard: true\n  }\n};\nreturn msg;",
         "outputs": 1,
         "timeout": 0,
         "noerr": 0,
@@ -650,7 +661,7 @@
         "type": "function",
         "z": "tg_tab",
         "name": "Comandos del menú",
-        "func": "const token = env.get('TELEGRAM_BOT_TOKEN');\nmsg.url = 'https://api.telegram.org/bot' + token + '/setMyCommands';\nmsg.method = 'POST';\nmsg.headers = { 'Content-Type': 'application/json' };\nmsg.payload = { commands: [ { command: 'stock', description: '📦 Ver stock de un producto' }, { command: 'ventas', description: '💰 Ventas de hoy' }, { command: 'deudas', description: '🧾 Clientes con deuda' }, { command: 'ayuda', description: '❓ Mostrar el menú' } ] };\nreturn msg;",
+        "func": "const token = env.get('TELEGRAM_BOT_TOKEN');\nif (!token) return null;\nmsg.url = 'https://api.telegram.org/bot' + token + '/setMyCommands';\nmsg.method = 'POST';\nmsg.headers = { 'Content-Type': 'application/json' };\nmsg.payload = { commands: [ { command: 'stock', description: '📦 Ver stock de un producto' }, { command: 'ventas', description: '💰 Ventas de hoy' }, { command: 'deudas', description: '🧾 Clientes con deuda' }, { command: 'ayuda', description: '❓ Mostrar el menú' } ] };\nreturn msg;",
         "outputs": 1,
         "timeout": 0,
         "noerr": 0,
@@ -697,6 +708,33 @@
         "x": 970,
         "y": 240,
         "wires": []
+    },
+    {
+        "id": "tg_http_catch",
+        "type": "catch",
+        "z": "tg_tab",
+        "name": "Capturar errores Telegram",
+        "scope": ["tg_send_http", "tg_menu_http"],
+        "uncaught": false,
+        "x": 760,
+        "y": 320,
+        "wires": [["tg_http_error_safe"]]
+    },
+    {
+        "id": "tg_http_error_safe",
+        "type": "function",
+        "z": "tg_tab",
+        "name": "Sanitizar error Telegram",
+        "func": "delete msg.error;\ndelete msg.url;\ndelete msg.requestUrl;\nmsg.payload = undefined;\nnode.warn('Telegram API request failed');\nreturn null;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1020,
+        "y": 320,
+        "wires": [[]]
     }
 ]
 

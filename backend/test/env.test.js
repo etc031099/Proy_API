@@ -81,6 +81,16 @@ test('environment validation accepts a Node-RED URL with its secret', () => {
   assert.equal(result.webhookEnabled, true);
 });
 
+test('environment validation rejects a weak Node-RED webhook secret', () => {
+  assertConfigurationError(
+    validEnvironment({
+      NODE_RED_WEBHOOK_URL: 'https://automation.example.test/webhook',
+      NODE_RED_WEBHOOK_SECRET: 'short-secret'
+    }),
+    'NODE_RED_WEBHOOK_SECRET must contain at least 32 characters'
+  );
+});
+
 test('environment validation warns when a webhook secret has no URL', () => {
   const warnings = [];
 

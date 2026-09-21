@@ -24,12 +24,20 @@ const telegramRequest = async (method, payload, timeoutMs = 8000) => {
       body: JSON.stringify(payload),
       signal: controller.signal
     });
+  } catch (error) {
+    const reason = error?.name === 'AbortError' ? 'timed out' : 'network request failed';
+    throw new Error(`Telegram API ${reason}`);
   } finally {
     clearTimeout(timeoutId);
   }
-  const data = await response.json();
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error(`Telegram API returned an invalid response (HTTP ${response.status})`);
+  }
   if (!response.ok || !data.ok) {
-    throw new Error(data.description || `Telegram API request failed: ${response.status}`);
+    throw new Error(`Telegram API request failed (HTTP ${response.status})`);
   }
   return data.result;
 };

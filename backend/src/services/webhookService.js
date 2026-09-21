@@ -12,21 +12,22 @@ const WEBHOOK_TIMEOUT_MS = 5000;
 const getWebhookUrl = () => process.env.NODE_RED_WEBHOOK_URL;
 
 /**
- * Fire-and-forget notification. Never throws so it cannot break a request.
+ * Deliver a notification without exposing payloads or secrets in logs.
  * @param {string} event - Event name, e.g. "transaction.created"
  * @param {object} payload - Event data
- * @returns {Promise<void>}
+ * @returns {Promise<{delivered: boolean, status?: number, reason?: string}>}
  */
 const notifyNodeRed = async (event, payload = {}) => {
   const url = getWebhookUrl();
-  if (!url) return; // integration disabled
+  if (!url) return { delivered: false, reason: 'disabled' };
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
 
   try {
-    await fetch(url, {
+    const response = await fetch(url, {
       method: 'POST',
+      redirect: 'error',
       headers: {
         'Content-Type': 'application/json',
         ...(process.env.NODE_RED_WEBHOOK_SECRET
@@ -40,8 +41,23 @@ const notifyNodeRed = async (event, payload = {}) => {
       }),
       signal: controller.signal
     });
+
+    if (!response.ok) {
+      const status = Number(response.status);
+      const category = status === 401 || status === 403
+        ? 'authentication rejected'
+        : status >= 500
+          ? 'service unavailable'
+          : 'request rejected';
+      console.error(`[Node-RED] webhook delivery failed: ${category} (HTTP ${status})`);
+      return { delivered: false, status, reason: category };
+    }
+
+    return { delivered: true, status: response.status };
   } catch (error) {
-    console.error(`[Node-RED] webhook "${event}" failed:`, error.message);
+    const reason = error?.name === 'AbortError' ? 'request timed out' : 'network request failed';
+    console.error(`[Node-RED] webhook delivery failed: ${reason}`);
+    return { delivered: false, reason };
   } finally {
     clearTimeout(timeoutId);
   }
@@ -53,7 +69,7 @@ const notifyNodeRed = async (event, payload = {}) => {
 const emitEvent = (event, payload) => {
   Promise.resolve()
     .then(() => notifyNodeRed(event, payload))
-    .catch((error) => console.error('[Node-RED] webhook failed:', error.message));
+    .catch(() => console.error('[Node-RED] webhook delivery failed unexpectedly'));
 };
 
 module.exports = {

@@ -3,7 +3,11 @@
   "version": "1.0.0",
   "description": "Node-RED integration demo for the Inventory & Billing system",
   "private": true,
+  "scripts": {
+    "test": "node test/run.js"
+  },
   "dependencies": {
-    "node-red-dashboard": "^3.6.0"
+    "bcryptjs": "3.0.2",
+    "node-red-dashboard": "3.6.6"
   }
 }

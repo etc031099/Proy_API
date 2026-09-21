@@ -1,212 +1,93 @@
-# Node-RED ↔ Sistema de Inventario y Facturación
+# Node-RED - integración de inventario y facturación
 
-Integración de **Node-RED** (en la nube, gratis) con el backend de tu sistema.
-El flujo incluye: **estado de conexión**, **KPIs en Dashboard**, **alerta de stock bajo**
-y un **webhook** para recibir eventos en tiempo real desde el backend.
+Este servicio recibe eventos autenticados del backend, consulta sus APIs para el
+dashboard y responde comandos de Telegram. Los flujos y la configuración se
+incluyen en la imagen; no se editan desde producción.
 
----
+## Endpoints y política de acceso
 
-## 1) Puntos de integración con tu sistema
+| Superficie | Ruta | Política |
+|---|---|---|
+| Webhook | `POST /webhook` | Requiere `X-Webhook-Secret` igual a `NODE_RED_WEBHOOK_SECRET`. Responde `401` si falta o es incorrecto. |
+| Dashboard | `GET /ui` | Requiere HTTP Basic con `NODE_RED_HTTP_USERNAME` y `NODE_RED_HTTP_PASSWORD` en producción. |
+| Otros HTTP nodes futuros | cualquier ruta | Quedan protegidos por el mismo HTTP Basic en producción. |
+| Editor/admin | `/` y rutas administrativas | Deshabilitado por defecto en producción. |
 
-| # | Punto | Endpoint | Auth | Uso en Node-RED |
-|---|-------|----------|------|-----------------|
-| 1 | Estado / conectividad | `GET /health` | ❌ No | Demostrar que Node-RED está conectado |
-| 2 | Login (JWT) | `POST /api/auth/login` | ❌ No | Obtener el token para el resto de llamadas |
-| 3 | Resumen del negocio | `GET /api/reports/dashboard` | ✅ Bearer | Gauges/medidores en el Dashboard |
-| 4 | Stock bajo | `GET /api/products/low-stock` | ✅ Bearer | Alerta automática cada X minutos |
-| 5 | Crear venta | `POST /api/transactions` | ✅ Bearer | Escritura desde Node-RED |
-| 6 | Tipo de cambio | `GET /api/external/exchange-rate` | ✅ Bearer | Enriquecer/avisar si cambia la tasa |
-| 7 | Webhook (nuevo) | `POST <node-red>/webhook` | opcional | **Eventos** del sistema → Node-RED |
+La autenticación del webhook se ejecuta antes de cualquier login al backend,
+consulta empresarial o envío a Telegram. Solo se aceptan los eventos
+`transaction.created`, `product.low_stock` y `telegram.command`. Este último
+valida además el formato de `chatId` y el comando permitido.
 
-> Los puntos 1–6 solo usan el nodo **HTTP Request** (cero cambios en tu código).
-> El punto 7 ya viene implementado en el backend y se **activa con una variable de entorno**.
+## Variables de entorno
 
----
+Producción requiere:
 
-## 2) Desplegar Node-RED GRATIS en la nube (Render) — recomendado
+- `NODE_ENV=production`
+- `NODE_RED_CREDENTIAL_SECRET`: secreto aleatorio de al menos 32 caracteres.
+- `NODE_RED_WEBHOOK_SECRET`: secreto aleatorio de al menos 32 caracteres; debe
+  coincidir con el valor configurado en el backend.
+- `NODE_RED_HTTP_USERNAME` y `NODE_RED_HTTP_PASSWORD`: protegen dashboard y
+  otros HTTP nodes. La contraseña debe tener al menos 12 caracteres.
+- `API_BASE`, `BILLING_EMAIL` y `BILLING_PASSWORD`: acceso del flujo a la API.
+- `TELEGRAM_BOT_TOKEN`: necesario solo para responder por Telegram.
 
-1. Sube este repositorio a GitHub (con la carpeta `node-red/`).
-2. En [Render](https://render.com) → **New → Web Service** → conecta el repo.
-3. Configura:
-   - **Runtime**: `Docker`
-   - **Root Directory**: la carpeta que contiene `node-red/` (p. ej. `Inventory-Billing-Management-System/node-red`)
-   - **Dockerfile Path**: `./Dockerfile`
-   - **Instance Type**: `Free`
-4. En **Environment**, agrega:
-   | Variable | Valor |
-   |----------|-------|
-   | `API_BASE` | `https://TU-BACKEND.onrender.com/api` |
-   | `BILLING_EMAIL` | correo de un usuario ya registrado en tu sistema |
-   | `BILLING_PASSWORD` | contraseña de ese usuario |
-   | `NODE_RED_USERNAME` | (opcional) usuario para proteger el editor |
-   | `NODE_RED_PASSWORD` | (opcional) contraseña del editor |
-   | `NODE_RED_CREDENTIAL_SECRET` | Render la genera sola (o pon una random) |
+No hay secretos predeterminados. Una configuración incompleta hace que
+Node-RED falle al arrancar.
 
-   > Alternativa: usa `render.yaml` con **New → Blueprint**. Si el archivo no está en la raíz del repo,
-   > crea el servicio manualmente como arriba.
-5. **Create Web Service**. Cuando termine, tendrás:
-   - Editor: `https://TU-NODERED.onrender.com/`
-   - Dashboard: `https://TU-NODERED.onrender.com/ui`
-   - Webhook: `https://TU-NODERED.onrender.com/webhook`
+### Editor en producción
 
-### Evitar que se duerma (plan free)
-Crea un monitor gratis en **UptimeRobot** o **cron-job.org** que haga `GET` a
-`https://TU-NODERED.onrender.com/` cada **10 minutos**.
+El editor está deshabilitado por defecto mediante
+`NODE_RED_ENABLE_EDITOR=false`. Si se habilita explícitamente con `true`, son
+obligatorios `NODE_RED_USERNAME` y `NODE_RED_PASSWORD`; la contraseña se
+almacena como hash bcrypt. Si bcrypt o las credenciales faltan, el proceso no
+arranca.
 
-### ¿Se borran los flujos al reiniciar/despertar? (IMPORTANTE)
-**No.** En este proyecto los flujos van **dentro de la imagen Docker**: el `Dockerfile` copia
-`flows.json` y `settings.js` a `/data` durante el build. Por eso, aunque Render duerma, despierte
-o haga un redeploy, Node-RED **siempre arranca con tus flujos cargados** (no queda en blanco).
+En desarrollo local usa `NODE_ENV=development`. El editor queda habilitado,
+pero el webhook sigue requiriendo `NODE_RED_WEBHOOK_SECRET`. No expongas ese
+entorno directamente a Internet.
 
-Única consideración: los cambios que hagas **desde el editor en Render**. Como el disco de Render
-free es efímero, esos cambios en caliente se pierden al reiniciar (vuelve a la versión horneada).
-Para conservarlos: expórtalos (Export → JSON) y actualiza `flows.json` en el repo, o edítalos en
-local y haz redeploy.
+## Configuración del backend
 
-### ¿Pesa mucho tener Node-RED y el backend en Render?
-Son **servicios separados** (Node-RED no se “agrega” dentro del backend; es otra Web Service),
-así que **no se afectan entre sí**. Ojo con el límite del plan free: son **~750 horas de instancia
-al mes** en total por cuenta. Si mantienes DOS servicios despiertos 24/7 (ping cada 10 min) te pasarás
-del límite → recomendable mantener despierto solo el que usas en la demo, o aceptar que duerman.
+Configura en el backend:
 
----
-
-## 3) Alternativas de hosting gratuito
-- **Oracle Cloud Always Free (VM)**: la opción más estable y *always-on* (Docker + Node-RED). Más pasos.
-- **Node-RED local + Cloudflare Tunnel / ngrok**: gratis y rapidísimo para una demo en vivo;
-  expone tu PC con una URL pública (requiere tener la PC encendida).
-- **Render** (la de arriba): la más simple y consistente con tu stack actual.
-
----
-
-## 4) Activar la integración en TIEMPO REAL (webhook)
-
-En el **backend** (Render), agrega la variable:
-
-| Variable | Valor |
-|----------|-------|
-| `NODE_RED_WEBHOOK_URL` | `https://TU-NODERED.onrender.com/webhook` |
-| `NODE_RED_WEBHOOK_SECRET` | (opcional) cadena secreta |
-
-Desde ese momento, el backend enviará eventos:
-- `transaction.created` → al registrar una venta/compra
-- `product.low_stock` → cuando un producto llega a su stock mínimo
-
-Si **no** defines `NODE_RED_WEBHOOK_URL`, no cambia nada (queda desactivado).
-
----
-
-## 5) Guion de demostración al docente
-1. Abre el **Dashboard** (`/ui`) y muestra el medidor *"🟢 API conectada"* → Node-RED ↔ sistema funcionando.
-2. Muestra los **KPIs** (productos, clientes, stock bajo, ventas del mes) actualizándose solos.
-3. Baja el stock de un producto en tu sistema → aparece la **alerta de stock bajo** en Node-RED.
-4. Realiza una venta en tu sistema → el **Debug** de Node-RED muestra el evento `transaction.created` en vivo.
-5. (Opcional) Desde Node-RED, con un **Inject + HTTP Request POST /api/transactions**, crea una venta
-   y muéstrala luego en la interfaz de tu sistema (integración bidireccional).
-
----
-
-## 6) Alternativa recomendada: Node-RED en **Railway** (con disco persistente)
-
-Railway es más cómodo que Render para Node-RED porque permite **volumen persistente** (los flujos
-se guardan de verdad) y soporta WebSockets del editor. Contra: no es gratis permanente (da ~$5 de
-crédito de prueba; luego es pago). Pasos:
-
-1. Crea cuenta en <https://railway.app> (entra con GitHub).
-2. **New Project → Deploy from GitHub repo** y elige tu repositorio.
-3. En el servicio → **Settings → Source → Root Directory**: apunta a la carpeta `node-red/`
-   (así Railway usa el `Dockerfile` de aquí).
-4. **Variables** del servicio:
-   `API_BASE`, `BILLING_EMAIL`, `BILLING_PASSWORD`, `NODE_RED_CREDENTIAL_SECRET`
-   (y opcional `NODE_RED_USERNAME` / `NODE_RED_PASSWORD`).
-5. **Data / Volumes → New Volume**, punto de montaje: `/data` (aquí viven flujos y nodos instalados).
-6. **Settings → Networking → Generate Domain** → obtienes la URL pública.
-7. Abre la URL, entra al editor. Si los flujos no aparecieran, impórtalos:
-   **Menú → Import → Clipboard** y pega el contenido de `flows.json`.
-8. En el backend (Render), define `NODE_RED_WEBHOOK_URL = https://TU-DOMINIO/webhook`.
-
-> Si prefieres lo mínimo: **New → Docker Image → `nodered/node-red`**, agrega el volumen `/data`,
-> genera el dominio, instala `node-red-dashboard` por *Manage Palette* e importa `flows.json`.
-
-## 7) Diferencia clave vs. la clase (ngrok)
-
-En la práctica de clase usaron **ngrok** porque Node-RED estaba en tu PC (`localhost:1880`) y
-Google Apps Script vive en la nube. Cuando Node-RED está **desplegado en la nube**, ya **no necesitas
-ngrok**: la URL pública de Railway/Render reemplaza al túnel. En Apps Script solo cambias la
-constante de la URL de ngrok por la de tu Node-RED en la nube.
-
-**Ejemplo Apps Script (Google):**
-```javascript
-function enviarANodeRed() {
-  const url = 'https://TU-NODERED-en-la-nube/webhook'; // antes era la URL de ngrok
-  const payload = { origen: 'Google Apps Script', total: 150, moneda: 'PEN' };
-  const respuesta = UrlFetchApp.fetch(url, {
-    method: 'post',
-    contentType: 'application/json',
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true
-  });
-  Logger.log(respuesta.getContentText());
-}
+```text
+NODE_RED_WEBHOOK_URL=https://TU-NODERED.example/webhook
+NODE_RED_WEBHOOK_SECRET=<el mismo secreto aleatorio de Node-RED>
 ```
 
----
+Si `NODE_RED_WEBHOOK_URL` está vacío, el backend deshabilita la integración. Si
+está configurado, el secreto es obligatorio. El backend considera error toda
+respuesta no 2xx y no registra secretos, payloads completos ni URLs con tokens.
 
-## 8) Bot de Telegram: consultar el sistema desde el celular
+## Despliegue
 
-Desde tu celular puedes preguntarle al bot y él consulta tu sistema y te responde:
+El `Dockerfile` usa una versión fija de Node-RED y `npm ci` con el lockfile. El
+archivo `render.yaml` deshabilita el editor y declara los secretos como valores
+externos; ninguna credencial real debe versionarse.
 
-| Comando | Respuesta |
-|---------|-----------|
-| `/stock <producto>` | Stock y stock mínimo de los productos que coincidan |
-| `/ventas` | Cantidad de ventas de hoy y total (S/) |
-| `/deudas` | Clientes con saldo pendiente |
+Para Render, crea un Web Service Docker con `node-red/` como directorio raíz o
+usa el Blueprint. Configura todos los valores marcados `sync: false` en el panel
+de secretos. Para Railway u otro proveedor aplica la misma política. No uses la
+imagen `latest` ni habilites instalación de módulos desde el editor.
 
-### ¿Cómo funciona con UN SOLO bot? (sin conflictos)
+Los cambios hechos dentro de un contenedor no son la fuente de verdad. Modifica
+`flows.json` en desarrollo, valida las pruebas y vuelve a desplegar la imagen.
 
-Telegram solo permite que **un** programa lea los mensajes. El reparto es:
+## Pruebas
 
-```
-Telegram → [Backend: LEE los mensajes] → reenvía los comandos a Node-RED (webhook)
-                                                    ↓
-                                    [Node-RED: consulta tu API y RESPONDE]
-                                                    ↓
-                                    [Node-RED: envía la respuesta a Telegram]
-```
-
-- El **backend sigue siendo el único que LEE** (no rompe el código de conexión).
-- **Node-RED solo RESPONDE** (esto nunca genera conflicto 409).
-- Resultado: **un solo bot**, sin errores ni inconvenientes para el usuario.
-
-### Requisitos
-
-1. En **node-red-billing** (Render) → Environment, agrega:
-   `TELEGRAM_BOT_TOKEN` = el mismo token del backend.
-2. **Redeploy** de `node-red-billing` y de `proy-api` (el backend ahora reenvía los comandos).
-
-### Uso (sin escribir comandos) — lo más cómodo
-
-1. Abre el bot en Telegram y pulsa **START**.
-2. Aparecerá un **teclado de botones** en la parte inferior:
-
-```
-       [ 📦 Stock bajo ]   [ 💰 Ventas de hoy ]
-       [ 🧾 Deudas ]       [ ❓ Ayuda ]
+```bash
+cd node-red
+npm ci
+npm test
 ```
 
-3. Solo **toca un botón** → el bot consulta tu sistema y te responde. ✅
-4. Además aparece el **menú del bot (☰)** junto al campo de texto, con las mismas opciones.
+La suite comprueba autenticación del webhook, aislamiento de solicitudes
+rechazadas, validación de eventos/Telegram, configuración fail-closed,
+protección de superficies HTTP, bcrypt, módulos externos y reproducibilidad de
+la imagen.
 
-> Para buscar un producto específico (opcional), escribe: `/stock arroz`
+## Límites de esta iteración
 
-### Comandos (alternativa)
-
-| Comando | Respuesta |
-|---------|-----------|
-| `/stock <producto>` | Stock y stock mínimo del producto |
-| `/stock` (sin texto) | Productos con **stock bajo** |
-| `/ventas` | Ventas de hoy + total (S/) |
-| `/deudas` | Clientes con saldo pendiente |
-| `/ayuda` | Muestra el menú
-
-
+El secreto compartido protege el origen, pero aún no incorpora timestamp,
+nonce ni almacenamiento anti-replay. Tampoco sustituye una futura identidad de
+servicio para las consultas de Node-RED al backend.

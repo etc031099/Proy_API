@@ -1,5 +1,6 @@
 const ALLOWED_NODE_ENVIRONMENTS = new Set(['development', 'test', 'production']);
 const MIN_JWT_SECRET_LENGTH = 32;
+const MIN_WEBHOOK_SECRET_LENGTH = 32;
 
 const EXACT_SECRET_PLACEHOLDERS = new Set([
   'secret',
@@ -86,6 +87,16 @@ const validateEnvironment = (environment = process.env, options = {}) => {
     issues.push('NODE_RED_WEBHOOK_SECRET is required when NODE_RED_WEBHOOK_URL is configured');
   }
 
+  if (webhookUrlConfigured && webhookSecretConfigured) {
+    const webhookSecret = environment.NODE_RED_WEBHOOK_SECRET.trim();
+    if (webhookSecret.length < MIN_WEBHOOK_SECRET_LENGTH) {
+      issues.push(`NODE_RED_WEBHOOK_SECRET must contain at least ${MIN_WEBHOOK_SECRET_LENGTH} characters`);
+    }
+    if (isKnownSecretPlaceholder(webhookSecret)) {
+      issues.push('NODE_RED_WEBHOOK_SECRET must not use a documented placeholder or default value');
+    }
+  }
+
   if (!webhookUrlConfigured && webhookSecretConfigured) {
     warnings.push(
       'NODE_RED_WEBHOOK_SECRET is configured without NODE_RED_WEBHOOK_URL; the integration remains disabled'
@@ -108,6 +119,7 @@ const validateEnvironment = (environment = process.env, options = {}) => {
 module.exports = {
   ALLOWED_NODE_ENVIRONMENTS,
   MIN_JWT_SECRET_LENGTH,
+  MIN_WEBHOOK_SECRET_LENGTH,
   EnvironmentConfigurationError,
   isKnownSecretPlaceholder,
   validateEnvironment
