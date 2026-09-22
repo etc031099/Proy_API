@@ -430,11 +430,13 @@ const createTransaction = asyncHandler(async (req, res) => {
       });
     }
 
-    const populatedTransaction = await Transaction.findById(transaction[0]._id)
-      .populate('customerId', 'name phone email')
-      .populate('vendorId', 'name phone email')
-      .populate('supplierId', 'name phone email')
-      .populate('products.productId', 'name category');
+    const populatedTransaction = historical
+      ? transaction[0]
+      : await Transaction.findById(transaction[0]._id)
+        .populate('customerId', 'name phone email')
+        .populate('vendorId', 'name phone email')
+        .populate('supplierId', 'name phone email')
+        .populate('products.productId', 'name category');
 
     res.status(201).json({
       success: true,
@@ -443,7 +445,7 @@ const createTransaction = asyncHandler(async (req, res) => {
     });
 
   } catch (error) {
-    await session.abortTransaction();
+    if (session.inTransaction()) await session.abortTransaction();
     throw error;
   } finally {
     session.endSession();
