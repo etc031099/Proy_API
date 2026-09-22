@@ -37,6 +37,9 @@ ml/data/silver/**
 ml/data/gold/**
 ml/data/operational/**
 ml/models/**
+!ml/models/demand_forecast_v1.joblib
+!ml/models/model_metadata.json
+!ml/models/demand_forecast_v1_contract.json
 ml/**/*.duckdb
 ml/**/*.duckdb.wal
 ml/.venv/

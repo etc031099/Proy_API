@@ -1,0 +1,297 @@
+{
+  "contract_version": "1.0.0",
+  "feature_set_version": "demand-v1",
+  "strict": true,
+  "safe_reorder_by_name": true,
+  "feature_order": [
+    "cat_id",
+    "dept_id",
+    "active_age_days",
+    "current_units",
+    "lag_1",
+    "lag_7",
+    "lag_14",
+    "lag_28",
+    "lag_56",
+    "rolling_sum_7",
+    "rolling_mean_28",
+    "rolling_std_28",
+    "rolling_mean_56",
+    "days_since_last_sale",
+    "has_prior_sale",
+    "sale_days_last_28",
+    "nonzero_rate_56",
+    "day_of_week",
+    "week_of_year",
+    "month",
+    "quarter",
+    "is_weekend",
+    "event_name_1",
+    "event_type_1",
+    "event_name_2",
+    "event_type_2",
+    "snap_CA",
+    "sell_price",
+    "price_change_pct_7",
+    "price_relative_to_recent_mean_28",
+    "price_missing_active"
+  ],
+  "features": [
+    {
+      "name": "cat_id",
+      "dtype": "string",
+      "source_dtype": "VARCHAR",
+      "type": "categorical",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "dept_id",
+      "dtype": "string",
+      "source_dtype": "VARCHAR",
+      "type": "categorical",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "active_age_days",
+      "dtype": "float32",
+      "source_dtype": "SMALLINT",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "current_units",
+      "dtype": "float32",
+      "source_dtype": "INTEGER",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "lag_1",
+      "dtype": "float32",
+      "source_dtype": "INTEGER",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "lag_7",
+      "dtype": "float32",
+      "source_dtype": "INTEGER",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "lag_14",
+      "dtype": "float32",
+      "source_dtype": "INTEGER",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "lag_28",
+      "dtype": "float32",
+      "source_dtype": "INTEGER",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "lag_56",
+      "dtype": "float32",
+      "source_dtype": "INTEGER",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "rolling_sum_7",
+      "dtype": "float32",
+      "source_dtype": "INTEGER",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "rolling_mean_28",
+      "dtype": "float32",
+      "source_dtype": "FLOAT",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "rolling_std_28",
+      "dtype": "float32",
+      "source_dtype": "FLOAT",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "rolling_mean_56",
+      "dtype": "float32",
+      "source_dtype": "FLOAT",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "days_since_last_sale",
+      "dtype": "float32",
+      "source_dtype": "SMALLINT",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "has_prior_sale",
+      "dtype": "float32",
+      "source_dtype": "TINYINT",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "sale_days_last_28",
+      "dtype": "float32",
+      "source_dtype": "TINYINT",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "nonzero_rate_56",
+      "dtype": "float32",
+      "source_dtype": "FLOAT",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "day_of_week",
+      "dtype": "float32",
+      "source_dtype": "TINYINT",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "week_of_year",
+      "dtype": "float32",
+      "source_dtype": "TINYINT",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "month",
+      "dtype": "float32",
+      "source_dtype": "TINYINT",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "quarter",
+      "dtype": "float32",
+      "source_dtype": "TINYINT",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "is_weekend",
+      "dtype": "float32",
+      "source_dtype": "TINYINT",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "event_name_1",
+      "dtype": "string",
+      "source_dtype": "VARCHAR",
+      "type": "categorical",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "event_type_1",
+      "dtype": "string",
+      "source_dtype": "VARCHAR",
+      "type": "categorical",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "event_name_2",
+      "dtype": "string",
+      "source_dtype": "VARCHAR",
+      "type": "categorical",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "event_type_2",
+      "dtype": "string",
+      "source_dtype": "VARCHAR",
+      "type": "categorical",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "snap_CA",
+      "dtype": "float32",
+      "source_dtype": "TINYINT",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "sell_price",
+      "dtype": "float32",
+      "source_dtype": "FLOAT",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "price_change_pct_7",
+      "dtype": "float32",
+      "source_dtype": "FLOAT",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "price_relative_to_recent_mean_28",
+      "dtype": "float32",
+      "source_dtype": "FLOAT",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    },
+    {
+      "name": "price_missing_active",
+      "dtype": "float32",
+      "source_dtype": "TINYINT",
+      "type": "numeric",
+      "required": true,
+      "nullable": false
+    }
+  ],
+  "output": {
+    "name": "predictedDemand7d",
+    "dtype": "float",
+    "minimum_after_clipping": 0.0,
+    "rounding": "none",
+    "clipping": "max(0.0, raw_prediction)"
+  },
+  "artifact_security": "Load joblib/pickle only from trusted, application-owned artifacts; never load a model uploaded by a user."
+}
