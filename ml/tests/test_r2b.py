@@ -13,6 +13,7 @@ from ml.src.common import sql_literal
 from ml.src.m5 import connect_duckdb
 from ml.src.scenario.config import load_scenario_config
 from ml.src.scenario.generator import EventWriter, deterministic_id, generate_scenario
+from ml.src.scenario.report import build_summary
 from ml.src.scenario.validation import validate_scenario
 
 
@@ -24,6 +25,8 @@ class R2BScenarioTests(unittest.TestCase):
         cls.root = root / f"r2b-{uuid.uuid4().hex}"
         cls.root.mkdir()
         cls.bronze = cls.root / "bronze.parquet"
+        cls.raw_manifest = cls.root / "raw_manifest.json"
+        cls.raw_manifest.write_text('{"fixture":true}\n', encoding="utf-8")
         connection = connect_duckdb()
         try:
             connection.execute(
@@ -79,6 +82,7 @@ source_end = "2020-01-05"
 operational_date_offset_days = 1001
 [paths]
 bronze = "{normalized(cls.bronze)}"
+raw_manifest = "{normalized(cls.raw_manifest)}"
 output = "{normalized(output)}"
 manifest = "{normalized(manifest)}"
 [selection]
@@ -140,10 +144,14 @@ credit = 0.1
         timestamps = [datetime.fromisoformat(event["occurredAt"].replace("Z", "+00:00")) for event in self.events]
         self.assertEqual(timestamps, sorted(timestamps))
 
+    def test_every_event_carries_the_configured_scenario_id(self) -> None:
+        self.assertTrue(self.events)
+        self.assertTrue(all(event["scenarioId"] == "fixture" for event in self.events))
+
     def test_stock_never_becomes_negative(self) -> None:
         result = validate_scenario(load_scenario_config(self.config))
         self.assertEqual(result["status"], "passed")
-        self.assertGreaterEqual(result["minimum_ending_stock"], 0)
+        self.assertGreaterEqual(result["stock"]["minimum_observed"], 0)
 
     def test_validator_rejects_a_sale_that_would_make_stock_negative(self) -> None:
         tampered = self.root / "tampered.ndjson"
@@ -204,7 +212,7 @@ credit = 0.1
         payments = [event for event in self.events if event["eventType"] == "credit-payment.created"]
         self.assertTrue(payments)
         result = validate_scenario(load_scenario_config(self.config))
-        self.assertGreaterEqual(result["ending_open_credit_pen"], 0)
+        self.assertGreaterEqual(result["credit"]["ending_open_credit_pen"], 0)
 
     def test_cancellations_target_extra_non_credit_sales(self) -> None:
         sales = {event["payload"]["_id"]: event for event in self.events if event["eventType"] == "transaction.completed" and event["payload"]["type"] == "sale"}
@@ -226,6 +234,15 @@ credit = 0.1
         self.assertEqual(stored["ndjson_sha256"], sha256_file(self.output))
         self.assertEqual(set(stored["provenance"]), {"REAL", "DERIVED", "SYNTHETIC", "CONFIGURED"})
         self.assertEqual(stored["validation"]["status"], "passed")
+        self.assertEqual(stored["m5_raw_manifest_sha256"], sha256_file(self.raw_manifest))
+        self.assertEqual(stored["validation"]["demand_reconciliation"]["absolute_difference"], 0)
+
+    def test_human_summary_is_built_only_from_a_verified_manifest(self) -> None:
+        report = self.root / "summary.md"
+        build_summary(self.config, report)
+        text = report.read_text(encoding="utf-8")
+        self.assertIn("Diferencia absoluta: 0", text)
+        self.assertIn(self.manifest["ndjson_sha256"], text)
 
     def test_writer_streams_without_retaining_event_collection(self) -> None:
         path = self.root / "writer.ndjson"

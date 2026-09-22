@@ -1,11 +1,14 @@
 {
-  "version": "ml-r2b-v1",
+  "scenario_version": "m5-ca3-smoke-v1",
+  "generator_version": "ml-r2b-v1",
   "scenarioId": "m5-ca3-smoke-v1",
   "seed": 2026,
-  "created_at_utc": "2026-09-21T20:56:21.424263+00:00",
+  "created_at_utc": "2026-09-22T00:43:22.813055+00:00",
   "source_dataset": "M5 Forecasting Accuracy",
   "source_bronze": "ml/data/bronze/m5_store_daily.parquet",
   "source_bronze_sha256": "3029c1b390d96a2da02c589df9b7e750be458bea5bc04855dc5942e2cc96c8a6",
+  "m5_raw_manifest": "ml/data/raw/m5_manifest.json",
+  "m5_raw_manifest_sha256": "8ed19849c600da535328756a9cdd1886479abfe118c458319b14709fd6d0edfc",
   "selected_store": "CA_3",
   "source_date_range": [
     "2015-01-01",
@@ -28,13 +31,15 @@
     "customers": 5,
     "purchases": 16,
     "sales": 45,
+    "transactions": 61,
     "m5_sales": 38,
     "synthetic_cancellation_sales": 7,
     "payments": 24,
     "cancellations": 7,
     "sale_lines": 70,
     "materialized_m5_units": 267,
-    "events": 104
+    "events": 104,
+    "expected_inventory_movements": 93
   },
   "volume_comparison": {
     "full_ml_product_day_observations": 5918109,
@@ -42,10 +47,10 @@
     "materialized_positive_product_days": 14
   },
   "ndjson": "ml/data/operational/scenario_smoke.ndjson",
-  "ndjson_sha256": "32fdfb03c2e39b96c94f4c61928b69743df814b0743ba80bd49079c853b41032",
-  "ndjson_size_bytes": 40508,
+  "ndjson_sha256": "67fd74a97a1d213aba02a5df2a51f0f428e9c9492afb05f533d62cd0da606150",
+  "ndjson_size_bytes": 43822,
   "config": "ml/config/scenario_smoke.toml",
-  "config_sha256": "91806d89295063b6cb7d813b7c5e7438cf61714c0f38d8820375847cfdbab487",
+  "config_sha256": "e873106381253392f03b87659e6b2ed603946bdb2b917b47118efcf667e7a677",
   "provenance": {
     "REAL": [
       "item_id",
@@ -90,6 +95,27 @@
       "cancellation rate"
     ]
   },
+  "field_provenance": {
+    "units_sold": "REAL",
+    "sell_price": "REAL",
+    "source_date": "REAL",
+    "operational_date": "DERIVED",
+    "supplierId": "SYNTHETIC",
+    "customerId": "SYNTHETIC",
+    "purchasePrice": "SYNTHETIC",
+    "stock": "DERIVED",
+    "minStockLevel": "DERIVED",
+    "leadTime": "SYNTHETIC",
+    "credit": "SYNTHETIC",
+    "payments": "SYNTHETIC",
+    "cancelledAt": "SYNTHETIC"
+  },
+  "rules": {
+    "price": "Fixed per-product median M5 USD price converted with configured FX; weekly source prices remain in Bronze.",
+    "stock": "Future-aware rotation stratification is used only for simulation sizing and is forbidden as an ML feature.",
+    "cancellations": "Additional synthetic cash sales are cancelled; non-cancelled M5 sales remain exactly reconciled.",
+    "orders": "Order dates and lead times are simulated internally; Mongo records purchases on receipt."
+  },
   "policies": {
     "price": "Fixed per-product median M5 USD price converted with configured FX; weekly source prices remain in Bronze.",
     "stock": "Future-aware rotation stratification is used only for simulation sizing and is forbidden as an ML feature.",
@@ -109,29 +135,139 @@
       "unique_ids",
       "unique_sourceEventId",
       "timestamp_timezone",
+      "scenario_id",
+      "source_operational_dates",
+      "synthetic_contact_policy",
       "m5_demand_reconciliation"
+    ],
+    "warnings": [
+      "Operational price is fixed per product because the application has no PriceHistory model.",
+      "Rotation-based inventory sizing is simulation metadata and must not be used as an ML feature.",
+      "Customer and supplier attributes are synthetic operational data, not initial ML features."
     ],
     "counts": {
       "events": 104,
       "vendors": 2,
       "customers": 5,
       "products": 5,
+      "purchase_lines": 16,
+      "expected_inventory_movements": 93,
       "purchase_transactions": 16,
+      "initial_purchases": 5,
+      "emergency_purchases": 8,
       "sale_transactions": 45,
       "sale_lines": 70,
       "m5_sale_transactions": 38,
       "materialized_m5_units": 267,
+      "credit_sales": 24,
+      "credit_sales_amount_pen": 2605.3100000000004,
+      "identified_sales": 24,
+      "anonymous_sales": 14,
       "synthetic_cancellation_sales": 7,
+      "credit_payment_amount_pen": 1823.7100000000005,
+      "partial_credit_payments": 24,
       "credit_payments": 24,
       "cancellations": 7,
+      "planned_replenishments": 3,
       "materialized_product_days": 14
     },
-    "ending_open_credit_pen": 781.6,
-    "minimum_ending_stock": 4
+    "demand_reconciliation": {
+      "expected_units": 267,
+      "actual_units": 267,
+      "absolute_difference": 0,
+      "percentage_difference": 0.0,
+      "mismatched_product_days": 0,
+      "mismatched_products": 0,
+      "mismatched_product_ids": []
+    },
+    "stock": {
+      "minimum_observed": 0,
+      "ending_total_units": 81,
+      "ending_min_per_product": 4,
+      "ending_max_per_product": 37,
+      "products_with_emergency_receipt": 3,
+      "emergency_receipts": 8,
+      "planned_replenishments": 3,
+      "initial_purchases": 5,
+      "stockouts_avoided": 8,
+      "expected_inventory_movements": 93
+    },
+    "suppliers": {
+      "products_per_supplier": {
+        "min": 3,
+        "max": 3,
+        "mean": 3.0
+      },
+      "suppliers_per_product": {
+        "min": 1,
+        "max": 2,
+        "mean": 1.2
+      },
+      "assigned_lead_time_days": {
+        "min": 3,
+        "max": 4,
+        "mean": 3.4
+      },
+      "observed_receipt_lead_time_days": {
+        "min": 0,
+        "max": 4,
+        "mean": 0.938
+      }
+    },
+    "customers": {
+      "identified_sales": 24,
+      "anonymous_sales": 14,
+      "credit_enabled_customers": 1,
+      "ticket_by_segment": {
+        "anonymous": {
+          "transactions": 14,
+          "amount_pen": 1270.77,
+          "average_ticket_pen": 90.77
+        },
+        "credit-enabled": {
+          "transactions": 24,
+          "amount_pen": 2605.31,
+          "average_ticket_pen": 108.55
+        }
+      },
+      "pii_policy": "Explicit synthetic names/phones; email and documentNumber forbidden."
+    },
+    "credit": {
+      "sales": 24,
+      "sales_amount_pen": 2605.31,
+      "customers_with_credit_sales": 1,
+      "payments": 24,
+      "payment_amount_pen": 1823.71,
+      "customers_with_payments": 1,
+      "partial_payments": 24,
+      "full_payments": 0,
+      "customers_with_open_debt": 1,
+      "ending_open_credit_pen": 781.6,
+      "vendor_debt_pen": 0
+    },
+    "cancellations": {
+      "count": 7,
+      "rate_over_all_sales_percentage": 15.5556,
+      "rate_over_m5_sales_percentage": 18.4211,
+      "policy": "Only additional synthetic non-credit sales; M5 demand remains valid."
+    },
+    "dates": {
+      "source_range": [
+        "2015-01-01",
+        "2015-01-05"
+      ],
+      "operational_range": [
+        "2025-01-02",
+        "2025-01-06"
+      ],
+      "offset_days": 3654,
+      "weekday_preserved": true,
+      "intervals_preserved": true
+    }
   },
   "performance": {
-    "elapsed_seconds": 0.218,
-    "peak_rss_bytes": 78106624,
-    "peak_rss_mb": 74.488
+    "elapsed_seconds": 0.461,
+    "peak_rss_bytes": 90341376,
+    "peak_rss_mb": 86.156
   }
 }

@@ -228,6 +228,22 @@ The validator checks causal order, references, supplier relationships, positive
 prices/costs, non-negative stock, credit/payment arithmetic, cancellations,
 ObjectIds, event IDs, timezone-aware timestamps and exact M5 product/day demand.
 Failure returns a non-zero exit and does not publish the temporary NDJSON.
+Every generated event also carries the configured `scenarioId`; validation
+rejects a mixed or incorrectly labelled file.
+
+ML-R2C performs the independent final review and builds the versionable NORMAL
+presentation summary after verifying the Bronze, raw-manifest, configuration
+and NDJSON hashes:
+
+```powershell
+ml/.venv/Scripts/python.exe -m ml.src.scenario.validation --config ml/config/scenario_normal.toml
+ml/.venv/Scripts/python.exe -m ml.src.scenario.report --config ml/config/scenario_normal.toml --output ml/reports/scenario_normal_summary.md
+```
+
+The summary and manifest distinguish the complete 5,918,109-row ML Bronze
+dataset from the NORMAL Mongo operational sample. They report demand and stock
+reconciliation, expected inventory movements, suppliers, customer segments,
+credit, cancellations, dates, field-level provenance and known limitations.
 
 Generation does not connect to MongoDB. After human approval, an isolated smoke
 file may be passed to the existing importer and then reset explicitly:

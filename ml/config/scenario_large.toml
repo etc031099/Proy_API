@@ -8,6 +8,7 @@ operational_date_offset_days = 3654
 
 [paths]
 bronze = "ml/data/bronze/m5_store_daily.parquet"
+raw_manifest = "ml/data/raw/m5_manifest.json"
 output = "ml/data/operational/scenario_large.ndjson"
 manifest = "ml/reports/scenario_large_manifest.json"
 

@@ -38,6 +38,21 @@ PROVENANCE = {
         "replenishment policy", "credit rate", "cancellation rate",
     ],
 }
+FIELD_PROVENANCE = {
+    "units_sold": "REAL",
+    "sell_price": "REAL",
+    "source_date": "REAL",
+    "operational_date": "DERIVED",
+    "supplierId": "SYNTHETIC",
+    "customerId": "SYNTHETIC",
+    "purchasePrice": "SYNTHETIC",
+    "stock": "DERIVED",
+    "minStockLevel": "DERIVED",
+    "leadTime": "SYNTHETIC",
+    "credit": "SYNTHETIC",
+    "payments": "SYNTHETIC",
+    "cancelledAt": "SYNTHETIC",
+}
 
 
 def deterministic_id(scenario_id: str, kind: str, key: str) -> str:
@@ -79,8 +94,9 @@ def weighted_choice(rng: random.Random, values: list[tuple[str, float]]) -> str:
 
 
 class EventWriter:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, scenario_id: str | None = None) -> None:
         self.path = path
+        self.scenario_id = scenario_id
         self.stream = path.open("w", encoding="utf-8", newline="\n")
         self.counts: defaultdict[str, int] = defaultdict(int)
         self.records = 0
@@ -88,6 +104,8 @@ class EventWriter:
         self.units = 0
 
     def write(self, event: dict[str, Any]) -> None:
+        if self.scenario_id is not None:
+            event = {"scenarioId": self.scenario_id, **event}
         self.stream.write(json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n")
         self.records += 1
         self.counts[event["eventType"]] += 1
@@ -216,6 +234,8 @@ def generate_scenario(config_path: str | Path, *, overwrite: bool = False) -> di
     config = load_scenario_config(config_path)
     if not config.bronze.exists():
         raise FileNotFoundError(f"Bronze input does not exist: {config.bronze}")
+    if not config.raw_manifest.exists():
+        raise FileNotFoundError(f"M5 raw manifest does not exist: {config.raw_manifest}")
     if config.output.exists() and not overwrite:
         raise FileExistsError(f"Scenario already exists: {config.output}; use --overwrite")
     config.output.parent.mkdir(parents=True, exist_ok=True)
@@ -328,7 +348,8 @@ def generate_scenario(config_path: str | Path, *, overwrite: bool = False) -> di
                         "name": f"Producto sintético M5 {item_id}",
                         "description": (
                             f"Origen M5 {item_id}; source_price_median_usd="
-                            f"{float(product['median_price']):.4f}; fx_usd_pen={fx:.4f}"
+                            f"{float(product['median_price']):.4f}; fx_usd_pen={fx:.4f}; "
+                            f"lead_time_days={lead_time}"
                         ),
                         "category": product["cat_id"], "price": price,
                         "costPrice": preferred["purchasePrice"], "currency": "PEN",
@@ -341,7 +362,7 @@ def generate_scenario(config_path: str | Path, *, overwrite: bool = False) -> di
 
             earliest_product_day = min(product_events)
             contact_day = earliest_product_day - timedelta(days=2)
-            writer = EventWriter(temporary)
+            writer = EventWriter(temporary, config.scenario_id)
             for index, supplier_id in enumerate(supplier_ids):
                 specialty = categories[index % len(categories)]
                 writer.write({
@@ -564,14 +585,23 @@ def generate_scenario(config_path: str | Path, *, overwrite: bool = False) -> di
             validation = validate_scenario(config, products, file_path=temporary)
             os.replace(temporary, config.output)
             ndjson_hash = sha256_file(config.output)
+            scenario_rules = {
+                "price": "Fixed per-product median M5 USD price converted with configured FX; weekly source prices remain in Bronze.",
+                "stock": "Future-aware rotation stratification is used only for simulation sizing and is forbidden as an ML feature.",
+                "cancellations": "Additional synthetic cash sales are cancelled; non-cancelled M5 sales remain exactly reconciled.",
+                "orders": "Order dates and lead times are simulated internally; Mongo records purchases on receipt.",
+            }
             manifest = {
-                "version": GENERATOR_VERSION,
+                "scenario_version": config.scenario_id,
+                "generator_version": GENERATOR_VERSION,
                 "scenarioId": config.scenario_id,
                 "seed": config.seed,
                 "created_at_utc": utc_now(),
                 "source_dataset": "M5 Forecasting Accuracy",
                 "source_bronze": portable_path(config.bronze),
                 "source_bronze_sha256": sha256_file(config.bronze),
+                "m5_raw_manifest": portable_path(config.raw_manifest),
+                "m5_raw_manifest_sha256": sha256_file(config.raw_manifest),
                 "selected_store": config.source_store,
                 "source_date_range": [config.source_start.isoformat(), config.source_end.isoformat()],
                 "operational_date_range": [config.operational_start.isoformat(), config.operational_end.isoformat()],
@@ -581,6 +611,10 @@ def generate_scenario(config_path: str | Path, *, overwrite: bool = False) -> di
                     "customers": config.customer_count,
                     "purchases": validation["counts"].get("purchase_transactions", 0),
                     "sales": validation["counts"].get("sale_transactions", 0),
+                    "transactions": (
+                        validation["counts"].get("purchase_transactions", 0)
+                        + validation["counts"].get("sale_transactions", 0)
+                    ),
                     "m5_sales": validation["counts"].get("m5_sale_transactions", 0),
                     "synthetic_cancellation_sales": validation["counts"].get("synthetic_cancellation_sales", 0),
                     "payments": validation["counts"].get("credit_payments", 0),
@@ -588,6 +622,9 @@ def generate_scenario(config_path: str | Path, *, overwrite: bool = False) -> di
                     "sale_lines": validation["counts"].get("sale_lines", 0),
                     "materialized_m5_units": validation["counts"].get("materialized_m5_units", 0),
                     "events": validation["counts"].get("events", 0),
+                    "expected_inventory_movements": validation["counts"].get(
+                        "expected_inventory_movements", 0
+                    ),
                 },
                 "volume_comparison": {
                     "full_ml_product_day_observations": ml_observations,
@@ -600,12 +637,9 @@ def generate_scenario(config_path: str | Path, *, overwrite: bool = False) -> di
                 "config": portable_path(config.path),
                 "config_sha256": config.config_hash,
                 "provenance": PROVENANCE,
-                "policies": {
-                    "price": "Fixed per-product median M5 USD price converted with configured FX; weekly source prices remain in Bronze.",
-                    "stock": "Future-aware rotation stratification is used only for simulation sizing and is forbidden as an ML feature.",
-                    "cancellations": "Additional synthetic cash sales are cancelled; non-cancelled M5 sales remain exactly reconciled.",
-                    "orders": "Order dates and lead times are simulated internally; Mongo records purchases on receipt.",
-                },
+                "field_provenance": FIELD_PROVENANCE,
+                "rules": scenario_rules,
+                "policies": scenario_rules,
                 "validation": validation,
                 "performance": performance,
             }

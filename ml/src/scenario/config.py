@@ -26,6 +26,7 @@ class ScenarioConfig:
     output: Path
     manifest: Path
     bronze: Path
+    raw_manifest: Path
 
     @property
     def operational_start(self) -> date:
@@ -155,4 +156,5 @@ def load_scenario_config(path: str | Path) -> ScenarioConfig:
         output=repository_path(_require(paths, "output", str, "paths")).resolve(),
         manifest=repository_path(_require(paths, "manifest", str, "paths")).resolve(),
         bronze=repository_path(_require(paths, "bronze", str, "paths")).resolve(),
+        raw_manifest=repository_path(_require(paths, "raw_manifest", str, "paths")).resolve(),
     )
