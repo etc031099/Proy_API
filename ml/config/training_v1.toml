@@ -1,0 +1,22 @@
+[experiment]
+feature_set_version = "demand-v1"
+gold_logical_hash = "8331eea267c4e71bdcffdf53ff40429a75aacf15c70377c46cc0196ea47b6868"
+random_state = 2026
+rmsse_scale_definition = "mean squared first difference of the 7-day target per item on consecutive TRAIN anchors"
+
+[paths]
+gold = "ml/data/gold/demand_features_v1.parquet"
+bronze = "ml/data/bronze/m5_store_daily.parquet"
+manifest = "ml/data/gold/demand_features_v1_manifest.json"
+experiments = "ml/reports/ml_r4_experiments.csv"
+segments_directory = "ml/reports/ml_r4_segments"
+
+[ridge]
+alphas = [0.1, 1.0, 10.0, 100.0]
+solver = "lsqr"
+fit_intercept = true
+tol = 0.001
+max_iter = 500
+
+[memory]
+maximum_rss_bytes = 12884901888
