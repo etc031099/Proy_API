@@ -53,7 +53,17 @@ interface ContactReportData {
 }
 
 interface TransactionReportData {
-  transactions: Transaction[];
+  recentTransactions: Transaction[];
+  groupedData: Array<{
+    period: string;
+    sales: { count: number; amount: number };
+    purchases: { count: number; amount: number };
+  }>;
+  range: {
+    from: string | null;
+    to: string | null;
+    groupBy: string;
+  };
   summary: {
     totalSales: number;
     totalPurchases: number;
@@ -219,12 +229,19 @@ export default function ReportsPage() {
           [t('reports.totalSales'), transactionReport.summary.totalSales, '', '', ''],
           [t('reports.totalPurchases'), transactionReport.summary.totalPurchases, '', '', ''],
           [t('reports.netProfit'), transactionReport.summary.profit, '', '', ''],
-          ...transactionReport.transactions.map((transaction) => [
-            formatDate(transaction.date),
-            transaction.type,
-            transaction.type === 'sale' ? transaction.customerName || '' : transaction.vendorName || '',
-            transaction.totalAmount,
-            transaction.currency || 'USD'
+          ...transactionReport.groupedData.map((period) => [
+            period.period,
+            t('reports.totalSales'),
+            '',
+            period.sales.amount,
+            transactionReport.summary.currency || 'PEN'
+          ]),
+          ...transactionReport.groupedData.map((period) => [
+            period.period,
+            t('reports.totalPurchases'),
+            '',
+            period.purchases.amount,
+            transactionReport.summary.currency || 'PEN'
           ])
         ],
         summary: `${t('reports.totalSales')}: ${formatCurrency(transactionReport.summary.totalSales, transactionReport.summary.currency || 'PEN')} | ${t('reports.totalPurchases')}: ${formatCurrency(transactionReport.summary.totalPurchases, transactionReport.summary.currency || 'PEN')} | ${t('reports.netProfit')}: ${formatCurrency(transactionReport.summary.profit, transactionReport.summary.currency || 'PEN')}`
@@ -581,6 +598,39 @@ export default function ReportsPage() {
                             </Card>
                           </div>
 
+                          {/* Aggregated periods */}
+                          <Card>
+                            <CardHeader>
+                              <CardTitle>{t('reports.periodBreakdown')}</CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                              <Table>
+                                <TableHeader>
+                                  <TableRow>
+                                    <TableHead>{t('reports.period')}</TableHead>
+                                    <TableHead>{t('reports.totalSales')}</TableHead>
+                                    <TableHead>{t('reports.totalPurchases')}</TableHead>
+                                    <TableHead>{t('reports.totalTransactions')}</TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {transactionReport.groupedData.slice(-12).map((period) => (
+                                    <TableRow key={period.period}>
+                                      <TableCell>{period.period}</TableCell>
+                                      <TableCell className="text-green-600">
+                                        {formatCurrency(period.sales.amount, transactionReport.summary.currency || 'PEN')}
+                                      </TableCell>
+                                      <TableCell className="text-red-600">
+                                        {formatCurrency(period.purchases.amount, transactionReport.summary.currency || 'PEN')}
+                                      </TableCell>
+                                      <TableCell>{period.sales.count + period.purchases.count}</TableCell>
+                                    </TableRow>
+                                  ))}
+                                </TableBody>
+                              </Table>
+                            </CardContent>
+                          </Card>
+
                           {/* Recent Transactions */}
                           <Card>
                             <CardHeader>
@@ -597,7 +647,7 @@ export default function ReportsPage() {
                                   </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                  {transactionReport.transactions.slice(0, 10).map((transaction) => (
+                                  {transactionReport.recentTransactions.map((transaction) => (
                                     <TableRow key={transaction._id}>
                                       <TableCell>{formatDate(transaction.date)}</TableCell>
                                       <TableCell>

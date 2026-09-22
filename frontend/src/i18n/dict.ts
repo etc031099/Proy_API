@@ -44,6 +44,10 @@ export const dictionary = {
       noRecentTransactions: 'No recent transactions',
       sale: 'Sale',
       purchase: 'Purchase',
+      periodMode: 'Dashboard period',
+      currentPeriod: 'Current calendar period',
+      latestPeriod: 'Latest period with data',
+      periodShown: 'Period shown',
     },
     contacts: {
       title: 'Contacts',
@@ -213,6 +217,7 @@ export const dictionary = {
       netProfit: 'Net Profit', avgSale: 'Avg Sale', recentTransactions: 'Recent Transactions', generatePrompt: 'Click "Generate Report" to view transaction analytics',
       selectCustomer: 'Select Customer', selectVendor: 'Select Vendor', chooseCustomer: 'Choose a customer...', chooseVendor: 'Choose a vendor...',
       totalTransactions: 'Total Transactions', averagePurchase: 'Average Purchase', date: 'Date', type: 'Type', contact: 'Contact', amount: 'Amount',
+      periodBreakdown: 'Aggregated period breakdown', period: 'Period',
     },
     integrations: {
       title: 'External Integrations',
@@ -283,6 +288,10 @@ export const dictionary = {
       noRecentTransactions: 'No hay transacciones recientes',
       sale: 'Venta',
       purchase: 'Compra',
+      periodMode: 'PerÃ­odo del panel',
+      currentPeriod: 'PerÃ­odo calendario actual',
+      latestPeriod: 'Ãšltimo perÃ­odo con datos',
+      periodShown: 'PerÃ­odo mostrado',
     },
     contacts: {
       title: 'Contactos',
@@ -450,6 +459,7 @@ export const dictionary = {
       netProfit: 'Ganancia neta', avgSale: 'Venta promedio', recentTransactions: 'Transacciones recientes', generatePrompt: 'Presiona "Generar reporte" para ver el análisis',
       selectCustomer: 'Seleccionar cliente', selectVendor: 'Seleccionar proveedor', chooseCustomer: 'Elegir un cliente...', chooseVendor: 'Elegir un proveedor...',
       totalTransactions: 'Total de transacciones', averagePurchase: 'Compra promedio', date: 'Fecha', type: 'Tipo', contact: 'Contacto', amount: 'Monto',
+      periodBreakdown: 'Desglose agregado por perÃ­odo', period: 'PerÃ­odo',
     },
     integrations: {
       title: 'Integraciones externas',

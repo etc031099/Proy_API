@@ -18,6 +18,8 @@ const testUri = process.env.MONGODB_TEST_URI;
 const runId = `${Date.now()}-${process.pid}`;
 const businessId = `h01-${runId}`;
 const reportBusinessId = `h02-${runId}`;
+const scaleReportBusinessId = `h02-scale-${runId}`;
+const emptyReportBusinessId = `h02-empty-${runId}`;
 const originalFetch = global.fetch;
 let sequence = 0;
 
@@ -122,7 +124,9 @@ test.before(async () => {
 test.after(async () => {
   global.fetch = originalFetch;
   if (mongoose.connection.readyState === 1) {
-    const businesses = { $in: [businessId, reportBusinessId] };
+    const businesses = {
+      $in: [businessId, reportBusinessId, scaleReportBusinessId, emptyReportBusinessId]
+    };
     await Promise.all([
       Product.deleteMany({ businessId: businesses }),
       Contact.deleteMany({ businessId: businesses }),
@@ -370,7 +374,9 @@ test('summary and financial reports include only completed transactions', async 
   assert.equal(summary.body.data.summary.profitLoss, 222);
 
   const transactionReport = await invokeController(getTransactionReport, request);
-  assert.equal(transactionReport.body.data.transactions.length, 2);
+  assert.equal(transactionReport.body.data.recentTransactions.length, 2);
+  assert.equal(Object.hasOwn(transactionReport.body.data, 'transactions'), false);
+  assert.ok(transactionReport.body.data.groupedData.every(group => !group.transactions));
   assert.equal(transactionReport.body.data.summary.totalTransactions, 2);
   assert.equal(transactionReport.body.data.summary.totalSales, 370);
   assert.equal(transactionReport.body.data.summary.totalPurchases, 148);
@@ -394,4 +400,95 @@ test('summary and financial reports include only completed transactions', async 
   assert.equal(dashboard.body.data.yearly.transactionCount, 2);
   assert.equal(dashboard.body.data.recentTransactions.length, 2);
   assert.ok(dashboard.body.data.recentTransactions.every(item => item.status === 'completed'));
+});
+
+test('large transaction report stays aggregated, filters dates and isolates tenants', async () => {
+  const productId = new mongoose.Types.ObjectId();
+  const records = [];
+  for (let index = 0; index < 250; index += 1) {
+    const isJanuary = index < 120;
+    records.push({
+      type: index % 2 === 0 ? 'sale' : 'purchase',
+      status: 'completed',
+      products: [{
+        productId,
+        productName: 'Aggregated product',
+        quantity: 1,
+        price: 10,
+        costPrice: index % 2 === 0 ? undefined : 10,
+        total: 10
+      }],
+      totalAmount: 10,
+      originalAmount: 10 / 3.7,
+      exchangeRate: 3.7,
+      currency: 'PEN',
+      paymentMethod: 'cash',
+      customerName: index % 2 === 0 ? 'Final customer' : undefined,
+      vendorId: index % 2 === 0 ? undefined : new mongoose.Types.ObjectId(),
+      vendorName: index % 2 === 0 ? undefined : 'Vendor',
+      businessId: scaleReportBusinessId,
+      date: new Date(isJanuary ? '2025-01-15T12:00:00Z' : '2025-02-15T12:00:00Z')
+    });
+  }
+  records.push(
+    { ...records[0], _id: undefined, status: 'pending', date: new Date('2025-02-20T12:00:00Z') },
+    { ...records[0], _id: undefined, status: 'cancelled', date: new Date('2025-02-20T12:00:00Z') },
+    { ...records[0], _id: undefined, businessId, date: new Date('2025-02-20T12:00:00Z') }
+  );
+  await Transaction.insertMany(records);
+
+  const started = performance.now();
+  const report = await invokeController(getTransactionReport, {
+    businessId: scaleReportBusinessId,
+    query: {}
+  });
+  assert.ok(performance.now() - started < 2000);
+  assert.equal(report.body.data.summary.totalTransactions, 250);
+  assert.equal(report.body.data.summary.salesCount, 125);
+  assert.equal(report.body.data.summary.purchasesCount, 125);
+  assert.equal(report.body.data.summary.totalSales, 1250);
+  assert.equal(report.body.data.summary.totalPurchases, 1250);
+  assert.equal(report.body.data.recentTransactions.length, 10);
+  assert.equal(report.body.data.groupedData.length, 2);
+  assert.ok(report.body.data.groupedData.every(group => !group.transactions));
+  assert.equal(JSON.stringify(report.body).includes('Final customer'), true);
+
+  const january = await invokeController(getTransactionReport, {
+    businessId: scaleReportBusinessId,
+    query: { from: '2025-01-01', to: '2025-01-31T23:59:59.999Z' }
+  });
+  assert.equal(january.body.data.summary.totalTransactions, 120);
+  assert.equal(january.body.data.groupedData.length, 1);
+  assert.equal(january.body.data.range.from, '2025-01-01T00:00:00.000Z');
+  assert.equal(january.body.data.range.to, '2025-01-31T23:59:59.999Z');
+});
+
+test('dashboard preserves current period and explicitly exposes latest period with data', async () => {
+  const current = await invokeController(getDashboardSummary, {
+    businessId: scaleReportBusinessId,
+    query: { period: 'current' }
+  });
+  assert.equal(current.body.data.period.mode, 'current');
+  assert.equal(current.body.data.period.hasData, false);
+  assert.equal(current.body.data.monthly.transactionCount, 0);
+
+  const latest = await invokeController(getDashboardSummary, {
+    businessId: scaleReportBusinessId,
+    query: { period: 'latest' }
+  });
+  assert.equal(latest.body.data.period.mode, 'latest');
+  assert.equal(latest.body.data.period.hasData, true);
+  assert.equal(latest.body.data.period.monthFrom, '2025-02-01T00:00:00.000Z');
+  assert.equal(latest.body.data.period.monthTo, '2025-03-01T00:00:00.000Z');
+  assert.equal(latest.body.data.monthly.transactionCount, 130);
+  assert.equal(latest.body.data.yearly.transactionCount, 250);
+
+  const empty = await invokeController(getDashboardSummary, {
+    businessId: emptyReportBusinessId,
+    query: { period: 'latest' }
+  });
+  assert.equal(empty.body.data.period.mode, 'latest');
+  assert.equal(empty.body.data.period.hasData, false);
+  assert.equal(empty.body.data.monthly.transactionCount, 0);
+  assert.equal(empty.body.data.yearly.transactionCount, 0);
 });

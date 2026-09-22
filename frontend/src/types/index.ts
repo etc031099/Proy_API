@@ -168,6 +168,14 @@ export interface CreateTransactionData {
 // Report types
 export interface DashboardSummary {
   baseCurrency?: 'PEN' | 'USD' | 'EUR';
+  period: {
+    mode: 'current' | 'latest';
+    hasData: boolean;
+    monthFrom: string;
+    monthTo: string;
+    yearFrom: string;
+    yearTo: string;
+  };
   overview: {
     totalProducts: number;
     totalCustomers: number;

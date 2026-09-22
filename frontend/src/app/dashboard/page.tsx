@@ -12,15 +12,17 @@ import { useLanguage } from '@/contexts/LanguageContext';
 export default function DashboardPage() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [periodMode, setPeriodMode] = useState<'current' | 'latest'>('current');
   const { language, t } = useLanguage();
 
   useEffect(() => {
     loadDashboardData();
-  }, []);
+  }, [periodMode]);
 
   const loadDashboardData = async () => {
     try {
-      const response = await apiClient.getDashboard();
+      setLoading(true);
+      const response = await apiClient.getDashboard({ period: periodMode });
       if (response.success) {
         setSummary(response.data);
       }
@@ -51,13 +53,40 @@ export default function DashboardPage() {
       minimumFractionDigits: 2,
     }).format(amount || 0);
 
+  const formatPeriod = () => {
+    if (!summary?.period) return '';
+    const formatter = new Intl.DateTimeFormat(language === 'es' ? 'es-PE' : 'en-US', {
+      year: 'numeric',
+      month: 'long',
+      timeZone: 'UTC'
+    });
+    return formatter.format(new Date(summary.period.monthFrom));
+  };
+
   return (
     <ProtectedRoute>
       <Layout>
         <div className="space-y-6">
-          <div>
-            <h1 className="text-3xl font-bold">{t('dashboard.title')}</h1>
-            <p className="text-muted-foreground">{t('dashboard.subtitle')}</p>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h1 className="text-3xl font-bold">{t('dashboard.title')}</h1>
+              <p className="text-muted-foreground">{t('dashboard.subtitle')}</p>
+              <p className="text-sm text-muted-foreground">
+                {t('dashboard.periodShown')}: {formatPeriod()}
+                {summary?.period.mode === 'latest' ? ` (${t('dashboard.latestPeriod')})` : ''}
+              </p>
+            </div>
+            <label className="flex flex-col gap-1 text-sm font-medium">
+              {t('dashboard.periodMode')}
+              <select
+                className="h-9 rounded-md border border-input bg-background px-3"
+                value={periodMode}
+                onChange={(event) => setPeriodMode(event.target.value as 'current' | 'latest')}
+              >
+                <option value="current">{t('dashboard.currentPeriod')}</option>
+                <option value="latest">{t('dashboard.latestPeriod')}</option>
+              </select>
+            </label>
           </div>
 
           {/* Overview Cards */}

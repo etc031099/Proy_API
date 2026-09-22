@@ -1,9 +1,18 @@
+const mongoose = require('mongoose');
 const { Product, Transaction, Contact } = require('../models');
 const { asyncHandler } = require('../middleware/validation');
 const { getExchangeRate } = require('../services/externalApiService');
 const { toFiniteNumber } = require('../utils/numbers');
 
 const REPORTING_CURRENCY = 'PEN';
+const RECENT_REPORT_TRANSACTION_LIMIT = 10;
+const REPORT_GROUP_FORMATS = {
+  hour: '%Y-%m-%d %H:00',
+  day: '%Y-%m-%d',
+  week: '%G-W%V',
+  month: '%Y-%m',
+  year: '%Y'
+};
 
 const getBaseAmount = (transaction) => {
   const originalAmount = Number(transaction.originalAmount);
@@ -17,6 +26,65 @@ const getBaseAmount = (transaction) => {
 
 const getReportingAmount = (transaction, usdToReportingRate) =>
   getBaseAmount(transaction) * usdToReportingRate;
+
+const reportingAmountExpression = (usdToReportingRate) => ({
+  $multiply: [
+    {
+      $cond: [
+        { $gt: ['$originalAmount', 0] },
+        '$originalAmount',
+        {
+          $cond: [
+            {
+              $and: [
+                { $ne: ['$currency', 'USD'] },
+                { $gt: ['$exchangeRate', 0] }
+              ]
+            },
+            { $divide: ['$totalAmount', '$exchangeRate'] },
+            '$totalAmount'
+          ]
+        }
+      ]
+    },
+    usdToReportingRate
+  ]
+});
+
+const invalidRequest = (message) => Object.assign(new Error(message), { statusCode: 400 });
+
+const parseOptionalDate = (value, label) => {
+  if (value === undefined || value === null || value === '') return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) throw invalidRequest(`${label} must be a valid date`);
+  return date;
+};
+
+const applyDateRange = (filter, query) => {
+  const start = parseOptionalDate(query.startDate ?? query.from, 'startDate/from');
+  const end = parseOptionalDate(query.endDate ?? query.to, 'endDate/to');
+  if (start && end && start > end) {
+    throw invalidRequest('The report start date cannot be after the end date');
+  }
+  if (start || end) {
+    filter.date = {};
+    if (start) filter.date.$gte = start;
+    if (end) filter.date.$lte = end;
+  }
+  return { start, end };
+};
+
+const emptyFinancialStats = () => ({ sales: 0, purchases: 0, transactionCount: 0 });
+
+const financialStatsFromAggregation = (rows = []) => {
+  const result = emptyFinancialStats();
+  rows.forEach((row) => {
+    if (row._id === 'sale') result.sales = row.amount;
+    if (row._id === 'purchase') result.purchases = row.amount;
+    result.transactionCount += row.count;
+  });
+  return { ...result, profit: result.sales - result.purchases };
+};
 
 /**
  * @desc    Get inventory report
@@ -105,40 +173,33 @@ const getInventoryReport = asyncHandler(async (req, res) => {
  * @access  Private
  */
 const getTransactionReport = asyncHandler(async (req, res) => {
-  const { 
-    startDate, 
-    endDate, 
-    type, 
-    groupBy = 'day',
-    contactId 
-  } = req.query;
+  const { type, groupBy = 'day', contactId } = req.query;
   const businessId = req.businessId;
+
+  if (!Object.prototype.hasOwnProperty.call(REPORT_GROUP_FORMATS, groupBy)) {
+    throw invalidRequest('groupBy must be one of: hour, day, week, month, year');
+  }
 
   // Build filter
   const filter = { businessId, status: 'completed' };
-
-  if (startDate || endDate) {
-    filter.date = {};
-    if (startDate) filter.date.$gte = new Date(startDate);
-    if (endDate) filter.date.$lte = new Date(endDate);
-  }
+  const range = applyDateRange(filter, req.query);
 
   if (type && ['sale', 'purchase'].includes(type)) {
     filter.type = type;
+  } else if (type) {
+    throw invalidRequest('type must be sale or purchase');
   }
 
   if (contactId) {
+    if (!mongoose.isObjectIdOrHexString(contactId)) {
+      throw invalidRequest('contactId must be a valid ObjectId');
+    }
+    const contactObjectId = new mongoose.Types.ObjectId(contactId);
     filter.$or = [
-      { customerId: contactId },
-      { vendorId: contactId }
+      { customerId: contactObjectId },
+      { vendorId: contactObjectId }
     ];
   }
-
-  // Get transactions
-  const transactions = await Transaction.find(filter)
-    .populate('customerId', 'name')
-    .populate('vendorId', 'name')
-    .sort({ date: -1 });
 
   const rateResponse = await getExchangeRate({ base: 'USD', target: REPORTING_CURRENCY });
   const usdToReportingRate = toFiniteNumber(rateResponse?.rate, {
@@ -146,64 +207,89 @@ const getTransactionReport = asyncHandler(async (req, res) => {
     min: Number.EPSILON
   });
 
-  // Group transactions by period
-  const groupedData = [];
-  const groupFormat = getGroupFormat(groupBy);
-  
-  const grouped = transactions.reduce((acc, transaction) => {
-    const key = formatDateForGrouping(transaction.date, groupBy);
-    if (!acc[key]) {
-      acc[key] = {
-        period: key,
-        sales: { count: 0, amount: 0 },
-        purchases: { count: 0, amount: 0 },
-        transactions: []
-      };
-    }
-    
-    if (transaction.type === 'sale') {
-      acc[key].sales.count++;
-      acc[key].sales.amount += getReportingAmount(transaction, usdToReportingRate);
-    } else {
-      acc[key].purchases.count++;
-      acc[key].purchases.amount += getReportingAmount(transaction, usdToReportingRate);
-    }
-    
-    acc[key].transactions.push(transaction);
-    return acc;
-  }, {});
+  const [aggregationRows, recentTransactions] = await Promise.all([
+    Transaction.aggregate([
+      { $match: filter },
+      { $set: { reportingAmount: reportingAmountExpression(usdToReportingRate) } },
+      {
+        $facet: {
+          summary: [{
+            $group: {
+              _id: '$type',
+              amount: { $sum: '$reportingAmount' },
+              count: { $sum: 1 },
+              average: { $avg: '$reportingAmount' }
+            }
+          }],
+          groupedData: [
+            {
+              $group: {
+                _id: {
+                  period: {
+                    $dateToString: {
+                      format: REPORT_GROUP_FORMATS[groupBy],
+                      date: '$date',
+                      timezone: 'UTC'
+                    }
+                  },
+                  type: '$type'
+                },
+                amount: { $sum: '$reportingAmount' },
+                count: { $sum: 1 }
+              }
+            },
+            { $sort: { '_id.period': 1 } }
+          ]
+        }
+      }
+    ]),
+    Transaction.find(filter)
+      .select('type customerId customerName vendorId vendorName totalAmount currency date paymentMethod status')
+      .populate('customerId', 'name')
+      .populate('vendorId', 'name')
+      .sort({ date: -1 })
+      .limit(RECENT_REPORT_TRANSACTION_LIMIT)
+      .lean()
+  ]);
+  const aggregation = aggregationRows[0] || { summary: [], groupedData: [] };
 
-  // Convert to array and sort
-  const groupedArray = Object.values(grouped).sort((a, b) => 
-    new Date(a.period) - new Date(b.period)
-  );
+  const byType = Object.fromEntries(aggregation.summary.map(row => [row._id, row]));
+  const groupedByPeriod = {};
+  aggregation.groupedData.forEach((row) => {
+    const period = row._id.period;
+    groupedByPeriod[period] ||= {
+      period,
+      sales: { count: 0, amount: 0 },
+      purchases: { count: 0, amount: 0 }
+    };
+    groupedByPeriod[period][row._id.type === 'sale' ? 'sales' : 'purchases'] = {
+      count: row.count,
+      amount: row.amount
+    };
+  });
 
-  // Calculate summary statistics
-  const totalSales = transactions
-    .filter(t => t.type === 'sale')
-    .reduce((sum, t) => sum + getReportingAmount(t, usdToReportingRate), 0);
-    
-  const totalPurchases = transactions
-    .filter(t => t.type === 'purchase')
-    .reduce((sum, t) => sum + getReportingAmount(t, usdToReportingRate), 0);
-    
-  const salesCount = transactions.filter(t => t.type === 'sale').length;
-  const purchasesCount = transactions.filter(t => t.type === 'purchase').length;
+  const sales = byType.sale || { amount: 0, count: 0, average: 0 };
+  const purchases = byType.purchase || { amount: 0, count: 0, average: 0 };
 
   res.json({
     success: true,
     data: {
-      transactions,
-      groupedData: groupedArray,
+      recentTransactions,
+      groupedData: Object.values(groupedByPeriod),
+      range: {
+        from: range.start?.toISOString() || null,
+        to: range.end?.toISOString() || null,
+        groupBy
+      },
       summary: {
-        totalSales,
-        totalPurchases,
-        profit: totalSales - totalPurchases,
-        salesCount,
-        purchasesCount,
-        totalTransactions: transactions.length,
-        averageSaleAmount: salesCount > 0 ? totalSales / salesCount : 0,
-        averagePurchaseAmount: purchasesCount > 0 ? totalPurchases / purchasesCount : 0,
+        totalSales: sales.amount,
+        totalPurchases: purchases.amount,
+        profit: sales.amount - purchases.amount,
+        salesCount: sales.count,
+        purchasesCount: purchases.count,
+        totalTransactions: sales.count + purchases.count,
+        averageSaleAmount: sales.average,
+        averagePurchaseAmount: purchases.average,
         currency: REPORTING_CURRENCY
       }
     }
@@ -407,24 +493,34 @@ const getVendorReport = asyncHandler(async (req, res) => {
 const getDashboardSummary = asyncHandler(async (req, res) => {
   const businessId = req.businessId;
   const today = new Date();
-  const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-  const startOfYear = new Date(today.getFullYear(), 0, 1);
+  const periodMode = req.query.period || 'current';
+  if (!['current', 'latest'].includes(periodMode)) {
+    throw invalidRequest('period must be current or latest');
+  }
+
+  const latestTransaction = periodMode === 'latest'
+    ? await Transaction.findOne({ businessId, status: 'completed' })
+      .select('date')
+      .sort({ date: -1 })
+      .lean()
+    : null;
+  const anchor = latestTransaction?.date || today;
+  const startOfMonth = new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth(), 1));
+  const endOfMonth = new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth() + 1, 1));
+  const startOfYear = new Date(Date.UTC(anchor.getUTCFullYear(), 0, 1));
+  const endOfYear = new Date(Date.UTC(anchor.getUTCFullYear() + 1, 0, 1));
 
   // Get counts
   const [
     totalProducts,
     totalCustomers,
     totalVendors,
-    lowStockProducts,
-    monthlyTransactions,
-    yearlyTransactions
+    lowStockProducts
   ] = await Promise.all([
     Product.countDocuments({ businessId, isActive: true }),
     Contact.countDocuments({ businessId, type: 'customer', isActive: true }),
     Contact.countDocuments({ businessId, type: 'vendor', isActive: true }),
-    Product.findLowStock(businessId),
-    Transaction.find({ businessId, status: 'completed', date: { $gte: startOfMonth } }),
-    Transaction.find({ businessId, status: 'completed', date: { $gte: startOfYear } })
+    Product.findLowStock(businessId)
   ]);
 
   const rateResponse = await getExchangeRate({ base: 'USD', target: REPORTING_CURRENCY });
@@ -433,23 +529,29 @@ const getDashboardSummary = asyncHandler(async (req, res) => {
     min: Number.EPSILON
   });
 
-  // Calculate monthly statistics
-  const monthlySales = monthlyTransactions
-    .filter(t => t.type === 'sale')
-    .reduce((sum, t) => sum + getReportingAmount(t, usdToReportingRate), 0);
-    
-  const monthlyPurchases = monthlyTransactions
-    .filter(t => t.type === 'purchase')
-    .reduce((sum, t) => sum + getReportingAmount(t, usdToReportingRate), 0);
-
-  // Calculate yearly statistics  
-  const yearlySales = yearlyTransactions
-    .filter(t => t.type === 'sale')
-    .reduce((sum, t) => sum + getReportingAmount(t, usdToReportingRate), 0);
-    
-  const yearlyPurchases = yearlyTransactions
-    .filter(t => t.type === 'purchase')
-    .reduce((sum, t) => sum + getReportingAmount(t, usdToReportingRate), 0);
+  const [aggregated = { monthly: [], yearly: [] }] = await Transaction.aggregate([
+    {
+      $match: {
+        businessId,
+        status: 'completed',
+        date: { $gte: startOfYear, $lt: endOfYear }
+      }
+    },
+    { $set: { reportingAmount: reportingAmountExpression(usdToReportingRate) } },
+    {
+      $facet: {
+        monthly: [
+          { $match: { date: { $gte: startOfMonth, $lt: endOfMonth } } },
+          { $group: { _id: '$type', amount: { $sum: '$reportingAmount' }, count: { $sum: 1 } } }
+        ],
+        yearly: [
+          { $group: { _id: '$type', amount: { $sum: '$reportingAmount' }, count: { $sum: 1 } } }
+        ]
+      }
+    }
+  ]);
+  const monthly = financialStatsFromAggregation(aggregated.monthly);
+  const yearly = financialStatsFromAggregation(aggregated.yearly);
 
   // Recent transactions
   const recentTransactions = await Transaction.find({ businessId, status: 'completed' })
@@ -462,56 +564,27 @@ const getDashboardSummary = asyncHandler(async (req, res) => {
     success: true,
     data: {
       baseCurrency: REPORTING_CURRENCY,
+      period: {
+        mode: periodMode,
+        hasData: monthly.transactionCount > 0 || yearly.transactionCount > 0,
+        monthFrom: startOfMonth.toISOString(),
+        monthTo: endOfMonth.toISOString(),
+        yearFrom: startOfYear.toISOString(),
+        yearTo: endOfYear.toISOString()
+      },
       overview: {
         totalProducts,
         totalCustomers,
         totalVendors,
         lowStockProductsCount: lowStockProducts.length
       },
-      monthly: {
-        sales: monthlySales,
-        purchases: monthlyPurchases,
-        profit: monthlySales - monthlyPurchases,
-        transactionCount: monthlyTransactions.length
-      },
-      yearly: {
-        sales: yearlySales,
-        purchases: yearlyPurchases,
-        profit: yearlySales - yearlyPurchases,
-        transactionCount: yearlyTransactions.length
-      },
+      monthly,
+      yearly,
       lowStockProducts: lowStockProducts.slice(0, 10),
       recentTransactions
     }
   });
 });
-
-// Helper functions
-const getGroupFormat = (groupBy) => {
-  switch (groupBy) {
-    case 'hour': return 'YYYY-MM-DD HH:00';
-    case 'day': return 'YYYY-MM-DD';
-    case 'week': return 'YYYY-[W]WW';
-    case 'month': return 'YYYY-MM';
-    case 'year': return 'YYYY';
-    default: return 'YYYY-MM-DD';
-  }
-};
-
-const formatDateForGrouping = (date, groupBy) => {
-  switch (groupBy) {
-    case 'hour':
-      return date.toISOString().substring(0, 13) + ':00:00.000Z';
-    case 'day':
-      return date.toISOString().substring(0, 10);
-    case 'month':
-      return date.toISOString().substring(0, 7);
-    case 'year':
-      return date.getFullYear().toString();
-    default:
-      return date.toISOString().substring(0, 10);
-  }
-};
 
 module.exports = {
   getInventoryReport,

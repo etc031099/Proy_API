@@ -304,8 +304,8 @@ class ApiClient {
   }
 
   // Report methods
-  async getDashboard(): Promise<ApiResponse> {
-    const response = await this.instance.get('/reports/dashboard');
+  async getDashboard(params?: { period?: 'current' | 'latest' }): Promise<ApiResponse> {
+    const response = await this.instance.get('/reports/dashboard', { params });
     return response.data;
   }
 

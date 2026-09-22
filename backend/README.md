@@ -482,6 +482,11 @@ GET /api/reports/dashboard
 Authorization: Bearer <token>
 ```
 
+The default `period=current` reports the current calendar month/year. Use
+`?period=latest` to report the month/year containing the tenant's latest
+completed transaction. The response always includes the exact period bounds;
+no transaction dates are shifted or fabricated.
+
 ### Inventory Report
 ```http
 GET /api/reports/inventory?category=electronics&lowStock=true&sortBy=stock&sortOrder=asc
@@ -493,6 +498,13 @@ Authorization: Bearer <token>
 GET /api/reports/transactions?startDate=2024-01-01&endDate=2024-01-31&type=sale&groupBy=day
 Authorization: Bearer <token>
 ```
+
+This endpoint returns an aggregate summary, compact period groups, and at most
+10 recent matching transactions. It never returns the complete transaction
+history or embeds transactions inside period groups. `from`/`to` are supported
+as aliases for `startDate`/`endDate`; `groupBy` accepts `hour`, `day`, `week`,
+`month`, or `year`. Use the paginated `/api/transactions` endpoint for browsing
+individual transactions.
 
 ### Customer Report
 ```http
