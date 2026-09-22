@@ -36,6 +36,11 @@ ml/data/bronze/**
 ml/data/silver/**
 ml/data/gold/**
 ml/data/operational/**
+ml/data/serving/**
+!ml/data/serving/cloud_demo_product_lineage.parquet
+!ml/data/serving/cloud_demo_calendar.parquet
+!ml/data/serving/cloud_demo_price_lineage.parquet
+!ml/data/serving/cloud_demo_lineage_manifest.json
 ml/models/**
 !ml/models/demand_forecast_v1.joblib
 !ml/models/model_metadata.json
