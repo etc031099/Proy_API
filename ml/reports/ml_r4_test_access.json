@@ -1,0 +1,10 @@
+{
+  "status": "completed",
+  "opened_at_utc": "2026-09-22T21:12:50.107563+00:00",
+  "test_access_policy": "single_final_evaluation",
+  "selection_timestamp": "2026-09-22T21:08:18.991533+00:00",
+  "selected_experiment_id": "r4b2b_hgb_b_full",
+  "model_content_hash": "4d112ed8ee09f68f986f55230f2c3ee2efc64538e132b3f2e0a3f4044c3fc05a",
+  "completed_at_utc": "2026-09-22T21:12:55.233210+00:00",
+  "report_sha256": "30192125b5dd6b23ce1c2c970414e87efaddce6f6c8ddda7821f2be5b3b01156"
+}

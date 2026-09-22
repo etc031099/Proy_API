@@ -44,8 +44,8 @@ EXPECTED_TRAIN_ROWS = 4_010_863
 EXPECTED_VALIDATION_ROWS = 255_756
 LOG_FIELDS = [
     "experiment_id", "executed_at_utc", "model", "target_transform",
-    "parameters_json", "sample_policy", "random_state", "train_rows",
-    "validation_rows", "feature_set_version", "gold_logical_hash",
+    "parameters_json", "sample_policy", "random_state", "evaluation_split",
+    "evaluation_rows", "train_rows", "validation_rows", "feature_set_version", "gold_logical_hash",
     "fit_seconds", "predict_seconds", "peak_rss_bytes",
     "model_size_estimate_bytes", "wape", "mae", "rmsse",
     "negative_predictions_before_clip", "status", "notes",

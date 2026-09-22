@@ -1,0 +1,106 @@
+{
+  "status": "locked_before_test",
+  "selection_timestamp": "2026-09-22T21:08:18.991533+00:00",
+  "selected_experiment_id": "r4b2b_hgb_b_full",
+  "selected_model": "HGB-B",
+  "target_transform": "direct",
+  "feature_set_version": "demand-v1",
+  "gold_logical_hash": "8331eea267c4e71bdcffdf53ff40429a75aacf15c70377c46cc0196ea47b6868",
+  "features": [
+    "cat_id",
+    "dept_id",
+    "active_age_days",
+    "current_units",
+    "lag_1",
+    "lag_7",
+    "lag_14",
+    "lag_28",
+    "lag_56",
+    "rolling_sum_7",
+    "rolling_mean_28",
+    "rolling_std_28",
+    "rolling_mean_56",
+    "days_since_last_sale",
+    "has_prior_sale",
+    "sale_days_last_28",
+    "nonzero_rate_56",
+    "day_of_week",
+    "week_of_year",
+    "month",
+    "quarter",
+    "is_weekend",
+    "event_name_1",
+    "event_type_1",
+    "event_name_2",
+    "event_type_2",
+    "snap_CA",
+    "sell_price",
+    "price_change_pct_7",
+    "price_relative_to_recent_mean_28",
+    "price_missing_active"
+  ],
+  "parameters": {
+    "actual_iterations": 250,
+    "categorical_features": [
+      25,
+      26,
+      27,
+      28,
+      29,
+      30
+    ],
+    "early_stopping": true,
+    "l2_regularization": 1.0,
+    "learning_rate": 0.05,
+    "loss": "squared_error",
+    "max_iter": 250,
+    "max_leaf_nodes": 63,
+    "min_samples_leaf": 200,
+    "n_iter_no_change": 20,
+    "validation_fraction": 0.05
+  },
+  "preprocessing": {
+    "numeric": "float32 passthrough",
+    "categorical": "OrdinalEncoder(handle_unknown=use_encoded_value, unknown_value=-1, encoded_missing_value=-1, dtype=float32)",
+    "categorical_features": [
+      "cat_id",
+      "dept_id",
+      "event_name_1",
+      "event_type_1",
+      "event_name_2",
+      "event_type_2"
+    ]
+  },
+  "clipping_policy": "prediction = max(prediction, 0); no rounding",
+  "metric_definitions": {
+    "primary": "global WAPE",
+    "secondary": [
+      "MAE",
+      "RMSSE"
+    ],
+    "rmsse_scale_definition": "mean squared first difference of the 7-day target per item on consecutive TRAIN anchors"
+  },
+  "selection_basis": {
+    "hgb_b_full_validation": {
+      "wape": 0.3331110195939861,
+      "mae": 4.48159591603151,
+      "rmsse": 2.4247648195423133
+    },
+    "four_week_validation_wape": 0.35799177837772045,
+    "ridge_validation_wape": 0.3609247803613216,
+    "relative_wape_improvement_vs_four_week_pct": 6.950092232979283,
+    "relative_wape_improvement_vs_ridge_pct": 7.706248581627217,
+    "peak_rss_bytes": 3221622784,
+    "fit_seconds": 67.763
+  },
+  "known_segment_observations": [
+    "low and low-demand segments are weaker than high-demand segments",
+    "target-zero predictions show positive bias",
+    "cold-start RMSSE is unavailable without a TRAIN scale"
+  ],
+  "limitations": [
+    "n_iter_ reached 250/250; max_iter remains frozen",
+    "single-store M5 demand-v1 dataset"
+  ],
+  "test_access_policy": "single_final_evaluation"
+}
