@@ -1,0 +1,60 @@
+[scenario]
+scenario_id = "m5-ca3-cloud-demo-v1"
+seed = 2026
+source_store = "CA_3"
+source_start = "2015-01-01"
+source_end = "2015-06-30"
+operational_date_offset_days = 3654
+
+[paths]
+bronze = "ml/data/bronze/m5_store_daily.parquet"
+raw_manifest = "ml/data/raw/m5_manifest.json"
+output = "ml/data/operational/scenario_cloud_demo.ndjson"
+manifest = "ml/reports/scenario_cloud_demo_manifest.json"
+
+[selection]
+product_count = 60
+
+[suppliers]
+count = 15
+max_per_product = 3
+
+[customers]
+count = 60
+anonymous_rate = 0.58
+
+[inventory]
+lead_time_min_days = 2
+lead_time_max_days = 7
+product_setup_lead_days = 7
+initial_stock_low = 8
+initial_stock_medium = 20
+initial_stock_high = 45
+min_stock_low = 3
+min_stock_medium = 8
+min_stock_high = 18
+reorder_point_low = 5
+reorder_point_medium = 14
+reorder_point_high = 30
+
+[pricing]
+usd_to_pen = 3.70
+
+[margins]
+low = 0.22
+medium = 0.28
+high = 0.34
+
+[transactions]
+max_lines_per_ticket = 6
+max_quantity_per_line = 6
+credit_rate = 0.10
+cancellation_rate = 0.012
+credit_payment_delay_days = 7
+credit_payment_fraction = 0.70
+
+[payment_methods]
+cash = 0.50
+card = 0.28
+bank_transfer = 0.12
+credit = 0.10
