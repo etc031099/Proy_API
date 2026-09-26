@@ -1,5 +1,5 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
-import { ApiResponse } from '@/types';
+import { ApiResponse, DemandForecastResponse } from '@/types';
 
 class ApiClient {
   private instance: AxiosInstance;
@@ -326,6 +326,13 @@ class ApiClient {
 
   async getVendorReport(id: string, params?: any): Promise<ApiResponse> {
     const response = await this.instance.get(`/reports/vendor/${id}`, { params });
+    return response.data;
+  }
+
+  async getDemandForecast(productId?: string): Promise<ApiResponse<DemandForecastResponse>> {
+    const response = await this.instance.get('/ml/demand-forecast', {
+      params: productId ? { productId } : undefined,
+    });
     return response.data;
   }
 }

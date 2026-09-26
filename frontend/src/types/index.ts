@@ -248,3 +248,34 @@ export interface AuthContextType {
   loading: boolean;
   error: string | null;
 }
+
+export interface DemandForecastProduct {
+  productId: string;
+  sku: string;
+  name: string;
+  stockAtAnchor: number;
+  salesLast7Days: number;
+  predictedDemand7d: number | null;
+  safetyStock: number | null;
+  recommendedQty: number | null;
+  inventoryStatus: 'REPONER' | 'VIGILAR' | 'OK' | 'ML_NO_DISPONIBLE';
+  mlStatus: 'READY' | 'ML_NO_DISPONIBLE' | string;
+}
+
+export interface DemandForecastModel {
+  name: string;
+  version: string;
+  featureSetVersion: string;
+  algorithm: string;
+  featuresCount: number;
+  horizonDays: number;
+  execution: string;
+}
+
+export interface DemandForecastResponse {
+  status: 'READY' | 'ML_NOT_READY' | string;
+  reason?: string;
+  model?: DemandForecastModel;
+  anchorOperationalDate?: string;
+  products?: DemandForecastProduct[];
+}

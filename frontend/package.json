@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test:security": "node test/security/run.js"
+    "test:security": "node test/security/run.js",
+    "test:ml-forecast": "node --test test/mlForecast.test.js"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.3.0",
