@@ -118,6 +118,9 @@ services:
       MONGODB_REPLICA_SET: rs0
       JWT_SECRET: ${JWT_SECRET:?Set a strong JWT_SECRET in backend/.env or the deployment secret manager}
       JWT_EXPIRE: 7d
+      ML_ENABLED: ${ML_ENABLED:-false}
+      ML_SERVICE_URL: ${ML_SERVICE_URL:-}
+      ML_SERVICE_SECRET: ${ML_SERVICE_SECRET:-}
     ports:
       - "5000:5000"
     depends_on:

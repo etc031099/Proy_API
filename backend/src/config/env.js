@@ -1,6 +1,7 @@
 const ALLOWED_NODE_ENVIRONMENTS = new Set(['development', 'test', 'production']);
 const MIN_JWT_SECRET_LENGTH = 32;
 const MIN_WEBHOOK_SECRET_LENGTH = 32;
+const MIN_ML_SECRET_LENGTH = 32;
 const { parseCorsAllowedOrigins } = require('./cors');
 
 const EXACT_SECRET_PLACEHOLDERS = new Set([
@@ -109,6 +110,49 @@ const validateEnvironment = (environment = process.env, options = {}) => {
     );
   }
 
+  const mlEnabledText = environment.ML_ENABLED === undefined
+    ? 'false'
+    : String(environment.ML_ENABLED).trim().toLowerCase();
+  if (!['true', 'false'].includes(mlEnabledText)) {
+    issues.push('ML_ENABLED must be true or false');
+  }
+  const mlEnabled = mlEnabledText === 'true';
+  if (mlEnabled) {
+    if (!hasText(environment.ML_SERVICE_URL)) {
+      issues.push('ML_SERVICE_URL is required when ML_ENABLED is true');
+    } else {
+      try {
+        const url = new URL(environment.ML_SERVICE_URL.trim());
+        if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+          issues.push('ML_SERVICE_URL must be an HTTP(S) URL without credentials, query, or fragment');
+        }
+      } catch {
+        issues.push('ML_SERVICE_URL must be a valid HTTP(S) URL');
+      }
+    }
+    if (!hasText(environment.ML_SERVICE_SECRET)) {
+      issues.push('ML_SERVICE_SECRET is required when ML_ENABLED is true');
+    } else {
+      const mlSecret = environment.ML_SERVICE_SECRET.trim();
+      if (mlSecret !== environment.ML_SERVICE_SECRET) {
+        issues.push('ML_SERVICE_SECRET must not contain surrounding whitespace');
+      }
+      if (mlSecret.length < MIN_ML_SECRET_LENGTH) {
+        issues.push(`ML_SERVICE_SECRET must contain at least ${MIN_ML_SECRET_LENGTH} characters`);
+      }
+      if (isKnownSecretPlaceholder(mlSecret)) {
+        issues.push('ML_SERVICE_SECRET must not use a documented placeholder or default value');
+      }
+      if (hasText(environment.JWT_SECRET) && mlSecret === environment.JWT_SECRET.trim()) {
+        issues.push('ML_SERVICE_SECRET must differ from JWT_SECRET');
+      }
+      if (hasText(environment.NODE_RED_WEBHOOK_SECRET)
+        && mlSecret === environment.NODE_RED_WEBHOOK_SECRET.trim()) {
+        issues.push('ML_SERVICE_SECRET must differ from NODE_RED_WEBHOOK_SECRET');
+      }
+    }
+  }
+
   if (issues.length > 0) {
     throw new EnvironmentConfigurationError(issues);
   }
@@ -119,6 +163,7 @@ const validateEnvironment = (environment = process.env, options = {}) => {
     nodeEnvironment: nodeEnvironment.trim(),
     port: environment.PORT === undefined ? 5000 : Number(environment.PORT.trim()),
     webhookEnabled: webhookUrlConfigured,
+    mlEnabled,
     corsAllowedOrigins: Object.freeze([...corsConfiguration.origins])
   });
 };
@@ -127,6 +172,7 @@ module.exports = {
   ALLOWED_NODE_ENVIRONMENTS,
   MIN_JWT_SECRET_LENGTH,
   MIN_WEBHOOK_SECRET_LENGTH,
+  MIN_ML_SECRET_LENGTH,
   EnvironmentConfigurationError,
   isKnownSecretPlaceholder,
   validateEnvironment

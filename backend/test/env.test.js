@@ -62,7 +62,30 @@ test('environment validation accepts a strong JWT_SECRET', () => {
   assert.equal(result.nodeEnvironment, 'test');
   assert.equal(result.port, 5000);
   assert.equal(result.webhookEnabled, false);
+  assert.equal(result.mlEnabled, false);
   assert.deepEqual(result.corsAllowedOrigins, ['https://test-frontend.example']);
+});
+
+test('ML integration requires URL and a dedicated strong secret when enabled', () => {
+  assertConfigurationError(validEnvironment({ ML_ENABLED: 'true' }), 'ML_SERVICE_URL is required');
+  assertConfigurationError(
+    validEnvironment({ ML_ENABLED: 'true', ML_SERVICE_URL: 'https://ml.example.test' }),
+    'ML_SERVICE_SECRET is required'
+  );
+  const jwtSecret = strongSecret();
+  assertConfigurationError(validEnvironment({
+    ML_ENABLED: 'true',
+    ML_SERVICE_URL: 'https://ml.example.test',
+    JWT_SECRET: jwtSecret,
+    ML_SERVICE_SECRET: jwtSecret
+  }), 'must differ from JWT_SECRET');
+
+  const result = validateEnvironment(validEnvironment({
+    ML_ENABLED: 'true',
+    ML_SERVICE_URL: 'https://ml.example.test',
+    ML_SERVICE_SECRET: strongSecret()
+  }), { warn: () => {} });
+  assert.equal(result.mlEnabled, true);
 });
 
 test('production rejects missing CORS_ALLOWED_ORIGINS', () => {
