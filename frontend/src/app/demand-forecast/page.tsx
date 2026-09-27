@@ -1,13 +1,13 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { Layout } from '@/components/Layout';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { apiClient } from '@/lib/api';
 import { DemandForecastModel, DemandForecastResponse } from '@/types';
-import { formatForecastNumber, getForecastSummary, getStatusClass, getStatusLabel } from '@/lib/demandForecast';
+import { formatForecastNumber, getForecastErrorCopy, getForecastSummary, getStatusClass, getStatusLabel } from '@/lib/demandForecast';
 import { AlertTriangle, BrainCircuit, CheckCircle2, Clock3, Database, Loader2, Package, Sparkles, TrendingUp } from 'lucide-react';
 
 const formatAnchorDate = (value?: string) => {
@@ -56,23 +56,27 @@ export default function DemandForecastPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<'unavailable' | 'not-ready' | 'empty' | null>(null);
 
-  useEffect(() => {
-    let active = true;
+  const loadForecast = useCallback(async () => {
     setLoading(true);
-    apiClient.getDemandForecast()
-      .then(response => {
-        if (!active) return;
-        const data = response.data;
-        if (!response.success || !data) { setError('unavailable'); return; }
-        if (data.status === 'ML_NOT_READY') { setError('not-ready'); return; }
-        if (data.status !== 'READY' || !data.products?.length) { setError('empty'); return; }
-        setForecast(data);
-        setSelectedId(data.products[0].productId);
-      })
-      .catch(() => { if (active) setError('unavailable'); })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
+    setError(null);
+    try {
+      const response = await apiClient.getDemandForecast();
+      const data = response.data;
+      if (!response.success || !data) { setError('unavailable'); return; }
+      if (data.status === 'ML_NOT_READY') { setError('not-ready'); return; }
+      if (data.status !== 'READY' || !data.products?.length) { setError('empty'); return; }
+      setForecast(data);
+      setSelectedId(data.products[0].productId);
+    } catch {
+      setError('unavailable');
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void loadForecast();
+  }, [loadForecast]);
 
   const products = useMemo(() => forecast?.products || [], [forecast?.products]);
   const summary = useMemo(() => getForecastSummary(products), [products]);
@@ -90,7 +94,7 @@ export default function DemandForecastPage() {
 
           {loading && <Card><CardContent className="flex min-h-48 flex-col items-center justify-center gap-3"><Loader2 className="h-8 w-8 animate-spin text-primary" /><p className="font-medium">Analizando demanda con el modelo ML…</p><p className="text-sm text-muted-foreground">Consultando el historial de tu negocio</p></CardContent></Card>}
 
-          {!loading && error && <Card className="border-amber-200 dark:border-amber-900"><CardContent className="flex min-h-40 flex-col items-center justify-center gap-2 text-center"><AlertTriangle className="h-8 w-8 text-amber-500" /><p className="font-semibold">{error === 'not-ready' ? 'Este negocio aún no cuenta con historial/configuración suficiente para generar predicciones.' : error === 'empty' ? 'No hay productos disponibles para analizar.' : 'El servicio de predicción no está disponible temporalmente.'}</p><p className="text-sm text-muted-foreground">Puedes volver a intentarlo más tarde.</p></CardContent></Card>}
+          {!loading && error && <Card className="border-amber-200 dark:border-amber-900"><CardContent className="flex min-h-40 flex-col items-center justify-center gap-3 text-center"><AlertTriangle className="h-8 w-8 text-amber-500" /><p className="font-semibold">{getForecastErrorCopy(error).title}</p><p className="max-w-xl text-sm text-muted-foreground">{getForecastErrorCopy(error).description}</p>{getForecastErrorCopy(error).retry && <button type="button" onClick={() => void loadForecast()} disabled={loading} className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60">{loading ? 'Analizando demanda con el modelo ML…' : 'Reintentar predicción'}</button>}</CardContent></Card>}
 
           {!loading && !error && forecast && <>
             <ModelMeta model={forecast.model} />

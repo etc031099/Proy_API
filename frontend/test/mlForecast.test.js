@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { formatForecastNumber, getForecastSummary, getStatusLabel } = require('../src/lib/demandForecast.js');
+const { formatForecastNumber, getForecastErrorCopy, getForecastSummary, getStatusLabel } = require('../src/lib/demandForecast.js');
 
 test('summarizes READY and inventory states without changing predictions', () => {
   const products = [
@@ -20,4 +20,11 @@ test('formats finite predictions for display and preserves unavailable values', 
 test('exposes human-readable ML status labels', () => {
   assert.equal(getStatusLabel('ML_NO_DISPONIBLE'), 'ML NO DISPONIBLE');
   assert.equal(getStatusLabel('REPONER'), 'REPONER');
+});
+
+test('keeps ML_NOT_READY separate from temporary unavailability', () => {
+  assert.equal(getForecastErrorCopy('not-ready').retry, false);
+  assert.match(getForecastErrorCopy('not-ready').title, /historial/);
+  assert.equal(getForecastErrorCopy('unavailable').retry, true);
+  assert.match(getForecastErrorCopy('unavailable').title, /iniciándose|disponible/);
 });

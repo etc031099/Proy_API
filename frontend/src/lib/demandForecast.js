@@ -27,4 +27,26 @@ const getStatusClass = status => ({
   ML_NO_DISPONIBLE: 'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300',
 }[status] || 'border-slate-200 bg-slate-50 text-slate-700');
 
-module.exports = { getForecastSummary, formatForecastNumber, getStatusLabel, getStatusClass };
+const getForecastErrorCopy = type => {
+  if (type === 'not-ready') {
+    return {
+      title: 'Este negocio aún no cuenta con historial/configuración suficiente para generar predicciones.',
+      description: 'La inferencia estará disponible cuando el escenario esté preparado.',
+      retry: false,
+    };
+  }
+  if (type === 'empty') {
+    return {
+      title: 'No hay productos disponibles para analizar.',
+      description: 'No se encontraron productos elegibles para esta consulta.',
+      retry: true,
+    };
+  }
+  return {
+    title: 'El servicio de predicción está iniciándose o no está disponible temporalmente.',
+    description: 'El servicio de Machine Learning puede tardar unos segundos en iniciar. Vuelve a intentarlo.',
+    retry: true,
+  };
+};
+
+module.exports = { getForecastSummary, formatForecastNumber, getStatusLabel, getStatusClass, getForecastErrorCopy };
