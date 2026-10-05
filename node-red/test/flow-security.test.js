@@ -57,14 +57,14 @@ test('Telegram HTTP errors are caught and stripped before safe logging', () => {
 test('Docker and deployment files enforce the production policy', () => {
   const dockerfile = fs.readFileSync(path.join(nodeRedDirectory, 'Dockerfile'), 'utf8');
   const render = fs.readFileSync(path.join(nodeRedDirectory, 'render.yaml'), 'utf8');
-  const packageJson = JSON.parse(fs.readFileSync(path.join(nodeRedDirectory, 'package.json'), 'utf8'));
 
   assert.match(dockerfile, /^FROM nodered\/node-red:4\.1\.15-22/m);
   assert.doesNotMatch(dockerfile, /node-red:latest/);
   assert.match(dockerfile, /npm ci/);
-  assert.equal(packageJson.dependencies.bcryptjs, '3.0.2');
   assert.match(render, /NODE_ENV\s*\n\s*value: production/);
-  assert.match(render, /NODE_RED_ENABLE_EDITOR\s*\n\s*value: "false"/);
+  assert.match(render, /NODE_RED_ENABLE_EDITOR\s*\n\s*value: "true"/);
+  assert.match(render, /NODE_RED_ADMIN_USER\s*\n\s*sync: false/);
+  assert.match(render, /NODE_RED_ADMIN_PASSWORD_HASH\s*\n\s*sync: false/);
   assert.match(render, /NODE_RED_WEBHOOK_SECRET/);
   assert.match(render, /NODE_RED_HTTP_PASSWORD/);
 });

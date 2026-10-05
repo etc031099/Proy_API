@@ -14,7 +14,11 @@ services:
       - key: NODE_ENV
         value: production
       - key: NODE_RED_ENABLE_EDITOR
-        value: "false"
+        value: "true"
+      - key: NODE_RED_ADMIN_USER
+        sync: false
+      - key: NODE_RED_ADMIN_PASSWORD_HASH
+        sync: false
       - key: NODE_RED_CREDENTIAL_SECRET
         generateValue: true
       # Must match NODE_RED_WEBHOOK_SECRET in the backend service.

@@ -11,7 +11,7 @@ incluyen en la imagen; no se editan desde producción.
 | Webhook | `POST /webhook` | Requiere `X-Webhook-Secret` igual a `NODE_RED_WEBHOOK_SECRET`. Responde `401` si falta o es incorrecto. |
 | Dashboard | `GET /ui` | Requiere HTTP Basic con `NODE_RED_HTTP_USERNAME` y `NODE_RED_HTTP_PASSWORD` en producción. |
 | Otros HTTP nodes futuros | cualquier ruta | Quedan protegidos por el mismo HTTP Basic en producción. |
-| Editor/admin | `/` y rutas administrativas | Deshabilitado por defecto en producción. |
+| Editor/admin | `/red` y rutas administrativas | `adminAuth` de Node-RED con usuario y hash bcrypt en producción. |
 
 La autenticación del webhook se ejecuta antes de cualquier login al backend,
 consulta empresarial o envío a Telegram. Solo se aceptan los eventos
@@ -28,23 +28,29 @@ Producción requiere:
   coincidir con el valor configurado en el backend.
 - `NODE_RED_HTTP_USERNAME` y `NODE_RED_HTTP_PASSWORD`: protegen dashboard y
   otros HTTP nodes. La contraseña debe tener al menos 12 caracteres.
+- `NODE_RED_ENABLE_EDITOR=true`, `NODE_RED_ADMIN_USER` y
+  `NODE_RED_ADMIN_PASSWORD_HASH`: habilitan el editor autenticado en `/red`.
+  El hash debe ser bcrypt; nunca configures ni guardes la contraseña en texto
+  plano. Para la demo el usuario tiene permisos `*` para visualizar y desplegar
+  flows. Si solo se requiere lectura, se puede limitar a `read`.
 - `API_BASE`, `BILLING_EMAIL` y `BILLING_PASSWORD`: acceso del flujo a la API.
 - `TELEGRAM_BOT_TOKEN`: necesario solo para responder por Telegram.
 
 No hay secretos predeterminados. Una configuración incompleta hace que
 Node-RED falle al arrancar.
 
-### Editor en producción
+### Dashboard y editor
 
-El editor está deshabilitado por defecto mediante
-`NODE_RED_ENABLE_EDITOR=false`. Si se habilita explícitamente con `true`, son
-obligatorios `NODE_RED_USERNAME` y `NODE_RED_PASSWORD`; la contraseña se
-almacena como hash bcrypt. Si bcrypt o las credenciales faltan, el proceso no
-arranca.
+El dashboard conserva su ruta `/ui`. El editor visual está en `/red` y requiere
+login propio de Node-RED. En Render, configura `NODE_RED_ENABLE_EDITOR=true`,
+`NODE_RED_ADMIN_USER` y `NODE_RED_ADMIN_PASSWORD_HASH`; el servicio falla al
+arrancar si se habilita el editor sin ambas credenciales o con un hash que no
+sea bcrypt válido. El editor queda deshabilitado por defecto en otros entornos.
 
-En desarrollo local usa `NODE_ENV=development`. El editor queda habilitado,
-pero el webhook sigue requiriendo `NODE_RED_WEBHOOK_SECRET`. No expongas ese
-entorno directamente a Internet.
+Genera el hash bcrypt en un entorno confiable con `node-red-admin hash-pw` y
+configura el resultado como `NODE_RED_ADMIN_PASSWORD_HASH` en Render. El
+comando solicita la contraseña de forma interactiva; no incluyas la contraseña
+ni el hash en Git, tickets o logs.
 
 ## Configuración del backend
 
@@ -62,8 +68,8 @@ respuesta no 2xx y no registra secretos, payloads completos ni URLs con tokens.
 ## Despliegue
 
 El `Dockerfile` usa una versión fija de Node-RED y `npm ci` con el lockfile. El
-archivo `render.yaml` deshabilita el editor y declara los secretos como valores
-externos; ninguna credencial real debe versionarse.
+archivo `render.yaml` habilita el editor protegido y declara sus credenciales
+como valores externos; ninguna credencial real debe versionarse.
 
 Para Render, crea un Web Service Docker con `node-red/` como directorio raíz o
 usa el Blueprint. Configura todos los valores marcados `sync: false` en el panel

@@ -56,7 +56,7 @@ const validateSecret = (issues, value, name, required) => {
   }
 };
 
-const createSettings = (environment = process.env, dependencies = {}) => {
+const createSettings = (environment = process.env) => {
   const issues = [];
   if (!hasText(environment.NODE_ENV)) {
     issues.push('NODE_ENV is required');
@@ -67,7 +67,7 @@ const createSettings = (environment = process.env, dependencies = {}) => {
   const isProduction = environment.NODE_ENV === 'production';
   const editorEnabled = readBoolean(
     environment.NODE_RED_ENABLE_EDITOR,
-    !isProduction,
+    false,
     'NODE_RED_ENABLE_EDITOR'
   );
 
@@ -87,9 +87,9 @@ const createSettings = (environment = process.env, dependencies = {}) => {
   addCredentialPairIssues(
     issues,
     environment,
-    'NODE_RED_USERNAME',
-    'NODE_RED_PASSWORD',
-    isProduction && editorEnabled
+    'NODE_RED_ADMIN_USER',
+    'NODE_RED_ADMIN_PASSWORD_HASH',
+    editorEnabled
   );
   addCredentialPairIssues(
     issues,
@@ -99,8 +99,9 @@ const createSettings = (environment = process.env, dependencies = {}) => {
     isProduction
   );
 
-  if (hasText(environment.NODE_RED_PASSWORD) && environment.NODE_RED_PASSWORD.trim().length < 12) {
-    issues.push('NODE_RED_PASSWORD must contain at least 12 characters');
+  if (hasText(environment.NODE_RED_ADMIN_PASSWORD_HASH)
+    && !/^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(environment.NODE_RED_ADMIN_PASSWORD_HASH.trim())) {
+    issues.push('NODE_RED_ADMIN_PASSWORD_HASH must be a valid bcrypt hash');
   }
   if (hasText(environment.NODE_RED_HTTP_PASSWORD)
     && environment.NODE_RED_HTTP_PASSWORD.trim().length < 12) {
@@ -129,7 +130,7 @@ const createSettings = (environment = process.env, dependencies = {}) => {
       modules: { allowInstall: false, allowList: [], denyList: ['*'] }
     },
     functionGlobalContext: { webhookSecurity },
-    httpAdminRoot: editorEnabled ? '/' : false,
+    httpAdminRoot: editorEnabled ? '/red' : false,
     disableEditor: !editorEnabled,
     httpNodeMiddleware: privateHttpMiddleware,
     ui: {
@@ -149,23 +150,12 @@ const createSettings = (environment = process.env, dependencies = {}) => {
     settings.credentialSecret = environment.NODE_RED_CREDENTIAL_SECRET.trim();
   }
 
-  const editorCredentialsConfigured = hasText(environment.NODE_RED_USERNAME);
-  if (editorEnabled && editorCredentialsConfigured) {
-    const loadBcrypt = dependencies.loadBcrypt || (() => require('bcryptjs'));
-    let bcrypt;
-    try {
-      bcrypt = loadBcrypt();
-    } catch {
-      throw new NodeRedConfigurationError([
-        'bcryptjs is required when editor authentication is enabled'
-      ]);
-    }
-
+  if (editorEnabled) {
     settings.adminAuth = {
       type: 'credentials',
       users: [{
-        username: environment.NODE_RED_USERNAME.trim(),
-        password: bcrypt.hashSync(environment.NODE_RED_PASSWORD, 10),
+        username: environment.NODE_RED_ADMIN_USER.trim(),
+        password: environment.NODE_RED_ADMIN_PASSWORD_HASH.trim(),
         permissions: '*'
       }]
     };

@@ -20,6 +20,8 @@ const assertConfigurationError = (environment, issue, dependencies) => {
   );
 };
 
+const TEST_ADMIN_PASSWORD_HASH = `$2b$10$${'a'.repeat(53)}`;
+
 test('production rejects a missing credentialSecret', () => {
   const environment = productionEnvironment();
   delete environment.NODE_RED_CREDENTIAL_SECRET;
@@ -37,14 +39,14 @@ test('startup fails closed when NODE_ENV is missing or unknown', () => {
   );
 });
 
-test('development remains usable with an explicit environment and webhook secret', () => {
+test('editor is disabled by default in development unless explicitly configured', () => {
   const settings = createSettings({
     NODE_ENV: 'development',
     NODE_RED_WEBHOOK_SECRET: 'development-webhook-secret-at-least-32-chars'
   });
 
-  assert.equal(settings.disableEditor, false);
-  assert.equal(settings.httpAdminRoot, '/');
+  assert.equal(settings.disableEditor, true);
+  assert.equal(settings.httpAdminRoot, false);
   assert.equal(settings.credentialSecret, undefined);
 });
 
@@ -74,38 +76,48 @@ test('production disables editor and admin endpoints by default', () => {
 test('production editor opt-in requires complete admin credentials', () => {
   assertConfigurationError(
     productionEnvironment({ NODE_RED_ENABLE_EDITOR: 'true' }),
-    'NODE_RED_USERNAME is required'
+    'NODE_RED_ADMIN_USER is required'
   );
 });
 
-test('missing bcrypt fails closed when authenticated editor is enabled', () => {
+test('editor rejects a malformed password hash', () => {
   const environment = productionEnvironment({
     NODE_RED_ENABLE_EDITOR: 'true',
-    NODE_RED_USERNAME: 'editor-user',
-    NODE_RED_PASSWORD: 'editor-password-strong'
+    NODE_RED_ADMIN_USER: 'editor-user',
+    NODE_RED_ADMIN_PASSWORD_HASH: 'not-a-bcrypt-hash'
   });
 
   assertConfigurationError(
     environment,
-    'bcryptjs is required',
-    { loadBcrypt: () => { throw new Error('module unavailable'); } }
+    'NODE_RED_ADMIN_PASSWORD_HASH must be a valid bcrypt hash'
   );
 });
 
-test('authenticated editor stores a bcrypt hash rather than plaintext', () => {
+test('authenticated editor uses the configured bcrypt hash at /red', () => {
   const environment = productionEnvironment({
     NODE_RED_ENABLE_EDITOR: 'true',
-    NODE_RED_USERNAME: 'editor-user',
-    NODE_RED_PASSWORD: 'editor-password-strong'
+    NODE_RED_ADMIN_USER: 'editor-user',
+    NODE_RED_ADMIN_PASSWORD_HASH: TEST_ADMIN_PASSWORD_HASH
   });
-  const settings = createSettings(environment, {
-    loadBcrypt: () => ({ hashSync: () => '$2b$10$test-hash' })
-  });
+  const settings = createSettings(environment);
 
   assert.equal(settings.disableEditor, false);
-  assert.equal(settings.httpAdminRoot, '/');
-  assert.equal(settings.adminAuth.users[0].password, '$2b$10$test-hash');
-  assert.notEqual(settings.adminAuth.users[0].password, environment.NODE_RED_PASSWORD);
+  assert.equal(settings.httpAdminRoot, '/red');
+  assert.equal(settings.adminAuth.type, 'credentials');
+  assert.equal(settings.adminAuth.users[0].username, 'editor-user');
+  assert.equal(settings.adminAuth.users[0].password, TEST_ADMIN_PASSWORD_HASH);
+  assert.equal(settings.adminAuth.users[0].permissions, '*');
+});
+
+test('editor cannot be enabled with a plaintext password variable', () => {
+  assertConfigurationError(
+    productionEnvironment({
+      NODE_RED_ENABLE_EDITOR: 'true',
+      NODE_RED_ADMIN_USER: 'editor-user',
+      NODE_RED_PASSWORD: 'editor-password-strong'
+    }),
+    'NODE_RED_ADMIN_PASSWORD_HASH is required'
+  );
 });
 
 test('production requires dashboard HTTP credentials', () => {
