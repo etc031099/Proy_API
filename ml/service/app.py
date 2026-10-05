@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from ml.service.model_runtime import (
     DuplicateBatchItemError,
@@ -31,6 +32,51 @@ SECRET_ENVIRONMENT_NAMES = (
 )
 
 logger = logging.getLogger("ml.service")
+
+
+class BodyLimitMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        content_length = dict(scope["headers"]).get(b"content-length")
+        if content_length:
+            try:
+                declared_size = int(content_length)
+            except ValueError:
+                await JSONResponse(status_code=400, content={"detail": "Invalid Content-Length header"})(scope, receive, send)
+                return
+            if declared_size > MAX_BODY_BYTES:
+                await JSONResponse(status_code=413, content={"detail": "Request payload is too large"})(scope, receive, send)
+                return
+
+        # Bound real bytes before JSON parsing, regardless of the declared size.
+        # Replay original chunks without joining/copying the buffered body here.
+        chunks: list[Message] = []
+        received_size = 0
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            received_size += len(message.get("body", b""))
+            if received_size > MAX_BODY_BYTES:
+                await JSONResponse(status_code=413, content={"detail": "Request payload is too large"})(scope, receive, send)
+                return
+            if message.get("body") or not message.get("more_body", False):
+                chunks.append(message)
+            if not message.get("more_body", False):
+                break
+
+        messages = iter(chunks)
+
+        async def replay() -> Message:
+            message = next(messages, None)
+            return message if message is not None else await receive()
+
+        await self.app(scope, replay, send)
 
 
 def load_service_secret() -> str:
@@ -66,22 +112,7 @@ def create_app(runtime: ModelRuntime | None = None) -> FastAPI:
         openapi_url=None,
     )
 
-    @application.middleware("http")
-    async def enforce_body_limit(request: Request, call_next):
-        content_length = request.headers.get("content-length")
-        if content_length:
-            try:
-                if int(content_length) > MAX_BODY_BYTES:
-                    return JSONResponse(
-                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                        content={"detail": "Request payload is too large"},
-                    )
-            except ValueError:
-                return JSONResponse(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    content={"detail": "Invalid Content-Length header"},
-                )
-        return await call_next(request)
+    application.add_middleware(BodyLimitMiddleware)
 
     @application.exception_handler(RequestValidationError)
     async def validation_error_handler(_request: Request, error: RequestValidationError):

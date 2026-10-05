@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
@@ -12,7 +13,7 @@ from unittest.mock import patch
 import numpy as np
 from fastapi.testclient import TestClient
 
-from ml.service.app import create_app
+from ml.service.app import MAX_BODY_BYTES, create_app
 from ml.service.model_runtime import ModelRuntime, ModelUnavailableError
 from ml.service.schemas import PredictionRequest
 from ml.src.common import repository_path
@@ -321,6 +322,87 @@ class R5DServiceTests(unittest.TestCase):
             "/v1/predict/demand", json=payload([long_item]), headers=self.headers
         )
         self.assertEqual(response.status_code, 413)
+
+    def send_body_chunks(self, chunks, *, declared_size=None, authenticated=True):
+        """Exercise actual ASGI receive messages without HTTPX coalescing chunks."""
+        headers = [(b"content-type", b"application/json")]
+        if authenticated:
+            headers.append((b"x-ml-service-secret", SERVICE_SECRET.encode()))
+        if declared_size is not None:
+            headers.append((b"content-length", str(declared_size).encode()))
+        scope = {
+            "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+            "method": "POST", "scheme": "http", "path": "/v1/predict/demand",
+            "raw_path": b"/v1/predict/demand", "query_string": b"",
+            "headers": headers, "server": ("testserver", 80), "client": ("testclient", 1),
+        }
+        sent = []
+        received = 0
+
+        async def receive():
+            nonlocal received
+            if received >= len(chunks):
+                raise AssertionError("Unexpected read after final body chunk")
+            index = received
+            received += 1
+            return {"type": "http.request", "body": chunks[index], "more_body": received < len(chunks)}
+
+        async def send(message):
+            sent.append(message)
+
+        asyncio.run(self.client.app(scope, receive, send))
+        response_status = next(message["status"] for message in sent if message["type"] == "http.response.start")
+        body = b"".join(message.get("body", b"") for message in sent if message["type"] == "http.response.body")
+        return response_status, json.loads(body), received
+
+    def test_small_body_without_content_length_is_accepted(self) -> None:
+        code, body, _ = self.send_body_chunks([json.dumps(payload()).encode()])
+        self.assertEqual(code, 200)
+        self.assertEqual(body["results"][0]["status"], "READY")
+
+    def test_declared_oversize_is_rejected_without_reading_body(self) -> None:
+        code, body, reads = self.send_body_chunks([b"{}"], declared_size=MAX_BODY_BYTES + 1)
+        self.assertEqual(code, 413)
+        self.assertEqual(body, {"detail": "Request payload is too large"})
+        self.assertEqual(reads, 0)
+
+    def test_oversize_without_content_length_is_rejected(self) -> None:
+        code, body, _ = self.send_body_chunks([b" " * (MAX_BODY_BYTES + 1)])
+        self.assertEqual(code, 413)
+        self.assertEqual(body, {"detail": "Request payload is too large"})
+
+    def test_chunked_oversize_stops_receiving_at_limit(self) -> None:
+        chunk = b" " * (MAX_BODY_BYTES // 4)
+        with patch.object(self.runtime.pipeline, "predict") as predict:
+            code, body, reads = self.send_body_chunks([chunk] * 4 + [b"x", b"never read"])
+            predict.assert_not_called()
+        self.assertEqual(code, 413)
+        self.assertEqual(body, {"detail": "Request payload is too large"})
+        self.assertEqual(reads, 5)
+
+    def test_underreported_content_length_cannot_bypass_limit(self) -> None:
+        code, _, _ = self.send_body_chunks([b" " * MAX_BODY_BYTES, b"x"], declared_size=1)
+        self.assertEqual(code, 413)
+
+    def test_valid_payload_at_and_below_limit_is_accepted(self) -> None:
+        encoded = json.dumps(payload()).encode()
+        for size in (MAX_BODY_BYTES - 1, MAX_BODY_BYTES):
+            with self.subTest(size=size):
+                padding = b" " * (size - len(encoded))
+                code, body, _ = self.send_body_chunks([encoded, padding], declared_size=size)
+                self.assertEqual(code, 200)
+                self.assertEqual(body["results"][0]["status"], "READY")
+
+    def test_small_invalid_body_keeps_validation_error(self) -> None:
+        code, body, _ = self.send_body_chunks([b"{}"])
+        self.assertEqual(code, 400)
+        self.assertEqual(body, {"detail": "Request validation failed"})
+
+    def test_oversize_without_secret_is_limited_before_authentication(self) -> None:
+        code, body, reads = self.send_body_chunks([b" " * MAX_BODY_BYTES, b"x", b"never read"], authenticated=False)
+        self.assertEqual(code, 413)
+        self.assertEqual(body, {"detail": "Request payload is too large"})
+        self.assertEqual(reads, 2)
 
     def test_feature_order_and_negative_prediction_clipping(self) -> None:
         original = self.runtime.pipeline
