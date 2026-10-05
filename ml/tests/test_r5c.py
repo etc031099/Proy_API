@@ -197,36 +197,65 @@ class R5CFeatureBuilderTests(unittest.TestCase):
 
 
 class R5CGoldEquivalenceTests(unittest.TestCase):
-    def test_final_anchor_features_match_gold(self) -> None:
-        bronze = repository_path("ml/data/bronze/m5_store_daily.parquet")
-        gold = repository_path("ml/data/gold/demand_features_v1.parquet")
-        if not bronze.exists() or not gold.exists():
-            self.skipTest("Validated Bronze and Gold artifacts are required")
-        builder = DemandFeatureBuilder()
-        scenario = json.loads(
-            repository_path("ml/reports/scenario_cloud_demo_manifest.json").read_text(
-                encoding="utf-8"
+    def test_all_cloud_demo_products_match_gold_at_final_anchor(self) -> None:
+        required = [
+            repository_path(path)
+            for path in (
+                "ml/data/bronze/m5_store_daily.parquet",
+                "ml/data/gold/demand_features_v1.parquet",
+                "ml/data/serving/cloud_demo_lineage_manifest.json",
+                "ml/data/serving/cloud_demo_product_lineage.parquet",
+                "ml/data/serving/cloud_demo_calendar.parquet",
+                "ml/data/serving/cloud_demo_price_lineage.parquet",
+                "ml/models/demand_forecast_v1_contract.json",
             )
-        )
-        sample = [scenario["selected_products"][index] for index in [0, 10, 20, 30, 40, 59]]
+        ]
+        missing = [str(path.relative_to(repository_path("."))) for path in required if not path.is_file()]
+        if missing:
+            self.skipTest(f"Gold-serving parity artifacts are unavailable: {', '.join(missing)}")
+
+        builder = DemandFeatureBuilder()
+        manifest = builder.manifest
+        self.assertEqual(manifest["source_anchor"], "2015-06-30")
+        self.assertEqual(manifest["operational_anchor"], "2025-07-01")
+        product_ids = sorted(builder.products)
+        self.assertEqual(len(product_ids), 60, "Lineage must contain exactly 60 unique products")
+        skus = [f"M5-{item_id}" for item_id in product_ids]
+        self.assertEqual(len(set(skus)), 60, "Lineage-derived SKUs must be unique")
+        feature_order = builder.contract["feature_order"]
+        self.assertEqual(len(feature_order), 31, "demand-v1 contract must contain exactly 31 features")
+        self.assertEqual(len(set(feature_order)), 31, "demand-v1 feature names must be unique")
+        categorical = {
+            feature["name"] for feature in builder.contract["features"]
+            if feature["type"] == "categorical"
+        }
+        self.assertEqual(set(feature["name"] for feature in builder.contract["features"]), set(feature_order))
+
         connection = connect_duckdb()
         try:
-            categorical = {
-                entry["name"]
-                for entry in builder.contract["features"]
-                if entry["type"] == "categorical"
-            }
-            for item_id in sample:
+            bronze = required[0]
+            gold = required[1]
+            gold_columns = [row[0] for row in connection.execute(
+                "DESCRIBE SELECT * FROM read_parquet(?)", [str(gold)]
+            ).fetchall()]
+            feature_start = gold_columns.index(feature_order[0])
+            self.assertEqual(
+                gold_columns[feature_start:feature_start + len(feature_order)],
+                feature_order,
+                "Gold feature names/order differ from the demand-v1 contract",
+            )
+            selected = ", ".join('"' + name.replace('"', '""') + '"' for name in feature_order)
+            sku_to_item = {f"M5-{item_id}": item_id for item_id in product_ids}
+            for sku in skus:
+                item_id = sku_to_item[sku]
                 demand = connection.execute(
-                    """
-                    SELECT source_date, CAST(units_sold AS BIGINT)
-                    FROM read_parquet(?)
-                    WHERE store_id = 'CA_3' AND item_id = ?
-                      AND source_date BETWEEN DATE '2015-01-01' AND DATE '2015-06-30'
-                    ORDER BY source_date
-                    """,
-                    [str(bronze), item_id],
+                    """SELECT source_date, CAST(units_sold AS BIGINT)
+                       FROM read_parquet(?)
+                       WHERE store_id = ? AND item_id = ? AND source_date <= DATE '2015-06-30'
+                       ORDER BY source_date""",
+                    [str(bronze), manifest["store_id"], item_id],
                 ).fetchall()
+                self.assertTrue(demand, f"No Bronze history for {sku}")
                 daily_sales = [
                     {
                         "date": (source_day + timedelta(days=3654)).isoformat(),
@@ -234,13 +263,11 @@ class R5CGoldEquivalenceTests(unittest.TestCase):
                     }
                     for source_day, units in demand
                 ]
-                actual = builder.build(
-                    f"M5-{item_id}", ANCHOR, daily_sales
-                ).features.iloc[0]
-                selected = ", ".join(
-                    '"' + name.replace('"', '""') + '"'
-                    for name in builder.contract["feature_order"]
-                )
+                result = builder.build(sku, ANCHOR, daily_sales)
+                self.assertEqual(result.status, READY, f"{sku} should be READY")
+                self.assertEqual(result.anchor_source_date, date(2015, 6, 30), sku)
+                self.assertEqual(list(result.features.columns), feature_order, sku)
+                actual = result.features.iloc[0]
                 expected = connection.execute(
                     f"""
                     SELECT {selected} FROM read_parquet(?)
@@ -249,17 +276,36 @@ class R5CGoldEquivalenceTests(unittest.TestCase):
                     """,
                     [str(gold), item_id],
                 ).fetchone()
-                self.assertIsNotNone(expected, item_id)
-                for index, name in enumerate(builder.contract["feature_order"]):
+                self.assertIsNotNone(expected, f"Gold row missing for {sku} at 2015-06-30")
+                for index, name in enumerate(feature_order):
+                    gold_value = expected[index]
+                    serving_value = actual[name]
+                    gold_missing = gold_value is None or (
+                        isinstance(gold_value, (float, np.floating)) and math.isnan(float(gold_value))
+                    )
+                    serving_missing = serving_value is None or (
+                        isinstance(serving_value, (float, np.floating)) and math.isnan(float(serving_value))
+                    )
+                    self.assertEqual(gold_missing, serving_missing,
+                                     f"Missing semantics differ for sku={sku}, feature={name}, Gold={gold_value!r}, serving={serving_value!r}")
+                    if gold_missing:
+                        self.assertTrue(builder.contract["features"][index]["nullable"], name)
+                        continue
                     if name in categorical:
-                        self.assertEqual(str(actual[name]), expected[index], (item_id, name))
+                        self.assertIsInstance(gold_value, str, (sku, name, type(gold_value)))
+                        self.assertIsInstance(serving_value, str, (sku, name, type(serving_value)))
+                        self.assertEqual(str(serving_value), str(gold_value), (sku, name, gold_value, serving_value))
                     else:
+                        self.assertIsInstance(gold_value, (int, float, np.number), (sku, name, type(gold_value)))
+                        self.assertIsInstance(serving_value, (int, float, np.number), (sku, name, type(serving_value)))
+                        self.assertTrue(math.isfinite(float(gold_value)), (sku, name, gold_value))
+                        self.assertTrue(math.isfinite(float(serving_value)), (sku, name, serving_value))
                         self.assertTrue(
                             math.isclose(
-                                float(actual[name]), float(expected[index]),
+                                float(serving_value), float(gold_value),
                                 rel_tol=1e-5, abs_tol=1e-5,
                             ),
-                            (item_id, name, actual[name], expected[index]),
+                            (sku, name, gold_value, serving_value),
                         )
         finally:
             connection.close()
