@@ -8,6 +8,7 @@ const { toFiniteNumber } = require('../utils/numbers');
 const { applyStockChange, normalizeDate } = require('../services/inventoryService');
 
 const TRANSACTION_CURRENCIES = ['PEN', 'USD', 'EUR'];
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const baseAmountExpression = {
   $cond: [
@@ -38,6 +39,7 @@ const getTransactions = asyncHandler(async (req, res) => {
     endDate, 
     contactId, 
     status, 
+    search,
     page = 1, 
     limit = 10 
   } = req.query;
@@ -57,10 +59,31 @@ const getTransactions = asyncHandler(async (req, res) => {
   }
 
   if (contactId) {
-    filter.$or = [
+    filter.$and = [{ $or: [
       { customerId: contactId },
       { vendorId: contactId }
+    ] }];
+  }
+
+  if (typeof search === 'string' && search.trim()) {
+    const searchPattern = new RegExp(escapeRegex(search.trim()), 'i');
+    const searchConditions = [
+      { customerName: searchPattern },
+      { vendorName: searchPattern },
+      { 'products.productName': searchPattern }
     ];
+    if (/^[0-9a-f]{1,24}$/i.test(search.trim())) {
+      searchConditions.push({
+        $expr: {
+          $regexMatch: {
+            input: { $toString: '$_id' },
+            regex: escapeRegex(search.trim()),
+            options: 'i'
+          }
+        }
+      });
+    }
+    filter.$and = [...(filter.$and || []), { $or: searchConditions }];
   }
 
   if (status && ['pending', 'completed', 'cancelled'].includes(status)) {
@@ -68,8 +91,11 @@ const getTransactions = asyncHandler(async (req, res) => {
   }
 
   // Calculate pagination
-  const pageNum = page;
-  const limitNum = limit;
+  const requestedPage = Number(page);
+  const limitNum = Number(limit);
+  const total = await Transaction.countDocuments(filter);
+  const pages = Math.ceil(total / limitNum);
+  const pageNum = pages === 0 ? 1 : Math.min(requestedPage, pages);
   const skip = (pageNum - 1) * limitNum;
 
   // Get transactions with pagination and populate references
@@ -82,16 +108,13 @@ const getTransactions = asyncHandler(async (req, res) => {
     .limit(limitNum)
     .skip(skip);
 
-  // Get total count for pagination
-  const total = await Transaction.countDocuments(filter);
-
   res.json({
     success: true,
     data: {
       transactions,
       pagination: {
         current: pageNum,
-        pages: Math.ceil(total / limitNum),
+        pages,
         total,
         limit: limitNum
       }

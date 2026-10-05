@@ -28,6 +28,15 @@ const paginationValidation = [
   ...limitValidation
 ];
 
+const transactionListValidation = [
+  ...paginationValidation,
+  query('search')
+    .optional()
+    .trim()
+    .isLength({ max: 100 })
+    .withMessage('Search cannot exceed 100 characters')
+];
+
 // Auth validations
 const registerValidation = [
   body('name')
@@ -715,6 +724,7 @@ module.exports = {
   updateTransactionStatusValidation,
   // Query and payment validations
   paginationValidation,
+  transactionListValidation,
   limitValidation,
   productQueryValidation,
   exchangeRateQueryValidation,

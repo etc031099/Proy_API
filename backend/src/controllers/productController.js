@@ -124,8 +124,11 @@ const getProducts = asyncHandler(async (req, res) => {
   }
 
   // Calculate pagination
-  const pageNum = page;
-  const limitNum = limit;
+  const requestedPage = Number(page);
+  const limitNum = Number(limit);
+  const total = await Product.countDocuments(filter);
+  const pages = Math.ceil(total / limitNum);
+  const pageNum = pages === 0 ? 1 : Math.min(requestedPage, pages);
   const skip = (pageNum - 1) * limitNum;
 
   // Get products with pagination
@@ -134,16 +137,13 @@ const getProducts = asyncHandler(async (req, res) => {
     .limit(limitNum)
     .skip(skip);
 
-  // Get total count for pagination
-  const total = await Product.countDocuments(filter);
-
   res.json({
     success: true,
     data: {
       products,
       pagination: {
         current: pageNum,
-        pages: Math.ceil(total / limitNum),
+        pages,
         total,
         limit: limitNum
       }

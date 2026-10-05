@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { Layout } from '@/components/Layout';
 import { Button } from '@/components/ui/button';
@@ -13,16 +13,15 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { 
   Plus, 
   Search, 
-  Filter,
   ArrowUpDown,
   Eye,
-  Calendar,
   DollarSign,
   TrendingUp,
   TrendingDown 
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { PaginationControls } from '@/components/PaginationControls';
 
 interface Transaction {
   _id: string;
@@ -68,13 +67,13 @@ export default function TransactionsPage() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
+  const [totalTransactions, setTotalTransactions] = useState(0);
   const { t, language } = useLanguage();
 
-  const fetchTransactions = async () => {
+  const fetchTransactions = useCallback(async () => {
     try {
       setLoading(true);
-      const params: Record<string, any> = { page, limit: 10 };
+      const params: Record<string, string | number> = { page, limit: 10, search: searchTerm };
       
       if (typeFilter !== 'all') params.type = typeFilter;
       if (statusFilter !== 'all') params.status = statusFilter;
@@ -84,7 +83,8 @@ export default function TransactionsPage() {
       const response = await api.getTransactions(params);
       if (response.success) {
         setTransactions(response.data.transactions);
-        setTotalPages(response.data.pagination.pages);
+        setTotalTransactions(response.data.pagination.total);
+        setPage(response.data.pagination.current);
       } else {
         setError('Failed to fetch transactions');
       }
@@ -94,11 +94,11 @@ export default function TransactionsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [page, searchTerm, startDate, endDate, typeFilter, statusFilter]);
 
-  const fetchSummary = async () => {
+  const fetchSummary = useCallback(async () => {
     try {
-      const params: Record<string, any> = {};
+      const params: Record<string, string> = {};
       if (startDate) params.startDate = startDate;
       if (endDate) params.endDate = endDate;
 
@@ -112,22 +112,26 @@ export default function TransactionsPage() {
       console.error('Error fetching summary:', err);
       setSummary(null);
     }
-  };
+  }, [startDate, endDate]);
 
   useEffect(() => {
-    fetchTransactions();
-    fetchSummary();
-  }, [page, typeFilter, statusFilter, startDate, endDate]);
+    void fetchTransactions();
+  }, [fetchTransactions]);
 
-  const filteredTransactions = transactions.filter(transaction => {
-    const searchLower = searchTerm.toLowerCase();
-    return (
-      transaction.customerName?.toLowerCase().includes(searchLower) ||
-      transaction.vendorName?.toLowerCase().includes(searchLower) ||
-      transaction._id.toLowerCase().includes(searchLower) ||
-      transaction.products.some(p => p.productName.toLowerCase().includes(searchLower))
-    );
-  });
+  useEffect(() => {
+    void fetchSummary();
+  }, [fetchSummary]);
+
+  const updateFilter = (update: () => void) => {
+    setPage(1);
+    update();
+  };
+
+  const rangeStart = totalTransactions === 0 ? 0 : ((page - 1) * 10) + 1;
+  const rangeEnd = Math.min(page * 10, totalTransactions);
+  const rangeText = language === 'es'
+    ? `Mostrando ${rangeStart}–${rangeEnd} de ${totalTransactions} transacciones`
+    : `Showing ${rangeStart}–${rangeEnd} of ${totalTransactions} transactions`;
 
   const getTypeColor = (type: string) => {
     return type === 'sale' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800';
@@ -279,7 +283,7 @@ export default function TransactionsPage() {
                   <Input
                     placeholder={t('transactions.searchPlaceholder')}
                     value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
+                    onChange={(e) => updateFilter(() => setSearchTerm(e.target.value))}
                     className="pl-8"
                   />
                 </div>
@@ -287,7 +291,7 @@ export default function TransactionsPage() {
 
               <div className="space-y-2">
                 <label className="text-sm font-medium">{t('transactions.type')}</label>
-                <Select value={typeFilter} onValueChange={setTypeFilter}>
+                <Select value={typeFilter} onValueChange={(value) => updateFilter(() => setTypeFilter(value))}>
                   <SelectTrigger>
                     <SelectValue placeholder={t('transactions.allTypes')} />
                   </SelectTrigger>
@@ -301,7 +305,7 @@ export default function TransactionsPage() {
 
               <div className="space-y-2">
                 <label className="text-sm font-medium">{t('transactions.status')}</label>
-                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <Select value={statusFilter} onValueChange={(value) => updateFilter(() => setStatusFilter(value))}>
                   <SelectTrigger>
                     <SelectValue placeholder={t('transactions.allStatuses')} />
                   </SelectTrigger>
@@ -319,7 +323,7 @@ export default function TransactionsPage() {
                 <Input
                   type="date"
                   value={startDate}
-                  onChange={(e) => setStartDate(e.target.value)}
+                  onChange={(e) => updateFilter(() => setStartDate(e.target.value))}
                 />
               </div>
 
@@ -328,7 +332,7 @@ export default function TransactionsPage() {
                 <Input
                   type="date"
                   value={endDate}
-                  onChange={(e) => setEndDate(e.target.value)}
+                  onChange={(e) => updateFilter(() => setEndDate(e.target.value))}
                 />
               </div>
             </div>
@@ -340,17 +344,13 @@ export default function TransactionsPage() {
           <CardHeader>
             <CardTitle>{t('transactions.history')}</CardTitle>
             <CardDescription>
-              {filteredTransactions.length} of {transactions.length} transactions
+              {rangeText}
             </CardDescription>
           </CardHeader>
           <CardContent>
             {loading ? (
               <div className="text-center py-8">
                 <p className="text-muted-foreground">{t('transactions.loading')}</p>
-              </div>
-            ) : filteredTransactions.length === 0 ? (
-              <div className="text-center py-8">
-                <p className="text-muted-foreground">{t('transactions.none')}</p>
               </div>
             ) : (
               <div className="space-y-4">
@@ -368,7 +368,7 @@ export default function TransactionsPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredTransactions.map((transaction) => (
+                    {transactions.map((transaction) => (
                       <TableRow key={transaction._id}>
                         <TableCell>
                           {new Date(transaction.date).toLocaleDateString()}
@@ -421,33 +421,24 @@ export default function TransactionsPage() {
                         </TableCell>
                       </TableRow>
                     ))}
+                    {transactions.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">
+                          {t('transactions.none')}
+                        </TableCell>
+                      </TableRow>
+                    )}
                   </TableBody>
                 </Table>
 
-                {/* Pagination */}
-                <div className="flex items-center justify-between">
-                  <p className="text-sm text-muted-foreground">
-                    Page {page} of {totalPages}
-                  </p>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setPage(p => Math.max(1, p - 1))}
-                      disabled={page === 1}
-                    >
-                      Previous
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                      disabled={page === totalPages}
-                    >
-                      Next
-                    </Button>
-                  </div>
-                </div>
+                <PaginationControls
+                  page={page}
+                  pageSize={10}
+                  total={totalTransactions}
+                  entity="transacciones"
+                  language={language}
+                  onPageChange={setPage}
+                />
               </div>
             )}
           </CardContent>

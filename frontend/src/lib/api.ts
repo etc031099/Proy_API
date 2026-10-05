@@ -284,6 +284,9 @@ class ApiClient {
   // Transaction methods
   async getTransactions(params?: {
     type?: string;
+    status?: string;
+    search?: string;
+    contactId?: string;
     startDate?: string;
     endDate?: string;
     page?: number;

@@ -7,7 +7,11 @@ export default defineConfig({
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },
   test: {
-    include: ['test/mlForecast.api.test.ts', 'test/mlForecast.component.test.tsx'],
+    include: [
+      'test/mlForecast.api.test.ts',
+      'test/mlForecast.component.test.tsx',
+      'test/systemPagination.component.test.tsx',
+    ],
     environment: 'jsdom',
     setupFiles: ['./test/setup.ts'],
     clearMocks: true,

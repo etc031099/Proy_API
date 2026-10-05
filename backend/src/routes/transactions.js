@@ -13,7 +13,7 @@ const { validateRequest } = require('../middleware/validation');
 const {
   createTransactionValidation,
   updateTransactionStatusValidation,
-  paginationValidation
+  transactionListValidation
 } = require('../utils/validations');
 
 const router = express.Router();
@@ -23,7 +23,7 @@ router.use(authenticate);
 router.use(checkBusinessAccess);
 
 // Transaction CRUD routes
-router.get('/', paginationValidation, validateRequest, getTransactions);
+router.get('/', transactionListValidation, validateRequest, getTransactions);
 router.post('/', createTransactionValidation, validateRequest, createTransaction);
 
 // Special routes (must come before :id routes)

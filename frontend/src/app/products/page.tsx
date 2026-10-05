@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { Layout } from '@/components/Layout';
 import { Button } from '@/components/ui/button';
@@ -13,31 +13,48 @@ import { Product } from '@/types';
 import { Plus, Search, Edit, Trash2, Package } from 'lucide-react';
 import Link from 'next/link';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { PaginationControls } from '@/components/PaginationControls';
 
 export default function ProductsPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const { t } = useLanguage();
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [total, setTotal] = useState(0);
+  const { t, language } = useLanguage();
 
   const formatPrice = (price: number, currency: Product['currency'] = 'USD') =>
     new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(price);
 
-  useEffect(() => {
-    loadProducts();
-  }, [search]);
-
-  const loadProducts = async () => {
+  const loadProducts = useCallback(async () => {
     try {
-      const response = await apiClient.getProducts({ search });
+      setLoading(true);
+      const response = await apiClient.getProducts({ search, page, limit: pageSize });
       if (response.success) {
         setProducts(response.data.products);
+        setTotal(response.data.pagination.total);
+        setPage(response.data.pagination.current);
       }
     } catch (error) {
       console.error('Failed to load products:', error);
     } finally {
       setLoading(false);
     }
+  }, [page, pageSize, search]);
+
+  useEffect(() => {
+    void loadProducts();
+  }, [loadProducts]);
+
+  const handleSearchChange = (value: string) => {
+    setSearch(value);
+    setPage(1);
+  };
+
+  const handlePageSizeChange = (value: number) => {
+    setPageSize(value);
+    setPage(1);
   };
 
   const handleDelete = async (id: string) => {
@@ -79,7 +96,7 @@ export default function ProductsPage() {
                 <Input
                   placeholder={t('products.search')}
                   value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  onChange={(e) => handleSearchChange(e.target.value)}
                   className="max-w-sm"
                 />
               </div>
@@ -157,6 +174,19 @@ export default function ProductsPage() {
                     )}
                   </TableBody>
                 </Table>
+              )}
+              {!loading && (
+                <div className="mt-4">
+                  <PaginationControls
+                    page={page}
+                    pageSize={pageSize}
+                    total={total}
+                    entity="productos"
+                    language={language}
+                    onPageChange={setPage}
+                    onPageSizeChange={handlePageSizeChange}
+                  />
+                </div>
               )}
             </CardContent>
           </Card>
