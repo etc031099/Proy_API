@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from ml.service.app import create_app
 from ml.service.model_runtime import ModelRuntime, ModelUnavailableError
+from ml.service.schemas import PredictionRequest
 from ml.src.common import repository_path
 
 
@@ -238,6 +239,65 @@ class R5DServiceTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["results"][0]["status"], "INVALID_HISTORY")
+
+    def test_ambiguous_zero_window_is_not_predicted_even_with_complete_coverage(self) -> None:
+        ambiguous = item(days=57)
+        for record in ambiguous["dailySales"]:
+            record["unitsSold"] = 0
+        with patch.object(self.runtime.pipeline, "predict") as predict:
+            batch = self.runtime.predict_batch(PredictionRequest.model_validate(payload([ambiguous])))
+            self.assertEqual(batch.ready_count, 0)
+            self.assertIsNone(batch.results[0].predictedDemand7d)
+            response = self.client.post(
+                "/v1/predict/demand", json=payload([ambiguous]), headers=self.headers
+            )
+            predict.assert_not_called()
+        self.assertEqual(response.status_code, 200)
+        result = response.json()["results"][0]
+        self.assertEqual(result["status"], "INSUFFICIENT_HISTORY")
+        self.assertIsNone(result.get("predictedDemand7d"))
+        self.assertIn("recency", result["message"])
+
+    def test_57_zero_days_from_introduction_are_ready_with_gold_recency(self) -> None:
+        never_sold = item(days=57)
+        for record in never_sold["dailySales"]:
+            record["unitsSold"] = 0
+        item_id = never_sold["sku"].removeprefix("M5-")
+        product = self.runtime.builder.products[item_id]
+        # In-memory fixture only: introduction coincides with the coverage start.
+        active_start = ANCHOR - timedelta(days=56 + self.runtime.builder.manifest["date_offset_days"])
+        with patch.dict(self.runtime.builder.products, {item_id: product._replace(active_start=active_start)}):
+            with patch.object(self.runtime.pipeline, "predict", wraps=self.runtime.pipeline.predict) as predict:
+                response = self.client.post(
+                    "/v1/predict/demand", json=payload([never_sold]), headers=self.headers
+                )
+                predict.assert_called_once()
+                row = predict.call_args.args[0].iloc[0]
+                self.assertEqual(row["has_prior_sale"], 0)
+                self.assertEqual(row["days_since_last_sale"], 57)
+        self.assertEqual(response.status_code, 200)
+        result = response.json()["results"][0]
+        self.assertEqual(result["status"], "READY")
+        self.assertTrue(np.isfinite(result["predictedDemand7d"]))
+
+    def test_ambiguous_recency_does_not_prevent_other_items_from_predicting(self) -> None:
+        ambiguous = item("ambiguous", "M5-FOODS_1_063", days=57)
+        for record in ambiguous["dailySales"]:
+            record["unitsSold"] = 0
+        with patch.object(self.runtime.pipeline, "predict", wraps=self.runtime.pipeline.predict) as predict:
+            response = self.client.post(
+                "/v1/predict/demand",
+                json=payload([item("ready", days=57), ambiguous]),
+                headers=self.headers,
+            )
+            predict.assert_called_once()
+            self.assertEqual(len(predict.call_args.args[0]), 1)
+        self.assertEqual(response.status_code, 200)
+        ready, rejected = response.json()["results"]
+        self.assertEqual(ready["status"], "READY")
+        self.assertTrue(np.isfinite(ready["predictedDemand7d"]))
+        self.assertEqual(rejected["status"], "INSUFFICIENT_HISTORY")
+        self.assertIsNone(rejected.get("predictedDemand7d"))
 
     def test_impossible_global_context_is_422(self) -> None:
         invalid = payload()

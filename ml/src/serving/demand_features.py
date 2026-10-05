@@ -27,6 +27,8 @@ EXPECTED_BUSINESS_ID = "ML-CLOUD-DEMO"
 EXPECTED_SCENARIO_ID = "m5-ca3-cloud-demo-v1"
 EXPECTED_ANCHOR_STRATEGY = "latest_eligible_historical_anchor"
 SKU_PREFIX = "M5-"
+# Necessary for lag_56/windows; recency also needs an observed sale or coverage
+# from active_start. A continuous 57-day window alone does not prove readiness.
 MINIMUM_HISTORY_ROWS = 57
 MAX_UNITS_SOLD = 2_147_483_647
 
@@ -278,7 +280,7 @@ class DemandFeatureBuilder:
         if product is None:
             raise FeatureBuildError(MISSING_LINEAGE, "SKU is not present in product lineage")
 
-        _, units = self._validate_history(daily_sales, operational_anchor)
+        dates, units = self._validate_history(daily_sales, operational_anchor)
         active_start = _parse_date(
             product.active_start, "active_start", MISSING_LINEAGE, allow_datetime=True
         )
@@ -292,6 +294,14 @@ class DemandFeatureBuilder:
             raise FeatureBuildError(MISSING_CALENDAR, "Anchor is absent from calendar lineage")
 
         last_positive = np.flatnonzero(units > 0)
+        source_history_start = dates[0] - timedelta(days=self.manifest["date_offset_days"])
+        if not len(last_positive) and source_history_start > active_start:
+            raise FeatureBuildError(
+                INSUFFICIENT_HISTORY,
+                "Sale recency requires an observed sale or history covering active_start",
+            )
+        # Gold uses active_age + 1 only when no sale exists since introduction.
+        # The guard above prevents assuming this from a truncated zero window.
         days_since_last_sale = (
             int(len(units) - 1 - last_positive[-1])
             if len(last_positive)

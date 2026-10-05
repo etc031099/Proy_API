@@ -23,6 +23,8 @@ class PredictionContext(StrictSchema):
 
 
 class HistoryCoverage(StrictSchema):
+    # Complete describes this range, not lifetime coverage. Readiness also
+    # checks observed sales or coverage from lineage active_start for recency.
     start: date
     end: date
     complete: StrictBool

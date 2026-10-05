@@ -4,6 +4,7 @@ import json
 import math
 import unittest
 from datetime import date, timedelta
+from unittest.mock import patch
 
 import numpy as np
 
@@ -49,6 +50,8 @@ class R5CFeatureBuilderTests(unittest.TestCase):
         result = self.builder.build(self.sku, ANCHOR, history(57))
         self.assertEqual(result.status, READY)
         self.assertEqual(result.features.shape, (1, 31))
+        self.assertEqual(result.features.iloc[0]["has_prior_sale"], 1)
+        self.assertEqual(result.features.iloc[0]["days_since_last_sale"], 1)
         self.assert_code(
             INSUFFICIENT_HISTORY,
             lambda: self.builder.build(self.sku, ANCHOR, history(56)),
@@ -133,17 +136,47 @@ class R5CFeatureBuilderTests(unittest.TestCase):
         row = self.builder.build(self.sku, ANCHOR, values).features.iloc[0]
         self.assertEqual(row["days_since_last_sale"], 1)
 
-    def test_no_observed_sale_uses_active_age_fallback(self) -> None:
-        values = history()
+    def test_zero_window_after_active_start_is_insufficient_before_features(self) -> None:
+        for days in (57, 181):
+            with self.subTest(days=days):
+                values = history(days)
+                for record in values:
+                    record["unitsSold"] = 0
+                with patch("ml.src.serving.demand_features.validate_and_order_features") as validate:
+                    with self.assertRaises(FeatureBuildError) as raised:
+                        self.builder.build(self.sku, ANCHOR, values)
+                    self.assertEqual(raised.exception.code, INSUFFICIENT_HISTORY)
+                    self.assertIn("recency", str(raised.exception))
+                    validate.assert_not_called()
+
+    def test_no_sale_with_coverage_from_or_before_active_start_matches_gold_semantics(self) -> None:
+        product = self.builder.products[self.sku.removeprefix("M5-")]
+        active_start = product.active_start.date()
+        operational_start = active_start + timedelta(days=self.builder.manifest["date_offset_days"])
+        for extra_days in (0, 1):
+            with self.subTest(extra_days=extra_days):
+                values = history((ANCHOR - operational_start).days + 1 + extra_days)
+                for record in values:
+                    record["unitsSold"] = 0
+                result = self.builder.build(self.sku, ANCHOR, values)
+                row = result.features.iloc[0]
+                self.assertEqual(result.status, READY)
+                self.assertEqual(row["has_prior_sale"], 0)
+                self.assertEqual(row["days_since_last_sale"], (result.anchor_source_date - active_start).days + 1)
+
+    def test_sale_180_days_ago_remains_known_only_with_full_received_history(self) -> None:
+        values = history(181)
         for record in values:
             record["unitsSold"] = 0
+        values[0]["unitsSold"] = 3
         result = self.builder.build(self.sku, ANCHOR, values)
-        row = result.features.iloc[0]
-        product = self.builder.products[result.item_id]
-        active_start = product.active_start.date()
-        active_age = (result.anchor_source_date - active_start).days
-        self.assertEqual(row["has_prior_sale"], 0)
-        self.assertEqual(row["days_since_last_sale"], active_age + 1)
+        self.assertEqual(result.status, READY)
+        self.assertEqual(result.features.iloc[0]["has_prior_sale"], 1)
+        self.assertEqual(result.features.iloc[0]["days_since_last_sale"], 180)
+        self.assert_code(
+            INSUFFICIENT_HISTORY,
+            lambda: self.builder.build(self.sku, ANCHOR, values[-57:]),
+        )
 
     def test_lineage_categories_are_passed_through_without_invention(self) -> None:
         source_anchor = date(2015, 6, 30)
@@ -212,6 +245,7 @@ class R5CGoldEquivalenceTests(unittest.TestCase):
                     f"""
                     SELECT {selected} FROM read_parquet(?)
                     WHERE item_id = ? AND source_date = DATE '2015-06-30'
+                      AND split = 'train'
                     """,
                     [str(gold), item_id],
                 ).fetchone()
