@@ -30,8 +30,15 @@ const getStatusClass = status => ({
 const getForecastErrorCopy = type => {
   if (type === 'not-ready') {
     return {
-      title: 'Este negocio aún no cuenta con historial/configuración suficiente para generar predicciones.',
-      description: 'La inferencia estará disponible cuando el escenario esté preparado.',
+      title: 'Este negocio aún no cuenta con historial o configuración suficiente para generar predicciones.',
+      description: 'La generación de predicciones estará disponible cuando los datos y la configuración estén preparados.',
+      retry: false,
+    };
+  }
+  if (type === 'unknown') {
+    return {
+      title: 'No se pudo cargar la predicción.',
+      description: 'Inténtalo más tarde. Si el problema continúa, contacta con soporte.',
       retry: false,
     };
   }

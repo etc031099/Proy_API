@@ -1,11 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { Layout } from '@/components/Layout';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { apiClient } from '@/lib/api';
+import { apiClient, DemandForecastApiError } from '@/lib/api';
 import { DemandForecastModel, DemandForecastResponse } from '@/types';
 import { formatForecastNumber, getForecastErrorCopy, getForecastSummary, getStatusClass, getStatusLabel } from '@/lib/demandForecast';
 import { AlertTriangle, BrainCircuit, CheckCircle2, Clock3, Database, Loader2, Package, Sparkles, TrendingUp } from 'lucide-react';
@@ -54,22 +54,26 @@ export default function DemandForecastPage() {
   const [forecast, setForecast] = useState<DemandForecastResponse | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<'unavailable' | 'not-ready' | 'empty' | null>(null);
+  const [error, setError] = useState<'unavailable' | 'not-ready' | 'empty' | 'unknown' | null>(null);
+  const requestInFlight = useRef(false);
 
   const loadForecast = useCallback(async () => {
+    if (requestInFlight.current) return;
+    requestInFlight.current = true;
     setLoading(true);
-    setError(null);
     try {
       const response = await apiClient.getDemandForecast();
       const data = response.data;
-      if (!response.success || !data) { setError('unavailable'); return; }
+      if (!response.success || !data) { setError('unknown'); return; }
       if (data.status === 'ML_NOT_READY') { setError('not-ready'); return; }
       if (data.status !== 'READY' || !data.products?.length) { setError('empty'); return; }
       setForecast(data);
       setSelectedId(data.products[0].productId);
-    } catch {
-      setError('unavailable');
+      setError(null);
+    } catch (requestError) {
+      setError(requestError instanceof DemandForecastApiError ? requestError.category : 'unknown');
     } finally {
+      requestInFlight.current = false;
       setLoading(false);
     }
   }, []);
@@ -94,7 +98,7 @@ export default function DemandForecastPage() {
 
           {loading && <Card><CardContent className="flex min-h-48 flex-col items-center justify-center gap-3"><Loader2 className="h-8 w-8 animate-spin text-primary" /><p className="font-medium">Analizando demanda con el modelo ML…</p><p className="text-sm text-muted-foreground">Consultando el historial de tu negocio</p></CardContent></Card>}
 
-          {!loading && error && <Card className="border-amber-200 dark:border-amber-900"><CardContent className="flex min-h-40 flex-col items-center justify-center gap-3 text-center"><AlertTriangle className="h-8 w-8 text-amber-500" /><p className="font-semibold">{getForecastErrorCopy(error).title}</p><p className="max-w-xl text-sm text-muted-foreground">{getForecastErrorCopy(error).description}</p>{getForecastErrorCopy(error).retry && <button type="button" onClick={() => void loadForecast()} disabled={loading} className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60">{loading ? 'Analizando demanda con el modelo ML…' : 'Reintentar predicción'}</button>}</CardContent></Card>}
+          {error && <Card className="border-amber-200 dark:border-amber-900"><CardContent className="flex min-h-40 flex-col items-center justify-center gap-3 text-center"><AlertTriangle className="h-8 w-8 text-amber-500" /><p className="font-semibold">{getForecastErrorCopy(error).title}</p><p className="max-w-xl text-sm text-muted-foreground">{getForecastErrorCopy(error).description}</p>{getForecastErrorCopy(error).retry && <button type="button" onClick={() => void loadForecast()} disabled={loading} className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60">{loading ? 'Analizando demanda con el modelo ML…' : 'Reintentar predicción'}</button>}</CardContent></Card>}
 
           {!loading && !error && forecast && <>
             <ModelMeta model={forecast.model} />
@@ -115,7 +119,7 @@ export default function DemandForecastPage() {
               </Card>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5"><Card><CardContent className="p-4"><p className="text-sm text-muted-foreground">Productos analizados</p><p className="mt-1 text-2xl font-bold">{summary.total}</p></CardContent></Card><Card><CardContent className="p-4"><p className="text-sm text-muted-foreground">Modelos listos</p><p className="mt-1 text-2xl font-bold text-emerald-600">{summary.ready}</p></CardContent></Card><Card><CardContent className="p-4"><p className="text-sm text-muted-foreground">A reponer</p><p className="mt-1 text-2xl font-bold text-red-600">{summary.restock}</p></CardContent></Card><Card><CardContent className="p-4"><p className="text-sm text-muted-foreground">En vigilancia</p><p className="mt-1 text-2xl font-bold text-amber-600">{summary.watch}</p></CardContent></Card><Card><CardContent className="p-4"><p className="text-sm text-muted-foreground">Estado OK</p><p className="mt-1 text-2xl font-bold text-emerald-600">{summary.ok}</p></CardContent></Card></div>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5"><Card><CardContent className="p-4"><p className="text-sm text-muted-foreground">Productos analizados</p><p className="mt-1 text-2xl font-bold">{summary.total}</p></CardContent></Card><Card><CardContent className="p-4"><p className="text-sm text-muted-foreground">Productos listos</p><p className="mt-1 text-2xl font-bold text-emerald-600">{summary.ready}</p></CardContent></Card><Card><CardContent className="p-4"><p className="text-sm text-muted-foreground">A reponer</p><p className="mt-1 text-2xl font-bold text-red-600">{summary.restock}</p></CardContent></Card><Card><CardContent className="p-4"><p className="text-sm text-muted-foreground">En vigilancia</p><p className="mt-1 text-2xl font-bold text-amber-600">{summary.watch}</p></CardContent></Card><Card><CardContent className="p-4"><p className="text-sm text-muted-foreground">Estado OK</p><p className="mt-1 text-2xl font-bold text-emerald-600">{summary.ok}</p></CardContent></Card></div>
 
             <Card><CardHeader><div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between"><div><CardTitle>Resultados por producto</CardTitle><CardDescription>Datos analizados hasta: {formatAnchorDate(forecast.anchorOperationalDate)}</CardDescription></div><p className="text-xs text-muted-foreground">La predicción se muestra redondeada solo para presentación.</p></div></CardHeader><CardContent><div className="overflow-x-auto"><table className="w-full min-w-[900px] text-sm"><thead><tr className="border-b text-left text-muted-foreground"><th className="px-3 py-3 font-medium">Producto</th><th className="px-3 py-3 font-medium">SKU</th><th className="px-3 py-3 text-right font-medium">Stock</th><th className="px-3 py-3 text-right font-medium">Ventas 7 días</th><th className="bg-primary/5 px-3 py-3 text-right font-semibold text-primary">Predicción ML 7 días</th><th className="px-3 py-3 text-right font-medium">Reposición sugerida</th><th className="px-3 py-3 font-medium">Estado</th></tr></thead><tbody>{products.map(product => <tr key={product.productId} className={`cursor-pointer border-b transition-colors hover:bg-muted/50 ${selected?.productId === product.productId ? 'bg-primary/[0.04]' : ''}`} onClick={() => setSelectedId(product.productId)}><td className="px-3 py-3 font-medium">{product.name}</td><td className="px-3 py-3 text-muted-foreground">{product.sku}</td><td className="px-3 py-3 text-right">{formatForecastNumber(product.stockAtAnchor, 0)}</td><td className="px-3 py-3 text-right">{formatForecastNumber(product.salesLast7Days, 0)}</td><td className="bg-primary/5 px-3 py-3 text-right font-semibold text-primary">{formatForecastNumber(product.predictedDemand7d, 2)}</td><td className="px-3 py-3 text-right">{formatForecastNumber(product.recommendedQty, 0)}</td><td className="px-3 py-3"><StatusBadge status={product.inventoryStatus} /></td></tr>)}</tbody></table></div></CardContent></Card>
 

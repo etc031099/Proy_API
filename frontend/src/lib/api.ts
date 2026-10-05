@@ -1,6 +1,16 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import { ApiResponse, DemandForecastResponse } from '@/types';
 
+export class DemandForecastApiError extends Error {
+  readonly code: 'ML_NOT_READY' | 'ML_SERVICE_UNAVAILABLE';
+
+  constructor(readonly category: 'not-ready' | 'unavailable', readonly status: number) {
+    super('Demand forecast request failed');
+    this.name = 'DemandForecastApiError';
+    this.code = category === 'not-ready' ? 'ML_NOT_READY' : 'ML_SERVICE_UNAVAILABLE';
+  }
+}
+
 class ApiClient {
   private instance: AxiosInstance;
 
@@ -330,10 +340,24 @@ class ApiClient {
   }
 
   async getDemandForecast(productId?: string): Promise<ApiResponse<DemandForecastResponse>> {
-    const response = await this.instance.get('/ml/demand-forecast', {
-      params: productId ? { productId } : undefined,
-    });
-    return response.data;
+    try {
+      const response = await this.instance.get('/ml/demand-forecast', {
+        params: productId ? { productId } : undefined,
+      });
+      return response.data;
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        const status = error.response?.status;
+        const body = error.response?.data as { code?: unknown } | undefined;
+        if (status === 409 && body?.code === 'ML_NOT_READY') {
+          throw new DemandForecastApiError('not-ready', status);
+        }
+        if (status === 503 && body?.code === 'ML_SERVICE_UNAVAILABLE') {
+          throw new DemandForecastApiError('unavailable', status);
+        }
+      }
+      throw error;
+    }
   }
 }
 
