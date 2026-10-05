@@ -11,6 +11,7 @@ const {
   createDemandForecastService
 } = require('../src/services/demandForecastService');
 const { MlServiceUnavailableError } = require('../src/services/mlServiceClient');
+const { Product, Transaction, InventoryMovement } = require('../src/models');
 
 const productA = {
   _id: new mongoose.Types.ObjectId(),
@@ -199,4 +200,126 @@ test('ML unavailable is mapped to a sanitized 503 service error', async () => {
       && error.statusCode === 503
       && !error.message.includes('URL')
   );
+});
+
+const isInvalidMlResult = error => error.code === 'ML_SERVICE_UNAVAILABLE'
+  && error.statusCode === 503 && error.message === 'ML result is invalid';
+
+const invalidPredictions = [
+  ['null', null], ['undefined', undefined], ['numeric string', '12.5'],
+  ['zero string', '0'], ['text', 'abc'], ['NaN', NaN], ['Infinity', Infinity],
+  ['-Infinity', -Infinity], ['negative', -1], ['object', {}], ['array', [5]],
+  ['empty array', []], ['boolean', false]
+];
+
+test('READY predictions reject non-numbers, nonfinite and negative values without coercion', async t => {
+  for (const [name, prediction] of invalidPredictions) {
+    await t.test(name, () => {
+      assert.throws(() => calculateRecommendation({
+        predictedDemand7d: prediction, minStockLevel: 0, stockAtAnchor: 0
+      }), isInvalidMlResult);
+    });
+  }
+});
+
+test('zero and CLOUD-DEMO decimal predictions preserve the recommendation formula', () => {
+  assert.deepEqual(calculateRecommendation({ predictedDemand7d: 0, minStockLevel: 0, stockAtAnchor: 0 }), {
+    safetyStock: 0, recommendedQty: 0, inventoryStatus: 'VIGILAR'
+  });
+  const prediction = 0.802037;
+  const result = calculateRecommendation({ predictedDemand7d: prediction, minStockLevel: 0, stockAtAnchor: 0 });
+  assert.deepEqual(result, {
+    safetyStock: prediction * 0.20,
+    recommendedQty: Math.ceil(Math.max(0, prediction + prediction * 0.20)),
+    inventoryStatus: 'REPONER'
+  });
+});
+
+test('minimum and historical stock require finite nonnegative numbers with only a nullish minimum default', async t => {
+  for (const minimum of [undefined, null, 0]) {
+    assert.equal(calculateRecommendation({ predictedDemand7d: 10, minStockLevel: minimum, stockAtAnchor: 20 }).safetyStock, 2);
+  }
+  const invalid = [null, undefined, '', '3', false, {}, [], NaN, Infinity, -Infinity, -1];
+  for (const field of ['minStockLevel', 'stockAtAnchor']) {
+    for (const value of invalid) {
+      if (field === 'minStockLevel' && value == null) continue;
+      await t.test(`${field}: ${String(value)}`, () => {
+        assert.throws(() => calculateRecommendation({
+          predictedDemand7d: 10, minStockLevel: 0, stockAtAnchor: 20, [field]: value
+        }), isInvalidMlResult);
+      });
+    }
+  }
+});
+
+test('finite extreme values are rejected on overflow without imposing an arbitrary cap', () => {
+  assert.throws(() => calculateRecommendation({
+    predictedDemand7d: Number.MAX_VALUE, minStockLevel: 0, stockAtAnchor: Number.MAX_VALUE
+  }), isInvalidMlResult);
+  assert.throws(() => calculateRecommendation({
+    predictedDemand7d: Number.MAX_VALUE / 2, minStockLevel: Number.MAX_VALUE, stockAtAnchor: 0
+  }), isInvalidMlResult);
+  assert.throws(() => calculateRecommendation({
+    predictedDemand7d: Number.MAX_VALUE * 0.7, minStockLevel: 0, stockAtAnchor: Number.MAX_VALUE
+  }), isInvalidMlResult);
+  assert.ok(Number.isFinite(calculateRecommendation({
+    predictedDemand7d: Number.MAX_VALUE / 2, minStockLevel: 0, stockAtAnchor: 0
+  }).recommendedQty));
+});
+
+test('a READY-invalid batch fails safely and forecast repositories remain read-only', async t => {
+  const writeSpies = [
+    t.mock.method(Product, 'updateOne', () => { throw new Error('unexpected stock write'); }),
+    t.mock.method(Product.prototype, 'save', () => { throw new Error('unexpected stock save'); }),
+    t.mock.method(Transaction, 'create', () => { throw new Error('unexpected sale/purchase'); }),
+    t.mock.method(Transaction.prototype, 'save', () => { throw new Error('unexpected transaction save'); }),
+    t.mock.method(InventoryMovement, 'create', () => { throw new Error('unexpected movement'); }),
+    t.mock.method(InventoryMovement.prototype, 'save', () => { throw new Error('unexpected movement save'); })
+  ];
+  const products = [Object.freeze({ ...productA, stock: 8 }), Object.freeze({ ...productB, stock: 20 })];
+  const before = JSON.stringify(products);
+  for (const [name, value] of [...invalidPredictions, ['absent', undefined], ['overflow', Number.MAX_VALUE]]) {
+    await t.test(name, async () => {
+      const valid = readyMlClient();
+      const service = createDemandForecastService({
+        repositories: makeRepositories({ findProducts: async () => products }),
+        mlClient: {
+          predictDemand: async request => {
+            const response = await valid.predictDemand(request);
+            const invalid = { ...response.results[1], status: 'READY', predictedDemand7d: value };
+            if (name === 'absent') delete invalid.predictedDemand7d;
+            return { ...response, results: [response.results[0], invalid] };
+          }
+        }
+      });
+      await assert.rejects(service.getDemandForecast({ businessId: CLOUD_DEMO_BUSINESS_ID }), isInvalidMlResult);
+    });
+  }
+  assert.equal(JSON.stringify(products), before);
+  for (const spy of writeSpies) assert.equal(spy.mock.callCount(), 0);
+});
+
+test('legitimate non-READY results need no prediction and preserve mixed batches', async () => {
+  for (const status of ['INSUFFICIENT_HISTORY', 'MISSING_LINEAGE', 'MISSING_PRICE_HISTORY', 'MISSING_CALENDAR', 'INVALID_HISTORY', 'INVALID_FEATURES']) {
+    const valid = readyMlClient();
+    const service = createDemandForecastService({
+      repositories: makeRepositories(),
+      mlClient: {
+        predictDemand: async request => {
+          const response = await valid.predictDemand(request);
+          return { ...response, results: [response.results[0], {
+            productId: response.results[1].productId, sku: response.results[1].sku, status
+          }] };
+        }
+      }
+    });
+    const result = await service.getDemandForecast({ businessId: CLOUD_DEMO_BUSINESS_ID });
+    assert.equal(result.status, 'READY');
+    assert.equal(result.products[0].mlStatus, 'READY');
+    assert.equal(result.products[0].recommendedQty, 13);
+    assert.deepEqual({
+      status: result.products[1].mlStatus, prediction: result.products[1].predictedDemand7d,
+      safety: result.products[1].safetyStock, quantity: result.products[1].recommendedQty
+    }, { status, prediction: null, safety: null, quantity: null });
+  }
 });

@@ -59,3 +59,36 @@ test('ML client converts timeout into ML_SERVICE_UNAVAILABLE without retries', a
   await assert.rejects(client.predictDemand({}), { code: 'ML_SERVICE_UNAVAILABLE' });
   assert.equal(calls, 1);
 });
+
+test('ML client rejects malformed result structure with a sanitized error', async () => {
+  const valid = { productId: 'p1', sku: 'M5-ITEM', status: 'READY', predictedDemand7d: 0.802037 };
+  for (const body of [
+    null, {}, { results: null }, { results: [null] }, { results: [[]] },
+    { results: [{ ...valid, productId: 1 }] }, { results: [{ ...valid, sku: '' }] },
+    { results: [{ ...valid, status: undefined }] }, { results: [{ ...valid, status: '' }] }
+  ]) {
+    const client = createMlServiceClient({
+      serviceUrl: 'https://ml.internal.example',
+      serviceSecret: 'test-ml-secret-at-least-32-characters',
+      fetchImpl: async () => ({ ok: true, json: async () => body })
+    });
+    await assert.rejects(client.predictDemand({}), error => (
+      error instanceof MlServiceUnavailableError
+      && error.code === 'ML_SERVICE_UNAVAILABLE'
+      && error.message === 'ML service is unavailable'
+    ));
+  }
+});
+
+test('ML client accepts READY and non-READY protocol records without coercing predictions', async () => {
+  const body = { results: [
+    { productId: 'p1', sku: 'M5-ONE', status: 'READY', predictedDemand7d: 0.802037 },
+    { productId: 'p2', sku: 'M5-TWO', status: 'INSUFFICIENT_HISTORY' }
+  ] };
+  const client = createMlServiceClient({
+    serviceUrl: 'https://ml.internal.example',
+    serviceSecret: 'test-ml-secret-at-least-32-characters',
+    fetchImpl: async () => ({ ok: true, json: async () => body })
+  });
+  assert.deepEqual(await client.predictDemand({}), body);
+});

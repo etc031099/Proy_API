@@ -37,7 +37,15 @@ const createMlServiceClient = ({
 
       if (!response.ok) throw new MlServiceUnavailableError();
       const body = await response.json();
-      if (!body || !Array.isArray(body.results)) throw new MlServiceUnavailableError();
+      if (
+        !body || !Array.isArray(body.results)
+        || body.results.some(result => (
+          !result || typeof result !== 'object' || Array.isArray(result)
+          || typeof result.productId !== 'string' || !result.productId
+          || typeof result.sku !== 'string' || !result.sku
+          || typeof result.status !== 'string' || !result.status
+        ))
+      ) throw new MlServiceUnavailableError();
       return body;
     } catch (error) {
       if (error instanceof MlServiceUnavailableError) throw error;

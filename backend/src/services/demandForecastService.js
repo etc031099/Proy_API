@@ -73,17 +73,32 @@ const buildContinuousHistory = ({ startDate, anchorDate, transactions, productId
 };
 
 const calculateRecommendation = ({ predictedDemand7d, minStockLevel, stockAtAnchor }) => {
-  const prediction = Number(predictedDemand7d);
-  const minimum = Number(minStockLevel || 0);
-  const stock = Number(stockAtAnchor);
-  if (![prediction, minimum, stock].every(Number.isFinite) || prediction < 0 || minimum < 0 || stock < 0) {
+  const prediction = predictedDemand7d;
+  // Preserve Product's optional/default-zero minimum without numeric coercion.
+  const minimum = minStockLevel ?? 0;
+  const stock = stockAtAnchor;
+  const isNonnegativeNumber = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  if (![prediction, minimum, stock].every(isNonnegativeNumber)) {
     throw new DemandForecastError('ML_SERVICE_UNAVAILABLE', 'ML result is invalid', 503);
   }
   const safetyStock = Math.max(minimum, prediction * DEFAULT_SAFETY_STOCK_RATE);
-  const recommendedQty = Math.ceil(Math.max(0, prediction + safetyStock - stock));
-  const inventoryStatus = recommendedQty > 0
-    ? 'REPONER'
-    : stock <= 1.5 * prediction ? 'VIGILAR' : 'OK';
+  const requiredStock = prediction + safetyStock;
+  const shortage = requiredStock - stock;
+  if (!isNonnegativeNumber(safetyStock) || !Number.isFinite(requiredStock) || !Number.isFinite(shortage)) {
+    throw new DemandForecastError('ML_SERVICE_UNAVAILABLE', 'ML result is invalid', 503);
+  }
+  const recommendedQty = Math.ceil(Math.max(0, shortage));
+  if (!isNonnegativeNumber(recommendedQty)) {
+    throw new DemandForecastError('ML_SERVICE_UNAVAILABLE', 'ML result is invalid', 503);
+  }
+  let inventoryStatus = 'REPONER';
+  if (recommendedQty === 0) {
+    const watchThreshold = 1.5 * prediction;
+    if (!Number.isFinite(watchThreshold)) {
+      throw new DemandForecastError('ML_SERVICE_UNAVAILABLE', 'ML result is invalid', 503);
+    }
+    inventoryStatus = stock <= watchThreshold ? 'VIGILAR' : 'OK';
+  }
   return { safetyStock, recommendedQty, inventoryStatus };
 };
 
@@ -167,7 +182,7 @@ const createDemandForecastService = ({
         productId: String(product._id),
         sku: product.sku,
         stockAtAnchor: stocks[index],
-        minStockLevel: product.minStockLevel || 0,
+        minStockLevel: product.minStockLevel ?? 0,
         historyCoverage: {
           start: dailySales[0].date,
           end: dailySales[dailySales.length - 1].date,
@@ -198,7 +213,9 @@ const createDemandForecastService = ({
     }
 
     if (
-      prediction.model !== 'demand_forecast_v1'
+      !prediction
+      || !Array.isArray(prediction.results)
+      || prediction.model !== 'demand_forecast_v1'
       || prediction.modelVersion !== '1.0.0'
       || prediction.featureSetVersion !== 'demand-v1'
       || prediction.results.length !== items.length
@@ -208,6 +225,9 @@ const createDemandForecastService = ({
     const expectedResults = new Set(items.map(item => `${item.productId}\0${item.sku}`));
     const resultMap = new Map();
     for (const result of prediction.results) {
+      if (!result || typeof result.status !== 'string' || !result.status) {
+        throw new DemandForecastError('ML_SERVICE_UNAVAILABLE', 'ML response is invalid', 503);
+      }
       const key = `${result.productId}\0${result.sku}`;
       if (!expectedResults.has(key) || resultMap.has(key)) {
         throw new DemandForecastError('ML_SERVICE_UNAVAILABLE', 'ML response is invalid', 503);
