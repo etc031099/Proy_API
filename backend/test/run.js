@@ -8,3 +8,4 @@ require('./cors.test');
 require('./inventoryMovement.test');
 require('./mlServiceClient.test');
 require('./demandForecastService.test');
+require('./transactionsRoutes.test');

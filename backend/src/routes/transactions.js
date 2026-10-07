@@ -13,7 +13,8 @@ const { validateRequest } = require('../middleware/validation');
 const {
   createTransactionValidation,
   updateTransactionStatusValidation,
-  transactionListValidation
+  transactionListValidation,
+  paginationValidation
 } = require('../utils/validations');
 
 const router = express.Router();
