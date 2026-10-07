@@ -26,6 +26,7 @@ const externalRoutes = require('./routes/external');
 const telegramRoutes = require('./routes/telegram');
 const creditPaymentRoutes = require('./routes/creditPayments');
 const mlRoutes = require('./routes/ml');
+const createAgentRoutes = require('./routes/agent');
 const { startPolling } = require('./services/telegramService');
 
 // Import middleware
@@ -124,6 +125,7 @@ app.use('/api/external', externalRoutes);
 app.use('/api/telegram', telegramRoutes);
 app.use('/api/credit-payments', creditPaymentRoutes);
 if (environmentConfiguration.mlEnabled) app.use('/api/ml', mlRoutes);
+app.use('/api/agent', createAgentRoutes({ enabled: environmentConfiguration.agentEnabled }));
 
 // Welcome route
 app.get('/', (req, res) => {
