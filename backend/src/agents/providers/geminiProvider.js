@@ -6,6 +6,10 @@ const { DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_TIMEOUT_MS } = require('../../confi
 
 const GEMINI_ERROR_MESSAGES = Object.freeze({
   GEMINI_NOT_CONFIGURED: 'Gemini is not configured',
+  GEMINI_AUTHENTICATION_FAILED: 'Gemini authentication failed',
+  GEMINI_PERMISSION_DENIED: 'Gemini permission denied',
+  GEMINI_MODEL_NOT_FOUND: 'Gemini model was not found',
+  GEMINI_NETWORK_ERROR: 'Gemini network request failed',
   GEMINI_TIMEOUT: 'Gemini request timed out',
   GEMINI_RATE_LIMITED: 'Gemini rate limit reached',
   GEMINI_UNAVAILABLE: 'Gemini is temporarily unavailable',
@@ -14,10 +18,15 @@ const GEMINI_ERROR_MESSAGES = Object.freeze({
 });
 
 class GeminiProviderError extends AgentError {
-  constructor(code) {
+  constructor(code, { httpStatus = null, providerCode = null, retryable = false } = {}) {
     super(Object.hasOwn(GEMINI_ERROR_MESSAGES, code) ? code : 'GEMINI_UNAVAILABLE');
     this.name = 'GeminiProviderError';
     this.code = Object.hasOwn(GEMINI_ERROR_MESSAGES, code) ? code : 'GEMINI_UNAVAILABLE';
+    this.httpStatus = Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? httpStatus : null;
+    this.category = this.code;
+    this.providerCode = typeof providerCode === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(providerCode)
+      ? providerCode : null;
+    this.retryable = retryable === true;
   }
 }
 
@@ -42,13 +51,36 @@ const normalizeUsage = metadata => {
 const providerError = error => {
   if (error instanceof GeminiProviderError) return error;
   const status = error?.status ?? error?.statusCode ?? error?.response?.status;
-  if (status === 429 || /rate.?limit|resource exhausted/i.test(String(error?.message || ''))) {
-    return new GeminiProviderError('GEMINI_RATE_LIMITED');
+  const message = String(error?.message || '');
+  const providerCodeValue = error?.error?.status ?? error?.statusText;
+  const providerCode = typeof providerCodeValue === 'string'
+    && ['UNAUTHENTICATED', 'PERMISSION_DENIED', 'NOT_FOUND', 'RESOURCE_EXHAUSTED', 'INTERNAL', 'UNAVAILABLE', 'DEADLINE_EXCEEDED'].includes(providerCodeValue)
+    ? providerCodeValue : null;
+  const metadata = { httpStatus: status, providerCode };
+  if (status === 401 || providerCode === 'UNAUTHENTICATED' || /API key not valid|invalid api key|unauthenticated/i.test(message)) {
+    return new GeminiProviderError('GEMINI_AUTHENTICATION_FAILED', metadata);
   }
-  if (error?.name === 'AbortError' || error?.name === 'TimeoutError' || /timed? ?out|deadline exceeded/i.test(String(error?.name || ''))) {
-    return new GeminiProviderError('GEMINI_TIMEOUT');
+  if (status === 403 || providerCode === 'PERMISSION_DENIED' || /permission denied|forbidden|not authorized/i.test(message)) {
+    return new GeminiProviderError('GEMINI_PERMISSION_DENIED', metadata);
   }
-  return new GeminiProviderError('GEMINI_UNAVAILABLE');
+  if (status === 404 || providerCode === 'NOT_FOUND' && /model|generatecontent|resource.*not found/i.test(message)) {
+    return new GeminiProviderError('GEMINI_MODEL_NOT_FOUND', metadata);
+  }
+  if (status === 429 || providerCode === 'RESOURCE_EXHAUSTED' || /rate.?limit|resource exhausted|quota/i.test(message)) {
+    return new GeminiProviderError('GEMINI_RATE_LIMITED', { ...metadata, retryable: true });
+  }
+  if (error?.name === 'AbortError' || error?.name === 'TimeoutError' || /timed? ?out|deadline exceeded/i.test(`${error?.name || ''} ${message}`)
+    || providerCode === 'DEADLINE_EXCEEDED') {
+    return new GeminiProviderError('GEMINI_TIMEOUT', { ...metadata, retryable: true });
+  }
+  if (/fetch failed|network|socket|econn|enotfound|connection/i.test(message)
+    || /^ERR_(?:NETWORK|INTERNET|CONNECTION)/.test(String(error?.code || ''))) {
+    return new GeminiProviderError('GEMINI_NETWORK_ERROR', { ...metadata, retryable: true });
+  }
+  if ((Number.isInteger(status) && status >= 500 && status <= 599) || ['INTERNAL', 'UNAVAILABLE'].includes(providerCode)) {
+    return new GeminiProviderError('GEMINI_UNAVAILABLE', { ...metadata, retryable: true });
+  }
+  return new GeminiProviderError('GEMINI_UNAVAILABLE', metadata);
 };
 
 const validatePrompt = ({ systemInstruction, messages }) => {
@@ -136,12 +168,12 @@ const createGeminiProvider = ({ apiKey, model = DEFAULT_GEMINI_MODEL,
       response = await Promise.race([requestPromise, new Promise((resolve, reject) => {
         timer = setTimeout(() => {
           controller.abort();
-          reject(new GeminiProviderError('GEMINI_TIMEOUT'));
+          reject(new GeminiProviderError('GEMINI_TIMEOUT', { retryable: true }));
         }, timeoutMs);
       })]);
     } catch (error) {
       if (!apiKey && error instanceof GeminiProviderError) throw error;
-      if (controller.signal.aborted) throw new GeminiProviderError('GEMINI_TIMEOUT');
+      if (controller.signal.aborted) throw new GeminiProviderError('GEMINI_TIMEOUT', { retryable: true });
       throw providerError(error);
     } finally { clearTimeout(timer); }
 

@@ -4,7 +4,7 @@ const {
   AgentError, createAgentExecution, createAgentRequestContext, createGeminiProvider,
   getToolDeclarations, executeRequestedSkill, classifyAgentIntent, validateRoutingOutput, SKILLS
 } = require('../src/agents');
-const { GeminiProviderError } = require('../src/agents/providers/geminiProvider');
+const { GeminiProviderError, providerError } = require('../src/agents/providers/geminiProvider');
 
 const id = '507f1f77bcf86cd799439011';
 const context = () => createAgentRequestContext({ user: { _id: id, businessId: 'AG-DEMO', role: 'user', isActive: true }, businessId: 'AG-DEMO' });
@@ -179,6 +179,27 @@ test('429, 5xx, timeout and missing metadata become bounded errors and real call
     assert.equal(usage.totalTokens, null);
     assert.equal(usage.metricsComplete, false);
     assert.equal(JSON.stringify(execution.getEvents()).includes('raw'), false);
+  }
+});
+
+test('provider errors preserve only safe status, category, provider code and retryability', () => {
+  const cases = [
+    [Object.assign(new Error('private key detail'), { status: 401 }), 'GEMINI_AUTHENTICATION_FAILED', 401, false],
+    [Object.assign(new Error('permission denied'), { status: 403, error: { status: 'PERMISSION_DENIED' } }), 'GEMINI_PERMISSION_DENIED', 403, false],
+    [Object.assign(new Error('models/gemini-3.8-flash not found'), { status: 404 }), 'GEMINI_MODEL_NOT_FOUND', 404, false],
+    [Object.assign(new Error('quota exhausted'), { status: 429, error: { status: 'RESOURCE_EXHAUSTED' } }), 'GEMINI_RATE_LIMITED', 429, true],
+    [Object.assign(new Error('upstream failure'), { status: 503 }), 'GEMINI_UNAVAILABLE', 503, true],
+    [Object.assign(new Error('request timeout'), { name: 'TimeoutError' }), 'GEMINI_TIMEOUT', null, true],
+    [Object.assign(new TypeError('fetch failed'), { code: 'ECONNRESET' }), 'GEMINI_NETWORK_ERROR', null, true]
+  ];
+  for (const [rawError, category, httpStatus, retryable] of cases) {
+    const normalized = providerError(rawError);
+    assert.equal(normalized.code, category);
+    assert.equal(normalized.category, category);
+    assert.equal(normalized.httpStatus, httpStatus);
+    assert.equal(normalized.retryable, retryable);
+    assert.equal(JSON.stringify(normalized).includes('private key detail'), false);
+    if (rawError.error?.status) assert.equal(normalized.providerCode, rawError.error.status);
   }
 });
 
