@@ -2,6 +2,8 @@ const ALLOWED_NODE_ENVIRONMENTS = new Set(['development', 'test', 'production'])
 const MIN_JWT_SECRET_LENGTH = 32;
 const MIN_WEBHOOK_SECRET_LENGTH = 32;
 const MIN_ML_SECRET_LENGTH = 32;
+const DEFAULT_GEMINI_MODEL = 'gemini-3.8-flash';
+const DEFAULT_GEMINI_TIMEOUT_MS = 15000;
 const { parseCorsAllowedOrigins } = require('./cors');
 
 const EXACT_SECRET_PLACEHOLDERS = new Set([
@@ -153,6 +155,24 @@ const validateEnvironment = (environment = process.env, options = {}) => {
     }
   }
 
+  const agentEnabledText = environment.AGENT_ENABLED === undefined
+    ? 'false' : String(environment.AGENT_ENABLED).trim().toLowerCase();
+  if (!['true', 'false'].includes(agentEnabledText)) issues.push('AGENT_ENABLED must be true or false');
+  const agentEnabled = agentEnabledText === 'true';
+  const geminiModel = environment.GEMINI_MODEL === undefined || !hasText(environment.GEMINI_MODEL)
+    ? DEFAULT_GEMINI_MODEL : environment.GEMINI_MODEL.trim();
+  if (!/^[a-z0-9][a-z0-9._-]{0,79}$/.test(geminiModel)) issues.push('GEMINI_MODEL must be a valid model identifier');
+  const geminiTimeoutText = environment.GEMINI_TIMEOUT_MS === undefined
+    ? String(DEFAULT_GEMINI_TIMEOUT_MS) : String(environment.GEMINI_TIMEOUT_MS).trim();
+  const geminiTimeoutMs = Number(geminiTimeoutText);
+  if (!/^\d+$/.test(geminiTimeoutText) || !Number.isSafeInteger(geminiTimeoutMs)
+    || geminiTimeoutMs < 1000 || geminiTimeoutMs > 20000) {
+    issues.push('GEMINI_TIMEOUT_MS must be an integer between 1000 and 20000');
+  }
+  if (agentEnabled && !hasText(environment.GEMINI_API_KEY)) {
+    issues.push('GEMINI_API_KEY is required when AGENT_ENABLED is true');
+  }
+
   if (issues.length > 0) {
     throw new EnvironmentConfigurationError(issues);
   }
@@ -164,6 +184,9 @@ const validateEnvironment = (environment = process.env, options = {}) => {
     port: environment.PORT === undefined ? 5000 : Number(environment.PORT.trim()),
     webhookEnabled: webhookUrlConfigured,
     mlEnabled,
+    agentEnabled,
+    geminiModel,
+    geminiTimeoutMs,
     corsAllowedOrigins: Object.freeze([...corsConfiguration.origins])
   });
 };
@@ -173,6 +196,8 @@ module.exports = {
   MIN_JWT_SECRET_LENGTH,
   MIN_WEBHOOK_SECRET_LENGTH,
   MIN_ML_SECRET_LENGTH,
+  DEFAULT_GEMINI_MODEL,
+  DEFAULT_GEMINI_TIMEOUT_MS,
   EnvironmentConfigurationError,
   isKnownSecretPlaceholder,
   validateEnvironment

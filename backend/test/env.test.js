@@ -63,7 +63,29 @@ test('environment validation accepts a strong JWT_SECRET', () => {
   assert.equal(result.port, 5000);
   assert.equal(result.webhookEnabled, false);
   assert.equal(result.mlEnabled, false);
+  assert.equal(result.agentEnabled, false);
+  assert.equal(result.geminiModel, 'gemini-3.8-flash');
+  assert.equal(result.geminiTimeoutMs, 15000);
   assert.deepEqual(result.corsAllowedOrigins, ['https://test-frontend.example']);
+});
+
+test('agent configuration defaults off and requires an API key only when enabled', () => {
+  const disabled = validateEnvironment(validEnvironment(), { warn: () => {} });
+  assert.equal(disabled.agentEnabled, false);
+  assert.equal(Object.hasOwn(disabled, 'geminiApiKey'), false);
+  assertConfigurationError(validEnvironment({ AGENT_ENABLED: 'true' }), 'GEMINI_API_KEY is required');
+  const enabled = validateEnvironment(validEnvironment({ AGENT_ENABLED: 'true', GEMINI_API_KEY: strongSecret() }), { warn: () => {} });
+  assert.equal(enabled.agentEnabled, true);
+  assert.equal(Object.hasOwn(enabled, 'GEMINI_API_KEY'), false);
+  assert.equal(enabled.geminiModel, 'gemini-3.8-flash');
+});
+
+test('agent configuration rejects malformed enable flags, model IDs and timeout bounds', () => {
+  assertConfigurationError(validEnvironment({ AGENT_ENABLED: 'yes' }), 'AGENT_ENABLED must be true or false');
+  assertConfigurationError(validEnvironment({ GEMINI_MODEL: 'https://internal.example' }), 'GEMINI_MODEL');
+  for (const value of ['abc', '999', '20001', '-1', '1.5']) {
+    assertConfigurationError(validEnvironment({ GEMINI_TIMEOUT_MS: value }), 'GEMINI_TIMEOUT_MS');
+  }
 });
 
 test('ML integration requires URL and a dedicated strong secret when enabled', () => {

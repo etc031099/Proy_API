@@ -10,7 +10,7 @@ const EVENT_TYPES = Object.freeze([
   'request_started', 'agent_started', 'llm_started', 'llm_finished',
   'skill_called', 'skill_finished', 'agent_finished', 'request_finished', 'error'
 ]);
-const TOKEN_FIELDS = ['inputTokens', 'outputTokens', 'thoughtTokens', 'cachedInputTokens', 'totalTokens'];
+const TOKEN_FIELDS = ['inputTokens', 'outputTokens', 'thoughtTokens', 'cachedInputTokens', 'toolUseTokens', 'totalTokens'];
 const safeCount = value => Number.isSafeInteger(value) && value >= 0;
 const safeDuration = value => typeof value === 'number' && Number.isFinite(value)
   && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
@@ -35,6 +35,18 @@ const createTraceEvent = (type, metadata) => {
   if (metadata.returnedCount !== undefined) {
     if (!safeCount(metadata.returnedCount)) invalid();
     event.returnedCount = metadata.returnedCount;
+  }
+  if (metadata.model !== undefined) {
+    if (typeof metadata.model !== 'string' || !/^[\w.:/-]{1,100}$/.test(metadata.model)) invalid();
+    event.model = metadata.model;
+  }
+  for (const field of TOKEN_FIELDS) {
+    if (metadata[field] !== undefined && metadata[field] !== null && !safeCount(metadata[field])) invalid();
+    if (Object.hasOwn(metadata, field)) event[field] = metadata[field];
+  }
+  if (metadata.usageAvailable !== undefined) {
+    if (typeof metadata.usageAvailable !== 'boolean') invalid();
+    event.usageAvailable = metadata.usageAvailable;
   }
   if (metadata.status !== undefined) {
     if (!['STARTED', 'SUCCEEDED', 'FAILED'].includes(metadata.status)) invalid();
@@ -68,7 +80,7 @@ const createRequestUsage = (options = {}) => {
       usageAvailable: record.usageAvailable, latencyMs: record.latencyMs };
     for (const field of TOKEN_FIELDS) {
       if (record.usageAvailable) {
-        if (!safeCount(record[field])) invalid();
+        if (record[field] !== null && !safeCount(record[field])) invalid();
         copy[field] = record[field];
       } else {
         if (record[field] !== undefined && record[field] !== null) invalid();
@@ -79,7 +91,7 @@ const createRequestUsage = (options = {}) => {
     return copy;
   });
   const sum = (items, field) => {
-    if (items.some(record => !record.usageAvailable)) return null;
+    if (items.some(record => !record.usageAvailable || record[field] === null)) return null;
     const value = items.reduce((total, record) => total + record[field], 0);
     if (!safeCount(value)) invalid();
     return value;
@@ -98,7 +110,9 @@ const createRequestUsage = (options = {}) => {
   return deepFreeze({
     totalLlmCalls: records.length, totalSkillCalls,
     totalInputTokens: sum(records, 'inputTokens'), totalOutputTokens: sum(records, 'outputTokens'),
-    totalTokens: sum(records, 'totalTokens'), metricsComplete: records.every(record => record.usageAvailable), agents
+    totalTokens: sum(records, 'totalTokens'),
+    totalToolUseTokens: sum(records, 'toolUseTokens'),
+    metricsComplete: records.every(record => record.usageAvailable && TOKEN_FIELDS.every(field => record[field] !== null)), agents
   });
 };
 

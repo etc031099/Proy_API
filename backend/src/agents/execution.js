@@ -4,6 +4,7 @@ const { AgentError, deepFreeze, isPlainObject, assertAgentRequestContext, create
 const { validateSkillInvocation } = require('./skills');
 const { createTraceEvent, createRequestUsage, createEvidence } = require('./observability');
 const { createSkillExecutors } = require('./executors');
+const { getGeminiProvider, providerError } = require('./providers/geminiProvider');
 
 /** A wall-clock deadline complements Mongo maxTimeMS and the ML client's timeout.
  * Abort prevents subsequent reads; already-dispatched read-only operations may
@@ -28,7 +29,7 @@ const withSkillTimeout = async (operation, timeoutMs) => {
 
 /** Internal request lifecycle. Dependencies are supplied by trusted server code. */
 const createAgentExecution = options => {
-  if (!isPlainObject(options) || Reflect.ownKeys(options).some(key => !['context', 'onEvent', 'dependencies'].includes(key))) {
+  if (!isPlainObject(options) || Reflect.ownKeys(options).some(key => !['context', 'onEvent', 'dependencies', 'provider'].includes(key))) {
     throw new AgentError('AGENT_INVALID_REQUEST');
   }
   const { context, onEvent = () => {} } = options;
@@ -38,6 +39,11 @@ const createAgentExecution = options => {
     || Reflect.ownKeys(options.dependencies).some(key => !['models', 'forecastService', 'clock', 'toObjectId'].includes(key)))) {
     throw new AgentError('AGENT_INVALID_REQUEST');
   }
+  if (options.provider !== undefined && (!isPlainObject(options.provider)
+    || typeof options.provider.generateStructured !== 'function' || typeof options.provider.generateWithTools !== 'function')) {
+    throw new AgentError('AGENT_INVALID_REQUEST');
+  }
+  const provider = options.provider;
   const executors = createSkillExecutors(options.dependencies);
   const budget = createExecutionBudget();
   const participants = new Set();
@@ -47,6 +53,8 @@ const createAgentExecution = options => {
   let failed = false;
   let active = 0;
   let skillCalls = 0;
+  const llmRecords = [];
+  const llmCallsByAgent = new Map();
   const emit = (type, metadata = {}) => {
     const event = createTraceEvent(type, {
       requestId: context.requestId, conversationId: context.conversationId, ...metadata
@@ -54,10 +62,12 @@ const createAgentExecution = options => {
     events.push(event);
     try { onEvent(event); } catch { /* A trace sink cannot break domain execution. */ }
   };
-  const usage = () => createRequestUsage({ totalSkillCalls: skillCalls, agentIds: [...participants] });
+  const usage = () => createRequestUsage({ llmRecords, totalSkillCalls: skillCalls, agentIds: [...participants] });
   emit('request_started', { status: 'STARTED' });
 
   return Object.freeze({
+    async generateStructured(input) { return runLlmCall('generateStructured', input); },
+    async generateWithTools(input) { return runLlmCall('generateWithTools', input); },
     async executeSkill(input) {
       if (closed) throw new AgentError('AGENT_INVALID_REQUEST');
       let invocation;
@@ -121,6 +131,57 @@ const createAgentExecution = options => {
       return usage();
     }
   });
+
+  async function runLlmCall(method, input) {
+    if (closed || !isPlainObject(input) || Reflect.ownKeys(input).some(key => !['agentId', 'systemInstruction', 'messages', 'schema'].includes(key))) {
+      throw new AgentError('AGENT_INVALID_REQUEST');
+    }
+    let agent;
+    try { agent = require('./definitions').getAgentDefinition(input.agentId); } catch { throw new AgentError('AGENT_INVALID_REQUEST'); }
+    const llmCount = llmCallsByAgent.get(agent.id) || 0;
+    if (llmCount >= agent.limits.maxLlmCalls || budget.snapshot().llmCalls >= agent.limits.maxLlmCalls) {
+      failed = true;
+      const error = new AgentError('AGENT_BUDGET_EXCEEDED');
+      emit('error', { agentId: agent.id, status: 'FAILED', code: error.code });
+      throw error;
+    }
+    budget.consume('llmCalls');
+    llmCallsByAgent.set(agent.id, llmCount + 1);
+    participants.add(agent.id);
+    const agentRunId = randomUUID();
+    const start = performance.now();
+    active++;
+    emit('agent_started', { agentId: agent.id, agentRunId, status: 'STARTED' });
+    emit('llm_started', { agentId: agent.id, agentRunId, status: 'STARTED' });
+    try {
+      const result = await (provider || getGeminiProvider())[method](input);
+      if (!isPlainObject(result) || typeof result.model !== 'string' || !/^[\w.:/-]{1,100}$/.test(result.model)
+        || typeof result.latencyMs !== 'number' || !Number.isFinite(result.latencyMs) || result.latencyMs < 0
+        || !isPlainObject(result.usage) || typeof result.usage.usageAvailable !== 'boolean'
+        || !['inputTokens', 'outputTokens', 'thoughtTokens', 'cachedInputTokens', 'toolUseTokens', 'totalTokens'].every(key =>
+          result.usage[key] === null || Number.isSafeInteger(result.usage[key]) && result.usage[key] >= 0)) {
+        throw new AgentError('GEMINI_INVALID_RESPONSE');
+      }
+      if (method === 'generateStructured' && !isPlainObject(result.output)) throw new AgentError('GEMINI_INVALID_RESPONSE');
+      if (method === 'generateWithTools' && (!Array.isArray(result.toolCalls) || result.toolCalls.length > 4)) {
+        throw new AgentError('GEMINI_INVALID_RESPONSE');
+      }
+      llmRecords.push({ agentId: agent.id, model: result.model, latencyMs: result.latencyMs, ...result.usage });
+      emit('llm_finished', { agentId: agent.id, agentRunId, model: result.model,
+        durationMs: result.latencyMs, status: 'SUCCEEDED', ...result.usage });
+      emit('agent_finished', { agentId: agent.id, agentRunId, durationMs: performance.now() - start, status: 'SUCCEEDED' });
+      return result;
+    } catch (error) {
+      failed = true;
+      const safeError = error instanceof AgentError ? error : providerError(error);
+      llmRecords.push({ agentId: agent.id, model: process.env.GEMINI_MODEL || 'gemini-3.8-flash',
+        latencyMs: performance.now() - start, usageAvailable: false });
+      emit('error', { agentId: agent.id, agentRunId, durationMs: performance.now() - start,
+        status: 'FAILED', code: safeError.code });
+      emit('agent_finished', { agentId: agent.id, agentRunId, durationMs: performance.now() - start, status: 'FAILED' });
+      throw safeError;
+    } finally { active--; }
+  }
 };
 
 module.exports = { createAgentExecution, withSkillTimeout };

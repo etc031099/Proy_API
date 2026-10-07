@@ -31,7 +31,13 @@ const ERROR_MESSAGES = deepFreeze({
   AGENT_RESOURCE_NOT_FOUND: 'Resource not found',
   AGENT_SKILL_EXECUTION_FAILED: 'Skill execution failed',
   AGENT_SKILL_TIMEOUT: 'Skill execution timed out',
-  ML_SERVICE_UNAVAILABLE: 'ML service is temporarily unavailable'
+  ML_SERVICE_UNAVAILABLE: 'ML service is temporarily unavailable',
+  GEMINI_NOT_CONFIGURED: 'Gemini is not configured',
+  GEMINI_TIMEOUT: 'Gemini request timed out',
+  GEMINI_RATE_LIMITED: 'Gemini rate limit reached',
+  GEMINI_UNAVAILABLE: 'Gemini is temporarily unavailable',
+  GEMINI_INVALID_RESPONSE: 'Gemini returned an invalid response',
+  GEMINI_BUDGET_EXCEEDED: 'Gemini request budget exceeded'
 });
 
 class AgentError extends Error {

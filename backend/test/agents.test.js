@@ -229,12 +229,12 @@ test('zero generations have known zero usage, including deterministic agent runs
   const usage = createRequestUsage({ agentIds: ['operations'], totalSkillCalls: 1 });
   assert.equal(usage.metricsComplete, true);
   assert.deepEqual(usage.agents[0], { agentId: 'operations', model: null, llmCalls: 0,
-    inputTokens: 0, outputTokens: 0, thoughtTokens: 0, cachedInputTokens: 0, totalTokens: 0, latencyMs: 0, usageAvailable: true });
+    inputTokens: 0, outputTokens: 0, thoughtTokens: 0, cachedInputTokens: 0, toolUseTokens: 0, totalTokens: 0, latencyMs: 0, usageAvailable: true });
   assert.ok(Object.isFrozen(usage.agents[0]));
 });
 
 const measuredRecord = overrides => ({ agentId: 'analyst', model: 'future-model', usageAvailable: true,
-  inputTokens: 100, outputTokens: 20, thoughtTokens: 10, cachedInputTokens: 40, totalTokens: 130, latencyMs: 15, ...overrides });
+  inputTokens: 100, outputTokens: 20, thoughtTokens: 10, cachedInputTokens: 40, toolUseTokens: 7, totalTokens: 130, latencyMs: 15, ...overrides });
 
 test('usage aggregates provider totals without adding cached input twice', () => {
   const usage = createRequestUsage({ llmRecords: [measuredRecord(), measuredRecord({ agentId: 'operations' })], totalSkillCalls: 2 });
@@ -242,6 +242,7 @@ test('usage aggregates provider totals without adding cached input twice', () =>
   assert.equal(usage.totalInputTokens, 200);
   assert.equal(usage.totalOutputTokens, 40);
   assert.equal(usage.totalTokens, 260);
+  assert.equal(usage.totalToolUseTokens, 14);
   assert.equal(usage.agents[0].thoughtTokens, 10);
   assert.equal(usage.agents[0].cachedInputTokens, 40);
 });
@@ -257,6 +258,18 @@ test('missing provider metrics remain unknown and cannot masquerade as zero', ()
   assert.equal(usage.agents[1].totalTokens, null);
   assert.equal(usage.agents[1].usageAvailable, false);
   assert.throws(() => createRequestUsage({ llmRecords: [{ ...unknown, totalTokens: 0 }] }), expectCode('AGENT_INVALID_REQUEST'));
+});
+
+test('partial usage fields stay unknown individually while retaining official totals', () => {
+  const usage = createRequestUsage({ llmRecords: [{ agentId: 'analyst', model: 'gemini-3.8-flash', usageAvailable: true,
+    inputTokens: 12, outputTokens: null, thoughtTokens: null, cachedInputTokens: 3, toolUseTokens: null,
+    totalTokens: 25, latencyMs: 11 }] });
+  assert.equal(usage.totalInputTokens, 12);
+  assert.equal(usage.totalOutputTokens, null);
+  assert.equal(usage.totalTokens, 25);
+  assert.equal(usage.totalToolUseTokens, null);
+  assert.equal(usage.metricsComplete, false);
+  assert.equal(usage.agents[0].usageAvailable, true);
 });
 
 test('usage rejects malformed counts and overflow instead of coercing metrics', () => {
