@@ -12,6 +12,11 @@ const schema = (properties = {}, required = [], oneOf) => ({
 const period = { startDate: date, endDate: date };
 const product = { productId: id, sku: text(100) };
 const both = ['operations', 'analyst'];
+const READY_SKILL_IDS = Object.freeze([
+  'search_products', 'get_product_details', 'get_low_stock_products', 'get_recent_transactions',
+  'get_sales_summary', 'get_top_selling_products', 'get_business_summary',
+  'get_demand_forecast', 'get_replenishment_candidates'
+]);
 const entry = (skillId, description, allowedAgents, inputSchema, maxRecords, dataSensitivity, outputDescription) => ({
   id: skillId, version: '1.0.0', description, readOnly: true, allowedAgents, inputSchema,
   outputSchema: {
@@ -19,7 +24,7 @@ const entry = (skillId, description, allowedAgents, inputSchema, maxRecords, dat
     fields: { data: 'Projected records or summary', metadata: 'Period/asOf, currency when applicable, returnedCount, totalMatches and truncated' }
   },
   maxRecords, timeoutMs: skillId.includes('forecast') || skillId === 'get_replenishment_candidates' ? 10000 : 5000,
-  dataSensitivity, executorStatus: 'PENDING_IMPLEMENTATION'
+  dataSensitivity, executorStatus: READY_SKILL_IDS.includes(skillId) ? 'READY' : 'PENDING_IMPLEMENTATION'
 });
 
 const SKILLS = deepFreeze([
@@ -35,11 +40,11 @@ const SKILLS = deepFreeze([
     schema({ ...period, type: { ...text(8), enum: ['sale', 'purchase'] },
       status: { ...text(9), enum: ['completed', 'pending', 'cancelled'] }, limit: limit(20) }), 20, 'FINANCIAL', 'Transaction identity, type, date, status, amount and currency'),
   entry('get_sales_summary', 'Resume ventas completadas en un periodo.', both,
-    schema(period, ['startDate', 'endDate']), 1, 'FINANCIAL', 'Completed sales amount, currency and transaction count'),
+    schema(period, ['startDate', 'endDate']), 1, 'FINANCIAL', 'Completed sales count and units; amountsByCurrency in native transaction currencies, inclusive UTC period'),
   entry('get_purchase_summary', 'Resume compras completadas en un periodo.', both,
     schema(period, ['startDate', 'endDate']), 1, 'FINANCIAL', 'Completed purchase amount, currency and transaction count'),
   entry('get_business_summary', 'Obtiene agregados del negocio con periodo explícito.', ['analyst'],
-    schema({ period: { ...text(7), enum: ['current', 'latest'] } }), 1, 'FINANCIAL', 'Dashboard aggregates with reporting period and currency'),
+    schema({ period: { ...text(7), enum: ['current', 'latest'] } }), 1, 'FINANCIAL', 'Current active/low-stock counts and completed monthly sales/purchases, native currencies kept separate; no profit or inventory valuation'),
   entry('get_supplier_details', 'Consulta un proveedor o el proveedor configurado de un producto.', ['operations'],
     schema({ supplierId: id, productId: id }, [], ['supplierId', 'productId']), 1, 'CONTACT_REFERENCE', 'Supplier identity and verified relationship; excludes personal contact data'),
   entry('get_top_selling_products', 'Clasifica productos por unidades vendidas completadas.', ['analyst'],
@@ -72,4 +77,4 @@ const validateSkillInvocation = invocation => {
   return Object.freeze({ agent, skill, args: validateSkillArgs(skill.inputSchema, args), context });
 };
 
-module.exports = { SKILLS, getSkillDefinition, validateSkillInvocation };
+module.exports = { SKILLS, READY_SKILL_IDS, getSkillDefinition, validateSkillInvocation };

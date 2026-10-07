@@ -30,12 +30,12 @@ test('registry contains exactly three distinct immutable agent definitions', () 
   assert.equal(getAgentDefinition('analyst').llmPolicy.preferredMode, 'hybrid');
 });
 
-test('all thirteen skills are unique read-only contracts with explicit pending executors', () => {
+test('all thirteen skills are unique read-only contracts with nine implemented executors', () => {
   assert.equal(SKILLS.length, 13);
   assert.equal(new Set(SKILLS.map(skill => skill.id)).size, 13);
   for (const skill of SKILLS) {
     assert.equal(skill.readOnly, true);
-    assert.equal(skill.executorStatus, 'PENDING_IMPLEMENTATION');
+    assert.ok(['READY', 'PENDING_IMPLEMENTATION'].includes(skill.executorStatus));
     assert.equal(skill.inputSchema.additionalProperties, false);
     assert.ok(Number.isSafeInteger(skill.maxRecords) && skill.maxRecords > 0);
     assert.ok(Number.isSafeInteger(skill.timeoutMs) && skill.timeoutMs > 0);
@@ -43,6 +43,7 @@ test('all thirteen skills are unique read-only contracts with explicit pending e
     assert.ok(Object.isFrozen(skill.inputSchema.properties));
     assert.equal(new Set(skill.allowedAgents).size, skill.allowedAgents.length);
   }
+  assert.equal(SKILLS.filter(skill => skill.executorStatus === 'READY').length, 9);
 });
 
 test('permissions match in both directions for every agent and skill', () => {
@@ -182,18 +183,17 @@ test('unknown skills and unauthorized agents fail before any executor lifecycle 
 test('a pending executor returns a controlled error with trace correlation and zero LLM usage', async () => {
   const ctx = context();
   const execution = createAgentExecution({ context: ctx });
-  await assert.rejects(execution.executeSkill({ agentId: 'analyst', skillId: 'get_demand_forecast' }), expectCode('AGENT_EXECUTOR_NOT_READY'));
+  await assert.rejects(execution.executeSkill({ agentId: 'analyst', skillId: 'get_inventory_summary' }), expectCode('AGENT_EXECUTOR_NOT_READY'));
   const usage = execution.finish();
-  assert.equal(usage.totalSkillCalls, 1);
+  assert.equal(usage.totalSkillCalls, 0);
   assert.equal(usage.totalLlmCalls, 0);
   assert.equal(usage.totalTokens, 0);
   assert.equal(usage.metricsComplete, true);
   assert.equal(usage.agents[0].usageAvailable, true);
   const events = execution.getEvents();
-  assert.deepEqual(events.map(event => event.type), ['request_started', 'agent_started', 'skill_called', 'error', 'skill_finished', 'agent_finished', 'request_finished']);
+  assert.deepEqual(events.map(event => event.type), ['request_started', 'agent_started', 'error', 'agent_finished', 'request_finished']);
   assert.ok(events.every(event => event.requestId === ctx.requestId));
-  assert.equal(events[2].skillCallId, events[4].skillCallId);
-  assert.equal(events[1].agentRunId, events[5].agentRunId);
+  assert.equal(events[1].agentRunId, events[3].agentRunId);
   assert.equal(events.at(-1).status, 'FAILED');
   const count = events.length;
   execution.finish();
@@ -204,11 +204,11 @@ test('a pending executor returns a controlled error with trace correlation and z
 test('skill dispatch budget admits four attempts and blocks the fifth without executing it', async () => {
   const execution = createAgentExecution({ context: context() });
   for (let i = 0; i < 4; i++) {
-    await assert.rejects(execution.executeSkill({ agentId: 'operations', skillId: 'get_low_stock_products' }), expectCode('AGENT_EXECUTOR_NOT_READY'));
+    await assert.rejects(execution.executeSkill({ agentId: 'operations', skillId: 'get_inventory_summary' }), expectCode('AGENT_EXECUTOR_NOT_READY'));
   }
-  await assert.rejects(execution.executeSkill({ agentId: 'operations', skillId: 'get_low_stock_products' }), expectCode('AGENT_BUDGET_EXCEEDED'));
-  assert.equal(execution.finish().totalSkillCalls, 4);
-  assert.equal(execution.getEvents().filter(event => event.type === 'skill_called').length, 4);
+  await assert.rejects(execution.executeSkill({ agentId: 'operations', skillId: 'get_inventory_summary' }), expectCode('AGENT_BUDGET_EXCEEDED'));
+  assert.equal(execution.finish().totalSkillCalls, 0);
+  assert.equal(execution.getEvents().filter(event => event.type === 'skill_called').length, 0);
 });
 
 test('central budgets bound messages and future calls without reporting them as usage', () => {
@@ -291,7 +291,7 @@ test('trace allowlist omits secrets, raw arguments, tenant identities and reason
 
 test('failed telemetry sinks do not break the controlled domain result', async () => {
   const execution = createAgentExecution({ context: context(), onEvent: () => { throw new Error('sink unavailable'); } });
-  await assert.rejects(execution.executeSkill({ agentId: 'analyst', skillId: 'get_demand_forecast' }), expectCode('AGENT_EXECUTOR_NOT_READY'));
+  await assert.rejects(execution.executeSkill({ agentId: 'analyst', skillId: 'get_inventory_summary' }), expectCode('AGENT_EXECUTOR_NOT_READY'));
   assert.equal(execution.finish().totalLlmCalls, 0);
 });
 

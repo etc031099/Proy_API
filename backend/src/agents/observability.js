@@ -32,6 +32,10 @@ const createTraceEvent = (type, metadata) => {
     if (!safeDuration(metadata.durationMs)) invalid();
     event.durationMs = metadata.durationMs;
   }
+  if (metadata.returnedCount !== undefined) {
+    if (!safeCount(metadata.returnedCount)) invalid();
+    event.returnedCount = metadata.returnedCount;
+  }
   if (metadata.status !== undefined) {
     if (!['STARTED', 'SUCCEEDED', 'FAILED'].includes(metadata.status)) invalid();
     event.status = metadata.status;

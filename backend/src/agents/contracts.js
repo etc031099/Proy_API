@@ -27,7 +27,11 @@ const ERROR_MESSAGES = deepFreeze({
   AGENT_SKILL_NOT_ALLOWED: 'Skill is not allowed for this agent',
   AGENT_INVALID_SKILL_ARGS: 'Invalid skill arguments',
   AGENT_BUDGET_EXCEEDED: 'Agent execution budget exceeded',
-  AGENT_EXECUTOR_NOT_READY: 'Skill executor is not implemented'
+  AGENT_EXECUTOR_NOT_READY: 'Skill executor is not implemented',
+  AGENT_RESOURCE_NOT_FOUND: 'Resource not found',
+  AGENT_SKILL_EXECUTION_FAILED: 'Skill execution failed',
+  AGENT_SKILL_TIMEOUT: 'Skill execution timed out',
+  ML_SERVICE_UNAVAILABLE: 'ML service is temporarily unavailable'
 });
 
 class AgentError extends Error {

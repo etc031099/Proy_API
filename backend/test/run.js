@@ -10,3 +10,4 @@ require('./mlServiceClient.test');
 require('./demandForecastService.test');
 require('./transactionsRoutes.test');
 require('./agents.test');
+require('./agentSkills.test');
