@@ -126,8 +126,11 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
           const raw = productResult?.result.data;
           const entities = raw?.product ? [raw.product] : Array.isArray(raw) ? raw : raw?.id ? [raw] : undefined;
           const latest = results.at(-1)?.result;
+          const productListIntents = ['search_product', 'low_stock', 'top_selling_products', 'replenishment_candidates', 'demand_forecast'];
           commit({ lastIntent: plan.intent, lastAgent: plan.agent, recentEntities: entities,
             lastEntity: entities?.length === 1 ? entities[0] : undefined,
+            ...(productResult && productListIntents.includes(plan.intent) && Array.isArray(raw)
+              ? { lastProductSelection: { sourceIntent: plan.intent, items: raw.slice(0, 5) } } : {}),
             lastPeriod: latest?.metadata.period || plan.period, lastPeriodExplicit: plan.periodExplicit === true,
             listLimit: plan.limit || 5,
             lastSearchQuery: plan.query, lastCurrency: latest?.data?.currency,

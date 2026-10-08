@@ -9,7 +9,9 @@ const buildSkillAnswer = (skillId, result) => {
   const { data, metadata, status } = result;
   if (status === 'ML_NOT_READY') return 'Este negocio aún no cuenta con historial o configuración suficiente para el replay de ML.';
   if (skillId === 'get_sales_summary') return `Ventas completadas (${periodLabel(metadata)}): ${data.completedSalesCount}; ${format(data.totalUnitsSold)} unidades. Importe: ${amounts(data.amountsByCurrency)}.`;
-  if (skillId === 'get_product_sales_summary') return `${name(data.product)} vendió ${format(data.totalUnitsSold)} unidades (${periodLabel(metadata)}). Importe de líneas completadas: ${amounts(data.amountsByCurrency)}.`;
+  if (skillId === 'get_product_sales_summary') return status === 'NO_DATA'
+    ? `${name(data.product)} no registra ventas completadas durante ${periodLabel(metadata)}.`
+    : `${name(data.product)} vendió ${format(data.totalUnitsSold)} unidades (${periodLabel(metadata)}). Importe de líneas completadas: ${amounts(data.amountsByCurrency)}.`;
   if (skillId === 'get_product_details') return `${name(data)}: stock ${format(data.stock)}, mínimo ${format(data.minStockLevel)}, precio ${format(data.price)} ${data.currency}. ${data.isActive ? 'Activo' : 'Inactivo'}.`;
   if (skillId === 'get_business_summary') return `Estado del negocio (${periodLabel(metadata)}): ${data.activeProducts} productos activos, ${data.lowStockProducts} con stock bajo. Ventas completadas: ${amounts(data.sales.amountsByCurrency)}; compras completadas: ${amounts(data.purchases.amountsByCurrency)}. Transacciones completadas: ${data.completedTransactionsCount}.`;
   if (!Array.isArray(data) || !data.length) return skillId === 'get_top_selling_products'

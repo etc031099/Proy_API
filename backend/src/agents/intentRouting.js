@@ -8,6 +8,18 @@ const monthPeriod = (now, previous = false) => {
 };
 const clarify = question => ({ intent: 'ambiguous_query', agent: 'coordinator', clarificationQuestion: question });
 const PERIOD_INTENTS = ['sales_summary', 'top_selling_products', 'product_sales_summary', 'recent_transactions'];
+const ordinalReference = text => {
+  if (/\bel de arriba\b/.test(text)) return { matched: true, index: 0 };
+  const ordinalPattern = '(primer(?:o|a)?|segund[oa]|tercer(?:o|a)?|cuart[oa]|quint[oa]|sext[oa]|ultim[oa])';
+  const match = text.match(new RegExp(`\\b(?:el|la|ese|esa)\\s+${ordinalPattern}(?:\\s+(?:producto|de la lista))?\\b`))
+    || text.match(new RegExp(`\\b${ordinalPattern}\\s+(?:producto|de la lista)\\b`));
+  if (!match) return { matched: false };
+  const ordinal = match[1];
+  const indices = { primer: 0, primero: 0, primera: 0, segundo: 1, segunda: 1,
+    tercer: 2, tercero: 2, tercera: 2, cuarto: 3, cuarta: 3, quinto: 4, quinta: 4,
+    sexto: 5, sexta: 5, ultimo: -1, ultima: -1 };
+  return { matched: true, index: indices[ordinal] };
+};
 
 /** High-confidence routing only. Unrecognized language is delegated, never guessed. */
 const routeDeterministically = (message, memory, now) => {
@@ -18,9 +30,26 @@ const routeDeterministically = (message, memory, now) => {
   const explicitPeriod = dates ? { startDate: dates[0], endDate: dates[1] }
     : /mes pasado|mes anterior/.test(text) ? monthPeriod(now, true)
       : /este mes|mes actual/.test(text) ? monthPeriod(now) : undefined;
-  const period = explicitPeriod || memory.lastPeriod || monthPeriod(now);
+  const period = explicitPeriod || (memory.lastPeriodExplicit === true ? memory.lastPeriod : undefined) || monthPeriod(now);
   if (/\b(crea|crear|compra|comprar|borra|elimina|editar|actualiza|cancelar)\b|shell|ejecuta codigo|mongo query|ignora.*instruccion|api.?key|password|jwt/.test(text)) {
     return { intent: 'unsupported', agent: 'coordinator' };
+  }
+  const ordinal = ordinalReference(text);
+  if (ordinal.matched) {
+    const selection = memory.lastProductSelection;
+    const index = ordinal.index === -1 ? (selection?.items?.length || 0) - 1 : ordinal.index;
+    const selected = selection?.items?.[index];
+    if (!selected) return clarify('No encuentro ese elemento en la última lista de productos. Indica otro ordinal o un SKU.');
+    const selector = { productId: selected.id };
+    const hasSalesIntent = /vendio|vendido|ventas/.test(text);
+    if (hasSalesIntent) return { intent: 'product_sales_summary', agent: 'operations', selector,
+      period: explicitPeriod || (memory.lastPeriodExplicit === true ? memory.lastPeriod : undefined) || monthPeriod(now),
+      periodExplicit: Boolean(explicitPeriod || memory.lastPeriodExplicit === true), limit: 1 };
+    if (/explica|por que/.test(text) && /repon|reposicion/.test(text)) {
+      return { intent: 'explain_replenishment', agent: 'analyst', selector, synthesize: true, limit: 1 };
+    }
+    if (/demanda|prediccion|forecast/.test(text)) return { intent: 'demand_forecast', agent: 'analyst', selector, limit: 1 };
+    return { intent: 'product_details', agent: 'operations', selector, limit: 1 };
   }
   if (/muestrame mas|mostrar mas/.test(text)) {
     const limits = { low_stock: 20, recent_transactions: 20, search_product: 20, top_selling_products: 10, replenishment_candidates: 20 };

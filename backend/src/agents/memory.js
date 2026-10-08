@@ -6,6 +6,12 @@ const label = (value, max) => typeof value === 'string' ? value.replace(/[\r\n\t
 const compactEntity = value => value && isObjectId(value.id || value.productId) ? {
   type: 'product', id: value.id || value.productId, sku: label(value.sku, 100), label: label(value.name || value.label, 80)
 } : null;
+const LIST_INTENTS = new Set(['search_product', 'low_stock', 'top_selling_products', 'replenishment_candidates', 'demand_forecast']);
+const compactProductSelection = (value, now) => {
+  if (!value || !LIST_INTENTS.has(value.sourceIntent) || !Array.isArray(value.items)) return null;
+  return deepFreeze({ sourceIntent: value.sourceIntent,
+    items: value.items.map(compactEntity).filter(Boolean).slice(0, 5), createdAt: now() });
+};
 
 /** Demo-only, bounded in-process memory. Render restarts erase conversations.
  * Only domain references are retained: no messages, provider responses or reasoning.
@@ -41,11 +47,14 @@ const createConversationMemory = ({ now = Date.now, ttlMs = TTL_MS, maxEntries =
           const entities = Array.isArray(patch.recentEntities)
             ? patch.recentEntities.map(compactEntity).filter(Boolean).slice(0, 4) : state.recentEntities || [];
           const entity = compactEntity(patch.lastEntity);
+          const productSelection = Object.hasOwn(patch, 'lastProductSelection')
+            ? compactProductSelection(patch.lastProductSelection, now) : state.lastProductSelection || null;
           const period = patch.lastPeriod;
           pending = deepFreeze({
             lastIntent: label(patch.lastIntent ?? state.lastIntent, 40),
             lastAgent: ['operations', 'analyst'].includes(patch.lastAgent) ? patch.lastAgent : state.lastAgent || null,
             lastEntity: entity || (entities.length === 1 ? entities[0] : null), recentEntities: entities,
+            lastProductSelection: productSelection,
             lastPeriod: period && isDate(period.startDate) && isDate(period.endDate)
               ? { startDate: period.startDate, endDate: period.endDate } : state.lastPeriod || null,
             lastPeriodExplicit: typeof patch.lastPeriodExplicit === 'boolean'
@@ -78,4 +87,4 @@ const createConversationMemory = ({ now = Date.now, ttlMs = TTL_MS, maxEntries =
   });
 };
 
-module.exports = { createConversationMemory, compactEntity, TTL_MS };
+module.exports = { createConversationMemory, compactEntity, compactProductSelection, TTL_MS };

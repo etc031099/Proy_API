@@ -22,7 +22,7 @@ const forecast = { status: 'READY', anchorOperationalDate: '2025-07-01', product
 
 // Runs the real execution layer and executors. Only the database driver/provider
 // are replaced; fakes assert tenant predicates and expose no write methods.
-const fixture = ({ products = [product(1), product(2), product(3, 'B')], provider, emptySalesHistory = false,
+const fixture = ({ products = [product(1), product(2), product(3, 'B')], provider, emptySalesHistory = false, emptyProductSalesHistory = false,
   forecastService = { getDemandForecast: async () => structuredClone(forecast) }, memory = createConversationMemory(), onEvent } = {}) => {
   const calls = [];
   const reads = [];
@@ -57,7 +57,7 @@ const fixture = ({ products = [product(1), product(2), product(3, 'B')], provide
       const facet = pipeline.find(stage => stage.$facet)?.$facet;
       const productMatch = pipeline.find(stage => stage.$match?.['products.productId']);
       let result;
-      if (productMatch) result = [{ _id: 'PEN', units: 7, amount: 63 }];
+      if (productMatch) result = emptyProductSalesHistory ? [] : [{ _id: 'PEN', units: 7, amount: 63 }];
       else if (facet) {
         const ranking = Boolean(facet.ranking);
         result = ranking ? [{ ranking: emptySalesHistory ? [] : [{ _id: id(1), unitsSold: 7, historicalName: 'Producto 1' }],
@@ -180,6 +180,98 @@ test('memory resolves product sales, forecast and previous month without request
   assert.equal(third.evidence[0].period.startDate, '2024-12-01');
   const fourth = await f.run('¿Y su predicción?', first.conversationId);
   assert.match(fourth.answer, /8\.25/); assert.equal(fourth.usage.totalLlmCalls, 0);
+});
+
+const replenishmentForecast = () => ({ status: 'READY', anchorOperationalDate: '2025-07-01', products: Array.from({ length: 5 }, (_, index) => ({
+  productId: id(index + 1), sku: `SKU-00${index + 1}`, name: `Producto ${index + 1}`, mlStatus: 'READY',
+  predictedDemand7d: 8 + index, stockAtAnchor: 2, salesLast7Days: 3,
+  safetyStock: 5, recommendedQty: 12 - index, inventoryStatus: 'REPONER'
+})) });
+
+test('ordered replenishment selection resolves first, second and last ordinal to product sales with zero LLM', async () => {
+  for (const [query, expectedId, expectedSku] of [
+    ['¿Y cuánto vendió el primer producto este mes?', id(1), 'SKU-001'],
+    ['¿Y cuánto vendió el segundo producto este mes?', id(2), 'SKU-002'],
+    ['¿Y cuánto vendió el último producto este mes?', id(5), 'SKU-005']
+  ]) {
+    const f = fixture({ products: Array.from({ length: 5 }, (_, index) => product(index + 1)),
+      forecastService: { getDemandForecast: async () => replenishmentForecast() } });
+    const conversationId = randomUUID();
+    const first = await f.run('¿Qué productos debería reponer?', conversationId);
+    assert.equal(first.usage.totalLlmCalls, 0); assert.equal(first.usage.totalTokens, 0);
+    assert.deepEqual(first.evidence[0].skillId, 'get_replenishment_candidates');
+    const second = await f.run(query, conversationId);
+    assert.equal(second.code, null); assert.equal(second.intent, 'product_sales_summary');
+    assert.equal(second.requiresClarification, false); assert.equal(second.usage.totalLlmCalls, 0);
+    assert.equal(second.usage.totalTokens, 0); assert.equal(second.actions[0].skillId, 'get_product_sales_summary');
+    assert.equal(second.evidence[0].skillId, 'get_product_sales_summary');
+    const txRead = f.reads.filter(row => row.model === 'Transaction').at(-1).pipeline;
+    assert.equal(txRead[0].$match.businessId, 'A');
+    assert.equal(txRead[0].$match.date.$gte.toISOString(), '2025-01-01T00:00:00.000Z');
+    assert.equal(txRead.find(stage => stage.$match?.['products.productId']).$match['products.productId'], expectedId);
+    assert.match(second.answer, new RegExp(expectedSku));
+    assert.deepEqual(second.participants.map(row => row.agentId), ['coordinator', 'operations']);
+  }
+});
+
+test('ordinal outside the compact visible selection asks clarification without running a skill', async () => {
+  const f = fixture({ products: Array.from({ length: 5 }, (_, index) => product(index + 1)),
+    forecastService: { getDemandForecast: async () => replenishmentForecast() } });
+  const conversationId = randomUUID();
+  await f.run('¿Qué productos debería reponer?', conversationId);
+  const before = f.reads.length;
+  const result = await f.run('¿Cuánto vendió el sexto producto este mes?', conversationId);
+  assert.equal(result.requiresClarification, true); assert.equal(result.usage.totalLlmCalls, 0);
+  assert.equal(result.usage.totalTokens, 0); assert.equal(result.usage.totalSkillCalls, 0);
+  assert.equal(f.reads.length, before);
+});
+
+test('a new product list replaces the previous ordinal selection', async () => {
+  const f = fixture({ products: Array.from({ length: 5 }, (_, index) => product(index + 1)),
+    forecastService: { getDemandForecast: async () => replenishmentForecast() } });
+  const conversationId = randomUUID();
+  await f.run('¿Qué productos debería reponer?', conversationId);
+  const listed = await f.run('Muéstrame los productos con stock bajo', conversationId);
+  assert.equal(listed.actions[0].skillId, 'get_low_stock_products');
+  const followup = await f.run('¿Cuánto vendió el segundo producto este mes?', conversationId);
+  const txRead = f.reads.filter(row => row.model === 'Transaction').at(-1).pipeline;
+  assert.equal(followup.requiresClarification, false);
+  assert.equal(txRead.find(stage => stage.$match?.['products.productId']).$match['products.productId'], id(2));
+  assert.equal(followup.usage.totalLlmCalls, 0); assert.equal(followup.usage.totalTokens, 0);
+});
+
+test('current-month wording overrides a historical forecast anchor and no-data sales answer stays natural', async () => {
+  const f = fixture({ products: Array.from({ length: 5 }, (_, index) => product(index + 1)), emptyProductSalesHistory: true,
+    forecastService: { getDemandForecast: async () => replenishmentForecast() } });
+  const conversationId = randomUUID();
+  await f.run('¿Qué productos debería reponer?', conversationId);
+  const result = await f.run('¿Y cuánto vendió el primer producto este mes?', conversationId);
+  assert.equal(result.evidence[0].period.startDate, '2025-01-01');
+  assert.match(result.answer, /SKU-001 .*no registra ventas completadas durante/);
+  assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
+});
+
+test('ordinal product selection is isolated by tenant, user and conversation', async () => {
+  const f = fixture({ products: Array.from({ length: 5 }, (_, index) => product(index + 1)),
+    forecastService: { getDemandForecast: async () => replenishmentForecast() } });
+  const conversationId = randomUUID();
+  await f.run('¿Qué productos debería reponer?', conversationId, req('A', 900));
+  for (const [request, otherConversation] of [[req('B', 900), conversationId], [req('A', 901), conversationId], [req('A', 900), randomUUID()]]) {
+    const result = await f.run('¿Cuánto vendió el primer producto este mes?', otherConversation, request);
+    assert.equal(result.requiresClarification, true); assert.equal(result.usage.totalSkillCalls, 0);
+    assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
+  }
+});
+
+test('ordinal syntax supports common masculine/feminine, contracted and list forms', () => {
+  const selection = { lastProductSelection: { items: Array.from({ length: 5 }, (_, index) => ({ id: id(index + 1) })) } };
+  for (const [query, expected] of [['el primero', 1], ['el primer producto', 1], ['ese primero', 1],
+    ['el segundo de la lista', 2], ['el tercero', 3], ['el tercer producto', 3], ['el cuarto', 4],
+    ['el quinto producto', 5], ['el último', 5], ['el último producto', 5], ['el de arriba', 1]]) {
+    const plan = routeDeterministically(`¿Cuál es ${query}?`, selection, clock());
+    assert.equal(plan.intent, 'product_details', query);
+    assert.equal(plan.selector.productId, id(expected), query);
+  }
 });
 
 test('two product candidates create ambiguity rather than retaining an old selection', async () => {
