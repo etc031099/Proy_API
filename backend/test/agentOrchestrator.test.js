@@ -59,9 +59,11 @@ const fixture = ({ products = [product(1), product(2), product(3, 'B')], provide
       let result;
       if (productMatch) result = [{ _id: 'PEN', units: 7, amount: 63 }];
       else if (facet) {
-        const ranking = pipeline.some(stage => stage.$unwind);
-        result = [{ data: ranking ? [{ _id: id(1), unitsSold: 7, historicalName: 'Producto 1' }]
-          : [{ _id: id(50), type: 'sale', status: 'completed', date: clock(), totalAmount: 63, currency: 'PEN', itemCount: 1 }], count: [{ total: 1 }] }];
+        const ranking = pipeline.some(stage => stage.$unwind)
+          || pipeline.some(stage => stage.$facet?.ranking?.some(nested => nested.$unwind));
+        result = ranking ? [{ ranking: [{ data: [{ _id: id(1), unitsSold: 7, historicalName: 'Producto 1' }], count: [{ total: 1 }] }],
+          dateRange: [{ minDate: new Date('2019-01-01T12:00:00Z'), maxDate: new Date('2025-01-15T12:00:00Z') }] }]
+          : [{ data: [{ _id: id(50), type: 'sale', status: 'completed', date: clock(), totalAmount: 63, currency: 'PEN', itemCount: 1 }], count: [{ total: 1 }] }];
       } else result = [{ _id: { type: 'sale', currency: 'PEN' }, count: 1, amount: 63, units: 7 }];
       return { option() { return this; }, exec: async () => result };
     }
@@ -79,6 +81,7 @@ for (const [query, skillId, agent] of [
   ['Muéstrame las últimas transacciones', 'get_recent_transactions', 'operations'],
   ['¿Cuánto vendimos este mes?', 'get_sales_summary', 'operations'],
   ['¿Cuáles son los productos más vendidos?', 'get_top_selling_products', 'analyst'],
+  ['¿Qué productos se venden más?', 'get_top_selling_products', 'analyst'],
   ['¿Qué productos debería reponer?', 'get_replenishment_candidates', 'analyst']
 ]) test(`deterministic ${skillId} uses zero Gemini calls and real evidence`, async () => {
   const f = fixture(); const result = await f.run(query);
@@ -90,6 +93,40 @@ for (const [query, skillId, agent] of [
   assert.deepEqual(result.participants.map(row => row.agentId), ['coordinator', agent]);
   assert.equal(result.participants[1].skillCalls, 1); assert.equal(result.participants[0].skillCalls, 0);
   assert.equal(result.participants.every(row => row.totalTokens === 0 && row.llmCalls === 0), true);
+});
+
+test('generic top-selling uses all completed history even after a current-month sales query', async () => {
+  const f = fixture(); const conversationId = randomUUID();
+  const sales = await f.run('¿Cuánto vendimos este mes?', conversationId);
+  assert.deepEqual(sales.evidence[0].period, { startDate: '2025-01-01', endDate: '2025-01-31' });
+  const ranking = await f.run('¿Cuáles son los productos más vendidos?', conversationId);
+  assert.equal(ranking.code, null); assert.equal(ranking.intent, 'top_selling_products');
+  assert.equal(ranking.usage.totalLlmCalls, 0); assert.equal(ranking.usage.totalTokens, 0);
+  assert.equal(ranking.actions[0].skillId, 'get_top_selling_products');
+  assert.match(ranking.answer, /Todo el historial disponible/);
+  assert.equal(ranking.evidence[0].period, undefined);
+  assert.match(ranking.evidence[0].label, /2019-01-01 a 2025-01-15/);
+  const aggregate = f.reads.filter(row => row.model === 'Transaction').at(-1).pipeline;
+  assert.equal(aggregate[0].$match.date, undefined);
+  assert.equal(aggregate[0].$match.status, 'completed'); assert.equal(aggregate[0].$match.businessId, 'A');
+});
+
+test('top-selling respects current and previous month, while an explicit follow-up can carry the period', async () => {
+  for (const [query, expected] of [
+    ['productos más vendidos este mes', { startDate: '2025-01-01', endDate: '2025-01-31' }],
+    ['productos más vendidos el mes pasado', { startDate: '2024-12-01', endDate: '2024-12-31' }]
+  ]) {
+    const f = fixture(); const result = await f.run(query);
+    assert.deepEqual(result.evidence[0].period, expected);
+    assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
+    const aggregate = f.reads.find(row => row.model === 'Transaction').pipeline;
+    assert.equal(aggregate[0].$match.date.$gte.toISOString(), `${expected.startDate}T00:00:00.000Z`);
+  }
+  const f = fixture(); const conversationId = randomUUID();
+  await f.run('¿Cuánto vendimos este mes?', conversationId);
+  const continued = await f.run('Y ahora los productos más vendidos', conversationId);
+  assert.deepEqual(continued.evidence[0].period, { startDate: '2025-01-01', endDate: '2025-01-31' });
+  assert.equal(continued.usage.totalLlmCalls, 0); assert.equal(continued.usage.totalTokens, 0);
 });
 
 test('ambiguous request uses one Coordinator generation and asks clarification', async () => {

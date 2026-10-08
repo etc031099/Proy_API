@@ -12,9 +12,11 @@ const buildSkillAnswer = (skillId, result) => {
   if (skillId === 'get_product_sales_summary') return `${name(data.product)} vendió ${format(data.totalUnitsSold)} unidades (${periodLabel(metadata)}). Importe de líneas completadas: ${amounts(data.amountsByCurrency)}.`;
   if (skillId === 'get_product_details') return `${name(data)}: stock ${format(data.stock)}, mínimo ${format(data.minStockLevel)}, precio ${format(data.price)} ${data.currency}. ${data.isActive ? 'Activo' : 'Inactivo'}.`;
   if (skillId === 'get_business_summary') return `Estado del negocio (${periodLabel(metadata)}): ${data.activeProducts} productos activos, ${data.lowStockProducts} con stock bajo. Ventas completadas: ${amounts(data.sales.amountsByCurrency)}; compras completadas: ${amounts(data.purchases.amountsByCurrency)}. Transacciones completadas: ${data.completedTransactionsCount}.`;
-  if (!Array.isArray(data) || !data.length) return 'No hay registros que cumplan esta consulta.';
+  if (!Array.isArray(data) || !data.length) return skillId === 'get_top_selling_products'
+    ? `No hay ventas completadas registradas en ${metadata.periodLabel || 'el periodo consultado'}.`
+    : 'No hay registros que cumplan esta consulta.';
   const displayed = skillId === 'get_demand_forecast' ? data.slice(0, 5) : data;
-  const header = `Mostrando ${displayed.length} de ${metadata.totalMatches ?? metadata.returnedCount}${metadata.truncated || displayed.length < data.length ? ' (lista limitada; consulta un SKU para ver su detalle)' : ''}.`;
+  const header = `${skillId === 'get_top_selling_products' ? `Periodo: ${metadata.periodLabel || 'Todo el historial disponible'}. ` : ''}Mostrando ${displayed.length} de ${metadata.totalMatches ?? metadata.returnedCount}${metadata.truncated || displayed.length < data.length ? ' (lista limitada; consulta un SKU para ver su detalle)' : ''}.`;
   const lines = displayed.map(row => {
     if (skillId === 'get_low_stock_products') return `${name(row)}: stock ${format(row.stock)}, mínimo ${format(row.minStockLevel)}, déficit ${format(row.shortage)}.`;
     if (skillId === 'get_top_selling_products') return `${name(row)}: ${format(row.unitsSold)} unidades vendidas.`;

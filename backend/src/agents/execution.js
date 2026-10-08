@@ -131,7 +131,7 @@ const createAgentExecution = options => {
         if (!Number.isSafeInteger(returnedCount) || returnedCount < 0 || returnedCount > invocation.skill.maxRecords) {
           throw new AgentError('AGENT_SKILL_EXECUTION_FAILED');
         }
-        const evidence = createEvidence({ skillId, label: invocation.skill.description,
+        const evidence = createEvidence({ skillId, label: result.metadata.evidenceLabel || invocation.skill.description,
           ...(result.metadata.asOf ? { asOf: result.metadata.asOf } : {}),
           ...(result.metadata.period ? { period: result.metadata.period } : {}) });
         emit('skill_finished', { ...ids, status: 'SUCCEEDED', durationMs: performance.now() - start, returnedCount });

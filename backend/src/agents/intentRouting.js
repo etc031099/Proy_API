@@ -15,9 +15,10 @@ const routeDeterministically = (message, memory, now) => {
   const dates = message.match(/\d{4}-\d{2}-\d{2}/g);
   if (!dates && /ayer|semana|ano pasado|hoy/.test(text) && /venta|vendi/.test(text)) return clarify('Indica el periodo con dos fechas YYYY-MM-DD o usa este mes / mes pasado.');
   if (dates && (dates.length !== 2 || !dates.every(isDate) || dates[0] > dates[1])) return clarify('Indica un periodo válido con dos fechas YYYY-MM-DD.');
-  const period = dates ? { startDate: dates[0], endDate: dates[1] }
+  const explicitPeriod = dates ? { startDate: dates[0], endDate: dates[1] }
     : /mes pasado|mes anterior/.test(text) ? monthPeriod(now, true)
-      : /este mes|mes actual/.test(text) ? monthPeriod(now) : memory.lastPeriod || monthPeriod(now);
+      : /este mes|mes actual/.test(text) ? monthPeriod(now) : undefined;
+  const period = explicitPeriod || memory.lastPeriod || monthPeriod(now);
   if (/\b(crea|crear|compra|comprar|borra|elimina|editar|actualiza|cancelar)\b|shell|ejecuta codigo|mongo query|ignora.*instruccion|api.?key|password|jwt/.test(text)) {
     return { intent: 'unsupported', agent: 'coordinator' };
   }
@@ -38,7 +39,7 @@ const routeDeterministically = (message, memory, now) => {
   let plan;
   if (/stock bajo|poco stock|bajo stock|stock minimo/.test(text)) plan = { intent: 'low_stock', agent: 'operations' };
   else if (/transacciones.*(ultim|recient)|(ultim|recient).*transacciones/.test(text)) plan = { intent: 'recent_transactions', agent: 'operations' };
-  else if (/mas vendidos|mayores ventas/.test(text)) plan = { intent: 'top_selling_products', agent: 'analyst' };
+  else if (/mas vendidos|mayores ventas|se venden mas/.test(text)) plan = { intent: 'top_selling_products', agent: 'analyst' };
   else if (/vendimos|ventas del mes/.test(text)) plan = { intent: 'sales_summary', agent: 'operations' };
   else if (/vendio|cuanto.*vendido/.test(text)) plan = { intent: 'product_sales_summary', agent: 'operations', needsProduct: true };
   else if (/explica|por que/.test(text) && /repon|reposicion/.test(text)) plan = { intent: 'explain_replenishment', agent: 'analyst', needsProduct: true, synthesize: true };
@@ -76,7 +77,14 @@ const routeDeterministically = (message, memory, now) => {
     if (memory.lastEntity) plan.selector = { productId: memory.lastEntity.id };
     else return clarify('¿Qué producto o SKU deseas consultar?');
   }
-  return { ...plan, period, limit: plan.limit || 5 };
+  if (plan.intent === 'top_selling_products') {
+    const continuesPeriod = /^(y ahora|ahora|y tambien|tambien)\b/.test(text) && memory.lastPeriodExplicit === true;
+    const rankingPeriod = explicitPeriod || (continuesPeriod ? memory.lastPeriod : undefined);
+    return { ...plan, ...(rankingPeriod ? { period: rankingPeriod } : {}),
+      periodExplicit: Boolean(explicitPeriod || continuesPeriod), periodMode: rankingPeriod ? 'bounded' : 'all_history',
+      limit: plan.limit || 5 };
+  }
+  return { ...plan, period, periodExplicit: Boolean(explicitPeriod), limit: plan.limit || 5 };
 };
 
 module.exports = { routeDeterministically, monthPeriod, clarify };

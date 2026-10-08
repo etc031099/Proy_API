@@ -79,6 +79,8 @@ const evaluate = (rows, pipeline) => pipeline.reduce((data, stage) => {
         for (const [name, accumulator] of Object.entries(arg).filter(([name]) => name !== '_id')) {
           if ('$sum' in accumulator) group[name] = (group[name] || 0) + expression(accumulator.$sum, row);
           else if ('$first' in accumulator) { if (first) group[name] = expression(accumulator.$first, row); }
+          else if ('$min' in accumulator) group[name] = first || expression(accumulator.$min, row) < group[name] ? expression(accumulator.$min, row) : group[name];
+          else if ('$max' in accumulator) group[name] = first || expression(accumulator.$max, row) > group[name] ? expression(accumulator.$max, row) : group[name];
           else throw new Error('Unsupported fake accumulator');
         }
       }

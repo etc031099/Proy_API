@@ -48,6 +48,8 @@ const createConversationMemory = ({ now = Date.now, ttlMs = TTL_MS, maxEntries =
             lastEntity: entity || (entities.length === 1 ? entities[0] : null), recentEntities: entities,
             lastPeriod: period && isDate(period.startDate) && isDate(period.endDate)
               ? { startDate: period.startDate, endDate: period.endDate } : state.lastPeriod || null,
+            lastPeriodExplicit: typeof patch.lastPeriodExplicit === 'boolean'
+              ? patch.lastPeriodExplicit : state.lastPeriodExplicit === true,
             lastTransactionFilters: patch.lastTransactionFilters ? {
               periodRequested: patch.lastTransactionFilters.periodRequested === true,
               type: ['sale', 'purchase'].includes(patch.lastTransactionFilters.type) ? patch.lastTransactionFilters.type : null,

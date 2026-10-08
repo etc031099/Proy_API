@@ -128,7 +128,8 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
           const latest = results.at(-1)?.result;
           commit({ lastIntent: plan.intent, lastAgent: plan.agent, recentEntities: entities,
             lastEntity: entities?.length === 1 ? entities[0] : undefined,
-            lastPeriod: latest?.metadata.period || plan.period, listLimit: plan.limit || 5,
+            lastPeriod: latest?.metadata.period || plan.period, lastPeriodExplicit: plan.periodExplicit === true,
+            listLimit: plan.limit || 5,
             lastSearchQuery: plan.query, lastCurrency: latest?.data?.currency,
             lastTransactionFilters: plan.intent === 'recent_transactions' ? {
               periodRequested: plan.periodRequested, type: plan.type, status: plan.status

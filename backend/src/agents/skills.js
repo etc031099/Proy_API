@@ -48,7 +48,7 @@ const SKILLS = deepFreeze([
   entry('get_supplier_details', 'Consulta un proveedor o el proveedor configurado de un producto.', ['operations'],
     schema({ supplierId: id, productId: id }, [], ['supplierId', 'productId']), 1, 'CONTACT_REFERENCE', 'Supplier identity and verified relationship; excludes personal contact data'),
   entry('get_top_selling_products', 'Clasifica productos por unidades vendidas completadas.', ['analyst'],
-    schema({ ...period, limit: limit(10) }, ['startDate', 'endDate']), 10, 'OPERATIONAL', 'Product identity and completed units sold, descending'),
+    schema({ ...period, limit: limit(10) }), 10, 'OPERATIONAL', 'Product identity and completed units sold, descending; optional date range, otherwise all completed history'),
   entry('get_product_sales_summary', 'Resume ventas completadas de un producto.', both,
     schema({ ...product, ...period }, ['startDate', 'endDate'], ['productId', 'sku']), 1, 'FINANCIAL', 'Product units sold and amount with period and currency'),
   entry('get_demand_forecast', 'Consulta el forecast histórico existente sin modificarlo.', ['analyst'],

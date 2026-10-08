@@ -157,20 +157,36 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
     },
     async get_top_selling_products(invocation) {
       const models = getModels();
-      const result = await paged(models.Transaction, [
-        { $match: { businessId: invocation.context.businessId, type: 'sale', status: 'completed', date: dateFilter(invocation.args) } },
-        { $unwind: '$products' },
-        { $group: { _id: '$products.productId', unitsSold: { $sum: '$products.quantity' }, historicalName: { $first: '$products.productName' } } }
-      ], { _id: 1, unitsSold: 1, historicalName: 1 }, { unitsSold: -1, _id: 1 }, invocation);
+      const hasPeriod = Boolean(invocation.args.startDate);
+      const limit = invocation.args.limit ?? invocation.skill.maxRecords;
+      const rows = await aggregate(models.Transaction, [
+        { $match: { businessId: invocation.context.businessId, type: 'sale', status: 'completed',
+          ...(hasPeriod ? { date: dateFilter(invocation.args) } : {}) } },
+        { $facet: {
+          ranking: [{ $unwind: '$products' },
+            { $group: { _id: '$products.productId', unitsSold: { $sum: '$products.quantity' }, historicalName: { $first: '$products.productName' } } },
+            { $sort: { unitsSold: -1, _id: 1 } },
+            { $facet: { data: [{ $limit: limit }, { $project: { _id: 1, unitsSold: 1, historicalName: 1 } }],
+              count: [{ $count: 'total' }] } }],
+          dateRange: [{ $group: { _id: null, minDate: { $min: '$date' }, maxDate: { $max: '$date' } } }]
+        } }
+      ], invocation);
+      const ranking = rows[0]?.ranking?.[0] || { data: [], count: [] };
+      const dateRange = rows[0]?.dateRange?.[0];
+      const totalMatches = ranking.count[0]?.total || 0;
       // One bounded lookup for the top-N, including inactive historical products.
       invocation.signal.throwIfAborted();
-      const ids = result.rows.map(row => row._id);
+      const ids = ranking.data.map(row => row._id);
       const products = ids.length ? await models.Product.find({ businessId: invocation.context.businessId, _id: { $in: ids } })
         .select('_id sku name').limit(invocation.skill.maxRecords).maxTimeMS(invocation.skill.timeoutMs).lean().exec() : [];
       const byId = new Map(products.map(row => [String(row._id), row]));
-      return listResult(result.rows.map(row => ({ productId: String(row._id), sku: byId.get(String(row._id))?.sku ?? null,
-        name: byId.get(String(row._id))?.name ?? row.historicalName, unitsSold: row.unitsSold })), result.total,
-      { asOf: asOf(), period: { startDate: invocation.args.startDate, endDate: invocation.args.endDate } });
+      const periodLabel = hasPeriod ? `${invocation.args.startDate} a ${invocation.args.endDate}`
+        : `Todo el historial disponible${dateRange?.minDate && dateRange?.maxDate
+          ? ` (${dateRange.minDate.toISOString().slice(0, 10)} a ${dateRange.maxDate.toISOString().slice(0, 10)})` : ''}`;
+      return listResult(ranking.data.map(row => ({ productId: String(row._id), sku: byId.get(String(row._id))?.sku ?? null,
+        name: byId.get(String(row._id))?.name ?? row.historicalName, unitsSold: row.unitsSold })), totalMatches,
+      { asOf: asOf(), periodLabel, evidenceLabel: `Productos más vendidos · ${periodLabel}`,
+        ...(hasPeriod ? { period: { startDate: invocation.args.startDate, endDate: invocation.args.endDate } } : {}) });
     },
     async get_product_sales_summary(invocation) {
       invocation.signal.throwIfAborted();
