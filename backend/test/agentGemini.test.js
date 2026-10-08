@@ -281,6 +281,28 @@ test('provider errors preserve only safe status, category, provider code and ret
   }
 });
 
+test('response parsing failures carry safe response metadata into the correlated error event', async () => {
+  const events = [];
+  const provider = createGeminiProvider({ apiKey: 'synthetic-test-key', model: 'gemini-3.8-flash', timeoutMs: 12000,
+    client: call(response('not-json', { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'not-json' }] } }] })) });
+  const execution = createAgentExecution({ context: context(), provider, onEvent: event => events.push(event) });
+  await assert.rejects(execution.generateStructured({ agentId: 'analyst', systemInstruction: 'Clasificación breve.',
+    messages: [{ role: 'user', text: '¿Cuánto vendimos?' }], schema: { type: 'OBJECT', properties: { intent: { type: 'STRING' } }, required: ['intent'] } }),
+  agentErrorCode('GEMINI_INVALID_JSON'));
+  execution.finish();
+  const diagnostic = events.find(event => event.type === 'error' && event.internalCause === 'GEMINI_INVALID_JSON');
+  assert.ok(diagnostic); assert.equal(diagnostic.publicCode, 'AGENT_PROVIDER_FAILED');
+  assert.equal(diagnostic.model, 'gemini-3.8-flash'); assert.equal(diagnostic.timeoutMs, 12000);
+  assert.equal(diagnostic.responseKind, 'structured'); assert.equal(diagnostic.candidateCount, 1);
+  assert.equal(diagnostic.finishReason, 'STOP'); assert.equal(diagnostic.hasText, true);
+  assert.equal(diagnostic.hasUsageMetadata, true); assert.equal(diagnostic.usageAvailable, true);
+  assert.equal(diagnostic.metricsComplete, true); assert.ok(Number.isFinite(diagnostic.llmDurationMs));
+  const serialized = JSON.stringify(events);
+  for (const forbidden of ['synthetic-test-key', 'not-json', 'Clasificación breve', '¿Cuánto vendimos?']) {
+    assert.equal(serialized.includes(forbidden), false);
+  }
+});
+
 test('the SDK timeout abort signal fires and the error is sanitized', async () => {
   let signal;
   const client = { models: { async generateContent({ config }) {

@@ -439,6 +439,50 @@ test('skill failures preserve only allowlisted internal cause and timing diagnos
   }
 });
 
+test('provider failures keep a safe internal category and correlation while preserving public error behavior', async () => {
+  const cases = [
+    ['GEMINI_AUTHENTICATION_FAILED', 401, 'UNAUTHENTICATED', 'AGENT_PROVIDER_FAILED'],
+    ['GEMINI_PERMISSION_DENIED', 403, 'PERMISSION_DENIED', 'AGENT_PROVIDER_FAILED'],
+    ['GEMINI_MODEL_NOT_FOUND', 404, 'NOT_FOUND', 'AGENT_PROVIDER_FAILED'],
+    ['GEMINI_RATE_LIMITED', 429, 'RESOURCE_EXHAUSTED', 'AGENT_PROVIDER_FAILED'],
+    ['GEMINI_TIMEOUT', null, 'DEADLINE_EXCEEDED', 'AGENT_PROVIDER_FAILED'],
+    ['GEMINI_NETWORK_ERROR', null, null, 'AGENT_PROVIDER_FAILED'],
+    ['GEMINI_UNAVAILABLE', 503, 'UNAVAILABLE', 'AGENT_PROVIDER_FAILED'],
+    ['GEMINI_INVALID_RESPONSE', null, null, 'AGENT_PROVIDER_FAILED'],
+    ['GEMINI_INVALID_JSON', null, null, 'AGENT_PROVIDER_FAILED'],
+    ['GEMINI_SCHEMA_VALIDATION_FAILED', null, null, 'AGENT_PROVIDER_FAILED'],
+    ['GEMINI_OUTPUT_TRUNCATED', null, null, 'AGENT_PROVIDER_FAILED'],
+    ['GEMINI_BUDGET_EXCEEDED', null, null, 'AGENT_BUDGET_EXCEEDED']
+  ];
+  for (const [cause, providerStatus, providerCode, publicCode] of cases) {
+    const events = [];
+    const rawError = Object.assign(new Error('raw body, prompt, secret-key'), { code: cause,
+      httpStatus: providerStatus, providerCode, timeoutMs: 14000, usageAvailable: true, metricsComplete: true,
+      diagnostics: { responseKind: 'structured', candidateCount: 1, finishReason: ['MAX_TOKENS'],
+        hasText: false, hasFunctionCall: false, hasUsageMetadata: true, rawResponse: 'must-not-log' } });
+    const f = fixture({ provider: { generateStructured: async () => { throw rawError; } }, onEvent: event => events.push(event) });
+    const result = await f.run('Necesito orientación.');
+    assert.equal(result.code, publicCode, cause);
+    const diagnostic = events.find(event => event.type === 'error' && event.internalCause === cause);
+    assert.ok(diagnostic, cause);
+    assert.equal(diagnostic.publicCode, publicCode);
+    assert.equal(diagnostic.providerStatus, providerStatus);
+    assert.equal(diagnostic.providerCode, providerCode);
+    assert.equal(diagnostic.model, 'gemini-3.8-flash');
+    assert.equal(diagnostic.timeoutMs, 14000);
+    assert.equal(diagnostic.llmCallsBeforeFailure, 0);
+    assert.equal(diagnostic.responseKind, 'structured'); assert.equal(diagnostic.candidateCount, 1);
+    assert.equal(diagnostic.finishReason, 'MAX_TOKENS'); assert.equal(diagnostic.hasUsageMetadata, true);
+    assert.equal(diagnostic.usageAvailable, true); assert.equal(diagnostic.metricsComplete, true);
+    assert.ok(Number.isFinite(diagnostic.llmDurationMs));
+    const serialized = JSON.stringify(events);
+    for (const forbidden of ['raw body', 'prompt', 'secret-key', 'rawResponse', 'must-not-log', 'Authorization']) {
+      assert.equal(serialized.includes(forbidden), false, `${cause} leaked ${forbidden}`);
+    }
+    for (const key of ['requestId', 'conversationId', 'agentRunId']) assert.ok(diagnostic[key]);
+  }
+});
+
 test('partial metadata with known cached tokens never coerces unknown input to zero', async () => {
   const f = fixture({ provider: { generateStructured: async () => ({ ...generated({ intent: 'clarification', targetAgent: 'coordinator', requiresClarification: true }),
     usage: { ...usage, inputTokens: null, cachedInputTokens: 4 } }) } });

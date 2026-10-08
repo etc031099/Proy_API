@@ -9,6 +9,21 @@ const logAgentDiagnostic = event => {
   console.error('[AgentSkillDiagnostic]', JSON.stringify(safeEvent));
 };
 
+const logAgentProviderDiagnostic = event => {
+  if (event.type !== 'error' || !String(event.internalCause || '').startsWith('GEMINI_')) return;
+  const fields = ['requestId', 'conversationId', 'agentRunId', 'agentId', 'model', 'publicCode',
+    'internalCause', 'providerStatus', 'providerCode', 'finishReason', 'llmDurationMs', 'timeoutMs',
+    'llmCallsBeforeFailure', 'usageAvailable', 'metricsComplete', 'responseKind', 'candidateCount',
+    'hasText', 'hasFunctionCall', 'hasUsageMetadata'];
+  const safeEvent = Object.fromEntries(fields.filter(key => event[key] !== undefined).map(key => [key, event[key]]));
+  console.error('[AgentProviderDiagnostic]', JSON.stringify(safeEvent));
+};
+
+const logAgentEvent = event => {
+  logAgentDiagnostic(event);
+  logAgentProviderDiagnostic(event);
+};
+
 const errors = {
   AGENT_INVALID_REQUEST: [400, 'La consulta no es válida.'],
   AGENT_SKILL_NOT_ALLOWED: [403, 'Acceso denegado.'],
@@ -20,7 +35,7 @@ const errors = {
 
 // One runtime per router; memory, routing and usage belong to AG-R5, not HTTP.
 const createAgentMessagesHandler = ({ enabled, orchestrator } = {}) => {
-  const runtime = orchestrator || createAgentOrchestrator({ onEvent: logAgentDiagnostic });
+  const runtime = orchestrator || createAgentOrchestrator({ onEvent: logAgentEvent });
   return async (req, res) => {
   if (enabled !== true) return res.status(404).json({ success: false, code: 'AGENT_DISABLED', message: 'Asistente no disponible.' });
   const body = req.body;
@@ -49,4 +64,4 @@ const createAgentMessagesHandler = ({ enabled, orchestrator } = {}) => {
   };
 };
 
-module.exports = { createAgentMessagesHandler, logAgentDiagnostic };
+module.exports = { createAgentMessagesHandler, logAgentDiagnostic, logAgentProviderDiagnostic, logAgentEvent };

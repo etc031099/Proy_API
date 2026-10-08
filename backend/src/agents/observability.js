@@ -15,7 +15,12 @@ const safeCount = value => Number.isSafeInteger(value) && value >= 0;
 const safeDuration = value => typeof value === 'number' && Number.isFinite(value)
   && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
 const INTERNAL_CAUSES = Object.freeze(['ML_SERVICE_UNAVAILABLE', 'AGENT_SKILL_TIMEOUT',
-  'AGENT_EXECUTION_ERROR', 'AGENT_SKILL_VALIDATION_ERROR']);
+  'AGENT_EXECUTION_ERROR', 'AGENT_SKILL_VALIDATION_ERROR', 'GEMINI_AUTHENTICATION_FAILED',
+  'GEMINI_PERMISSION_DENIED', 'GEMINI_MODEL_NOT_FOUND', 'GEMINI_RATE_LIMITED', 'GEMINI_TIMEOUT',
+  'GEMINI_NETWORK_ERROR', 'GEMINI_UNAVAILABLE', 'GEMINI_INVALID_RESPONSE', 'GEMINI_EMPTY_RESPONSE',
+  'GEMINI_INVALID_JSON', 'GEMINI_SCHEMA_VALIDATION_FAILED', 'GEMINI_OUTPUT_TRUNCATED', 'GEMINI_BUDGET_EXCEEDED']);
+const PROVIDER_CODES = Object.freeze(['UNAUTHENTICATED', 'PERMISSION_DENIED', 'NOT_FOUND', 'RESOURCE_EXHAUSTED',
+  'INTERNAL', 'UNAVAILABLE', 'DEADLINE_EXCEEDED']);
 const invalid = () => { throw new AgentError('AGENT_INVALID_REQUEST'); };
 
 // Only these fields can reach a trace sink. No raw args, prompts, identities or secrets.
@@ -34,15 +39,47 @@ const createTraceEvent = (type, metadata) => {
     if (!safeDuration(metadata.durationMs)) invalid();
     event.durationMs = metadata.durationMs;
   }
-  for (const key of ['skillDurationMs', 'mlCallDurationMs', 'timeoutMs']) {
+  for (const key of ['skillDurationMs', 'mlCallDurationMs', 'llmDurationMs', 'timeoutMs']) {
     if (metadata[key] !== undefined) {
-      if (!safeDuration(metadata[key])) invalid();
+      if (metadata[key] !== null && !safeDuration(metadata[key])) invalid();
       event[key] = metadata[key];
     }
   }
   if (metadata.internalCause !== undefined) {
     if (!INTERNAL_CAUSES.includes(metadata.internalCause)) invalid();
     event.internalCause = metadata.internalCause;
+  }
+  if (metadata.publicCode !== undefined) {
+    if (!['AGENT_PROVIDER_FAILED', 'AGENT_BUDGET_EXCEEDED'].includes(metadata.publicCode)) invalid();
+    event.publicCode = metadata.publicCode;
+  }
+  if (metadata.providerStatus !== undefined) {
+    if (metadata.providerStatus !== null && (!Number.isInteger(metadata.providerStatus) || metadata.providerStatus < 100 || metadata.providerStatus > 599)) invalid();
+    event.providerStatus = metadata.providerStatus;
+  }
+  if (metadata.providerCode !== undefined) {
+    if (metadata.providerCode !== null && !PROVIDER_CODES.includes(metadata.providerCode)) invalid();
+    event.providerCode = metadata.providerCode;
+  }
+  if (metadata.finishReason !== undefined) {
+    if (metadata.finishReason !== null && (typeof metadata.finishReason !== 'string' || !/^[A-Z_]{2,40}$/.test(metadata.finishReason))) invalid();
+    event.finishReason = metadata.finishReason;
+  }
+  if (metadata.responseKind !== undefined) {
+    if (!['text', 'structured', 'function_call', 'empty', 'unknown'].includes(metadata.responseKind)) invalid();
+    event.responseKind = metadata.responseKind;
+  }
+  for (const key of ['candidateCount', 'llmCallsBeforeFailure']) {
+    if (metadata[key] !== undefined) {
+      if (!safeCount(metadata[key])) invalid();
+      event[key] = metadata[key];
+    }
+  }
+  for (const key of ['hasText', 'hasFunctionCall', 'hasUsageMetadata', 'metricsComplete']) {
+    if (metadata[key] !== undefined) {
+      if (typeof metadata[key] !== 'boolean') invalid();
+      event[key] = metadata[key];
+    }
   }
   if (metadata.returnedCount !== undefined) {
     if (!safeCount(metadata.returnedCount)) invalid();

@@ -5,6 +5,17 @@ const { validateSkillInvocation } = require('./skills');
 const { createTraceEvent, createRequestUsage, createEvidence } = require('./observability');
 const { createSkillExecutors } = require('./executors');
 const { getGeminiProvider, providerError } = require('./providers/geminiProvider');
+const { DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_TIMEOUT_MS } = require('../config/env');
+
+const GEMINI_CAUSES = new Set(['GEMINI_AUTHENTICATION_FAILED', 'GEMINI_PERMISSION_DENIED', 'GEMINI_MODEL_NOT_FOUND',
+  'GEMINI_RATE_LIMITED', 'GEMINI_TIMEOUT', 'GEMINI_NETWORK_ERROR', 'GEMINI_UNAVAILABLE', 'GEMINI_INVALID_RESPONSE',
+  'GEMINI_EMPTY_RESPONSE', 'GEMINI_INVALID_JSON', 'GEMINI_SCHEMA_VALIDATION_FAILED', 'GEMINI_OUTPUT_TRUNCATED',
+  'GEMINI_BUDGET_EXCEEDED']);
+const providerTimeoutMs = () => {
+  const configured = Number(process.env.GEMINI_TIMEOUT_MS);
+  return Number.isSafeInteger(configured) && configured >= 1000 && configured <= 20000
+    ? configured : DEFAULT_GEMINI_TIMEOUT_MS;
+};
 
 /** A wall-clock deadline complements Mongo maxTimeMS and the ML client's timeout.
  * Abort prevents subsequent reads; already-dispatched read-only operations may
@@ -181,6 +192,7 @@ const createAgentExecution = options => {
       throw error;
     }
     budget.consume('llmCalls');
+    const llmCallsBeforeFailure = budget.snapshot().llmCalls - 1;
     llmCallsByAgent.set(agent.id, llmCount + 1);
     participants.add(agent.id);
     const agentRunId = randomUUID();
@@ -208,12 +220,29 @@ const createAgentExecution = options => {
       return result;
     } catch (error) {
       failed = true;
-      const safeError = error instanceof AgentError ? error : providerError(error);
-      llmRecords.push({ agentId: agent.id, model: process.env.GEMINI_MODEL || 'gemini-3.8-flash',
-        latencyMs: performance.now() - start, usageAvailable: false });
-      emit('error', { agentId: agent.id, agentRunId, durationMs: performance.now() - start,
-        status: 'FAILED', code: safeError.code });
-      emit('agent_finished', { agentId: agent.id, agentRunId, durationMs: performance.now() - start, status: 'FAILED' });
+      const safeError = GEMINI_CAUSES.has(error?.code) ? error : providerError(error);
+      const llmDurationMs = performance.now() - start;
+      const timeoutMs = Number.isSafeInteger(safeError.timeoutMs) ? safeError.timeoutMs
+        : safeError.code === 'GEMINI_BUDGET_EXCEEDED' ? null : providerTimeoutMs();
+      const model = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
+      const diagnostics = safeError.diagnostics && isPlainObject(safeError.diagnostics) ? safeError.diagnostics : null;
+      const publicCode = safeError.code === 'GEMINI_BUDGET_EXCEEDED' ? 'AGENT_BUDGET_EXCEEDED' : 'AGENT_PROVIDER_FAILED';
+      llmRecords.push({ agentId: agent.id, model, latencyMs: llmDurationMs, usageAvailable: false });
+      emit('error', { agentId: agent.id, agentRunId, status: 'FAILED', code: safeError.code,
+        publicCode, internalCause: GEMINI_CAUSES.has(safeError.code) ? safeError.code : 'GEMINI_UNAVAILABLE',
+        model, llmDurationMs, timeoutMs, llmCallsBeforeFailure,
+        providerStatus: safeError.httpStatus ?? null, providerCode: safeError.providerCode ?? null,
+        ...(diagnostics ? {
+          responseKind: diagnostics.responseKind,
+          candidateCount: diagnostics.candidateCount,
+          finishReason: diagnostics.finishReason?.[0] || null,
+          hasText: diagnostics.hasText,
+          hasFunctionCall: diagnostics.hasFunctionCall,
+          hasUsageMetadata: diagnostics.hasUsageMetadata
+        } : {}),
+        usageAvailable: safeError.usageAvailable === true,
+        metricsComplete: safeError.metricsComplete === true });
+      emit('agent_finished', { agentId: agent.id, agentRunId, durationMs: llmDurationMs, status: 'FAILED' });
       throw safeError;
     } finally { active--; }
   }

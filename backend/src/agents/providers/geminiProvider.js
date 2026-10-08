@@ -22,7 +22,8 @@ const GEMINI_ERROR_MESSAGES = Object.freeze({
 });
 
 class GeminiProviderError extends AgentError {
-  constructor(code, { httpStatus = null, providerCode = null, retryable = false, diagnostics = null } = {}) {
+  constructor(code, { httpStatus = null, providerCode = null, retryable = false, diagnostics = null,
+    timeoutMs = null, usageAvailable = false, metricsComplete = false } = {}) {
     super(Object.hasOwn(GEMINI_ERROR_MESSAGES, code) ? code : 'GEMINI_UNAVAILABLE');
     this.name = 'GeminiProviderError';
     this.code = Object.hasOwn(GEMINI_ERROR_MESSAGES, code) ? code : 'GEMINI_UNAVAILABLE';
@@ -32,6 +33,9 @@ class GeminiProviderError extends AgentError {
       ? providerCode : null;
     this.retryable = retryable === true;
     if (diagnostics) this.diagnostics = diagnostics;
+    this.timeoutMs = Number.isSafeInteger(timeoutMs) && timeoutMs >= 1000 && timeoutMs <= 20000 ? timeoutMs : null;
+    this.usageAvailable = usageAvailable === true;
+    this.metricsComplete = metricsComplete === true;
   }
 }
 
@@ -239,7 +243,10 @@ const createGeminiProvider = ({ apiKey, model = DEFAULT_GEMINI_MODEL,
     } catch (error) {
       if (!apiKey && error instanceof GeminiProviderError) throw error;
       if (controller.signal.aborted) throw new GeminiProviderError('GEMINI_TIMEOUT', { retryable: true });
-      throw providerError(error);
+      const normalized = providerError(error);
+      throw new GeminiProviderError(normalized.code, { httpStatus: normalized.httpStatus,
+        providerCode: normalized.providerCode, retryable: normalized.retryable, timeoutMs,
+        usageAvailable: false, metricsComplete: false });
     } finally { clearTimeout(timer); }
 
     const latencyMs = now() - start;
@@ -247,20 +254,28 @@ const createGeminiProvider = ({ apiKey, model = DEFAULT_GEMINI_MODEL,
     const text = readResponseText(response);
     const calls = readFunctionCalls(response);
     const diagnostics = responseDiagnostics(response, kind, text, calls);
-    const toolCalls = parseToolCalls(response, diagnostics);
+    const responseErrorOptions = { diagnostics, timeoutMs, usageAvailable: usage.usageAvailable,
+      metricsComplete: usage.usageAvailable && Object.entries(usage).filter(([key]) => key !== 'usageAvailable').every(([, value]) => value !== null) };
+    let toolCalls;
+    try { toolCalls = parseToolCalls(response, diagnostics); }
+    catch (error) {
+      const normalized = error instanceof GeminiProviderError ? error : providerError(error);
+      throw new GeminiProviderError(normalized.code, { ...responseErrorOptions, httpStatus: normalized.httpStatus,
+        providerCode: normalized.providerCode, retryable: normalized.retryable });
+    }
     const outputTruncated = diagnostics.finishReason.includes('MAX_TOKENS');
     if (kind === 'structured') {
-      if (!text.trim()) throw new GeminiProviderError(outputTruncated ? 'GEMINI_OUTPUT_TRUNCATED' : 'GEMINI_EMPTY_RESPONSE', { diagnostics });
+      if (!text.trim()) throw new GeminiProviderError(outputTruncated ? 'GEMINI_OUTPUT_TRUNCATED' : 'GEMINI_EMPTY_RESPONSE', responseErrorOptions);
       let output;
       try { output = JSON.parse(text); } catch {
-        throw new GeminiProviderError(outputTruncated ? 'GEMINI_OUTPUT_TRUNCATED' : 'GEMINI_INVALID_JSON', { diagnostics });
+        throw new GeminiProviderError(outputTruncated ? 'GEMINI_OUTPUT_TRUNCATED' : 'GEMINI_INVALID_JSON', responseErrorOptions);
       }
-      if (!matchesSchema(output, schema)) throw new GeminiProviderError('GEMINI_SCHEMA_VALIDATION_FAILED', { diagnostics });
+      if (!matchesSchema(output, schema)) throw new GeminiProviderError('GEMINI_SCHEMA_VALIDATION_FAILED', responseErrorOptions);
       return Object.freeze({ output: isPlainObject(output) ? Object.freeze(output) : output, model, latencyMs, usage, diagnostics });
     }
     if (kind === 'tools' && toolCalls.length) return Object.freeze({ text: typeof text === 'string' ? text : '',
       toolCalls: Object.freeze(toolCalls), model, latencyMs, usage, diagnostics });
-    if (!text.trim()) throw new GeminiProviderError(outputTruncated ? 'GEMINI_OUTPUT_TRUNCATED' : 'GEMINI_EMPTY_RESPONSE', { diagnostics });
+    if (!text.trim()) throw new GeminiProviderError(outputTruncated ? 'GEMINI_OUTPUT_TRUNCATED' : 'GEMINI_EMPTY_RESPONSE', responseErrorOptions);
     return Object.freeze({ text, ...(kind === 'tools' ? { toolCalls: Object.freeze([]) } : {}), model, latencyMs, usage, diagnostics });
   };
 

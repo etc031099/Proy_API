@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const express = require('express');
 const createAgentRoutes = require('../src/routes/agent');
-const { logAgentDiagnostic } = require('../src/controllers/agentMessagesController');
+const { logAgentDiagnostic, logAgentProviderDiagnostic } = require('../src/controllers/agentMessagesController');
 const conversationId = '11111111-1111-4111-8111-111111111111';
 const fakeAuth = (req, res, next) => { req.user = { _id: 'aaaaaaaaaaaaaaaaaaaaaaaa', businessId: 'TENANT-A', role: 'user', isActive: true }; next(); };
 const access = (req, res, next) => { req.businessId = req.user.businessId; next(); };
@@ -84,6 +84,27 @@ test('internal diagnostic logger emits only allowlisted failure metadata', () =>
   assert.equal(logged[0][1].includes('ML_SERVICE_UNAVAILABLE'), true);
   assert.equal(logged[0][1].includes('must-not-log'), false);
   assert.equal(logged[0][1].includes('password'), false);
+});
+test('provider diagnostic logger emits safe Gemini metadata and excludes request/response contents', () => {
+  const original = console.error;
+  const logged = [];
+  console.error = (...args) => logged.push(args);
+  try {
+    logAgentProviderDiagnostic({ type: 'error', requestId: '22222222-2222-4222-8222-222222222222', conversationId,
+      agentRunId: '33333333-3333-4333-8333-333333333333', agentId: 'analyst', model: 'gemini-3.8-flash',
+      publicCode: 'AGENT_PROVIDER_FAILED', internalCause: 'GEMINI_PERMISSION_DENIED', providerStatus: 403,
+      providerCode: 'PERMISSION_DENIED', finishReason: null, llmDurationMs: 90, timeoutMs: 15000,
+      llmCallsBeforeFailure: 0, usageAvailable: false, metricsComplete: false, responseKind: 'unknown',
+      candidateCount: 0, hasText: false, hasFunctionCall: false, hasUsageMetadata: false,
+      prompt: 'do not log', output: 'do not log', headers: { Authorization: 'secret' }, apiKey: 'secret' });
+    logAgentProviderDiagnostic({ type: 'error', internalCause: 'ML_SERVICE_UNAVAILABLE', secret: 'must not log' });
+  } finally { console.error = original; }
+  assert.equal(logged.length, 1); assert.equal(logged[0][0], '[AgentProviderDiagnostic]');
+  const value = JSON.parse(logged[0][1]);
+  assert.equal(value.publicCode, 'AGENT_PROVIDER_FAILED'); assert.equal(value.internalCause, 'GEMINI_PERMISSION_DENIED');
+  assert.equal(value.providerStatus, 403); assert.equal(value.responseKind, 'unknown');
+  const serialized = JSON.stringify(logged);
+  for (const forbidden of ['do not log', 'Authorization', 'secret', 'headers', 'apiKey']) assert.equal(serialized.includes(forbidden), false);
 });
 test('messages limits requests per authenticated user to 20 per minute', async t => {
   let calls = 0;
