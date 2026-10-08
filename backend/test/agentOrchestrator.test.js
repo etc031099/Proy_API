@@ -4,6 +4,7 @@ const { randomUUID } = require('node:crypto');
 const { createAgentOrchestrator, createConversationMemory, createAgentExecution, createAgentRequestContext, AgentError } = require('../src/agents');
 const { routeDeterministically } = require('../src/agents/intentRouting');
 const { TTL_MS } = require('../src/agents/memory');
+const { logAgentEvent } = require('../src/controllers/agentMessagesController');
 
 const id = number => number.toString(16).padStart(24, '0');
 const clock = () => new Date('2025-01-20T12:00:00Z');
@@ -531,6 +532,63 @@ test('skill failures preserve only allowlisted internal cause and timing diagnos
     const serialized = JSON.stringify(event);
     for (const forbidden of ['secret URL', 'raw response', 'Mongo password', 'stack', 'businessId']) assert.equal(serialized.includes(forbidden), false);
   }
+});
+
+test('replenishment execution failures emit exactly one safe AgentSkillDiagnostic; success emits none', async () => {
+  const cases = [
+    ['ML_SERVICE_UNAVAILABLE', () => Object.assign(Error('private URL'), { code: 'ML_SERVICE_UNAVAILABLE' }), 'ML_SERVICE_UNAVAILABLE'],
+    ['AGENT_SKILL_TIMEOUT', () => new AgentError('AGENT_SKILL_TIMEOUT'), 'AGENT_SKILL_TIMEOUT'],
+    ['AGENT_EXECUTION_ERROR', () => Error('private stack, credentials'), 'AGENT_SKILL_EXECUTION_FAILED']
+  ];
+  for (const [internalCause, createFailure, expectedCode] of cases) {
+    const output = [];
+    const original = console.error;
+    console.error = (...args) => output.push(args);
+    try {
+      const f = fixture({ onEvent: logAgentEvent,
+        forecastService: { async getDemandForecast() { throw createFailure(); } } });
+      const result = await f.run('¿Qué productos debería reponer?');
+      assert.equal(result.code, 'AGENT_SKILL_FAILED');
+    } finally { console.error = original; }
+    const diagnostics = output.filter(args => args[0] === '[AgentSkillDiagnostic]');
+    assert.equal(diagnostics.length, 1, internalCause);
+    const diagnostic = JSON.parse(diagnostics[0][1]);
+    assert.equal(diagnostic.code, expectedCode);
+    assert.equal(diagnostic.internalCause, internalCause);
+    assert.equal(diagnostic.skillId, 'get_replenishment_candidates');
+    assert.equal(diagnostic.agentId, 'analyst');
+    assert.equal(diagnostic.timeoutMs, 25000);
+    for (const idField of ['requestId', 'conversationId', 'agentRunId', 'skillCallId']) assert.ok(diagnostic[idField]);
+    assert.ok(Number.isFinite(diagnostic.skillDurationMs));
+    assert.ok(Number.isFinite(diagnostic.mlCallDurationMs));
+    assert.doesNotMatch(JSON.stringify(diagnostic), /private URL|private stack|credentials|businessId/);
+  }
+
+  const output = [];
+  const original = console.error;
+  console.error = (...args) => output.push(args);
+  try {
+    const f = fixture({ onEvent: logAgentEvent });
+    const result = await f.run('¿Qué productos debería reponer?');
+    assert.equal(result.code, null);
+    assert.equal(result.usage.totalLlmCalls, 0);
+  } finally { console.error = original; }
+  assert.equal(output.filter(args => args[0] === '[AgentSkillDiagnostic]').length, 0);
+});
+
+test('pre-execution skill authorization rejection keeps its 403 code and is not logged as an execution failure', async () => {
+  const output = [];
+  const original = console.error;
+  console.error = (...args) => output.push(args);
+  try {
+    const f = fixture({ onEvent: logAgentEvent, provider: {
+      generateStructured: async () => generated({ intent: 'business_query', targetAgent: 'operations', requiresClarification: false }),
+      generateWithTools: async () => toolResponse([{ name: 'get_replenishment_candidates', args: { limit: 5 } }])
+    } });
+    const result = await f.run('Necesito orientación.');
+    assert.equal(result.code, 'AGENT_SKILL_NOT_ALLOWED');
+  } finally { console.error = original; }
+  assert.equal(output.filter(args => args[0] === '[AgentSkillDiagnostic]').length, 0);
 });
 
 test('provider failures keep a safe internal category and correlation while preserving public error behavior', async () => {

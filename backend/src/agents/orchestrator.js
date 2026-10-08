@@ -15,8 +15,9 @@ const SYNTHESIS_SCHEMA = { type: 'OBJECT', additionalProperties: false, properti
 const errorCode = error => error?.code === 'AGENT_BUDGET_EXCEEDED' || error?.code === 'GEMINI_BUDGET_EXCEEDED'
   ? 'AGENT_BUDGET_EXCEEDED' : String(error?.code).startsWith('GEMINI_') ? 'AGENT_PROVIDER_FAILED'
     : ['AGENT_RESOURCE_NOT_FOUND', 'AGENT_INVALID_SKILL_ARGS'].includes(error?.code) ? 'AGENT_CLARIFICATION_REQUIRED'
-      : String(error?.code).startsWith('AGENT_SKILL') || error?.code === 'ML_SERVICE_UNAVAILABLE'
-        || error?.code === 'AGENT_EXECUTOR_NOT_READY' ? 'AGENT_SKILL_FAILED' : 'AGENT_INTERNAL_ERROR';
+      : error?.code === 'AGENT_SKILL_NOT_ALLOWED' ? 'AGENT_SKILL_NOT_ALLOWED'
+        : ['AGENT_SKILL_EXECUTION_FAILED', 'AGENT_SKILL_TIMEOUT', 'ML_SERVICE_UNAVAILABLE', 'AGENT_EXECUTOR_NOT_READY'].includes(error?.code)
+          ? 'AGENT_SKILL_FAILED' : 'AGENT_INTERNAL_ERROR';
 
 /** Internal authenticated API. No HTTP endpoint, writes or autonomous actions.
  * .handle(authenticatedReq, {message, conversationId?}) is the future UI boundary.
