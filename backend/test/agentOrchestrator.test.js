@@ -23,7 +23,8 @@ const forecast = { status: 'READY', anchorOperationalDate: '2025-07-01', product
 // Runs the real execution layer and executors. Only the database driver/provider
 // are replaced; fakes assert tenant predicates and expose no write methods.
 const fixture = ({ products = [product(1), product(2), product(3, 'B')], provider, emptySalesHistory = false, emptyProductSalesHistory = false,
-  forecastService = { getDemandForecast: async () => structuredClone(forecast) }, memory = createConversationMemory(), onEvent } = {}) => {
+  forecastService = { getDemandForecast: async () => structuredClone(forecast) }, memory = createConversationMemory(), onEvent,
+  businessHistory, now = clock } = {}) => {
   const calls = [];
   const reads = [];
   const matches = (row, match) => row.businessId === match.businessId
@@ -52,6 +53,12 @@ const fixture = ({ products = [product(1), product(2), product(3, 'B')], provide
     }
   };
   const Transaction = {
+    findOne(match) {
+      assert.ok(match.businessId); reads.push({ model: 'Transaction', match });
+      return { select() { return this; }, sort() { return this; }, maxTimeMS() { return this; }, lean() { return this; },
+        exec: async () => (businessHistory || []).filter(row => row.businessId === match.businessId && row.status === match.status)
+          .sort((a, b) => b.date - a.date)[0] || null };
+    },
     aggregate(pipeline) {
       assert.ok(pipeline[0].$match.businessId); reads.push({ model: 'Transaction', pipeline });
       const facet = pipeline.find(stage => stage.$facet)?.$facet;
@@ -64,6 +71,17 @@ const fixture = ({ products = [product(1), product(2), product(3, 'B')], provide
           totalProducts: emptySalesHistory ? [] : [{ total: 1 }],
           dateRange: emptySalesHistory ? [] : [{ minDate: new Date('2019-01-01T12:00:00Z'), maxDate: new Date('2025-01-15T12:00:00Z') }] }]
           : [{ data: [{ _id: id(50), type: 'sale', status: 'completed', date: clock(), totalAmount: 63, currency: 'PEN', itemCount: 1 }], count: [{ total: 1 }] }];
+      } else if (businessHistory) {
+        const match = pipeline[0].$match;
+        const groups = new Map();
+        for (const row of businessHistory.filter(row => row.businessId === match.businessId && row.status === match.status
+          && (!match.type || row.type === match.type) && row.date >= match.date.$gte && row.date < match.date.$lt)) {
+          const key = `${row.type}-${row.currency}`;
+          const group = groups.get(key) || { _id: { type: row.type, currency: row.currency }, count: 0, amount: 0, units: 0 };
+          group.count++; group.amount += row.amount; group.units += row.units;
+          groups.set(key, group);
+        }
+        result = [...groups.values()];
       } else result = [{ _id: { type: 'sale', currency: 'PEN' }, count: 1, amount: 63, units: 7 }];
       return { option() { return this; }, exec: async () => result };
     }
@@ -71,7 +89,7 @@ const fixture = ({ products = [product(1), product(2), product(3, 'B')], provide
   const fakeProvider = provider || { generateStructured: async () => { throw Error('unexpected LLM'); }, generateWithTools: async () => { throw Error('unexpected LLM'); } };
   const adapter = { async generateStructured(input) { calls.push({ type: 'structured', input }); return fakeProvider.generateStructured(input); },
     async generateWithTools(input) { calls.push({ type: 'tools', input }); return fakeProvider.generateWithTools(input); } };
-  const orchestrator = createAgentOrchestrator({ provider: adapter, memory, clock, onEvent,
+  const orchestrator = createAgentOrchestrator({ provider: adapter, memory, clock: now, onEvent,
     dependencies: { models: { Product, Transaction }, forecastService, toObjectId: value => value } });
   return { calls, reads, orchestrator, run: (message, conversationId, request = req()) => orchestrator.handle(request, { message, ...(conversationId ? { conversationId } : {}) }) };
 };
@@ -103,7 +121,7 @@ test('generic top-selling uses all completed history even after a current-month 
   assert.equal(ranking.code, null); assert.equal(ranking.intent, 'top_selling_products');
   assert.equal(ranking.usage.totalLlmCalls, 0); assert.equal(ranking.usage.totalTokens, 0);
   assert.equal(ranking.actions[0].skillId, 'get_top_selling_products');
-  assert.match(ranking.answer, /Todo el historial disponible/);
+  assert.match(ranking.answer, /todo el historial disponible/i);
   assert.equal(ranking.evidence[0].period, undefined);
   assert.match(ranking.evidence[0].label, /2019-01-01 a 2025-01-15/);
   const aggregate = f.reads.filter(row => row.model === 'Transaction').at(-1).pipeline;
@@ -121,7 +139,7 @@ test('full-history ranking with no sales is a safe deterministic NO_DATA respons
   assert.equal(result.actions[0].skillId, 'get_top_selling_products');
   assert.equal(result.evidence[0].recordCount, 0);
   assert.equal(result.evidence[0].period, undefined);
-  assert.equal(result.answer.includes('Todo el historial disponible'), true);
+  assert.match(result.answer, /todo el historial disponible/i);
 });
 
 test('top-selling respects current and previous month, while an explicit follow-up can carry the period', async () => {
@@ -157,7 +175,7 @@ test('replenishment explanation uses verified forecast plus one bounded synthesi
   assert.equal(result.code, null); assert.equal(result.usage.totalLlmCalls, 1);
   assert.equal(result.usage.totalSkillCalls, 2);
   assert.match(result.answer, /8\.25 unidades/); assert.match(result.answer, /reponer 12 unidades/);
-  assert.match(result.answer, /Replay histórico, ancla 2025-07-01/);
+  assert.match(result.answer, /escenario histórico.*1 de julio de 2025/);
   assert.equal(f.calls[0].input.agentId, 'analyst');
   assert.equal(JSON.stringify(f.calls).includes(id(1)), false);
   assert.deepEqual(result.participants.map(row => row.agentId), ['coordinator', 'operations', 'analyst']);
@@ -168,7 +186,83 @@ test('multi-evidence business summary coordinates two specialists with one gener
   const result = await f.run('Resume cómo está mi negocio y qué debería vigilar');
   assert.equal(result.code, null); assert.equal(result.evidence.length, 2);
   assert.equal(result.usage.totalLlmCalls, 1); assert.equal(result.usage.totalSkillCalls, 2);
-  assert.match(result.answer, /Estado del negocio/); assert.match(result.answer, /déficit/);
+  assert.match(result.answer, /productos activos/); assert.match(result.answer, /necesita 3 más/);
+});
+
+const octoberClock = () => new Date('2026-10-08T12:00:00Z');
+const historicalActivity = () => [
+  { businessId: 'A', status: 'completed', type: 'sale', currency: 'PEN', amount: 80, units: 8, date: new Date('2025-07-14T12:00:00Z') },
+  { businessId: 'B', status: 'completed', type: 'sale', currency: 'USD', amount: 999, units: 99, date: new Date('2027-01-14T12:00:00Z') },
+  { businessId: 'A', status: 'cancelled', type: 'sale', currency: 'PEN', amount: 777, units: 77, date: new Date('2026-10-07T12:00:00Z') }
+];
+
+test('generic business summary separates empty current activity from tenant-scoped historical context without LLM', async () => {
+  const f = fixture({ businessHistory: historicalActivity(), now: octoberClock });
+  const result = await f.run('Resume el estado de mi negocio');
+  assert.equal(result.code, null);
+  assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
+  assert.equal(result.usage.totalSkillCalls, 2);
+  assert.match(result.answer, /2 productos activos/);
+  assert.match(result.answer, /No se registran ventas o compras completadas durante octubre de 2026/);
+  assert.match(result.answer, /datos de ventas y compras completadas disponibles son históricos/);
+  assert.match(result.answer, /último periodo con actividad completada registrada es julio de 2025/);
+  assert.match(result.answer, /80 PEN/); assert.doesNotMatch(result.answer, /999|777|2027/);
+  assert.deepEqual(result.evidence.map(row => row.period), [
+    { startDate: '2026-10-01', endDate: '2026-10-31' }, { startDate: '2025-07-01', endDate: '2025-07-31' }
+  ]);
+  assert.ok(f.reads.every(row => (row.match || row.pipeline[0].$match).businessId === 'A'));
+  const followup = await f.run('¿Cuánto vendimos este mes?', result.conversationId);
+  assert.equal(followup.usage.totalLlmCalls, 0); assert.equal(followup.usage.totalSkillCalls, 1);
+  assert.match(followup.answer, /No se registraron ventas completadas durante octubre de 2026/);
+  assert.equal(followup.evidence[0].period.startDate, '2026-10-01');
+});
+
+test('business summary with no historical activity does not invent an earlier period', async () => {
+  const f = fixture({ businessHistory: [], now: octoberClock });
+  const result = await f.run('Resume el estado de mi negocio');
+  assert.equal(result.code, null); assert.equal(result.usage.totalLlmCalls, 0);
+  assert.match(result.answer, /octubre de 2026/);
+  assert.match(result.answer, /No encontré ventas ni compras completadas en el historial/);
+  assert.doesNotMatch(result.answer, /julio|históricos|último periodo/);
+});
+
+test('business summaries with current activity or an explicit current period do not fetch historical context', async () => {
+  const currentActivity = { ...historicalActivity()[0], date: new Date('2026-10-07T12:00:00Z') };
+  for (const [businessHistory, query] of [
+    [[...historicalActivity(), currentActivity], 'Resume el estado de mi negocio'],
+    [historicalActivity(), 'Resume el estado de mi negocio este mes']
+  ]) {
+    const f = fixture({ businessHistory, now: octoberClock });
+    const result = await f.run(query);
+    assert.equal(result.code, null); assert.equal(result.usage.totalLlmCalls, 0);
+    assert.equal(result.usage.totalSkillCalls, 1);
+    assert.equal(f.reads.some(row => row.model === 'Transaction' && row.match), false);
+    assert.match(result.answer, /octubre de 2026/);
+    assert.doesNotMatch(result.answer, /julio de 2025/);
+  }
+});
+
+test('LLM-assisted business summary keeps all current and historical evidence with one bounded generation', async () => {
+  const f = fixture({ businessHistory: historicalActivity(), now: octoberClock,
+    provider: { generateStructured: async () => generated({ sections: [0, 1, 2] }) } });
+  const result = await f.run('Resume cómo está mi negocio y qué debería vigilar');
+  assert.equal(result.code, null); assert.equal(result.usage.totalLlmCalls, 1);
+  assert.equal(result.usage.totalSkillCalls, 3); assert.equal(result.evidence.length, 3);
+  assert.match(result.answer, /octubre de 2026/); assert.match(result.answer, /julio de 2025/);
+  assert.match(result.answer, /necesita 3 más/);
+  assert.deepEqual(result.participants.map(row => row.agentId), ['coordinator', 'analyst', 'operations']);
+  assert.match(f.calls[0].input.systemInstruction, /actividad actual e histórica separadas/);
+  assert.match(f.calls[0].input.messages[1].text, /"periodMode":"current"/);
+  assert.match(f.calls[0].input.messages[1].text, /"periodMode":"latest"/);
+});
+
+test('missing product references ask a natural clarification without calling Gemini', async () => {
+  const f = fixture();
+  const result = await f.run('¿Y su predicción?');
+  assert.equal(result.requiresClarification, true);
+  assert.match(result.clarificationQuestion, /¿A qué producto te refieres/);
+  assert.match(result.clarificationQuestion, /SKU.*lista anterior/);
+  assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalSkillCalls, 0);
 });
 
 test('memory resolves product sales, forecast and previous month without requesting SKU again', async () => {
@@ -376,7 +470,7 @@ test('bounded ReAct performs search then details with exactly three LLM calls an
   assert.equal(result.usage.totalSkillCalls, 2); assert.equal(result.usage.totalTokens, 51);
   assert.equal(result.usage.toolSelectionCycles, 2);
   assert.equal(result.usage.totalProviderLatencyMs, 6);
-  assert.match(result.answer, /precio 9 PEN/);
+  assert.match(result.answer, /precio es 9 PEN/);
 });
 
 for (const [name, args] of [['get_demand_forecast', {}], ['get_inventory_summary', {}], ['get_low_stock_products', { businessId: 'B' }], ['executeShell', {}]]) {
@@ -513,7 +607,7 @@ test('ML_NOT_READY and individual non-READY remain honest with no fabricated for
   assert.match((await notReady.run('¿Qué demanda habrá?')).answer, /historial o configuración suficiente/);
   const f = fixture({ forecastService: { getDemandForecast: async () => ({ ...forecast, products: [{ ...forecast.products[0], mlStatus: 'INSUFFICIENT_HISTORY' }] }) } });
   const result = await f.run('¿Qué demanda habrá?');
-  assert.match(result.answer, /INSUFFICIENT_HISTORY/); assert.doesNotMatch(result.answer, /8\.25/);
+  assert.match(result.answer, /suficiente historial/); assert.doesNotMatch(result.answer, /8\.25/);
 });
 
 test('invalid synthesis cannot replace facts with invented content', async () => {

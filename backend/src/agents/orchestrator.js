@@ -69,7 +69,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
           if (plan.lookupQuery) {
             const matched = await run('operations', 'search_products', { query: plan.lookupQuery, limit: 2 });
             if (matched.metadata.totalMatches !== 1) {
-              plan.clarificationQuestion = 'No hay una coincidencia única. Indica el SKU del producto para consultar su demanda.';
+              plan.clarificationQuestion = 'No encontré un único producto con ese nombre. ¿Puedes indicarme su SKU para consultar su demanda?';
             } else selector = { productId: matched.data[0].id };
           }
           if (selector?.sku && ['demand_forecast', 'explain_replenishment'].includes(plan.intent)) {
@@ -85,10 +85,15 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             case 'sales_summary': await run(plan.agent, 'get_sales_summary', plan.period); break;
             case 'product_sales_summary': await run(plan.agent, 'get_product_sales_summary', { ...selector, ...plan.period }); break;
             case 'top_selling_products': await run(plan.agent, 'get_top_selling_products', { ...plan.period, limit: Math.min(plan.limit, 10) }); break;
-            case 'business_summary':
-              await run(plan.agent, 'get_business_summary', { period: 'current' });
+            case 'business_summary': {
+              const current = await run(plan.agent, 'get_business_summary', { period: 'current' });
+              // Keep current activity visible; the existing latest-period skill is only additional context.
+              if (!plan.periodExplicit && current.data.completedTransactionsCount === 0) {
+                await run(plan.agent, 'get_business_summary', { period: 'latest' });
+              }
               if (plan.multi) await run('operations', 'get_low_stock_products', { limit: 5 });
               break;
+            }
             case 'replenishment_candidates': await run(plan.agent, 'get_replenishment_candidates', { limit: plan.limit }); break;
             case 'explain_replenishment':
             case 'demand_forecast': await run(plan.agent, 'get_demand_forecast', selector || {}); break;
@@ -109,7 +114,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             && (!Array.isArray(result.data) || result.data.every(row => !row.mlStatus || row.mlStatus === 'READY')))) {
             const compact = JSON.stringify(results.map(({ skillId, result }, index) => ({ section: index, ...llmObservation(skillId, result) })));
             const generated = await execution.generateStructured({ agentId: plan.agent, schema: SYNTHESIS_SCHEMA,
-              systemInstruction: 'Ordena índices de evidencias para responder. Para reposición incluye el forecast; para resumen y vigilancia incluye ambas evidencias. Devuelve solo sections; nunca inventes cifras ni razonamiento. Mantén la respuesta breve.',
+              systemInstruction: 'Ordena las secciones verificadas: conclusión primero, luego 2–4 puntos útiles. En resumen, catálogo actual primero, actividad actual e histórica separadas y vigilancia después; incluye todas las evidencias. En reposición incluye el forecast. Devuelve solo sections. No inventes hechos ni causalidad.',
               messages: [{ role: 'user', text: safeText(message) }, { role: 'user', text: compact.slice(0, 1900) }] });
             sections = generated.output.sections;
             if (Reflect.ownKeys(generated.output).some(key => key !== 'sections') || !Array.isArray(sections) || !sections.length || sections.length > results.length
@@ -125,7 +130,9 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
           const productResult = [...results].reverse().find(({ skillId }) => productSkills.includes(skillId));
           const raw = productResult?.result.data;
           const entities = raw?.product ? [raw.product] : Array.isArray(raw) ? raw : raw?.id ? [raw] : undefined;
-          const latest = results.at(-1)?.result;
+          // Additional historical context must not replace the current period in conversational state.
+          const latest = [...results].reverse().find(({ skillId, result }) => !(plan.intent === 'business_summary'
+            && skillId === 'get_business_summary' && result.metadata.periodMode === 'latest'))?.result;
           const productListIntents = ['search_product', 'low_stock', 'top_selling_products', 'replenishment_candidates', 'demand_forecast'];
           commit({ lastIntent: plan.intent, lastAgent: plan.agent, recentEntities: entities,
             lastEntity: entities?.length === 1 ? entities[0] : undefined,
@@ -140,7 +147,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
         }
       } catch (error) {
         code = errorCode(error);
-        if (code === 'AGENT_CLARIFICATION_REQUIRED') { question = 'No encontré ese producto o los parámetros necesitan aclaración. Indica un SKU y un periodo válidos.'; answer = question; }
+        if (code === 'AGENT_CLARIFICATION_REQUIRED') { question = 'No pude identificar el producto o el periodo. ¿Puedes confirmar su SKU y las fechas que deseas consultar?'; answer = question; }
         else answer = code === 'AGENT_PROVIDER_FAILED' ? 'El servicio de IA no está disponible temporalmente. Vuelve a intentarlo.'
           : code === 'AGENT_BUDGET_EXCEEDED' ? 'La consulta alcanzó su límite de ejecución. Haz una pregunta más concreta.'
             : 'No pude obtener la información solicitada. Vuelve a intentarlo.';

@@ -39,7 +39,7 @@ const routeDeterministically = (message, memory, now) => {
     const selection = memory.lastProductSelection;
     const index = ordinal.index === -1 ? (selection?.items?.length || 0) - 1 : ordinal.index;
     const selected = selection?.items?.[index];
-    if (!selected) return clarify('No encuentro ese elemento en la última lista de productos. Indica otro ordinal o un SKU.');
+    if (!selected) return clarify('No encuentro ese producto en la última lista. ¿Puedes indicarme su SKU o elegir otro de los productos mostrados?');
     const selector = { productId: selected.id };
     const hasSalesIntent = /vendio|vendido|ventas/.test(text);
     if (hasSalesIntent) return { intent: 'product_sales_summary', agent: 'operations', selector,
@@ -102,9 +102,9 @@ const routeDeterministically = (message, memory, now) => {
     if (plan.intent === 'product_details' && query && !/\b(ese|este) producto\b|\bsu producto\b/.test(text)) {
       return { intent: 'search_product', agent: 'operations', query, period, limit: 5 };
     }
-    if (/producto\s+\S+/.test(text) && !/\b(ese|este) producto\b|\bsu producto\b/.test(text)) return clarify('Indica el SKU del producto para evitar confundirlo con una selección anterior.');
+    if (/producto\s+\S+/.test(text) && !/\b(ese|este) producto\b|\bsu producto\b/.test(text)) return clarify('¿A qué producto te refieres? Puedes indicarme su SKU o elegirlo de la lista anterior.');
     if (memory.lastEntity) plan.selector = { productId: memory.lastEntity.id };
-    else return clarify('¿Qué producto o SKU deseas consultar?');
+    else return clarify('¿A qué producto te refieres? Puedes indicarme su SKU o elegirlo de la lista anterior.');
   }
   if (plan.intent === 'top_selling_products') {
     const continuesPeriod = /^(y ahora|ahora|y tambien|tambien)\b/.test(text) && memory.lastPeriodExplicit === true;
