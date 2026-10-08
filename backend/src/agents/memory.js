@@ -13,7 +13,8 @@ const compactProductSelection = (value, now) => {
     items: value.items.map(compactEntity).filter(Boolean).slice(0, 5), createdAt: now() });
 };
 
-/** Demo-only, bounded in-process memory. Render restarts erase conversations.
+/** Demo-only, bounded in-process working context. Render restarts erase this cache,
+ * not the separate Mongo conversation history; a compact snapshot may be restored.
  * Only domain references are retained: no messages, provider responses or reasoning.
  * A per-key queue serializes read/commit so concurrent follow-ups see committed state.
  */
@@ -31,6 +32,11 @@ const createConversationMemory = ({ now = Date.now, ttlMs = TTL_MS, maxEntries =
     for (const [key, entry] of entries) if (entry.expiresAt <= now() && !queues.has(key)) entries.delete(key);
   };
   return Object.freeze({
+    forget(context) {
+      const key = keyFor(context);
+      if (queues.has(key)) throw new AgentError('AGENT_BUDGET_EXCEEDED');
+      entries.delete(key);
+    },
     async withConversation(context, operation) {
       const key = keyFor(context);
       if (typeof operation !== 'function') throw new AgentError('AGENT_INVALID_REQUEST');

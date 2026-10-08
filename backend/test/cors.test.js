@@ -118,6 +118,7 @@ test('Authorization is an allowed preflight header', async () => {
   const allowedHeaders = response.headers.get('access-control-allow-headers');
 
   assert.match(allowedHeaders, /Authorization/);
+  assert.match(allowedHeaders, /Idempotency-Key/);
 });
 
 test('Content-Type is an allowed preflight header', async () => {

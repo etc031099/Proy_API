@@ -1,13 +1,13 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import { ApiResponse, DemandForecastResponse } from '@/types';
-import type { AgentMessageRequest, AgentResponse } from '@/types/agent';
+import type { AgentMessageRequest, AgentResponse, AgentConversationList, AgentConversationDetail } from '@/types/agent';
 
 export class AgentApiError extends Error {
-  constructor(readonly status?: number) {
+  constructor(readonly status?: number, readonly code?: string, readonly conversationId?: string) {
     super('No fue posible consultar el asistente.');
     this.name = 'AgentApiError';
   }
-  get retryable() { return this.status === undefined || this.status === 503 || this.status === 429; }
+  get retryable() { return this.code !== 'AGENT_HISTORY_PERSISTENCE_FAILED' && (this.status === undefined || this.status === 503 || this.status === 429); }
 }
 
 export class DemandForecastApiError extends Error {
@@ -372,13 +372,29 @@ class ApiClient {
     }
   }
 
-  async sendAgentMessage(input: AgentMessageRequest): Promise<ApiResponse<AgentResponse>> {
+  async sendAgentMessage(input: AgentMessageRequest, requestKey?: string): Promise<ApiResponse<AgentResponse>> {
     try {
-      const response = await this.instance.post('/agent/messages', input);
+      const response = requestKey ? await this.instance.post('/agent/messages', input, { headers: { 'Idempotency-Key': requestKey } })
+        : await this.instance.post('/agent/messages', input);
       return response.data;
     } catch (error) {
-      throw new AgentApiError(axios.isAxiosError(error) ? error.response?.status : 500);
+      const data = axios.isAxiosError(error) ? error.response?.data : undefined;
+      const code = typeof data?.code === 'string' && /^AGENT_HISTORY_[A-Z_]+$/.test(data.code) ? data.code : undefined;
+      const id = typeof data?.conversationId === 'string' && /^[a-f\d-]{36}$/i.test(data.conversationId) ? data.conversationId : undefined;
+      throw new AgentApiError(axios.isAxiosError(error) ? error.response?.status : 500, code, id);
     }
+  }
+  async listAgentConversations(page = 1): Promise<ApiResponse<AgentConversationList>> {
+    try { return (await this.instance.get('/agent/conversations', { params: { page, limit: 10 } })).data; }
+    catch (error) { throw new AgentApiError(axios.isAxiosError(error) ? error.response?.status : 500); }
+  }
+  async getAgentConversation(id: string, page = 1): Promise<ApiResponse<AgentConversationDetail>> {
+    try { return (await this.instance.get(`/agent/conversations/${encodeURIComponent(id)}`, { params: { page, limit: 50 } })).data; }
+    catch (error) { throw new AgentApiError(axios.isAxiosError(error) ? error.response?.status : 500); }
+  }
+  async deleteAgentConversation(id: string): Promise<ApiResponse<{ deleted: boolean }>> {
+    try { return (await this.instance.delete(`/agent/conversations/${encodeURIComponent(id)}`)).data; }
+    catch (error) { throw new AgentApiError(axios.isAxiosError(error) ? error.response?.status : 500); }
   }
 }
 

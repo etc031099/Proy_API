@@ -13,6 +13,7 @@ export default defineConfig({
       'test/systemPagination.component.test.tsx',
       'test/assistant.api.test.ts',
       'test/assistant.component.test.tsx',
+      'test/assistant.history.test.tsx',
     ],
     environment: 'jsdom',
     setupFiles: ['./test/setup.ts'],

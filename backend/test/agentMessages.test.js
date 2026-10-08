@@ -10,9 +10,10 @@ const response = { requestId: '22222222-2222-4222-8222-222222222222', conversati
   actions: [], evidence: [], usage: { totalLlmCalls: 0, totalSkillCalls: 1, totalTokens: 0 },
   requiresClarification: false, clarificationQuestion: null, latencyMs: 15 };
 async function setup(t, options = {}) {
+  const runtime = options.orchestrator || { handle: async () => response };
   const app = express(); app.use(express.json());
   app.use('/api/agent', createAgentRoutes({ enabled: true, authenticateMiddleware: fakeAuth, businessAccessMiddleware: access,
-    orchestrator: { handle: async () => response }, ...options }));
+    orchestrator: runtime, historyService: { send: (req, input) => runtime.handle(req, input) }, ...options }));
   const server = await new Promise((resolve, reject) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); s.once('error', reject); });
   t.after(() => new Promise(resolve => server.close(resolve)));
   return body => fetch(`http://127.0.0.1:${server.address().port}/api/agent/messages`, {

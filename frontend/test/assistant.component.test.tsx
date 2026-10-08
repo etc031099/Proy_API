@@ -6,7 +6,10 @@ import { apiClient, AgentApiError } from '@/lib/api';
 import type { AgentResponse } from '@/types/agent';
 vi.mock('@/components/ProtectedRoute', () => ({ ProtectedRoute: ({ children }: { children: ReactNode }) => <>{children}</> }));
 vi.mock('@/components/Layout', () => ({ Layout: ({ children }: { children: ReactNode }) => <main>{children}</main> }));
-vi.mock('@/lib/api', async importOriginal => ({ ...await importOriginal<typeof import('@/lib/api')>(), apiClient: { sendAgentMessage: vi.fn() } }));
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'user-a', businessId: 'business-a' } }) }));
+vi.mock('@/lib/api', async importOriginal => ({ ...await importOriginal<typeof import('@/lib/api')>(), apiClient: {
+  sendAgentMessage: vi.fn(), listAgentConversations: vi.fn().mockResolvedValue({ success: true, data: {
+    items: [], pagination: { page: 1, limit: 10, total: 0, totalPages: 1 } } }), getAgentConversation: vi.fn(), deleteAgentConversation: vi.fn() } }));
 const send = vi.mocked(apiClient.sendAgentMessage);
 const response: AgentResponse = {
   requestId: '22222222-2222-4222-8222-222222222222',
@@ -20,13 +23,14 @@ const response: AgentResponse = {
     totalThoughtTokens: 0, totalCachedInputTokens: 0, totalToolUseTokens: 0, totalProviderLatencyMs: 0,
     totalLatencyMs: 100, toolSelectionCycles: 0, metricsComplete: true, agents: [] }
 };
-beforeEach(() => { send.mockReset(); });
+beforeEach(() => { send.mockReset(); localStorage.clear(); vi.mocked(apiClient.listAgentConversations).mockResolvedValue({ success: true,
+  data: { items: [], pagination: { page: 1, limit: 10, total: 0, totalPages: 1 } } }); });
 function submit(text = 'stock bajo') { fireEvent.change(screen.getByLabelText('Tu consulta'), { target: { value: text } }); fireEvent.click(screen.getByRole('button', { name: 'Enviar' })); }
 it('renders initial suggestions and sends a suggested query', async () => {
   send.mockResolvedValue({ success: true, data: response }); render(<AssistantPage />);
   expect(screen.getByRole('heading', { name: 'Asistente Inteligente' })).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Muéstrame los productos con stock bajo' }));
-  await screen.findByText(response.answer); expect(send).toHaveBeenCalledWith({ message: 'Muéstrame los productos con stock bajo' });
+  await screen.findByText(response.answer); expect(send).toHaveBeenCalledWith({ message: 'Muéstrame los productos con stock bajo' }, expect.any(String));
 });
 it('displays loading, prevents parallel sends, and renders response, participants, evidence and zero tokens', async () => {
   let resolve!: (value: { success: boolean; data: AgentResponse }) => void;
@@ -58,6 +62,7 @@ it('keeps missing metrics as dashes and shows historical forecast evidence', asy
     usage: { ...response.usage, totalLlmCalls: 1, totalTokens: null, totalThoughtTokens: null, metricsComplete: false },
     evidence: [{ evidenceId: 'e2', sourceType: 'skill', skillId: 'get_demand_forecast', label: 'Forecast', asOf: '2025-07-01' }] } });
   render(<AssistantPage />); submit(); await screen.findByText(response.answer);
+  fireEvent.click(screen.getByRole('button', { name: 'Actividad y consumo IA' }));
   const panel = screen.getByRole('complementary', { name: 'Actividad multiagente' });
   expect(within(panel).getAllByText('—').length).toBeGreaterThan(0); expect(screen.queryByText('Respuesta determinística · 0 tokens IA')).toBeNull();
   expect(screen.getByText('Ancla histórica: 2025-07-01')).toBeTruthy();

@@ -69,3 +69,14 @@ export interface AgentResponse {
   latencyMs: number;
 }
 export interface AgentMessageRequest { message: string; conversationId?: string }
+export interface HistoryPagination { page: number; limit: number; total: number; totalPages: number }
+export interface AgentConversation {
+  conversationId: string; title: string; lastMessageAt: string; messageCount: number;
+  status: 'active' | 'archived'; createdAt: string; updatedAt: string;
+}
+export interface AgentHistoryMessage {
+  id: string; role: 'user' | 'assistant'; text: string; createdAt: string;
+  status: 'pending' | 'completed' | 'failed'; response?: AgentResponse;
+}
+export interface AgentConversationList { items: AgentConversation[]; pagination: HistoryPagination }
+export interface AgentConversationDetail { conversation: AgentConversation; messages: AgentHistoryMessage[]; pagination: HistoryPagination }

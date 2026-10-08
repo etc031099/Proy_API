@@ -18,3 +18,4 @@ require('./agentOrchestrator.test');
 require('./agentResponses.test');
 require('./agentSynthesis.test');
 require('./agentMessages.test');
+require('./agentHistory.test');

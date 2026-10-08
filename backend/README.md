@@ -717,6 +717,52 @@ Capacidades verificadas en la documentación oficial:
 La disponibilidad efectiva para el proyecto depende del proveedor; no se
 provocan fallos ni se consumen llamadas reales para probar el failover.
 
+## Historial persistente del asistente (AG-R8-HISTORY)
+
+Con `AGENT_ENABLED=true`, el chat empieza a guardarse desde esta versión; no se
+migran conversaciones antiguas. `AgentConversation` y `AgentConversationMessage`
+se consultan exclusivamente por usuario autenticado **y** negocio. Mongo Atlas
+(replica set) permite transacciones cortas para guardar pares de cambios y para
+borrar conversación + mensajes; ninguna transacción permanece abierta durante
+skills o Gemini.
+
+- `POST /api/agent/messages`: conserva el contrato `message, conversationId?`.
+  La primera consulta crea el chat; visitar la página o pulsar Nueva conversación
+  no crea documentos. El frontend reutiliza un UUID en `Idempotency-Key` para un
+  reintento de la misma consulta. CORS permite ese header sin ampliar orígenes.
+- `GET /api/agent/conversations?page=1&limit=10`: resúmenes, más recientes primero.
+- `GET /api/agent/conversations/:conversationId?page=1&limit=50`: ventana más
+  reciente en orden cronológico; páginas posteriores recuperan mensajes anteriores.
+- `DELETE /api/agent/conversations/:conversationId`: borrado real del propietario,
+  con confirmación en UI. IDs ajenos/inexistentes responden igual (404).
+
+Los títulos son determinísticos (máximo 60 caracteres). Mensaje entrante: 2000
+caracteres; texto persistido: máximo 20000; conversación: máximo 400 mensajes;
+paginación: máximo 50 registros. No hay borrado automático por antigüedad.
+Un fallo de ejecución conserva el mensaje del usuario como `failed`, sin inventar
+respuesta. Un fallo de guardado posterior deja `pending`: se informa al usuario
+y **no se regenera** automáticamente un resultado incierto. En ese caso, recargar
+historial antes de iniciar otra consulta. Se conservan solamente texto y metadata
+pública proyectada (agentes, skills, evidencia, uso real, fallback y latencia),
+nunca prompts internos, respuestas raw ni secretos.
+
+El historial es **persistencia para la UI**, no un prompt: listar, abrir, restaurar
+y borrar usan 0 llamadas LLM. La memoria del agente sigue siendo compacta,
+in-process y con TTL de 30 minutos. Un snapshot estructurado, sin mensajes y con
+máximo cinco productos, permite recuperar referencias tras reinicio/TTL sin
+reenviar el chat a Gemini. El frontend guarda únicamente el UUID activo bajo una
+clave por usuario/negocio y lo limpia al cerrar sesión; mensajes y actividad se
+recuperan del backend. La coordinación local de envíos es para la demo de una
+instancia; la unicidad Mongo protege las claves duplicadas, pero no constituye
+un sistema de locks distribuido ni retención corporativa.
+
+Prueba manual cloud tras deploy: enviar una consulta determinística, ir a Productos
+y volver, pulsar F5, crear un segundo chat con Nueva conversación, alternar entre
+ambos, cerrar sesión/login y confirmar recuperación; eliminar uno con confirmación.
+No requiere llamadas Gemini para verificar persistencia. Pruebas locales:
+`node --test test/agentHistory.test.js test/agentMessages.test.js` desde backend;
+`npm test`; desde frontend `npm run test:ml-forecast`, `npx tsc --noEmit`, `npm run build`.
+
 ## 📞 Support
 
 For issues and questions:

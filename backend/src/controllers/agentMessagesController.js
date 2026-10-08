@@ -1,5 +1,6 @@
 const { createAgentOrchestrator } = require('../agents/orchestrator');
 const { EXECUTION_LIMITS, isPlainObject, isTraceId } = require('../agents/contracts');
+const { HISTORY_ERRORS } = require('./agentHistoryController');
 
 const logAgentDiagnostic = event => {
   if (event.type !== 'error' || !event.internalCause || !event.skillId) return;
@@ -31,6 +32,7 @@ const logAgentEvent = event => {
 };
 
 const errors = {
+  ...HISTORY_ERRORS,
   AGENT_INVALID_REQUEST: [400, 'La consulta no es válida.'],
   AGENT_SKILL_NOT_ALLOWED: [403, 'Acceso denegado.'],
   AGENT_BUDGET_EXCEEDED: [429, 'Se alcanzó el límite de ejecución. Inténtalo más tarde.'],
@@ -40,7 +42,7 @@ const errors = {
 };
 
 // One runtime per router; memory, routing and usage belong to AG-R5, not HTTP.
-const createAgentMessagesHandler = ({ enabled, orchestrator } = {}) => {
+const createAgentMessagesHandler = ({ enabled, orchestrator, history } = {}) => {
   const runtime = orchestrator || createAgentOrchestrator({ onEvent: logAgentEvent });
   return async (req, res) => {
   if (enabled !== true) return res.status(404).json({ success: false, code: 'AGENT_DISABLED', message: 'Asistente no disponible.' });
@@ -54,11 +56,14 @@ const createAgentMessagesHandler = ({ enabled, orchestrator } = {}) => {
   const fail = code => {
     const safeCode = Object.hasOwn(errors, code) ? code : 'AGENT_INTERNAL_ERROR';
     const [status, message] = errors[safeCode];
-    return res.status(status).json({ success: false, code: safeCode, message });
+    return res.status(status).json({ success: false, code: safeCode, message,
+      ...(req.agentConversationId ? { conversationId: req.agentConversationId } : {}) });
   };
   try {
-    const result = await runtime.handle(req, { message: body.message.trim(),
-      ...(body.conversationId ? { conversationId: body.conversationId } : {}) });
+    const key = req.get('Idempotency-Key');
+    if (key !== undefined && !isTraceId(key)) return fail('AGENT_INVALID_REQUEST');
+    const input = { message: body.message.trim(), ...(body.conversationId ? { conversationId: body.conversationId } : {}) };
+    const result = history ? await history.send(req, input, key) : await runtime.handle(req, input);
     if (result.code && !['AGENT_CLARIFICATION_REQUIRED', 'AGENT_UNSUPPORTED_QUERY'].includes(result.code)) return fail(result.code);
     // Explicit public envelope: never serialize provider responses or internal prompts.
     const fields = ['requestId', 'conversationId', 'answer', 'intent', 'agent', 'participants', 'actions', 'evidence',

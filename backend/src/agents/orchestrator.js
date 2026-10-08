@@ -21,6 +21,18 @@ const errorCode = error => error?.code === 'AGENT_BUDGET_EXCEEDED' || error?.cod
  * .handle(authenticatedReq, {message, conversationId?}) is the future UI boundary.
  */
 const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencies, onEvent = () => {}, clock = () => new Date() } = {}) => Object.freeze({
+  async restoreContext(req, conversationId, snapshot) {
+    const context = createAgentRequestContext(req, { conversationId });
+    return memory.withConversation(context, (state, commit) => {
+      if (!Object.keys(state).length) commit(snapshot);
+    });
+  },
+  async getContextSnapshot(req, conversationId) {
+    return memory.withConversation(createAgentRequestContext(req, { conversationId }), state => state);
+  },
+  forgetConversation(req, conversationId) {
+    memory.forget(createAgentRequestContext(req, { conversationId }));
+  },
   async handle(req, input) {
     if (!isPlainObject(input) || Reflect.ownKeys(input).some(key => !['message', 'conversationId'].includes(key))) throw new AgentError('AGENT_INVALID_REQUEST');
     const message = validateAgentMessage(input.message);

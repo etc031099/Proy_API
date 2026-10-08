@@ -1,5 +1,5 @@
 const CORS_METHODS = Object.freeze(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
-const CORS_ALLOWED_HEADERS = Object.freeze(['Content-Type', 'Authorization']);
+const CORS_ALLOWED_HEADERS = Object.freeze(['Content-Type', 'Authorization', 'Idempotency-Key']);
 
 const validateCorsOrigin = (origin) => {
   if (origin.includes('*')) {
