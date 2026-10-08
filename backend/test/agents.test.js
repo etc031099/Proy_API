@@ -221,7 +221,9 @@ test('central budgets bound messages and future calls without reporting them as 
     assert.equal(budget.snapshot()[kind], max);
   }
   assert.equal(EXECUTION_LIMITS.maxMessageChars, 2000);
-  assert.deepEqual(TOKEN_BUDGETS.analyst, { maxInputTokens: 2200, maxOutputTokens: 450 });
+  assert.deepEqual(TOKEN_BUDGETS.analyst, {
+    maxInputTokens: 2200, responseTargetTokens: 450, providerMaxOutputTokens: 1024
+  });
   assert.equal(createRequestUsage().totalTokens, 0);
 });
 

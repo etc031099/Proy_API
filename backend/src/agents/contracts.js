@@ -17,9 +17,9 @@ const EXECUTION_LIMITS = deepFreeze({
   maxToolSelectionCycles: 2
 });
 const TOKEN_BUDGETS = deepFreeze({
-  coordinator: { maxInputTokens: 800, maxOutputTokens: 100 },
-  operations: { maxInputTokens: 1500, maxOutputTokens: 200 },
-  analyst: { maxInputTokens: 2200, maxOutputTokens: 450 }
+  coordinator: { maxInputTokens: 800, responseTargetTokens: 100, providerMaxOutputTokens: 512 },
+  operations: { maxInputTokens: 1500, responseTargetTokens: 200, providerMaxOutputTokens: 768 },
+  analyst: { maxInputTokens: 2200, responseTargetTokens: 450, providerMaxOutputTokens: 1024 }
 });
 const ERROR_MESSAGES = deepFreeze({
   AGENT_INVALID_REQUEST: 'Invalid agent request',
@@ -41,6 +41,10 @@ const ERROR_MESSAGES = deepFreeze({
   GEMINI_RATE_LIMITED: 'Gemini rate limit reached',
   GEMINI_UNAVAILABLE: 'Gemini is temporarily unavailable',
   GEMINI_INVALID_RESPONSE: 'Gemini returned an invalid response',
+  GEMINI_EMPTY_RESPONSE: 'Gemini returned no usable content',
+  GEMINI_INVALID_JSON: 'Gemini returned invalid JSON',
+  GEMINI_SCHEMA_VALIDATION_FAILED: 'Gemini response did not match the required schema',
+  GEMINI_OUTPUT_TRUNCATED: 'Gemini output was truncated by its token limit',
   GEMINI_BUDGET_EXCEEDED: 'Gemini request budget exceeded'
 });
 

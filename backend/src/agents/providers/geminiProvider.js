@@ -14,11 +14,15 @@ const GEMINI_ERROR_MESSAGES = Object.freeze({
   GEMINI_RATE_LIMITED: 'Gemini rate limit reached',
   GEMINI_UNAVAILABLE: 'Gemini is temporarily unavailable',
   GEMINI_INVALID_RESPONSE: 'Gemini returned an invalid response',
+  GEMINI_EMPTY_RESPONSE: 'Gemini returned no usable content',
+  GEMINI_INVALID_JSON: 'Gemini returned invalid JSON',
+  GEMINI_SCHEMA_VALIDATION_FAILED: 'Gemini response did not match the required schema',
+  GEMINI_OUTPUT_TRUNCATED: 'Gemini output was truncated by its token limit',
   GEMINI_BUDGET_EXCEEDED: 'Gemini request budget exceeded'
 });
 
 class GeminiProviderError extends AgentError {
-  constructor(code, { httpStatus = null, providerCode = null, retryable = false } = {}) {
+  constructor(code, { httpStatus = null, providerCode = null, retryable = false, diagnostics = null } = {}) {
     super(Object.hasOwn(GEMINI_ERROR_MESSAGES, code) ? code : 'GEMINI_UNAVAILABLE');
     this.name = 'GeminiProviderError';
     this.code = Object.hasOwn(GEMINI_ERROR_MESSAGES, code) ? code : 'GEMINI_UNAVAILABLE';
@@ -27,6 +31,7 @@ class GeminiProviderError extends AgentError {
     this.providerCode = typeof providerCode === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(providerCode)
       ? providerCode : null;
     this.retryable = retryable === true;
+    if (diagnostics) this.diagnostics = diagnostics;
   }
 }
 
@@ -100,16 +105,76 @@ const validatePrompt = ({ systemInstruction, messages }) => {
   if (totalChars > 6000) throw new GeminiProviderError('GEMINI_BUDGET_EXCEEDED');
 };
 
-const parseToolCalls = response => {
-  const calls = response?.functionCalls;
+const responseParts = response => Array.isArray(response?.candidates)
+  ? response.candidates[0]?.content?.parts || [] : [];
+const readResponseText = response => {
+  let sdkText;
+  try { sdkText = response?.text; } catch { sdkText = undefined; }
+  if (typeof sdkText === 'string' && sdkText.trim()) return sdkText;
+  return responseParts(response).filter(part => part && typeof part.text === 'string' && part.thought !== true)
+    .map(part => part.text).join('');
+};
+const readFunctionCalls = response => {
+  let sdkCalls;
+  try { sdkCalls = response?.functionCalls; } catch { sdkCalls = undefined; }
+  if (sdkCalls !== undefined && !Array.isArray(sdkCalls)) return sdkCalls;
+  if (Array.isArray(sdkCalls) && sdkCalls.length) return sdkCalls;
+  const parts = responseParts(response);
+  const callsFromParts = parts.filter(part => part?.functionCall).map(part => part.functionCall);
+  return callsFromParts.length ? callsFromParts : Array.isArray(sdkCalls) ? sdkCalls : undefined;
+};
+const responseDiagnostics = (response, kind, text, calls) => {
+  const candidates = Array.isArray(response?.candidates) ? response.candidates : [];
+  const finishReason = candidates.map(candidate => candidate?.finishReason)
+    .filter(value => typeof value === 'string' && /^[A-Z_]{2,40}$/.test(value)).slice(0, 4);
+  const hasText = typeof text === 'string' && text.trim().length > 0;
+  const hasFunctionCall = Array.isArray(calls) && calls.length > 0;
+  const hasOtherParts = responseParts(response).some(part => part && typeof part === 'object'
+    && typeof part.text !== 'string' && !part.functionCall);
+  const responseKind = hasFunctionCall ? 'function_call'
+    : hasText ? kind === 'structured' ? 'structured' : 'text'
+      : hasOtherParts ? 'unknown' : 'empty';
+  return Object.freeze({ responseKind, candidateCount: candidates.length, finishReason: Object.freeze(finishReason),
+    hasText, hasFunctionCall, hasUsageMetadata: Boolean(response?.usageMetadata) });
+};
+const parseToolCalls = (response, diagnostics = null) => {
+  const calls = readFunctionCalls(response);
   if (calls === undefined) return [];
-  if (!Array.isArray(calls)) throw new GeminiProviderError('GEMINI_INVALID_RESPONSE');
+  if (!Array.isArray(calls)) throw new GeminiProviderError('GEMINI_INVALID_RESPONSE', { diagnostics });
   if (calls.length > 4) throw new GeminiProviderError('GEMINI_BUDGET_EXCEEDED');
   return calls.map(call => {
     if (!isPlainObject(call) || typeof call.name !== 'string' || !/^[a-z][a-z0-9_]{0,79}$/.test(call.name)
-      || !isPlainObject(call.args)) throw new GeminiProviderError('GEMINI_INVALID_RESPONSE');
-    return Object.freeze({ name: call.name, args: Object.freeze({ ...call.args }) });
+      || call.args !== undefined && !isPlainObject(call.args)) throw new GeminiProviderError('GEMINI_INVALID_RESPONSE', { diagnostics });
+    return Object.freeze({ name: call.name, args: Object.freeze({ ...(call.args || {}) }) });
   });
+};
+
+const schemaTypeMatches = (value, expected) => {
+  const type = String(expected || '').toLowerCase();
+  if (type === 'object') return isPlainObject(value);
+  if (type === 'array') return Array.isArray(value);
+  if (type === 'string') return typeof value === 'string';
+  if (type === 'integer') return Number.isSafeInteger(value);
+  if (type === 'number') return typeof value === 'number' && Number.isFinite(value);
+  if (type === 'boolean') return typeof value === 'boolean';
+  return false;
+};
+const matchesSchema = (value, schema, depth = 0) => {
+  if (!isPlainObject(schema) || depth > 20) return false;
+  if (schema.enum && (!Array.isArray(schema.enum) || !schema.enum.some(candidate => Object.is(candidate, value)))) return false;
+  if (schema.oneOf) {
+    if (!Array.isArray(schema.oneOf) || schema.oneOf.filter(candidate => matchesSchema(value, candidate, depth + 1)).length !== 1) return false;
+  }
+  if (schema.type && ![].concat(schema.type).some(type => schemaTypeMatches(value, type))) return false;
+  if (schemaTypeMatches(value, 'object')) {
+    if (Array.isArray(schema.required) && schema.required.some(key => !Object.hasOwn(value, key))) return false;
+    if (schema.additionalProperties === false && Object.keys(value).some(key => !Object.hasOwn(schema.properties || {}, key))) return false;
+    if (schema.properties && (!isPlainObject(schema.properties)
+      || Object.entries(schema.properties).some(([key, propertySchema]) => Object.hasOwn(value, key)
+        && !matchesSchema(value[key], propertySchema, depth + 1)))) return false;
+  }
+  if (Array.isArray(value) && schema.items && value.some(item => !matchesSchema(item, schema.items, depth + 1))) return false;
+  return true;
 };
 
 const createGeminiProvider = ({ apiKey, model = DEFAULT_GEMINI_MODEL,
@@ -148,7 +213,7 @@ const createGeminiProvider = ({ apiKey, model = DEFAULT_GEMINI_MODEL,
     try {
       const config = {
         systemInstruction,
-        maxOutputTokens: agent.limits.maxOutputTokens,
+        maxOutputTokens: agent.limits.providerMaxOutputTokens,
         thinkingConfig: { thinkingLevel: 'low' },
         automaticFunctionCalling: { disable: true },
         abortSignal: controller.signal,
@@ -179,19 +244,24 @@ const createGeminiProvider = ({ apiKey, model = DEFAULT_GEMINI_MODEL,
 
     const latencyMs = now() - start;
     const usage = normalizeUsage(response?.usageMetadata);
-    const toolCalls = parseToolCalls(response);
-    const text = response?.text;
+    const text = readResponseText(response);
+    const calls = readFunctionCalls(response);
+    const diagnostics = responseDiagnostics(response, kind, text, calls);
+    const toolCalls = parseToolCalls(response, diagnostics);
+    const outputTruncated = diagnostics.finishReason.includes('MAX_TOKENS');
     if (kind === 'structured') {
-      if (typeof text !== 'string' || !text.trim()) throw new GeminiProviderError('GEMINI_INVALID_RESPONSE');
+      if (!text.trim()) throw new GeminiProviderError(outputTruncated ? 'GEMINI_OUTPUT_TRUNCATED' : 'GEMINI_EMPTY_RESPONSE', { diagnostics });
       let output;
-      try { output = JSON.parse(text); } catch { throw new GeminiProviderError('GEMINI_INVALID_RESPONSE'); }
-      if (!isPlainObject(output)) throw new GeminiProviderError('GEMINI_INVALID_RESPONSE');
-      return Object.freeze({ output: Object.freeze(output), model, latencyMs, usage });
+      try { output = JSON.parse(text); } catch {
+        throw new GeminiProviderError(outputTruncated ? 'GEMINI_OUTPUT_TRUNCATED' : 'GEMINI_INVALID_JSON', { diagnostics });
+      }
+      if (!matchesSchema(output, schema)) throw new GeminiProviderError('GEMINI_SCHEMA_VALIDATION_FAILED', { diagnostics });
+      return Object.freeze({ output: isPlainObject(output) ? Object.freeze(output) : output, model, latencyMs, usage, diagnostics });
     }
     if (kind === 'tools' && toolCalls.length) return Object.freeze({ text: typeof text === 'string' ? text : '',
-      toolCalls: Object.freeze(toolCalls), model, latencyMs, usage });
-    if (typeof text !== 'string' || !text.trim()) throw new GeminiProviderError('GEMINI_INVALID_RESPONSE');
-    return Object.freeze({ text, model, latencyMs, usage });
+      toolCalls: Object.freeze(toolCalls), model, latencyMs, usage, diagnostics });
+    if (!text.trim()) throw new GeminiProviderError(outputTruncated ? 'GEMINI_OUTPUT_TRUNCATED' : 'GEMINI_EMPTY_RESPONSE', { diagnostics });
+    return Object.freeze({ text, model, latencyMs, usage, diagnostics });
   };
 
   return Object.freeze({
@@ -209,4 +279,5 @@ const getGeminiProvider = () => processProvider ||= createGeminiProvider({
   timeoutMs: process.env.GEMINI_TIMEOUT_MS === undefined ? DEFAULT_GEMINI_TIMEOUT_MS : Number(process.env.GEMINI_TIMEOUT_MS)
 });
 
-module.exports = { GeminiProviderError, createGeminiProvider, getGeminiProvider, normalizeUsage, providerError, validatePrompt };
+module.exports = { GeminiProviderError, createGeminiProvider, getGeminiProvider, normalizeUsage, providerError,
+  responseDiagnostics, readResponseText, readFunctionCalls, matchesSchema, validatePrompt };

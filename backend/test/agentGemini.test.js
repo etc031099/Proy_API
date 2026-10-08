@@ -33,12 +33,30 @@ test('Gemini client is lazily created with one request attempt, output budgets a
   assert.equal(result.model, 'gemini-3.8-flash');
   assert.equal(result.latencyMs, 1);
   assert.equal(captured.request.model, 'gemini-3.8-flash');
-  assert.equal(captured.request.config.maxOutputTokens, 450);
+  assert.equal(captured.request.config.maxOutputTokens, 1024);
   assert.deepEqual(captured.request.config.thinkingConfig, { thinkingLevel: 'low' });
   assert.equal(captured.request.config.automaticFunctionCalling.disable, true);
   assert.equal(captured.request.config.httpOptions.timeout, 15000);
   assert.equal(captured.request.config.httpOptions.retryOptions.attempts, 1);
   assert.equal(captured.tokenCountCalls || 0, 0);
+});
+
+test('Gemini provider hard output ceilings are separate from visible response targets', async () => {
+  const cases = [
+    ['coordinator', 100, 512],
+    ['operations', 200, 768],
+    ['analyst', 450, 1024]
+  ];
+  for (const [agentId, responseTargetTokens, providerMaxOutputTokens] of cases) {
+    const captured = {};
+    const provider = createGeminiProvider({ apiKey: 'synthetic-test-key', client: call(response('OK'), captured) });
+    await provider.generate({ agentId, systemInstruction: 'Breve.', messages: [{ role: 'user', text: 'Estado?' }] });
+    assert.equal(captured.request.config.maxOutputTokens, providerMaxOutputTokens);
+    assert.deepEqual(captured.request.config.thinkingConfig, { thinkingLevel: 'low' });
+    const { getAgentDefinition } = require('../src/agents/definitions');
+    assert.equal(getAgentDefinition(agentId).limits.responseTargetTokens, responseTargetTokens);
+    assert.equal(getAgentDefinition(agentId).limits.providerMaxOutputTokens, providerMaxOutputTokens);
+  }
 });
 
 test('Gemini captures provider usage fields and preserves totalTokenCount verbatim', async () => {
@@ -61,14 +79,22 @@ test('partial and absent usage metadata remain unknown, never estimated', async 
   }
 });
 
-test('Gemini rejects missing configuration, model response JSON and payload violations safely', async () => {
+test('Gemini distinguishes invalid JSON, schema mismatch, empty and truncated structured responses', async () => {
   const noKey = createGeminiProvider({});
   await assert.rejects(noKey.generate({ agentId: 'analyst', systemInstruction: 'Safe.', messages: [{ role: 'user', text: 'Hola' }] }),
     providerErrorCode('GEMINI_NOT_CONFIGURED'));
-  for (const text of ['not json', '[]', '']) {
-    const p = createGeminiProvider({ apiKey: 'synthetic-test-key', client: call(response(text)) });
-    await assert.rejects(p.generateStructured({ agentId: 'coordinator', systemInstruction: 'Safe.',
-      messages: [{ role: 'user', text: 'Hola' }], schema: { type: 'OBJECT' } }), providerErrorCode('GEMINI_INVALID_RESPONSE'));
+  const structuredInput = { agentId: 'coordinator', systemInstruction: 'Safe.',
+    messages: [{ role: 'user', text: 'Hola' }], schema: { type: 'OBJECT', properties: { status: { type: 'STRING', enum: ['ok'] } }, required: ['status'], additionalProperties: false } };
+  const cases = [
+    [response('not json'), 'GEMINI_INVALID_JSON', 'structured'],
+    [response('{}'), 'GEMINI_SCHEMA_VALIDATION_FAILED', 'structured'],
+    [response(''), 'GEMINI_EMPTY_RESPONSE', 'empty'],
+    [{ candidates: [{ finishReason: 'MAX_TOKENS', content: { parts: [] } }], usageMetadata }, 'GEMINI_OUTPUT_TRUNCATED', 'empty']
+  ];
+  for (const [sdkResponse, expected, expectedKind] of cases) {
+    const p = createGeminiProvider({ apiKey: 'synthetic-test-key', client: call(sdkResponse) });
+    await assert.rejects(p.generateStructured(structuredInput), error => error.code === expected
+      && error.diagnostics?.responseKind === expectedKind);
   }
   const p = createGeminiProvider({ apiKey: 'synthetic-test-key', client: call(response()) });
   for (const text of ['contacta a persona@example.com', 'mi teléfono 987654321', `id ${id}`, 'x'.repeat(2001)]) {
@@ -78,6 +104,50 @@ test('Gemini rejects missing configuration, model response JSON and payload viol
   await assert.rejects(p.generate({ agentId: 'analyst', systemInstruction: 'x'.repeat(2000),
     messages: [{ role: 'user', text: 'y'.repeat(2000) }, { role: 'model', text: 'z'.repeat(2000) }, { role: 'user', text: 'w' }] }),
   providerErrorCode('GEMINI_BUDGET_EXCEEDED'));
+});
+
+test('SDK candidate parts provide usable text when response.text is absent and STOP is normal', async () => {
+  const provider = createGeminiProvider({ apiKey: 'synthetic-test-key', client: call({ candidates: [
+    { finishReason: 'STOP', content: { parts: [{ text: 'OK' }] } }
+  ], usageMetadata }) });
+  const result = await provider.generate({ agentId: 'operations', systemInstruction: 'Short.', messages: [{ role: 'user', text: 'Status?' }] });
+  assert.equal(result.text, 'OK');
+  assert.deepEqual(result.diagnostics, { responseKind: 'text', candidateCount: 1, finishReason: ['STOP'],
+    hasText: true, hasFunctionCall: false, hasUsageMetadata: true });
+});
+
+test('structured output validates parsed JSON semantically against the supplied schema', async () => {
+  const provider = createGeminiProvider({ apiKey: 'synthetic-test-key', client: call({
+    candidates: [{ finishReason: 'STOP', content: { parts: [{ text: '{"status":"ok","agent":"operations"}' }] } }], usageMetadata
+  }) });
+  const result = await provider.generateStructured({ agentId: 'coordinator', systemInstruction: 'Compact.',
+    messages: [{ role: 'user', text: 'Classify.' }], schema: { type: 'OBJECT', properties: {
+      status: { type: 'STRING', enum: ['ok'] }, agent: { type: 'STRING', enum: ['operations'] }
+    }, required: ['status', 'agent'], additionalProperties: false } });
+  assert.deepEqual(result.output, { status: 'ok', agent: 'operations' });
+  assert.equal(result.diagnostics.responseKind, 'structured');
+});
+
+test('function call response is accepted without text and diagnostics stay structural', async () => {
+  const provider = createGeminiProvider({ apiKey: 'synthetic-test-key', client: call({
+    candidates: [{ finishReason: 'STOP', content: { parts: [{ functionCall: { name: 'get_low_stock_products', args: { limit: 3 } } }] } }],
+    usageMetadata
+  }) });
+  const result = await provider.generateWithTools({ agentId: 'operations', systemInstruction: 'Use permitted tools.',
+    messages: [{ role: 'user', text: 'Low stock?' }] });
+  assert.deepEqual(result.toolCalls, [{ name: 'get_low_stock_products', args: { limit: 3 } }]);
+  assert.equal(result.text, '');
+  assert.deepEqual(result.diagnostics, { responseKind: 'function_call', candidateCount: 1, finishReason: ['STOP'],
+    hasText: false, hasFunctionCall: true, hasUsageMetadata: true });
+});
+
+test('malformed function calls fail safely with structural diagnostics', async () => {
+  const provider = createGeminiProvider({ apiKey: 'synthetic-test-key', client: call({
+    candidates: [{ finishReason: 'STOP', content: { parts: [{ functionCall: { name: 'invalid name', args: {} } }] } }]
+  }) });
+  await assert.rejects(provider.generateWithTools({ agentId: 'operations', systemInstruction: 'Use permitted tools.',
+    messages: [{ role: 'user', text: 'Low stock?' }] }), error => error.code === 'GEMINI_INVALID_RESPONSE'
+      && error.diagnostics?.responseKind === 'function_call' && error.diagnostics.hasFunctionCall);
 });
 
 test('tool declarations contain only READY skills allowed in both registries', () => {
