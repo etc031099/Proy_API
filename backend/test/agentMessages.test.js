@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const express = require('express');
 const createAgentRoutes = require('../src/routes/agent');
+const { logAgentDiagnostic } = require('../src/controllers/agentMessagesController');
 const conversationId = '11111111-1111-4111-8111-111111111111';
 const fakeAuth = (req, res, next) => { req.user = { _id: 'aaaaaaaaaaaaaaaaaaaaaaaa', businessId: 'TENANT-A', role: 'user', isActive: true }; next(); };
 const access = (req, res, next) => { req.businessId = req.user.businessId; next(); };
@@ -65,6 +66,24 @@ test('messages maps returned runtime failure and unknown thrown errors safely', 
   assert.equal((await post({ message: 'hello' })).status, 503);
   const unknown = await setup(t, { orchestrator: { async handle() { throw new Error('secret'); } } });
   const res = await unknown({ message: 'hello' }); assert.equal(res.status, 500); assert.ok(!(await res.text()).includes('secret'));
+});
+test('internal diagnostic logger emits only allowlisted failure metadata', () => {
+  const original = console.error;
+  const logged = [];
+  console.error = (...args) => logged.push(args);
+  try {
+    logAgentDiagnostic({ type: 'error', requestId: '22222222-2222-4222-8222-222222222222',
+      conversationId, agentRunId: '33333333-3333-4333-8333-333333333333',
+      skillCallId: '44444444-4444-4444-8444-444444444444', agentId: 'analyst',
+      skillId: 'get_replenishment_candidates', code: 'ML_SERVICE_UNAVAILABLE',
+      internalCause: 'ML_SERVICE_UNAVAILABLE', skillDurationMs: 12, mlCallDurationMs: 10,
+      timeoutMs: 10000, secret: 'must-not-log', payload: { password: 'never' } });
+  } finally { console.error = original; }
+  assert.equal(logged.length, 1);
+  assert.equal(logged[0][0], '[AgentSkillDiagnostic]');
+  assert.equal(logged[0][1].includes('ML_SERVICE_UNAVAILABLE'), true);
+  assert.equal(logged[0][1].includes('must-not-log'), false);
+  assert.equal(logged[0][1].includes('password'), false);
 });
 test('messages limits requests per authenticated user to 20 per minute', async t => {
   let calls = 0;

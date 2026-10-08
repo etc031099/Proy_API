@@ -1,4 +1,5 @@
 const { AgentError } = require('./contracts');
+const { performance } = require('node:perf_hooks');
 
 const escapeLiteral = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const productFields = { _id: 1, sku: 1, name: 1, category: 1, stock: 1, minStockLevel: 1 };
@@ -69,11 +70,21 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
       pending.catch(() => forecastPromises.delete(key));
     }
     let result;
+    const mlCallStartedAt = performance.now();
     try { result = await forecastPromises.get(key); } catch (error) {
+      const mlCallDurationMs = performance.now() - mlCallStartedAt;
       if (error.code === 'PRODUCT_NOT_FOUND') throw new AgentError('AGENT_RESOURCE_NOT_FOUND');
       if (error.code === 'ML_NOT_READY') return { status: 'ML_NOT_READY' };
-      if (error.code === 'ML_SERVICE_UNAVAILABLE') throw new AgentError('ML_SERVICE_UNAVAILABLE');
-      throw error;
+      if (error.code === 'AGENT_SKILL_TIMEOUT') {
+        const safeError = new AgentError('AGENT_SKILL_TIMEOUT');
+        safeError.diagnostic = Object.freeze({ internalCause: 'AGENT_SKILL_TIMEOUT', mlCallDurationMs });
+        throw safeError;
+      }
+      const internalCause = error.code === 'ML_SERVICE_UNAVAILABLE' ? 'ML_SERVICE_UNAVAILABLE' : 'AGENT_EXECUTION_ERROR';
+      const safeError = new AgentError(internalCause === 'ML_SERVICE_UNAVAILABLE'
+        ? 'ML_SERVICE_UNAVAILABLE' : 'AGENT_SKILL_EXECUTION_FAILED');
+      safeError.diagnostic = Object.freeze({ internalCause, mlCallDurationMs });
+      throw safeError;
     }
     return result;
   };

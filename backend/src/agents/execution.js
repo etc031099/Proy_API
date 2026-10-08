@@ -140,8 +140,16 @@ const createAgentExecution = options => {
       } catch (error) {
         failed = true;
         const safeError = error instanceof AgentError ? error : new AgentError('AGENT_SKILL_EXECUTION_FAILED');
-        emit('error', { ...ids, status: 'FAILED', code: safeError.code });
-        if (dispatched) emit('skill_finished', { ...ids, status: 'FAILED', durationMs: performance.now() - start });
+        const skillDurationMs = performance.now() - start;
+        const diagnostic = error?.diagnostic && isPlainObject(error.diagnostic) ? error.diagnostic : {};
+        const internalCause = diagnostic.internalCause
+          || (error?.code === 'ML_SERVICE_UNAVAILABLE' ? 'ML_SERVICE_UNAVAILABLE'
+            : error?.code === 'AGENT_SKILL_TIMEOUT' ? 'AGENT_SKILL_TIMEOUT'
+              : error?.code === 'AGENT_SKILL_EXECUTION_FAILED' ? 'AGENT_SKILL_VALIDATION_ERROR' : 'AGENT_EXECUTION_ERROR');
+        const diagnostics = { internalCause, skillDurationMs, timeoutMs: invocation.skill.timeoutMs,
+          ...(typeof diagnostic.mlCallDurationMs === 'number' ? { mlCallDurationMs: diagnostic.mlCallDurationMs } : {}) };
+        emit('error', { ...ids, status: 'FAILED', code: safeError.code, ...diagnostics });
+        if (dispatched) emit('skill_finished', { ...ids, status: 'FAILED', durationMs: skillDurationMs });
         emit('agent_finished', { agentId, agentRunId: ids.agentRunId, status: 'FAILED', durationMs: performance.now() - start });
         throw safeError;
       } finally { active--; }

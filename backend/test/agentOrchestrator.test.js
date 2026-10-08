@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
-const { createAgentOrchestrator, createConversationMemory, createAgentExecution, createAgentRequestContext } = require('../src/agents');
+const { createAgentOrchestrator, createConversationMemory, createAgentExecution, createAgentRequestContext, AgentError } = require('../src/agents');
 const { routeDeterministically } = require('../src/agents/intentRouting');
 const { TTL_MS } = require('../src/agents/memory');
 
@@ -322,6 +322,29 @@ test('provider and skill errors are sanitized; missing usage stays null', async 
   assert.equal(result.usage.totalLlmCalls, 1); assert.equal(JSON.stringify(result).includes('secret raw response'), false);
   const broken = fixture({ forecastService: { getDemandForecast: async () => { throw Object.assign(Error('Mongo URI and stack'), { code: 'ML_SERVICE_UNAVAILABLE' }); } } });
   assert.equal((await broken.run('¿Qué productos debería reponer?')).code, 'AGENT_SKILL_FAILED');
+});
+
+test('skill failures preserve only allowlisted internal cause and timing diagnostics', async () => {
+  const cases = [
+    ['ML_SERVICE_UNAVAILABLE', () => Object.assign(Error('secret URL and raw response'), { code: 'ML_SERVICE_UNAVAILABLE' })],
+    ['AGENT_SKILL_TIMEOUT', () => new AgentError('AGENT_SKILL_TIMEOUT')],
+    ['AGENT_EXECUTION_ERROR', () => Error('Mongo password and stack')]
+  ];
+  for (const [expectedCause, makeError] of cases) {
+    const events = [];
+    const f = fixture({ onEvent: event => events.push(event), forecastService: { async getDemandForecast() { throw makeError(); } } });
+    const result = await f.run('¿Qué productos debería reponer?');
+    assert.equal(result.code, 'AGENT_SKILL_FAILED');
+    assert.equal(JSON.stringify(result).includes('internalCause'), false);
+    const event = events.find(item => item.type === 'error' && item.skillId === 'get_replenishment_candidates');
+    assert.equal(event.internalCause, expectedCause);
+    assert.equal(event.timeoutMs, 10000);
+    assert.ok(event.skillDurationMs >= 0);
+    assert.ok(typeof event.mlCallDurationMs === 'number');
+    for (const key of ['requestId', 'conversationId', 'agentRunId', 'skillCallId']) assert.ok(event[key]);
+    const serialized = JSON.stringify(event);
+    for (const forbidden of ['secret URL', 'raw response', 'Mongo password', 'stack', 'businessId']) assert.equal(serialized.includes(forbidden), false);
+  }
 });
 
 test('partial metadata with known cached tokens never coerces unknown input to zero', async () => {

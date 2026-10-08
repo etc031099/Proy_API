@@ -14,6 +14,8 @@ const TOKEN_FIELDS = ['inputTokens', 'outputTokens', 'thoughtTokens', 'cachedInp
 const safeCount = value => Number.isSafeInteger(value) && value >= 0;
 const safeDuration = value => typeof value === 'number' && Number.isFinite(value)
   && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
+const INTERNAL_CAUSES = Object.freeze(['ML_SERVICE_UNAVAILABLE', 'AGENT_SKILL_TIMEOUT',
+  'AGENT_EXECUTION_ERROR', 'AGENT_SKILL_VALIDATION_ERROR']);
 const invalid = () => { throw new AgentError('AGENT_INVALID_REQUEST'); };
 
 // Only these fields can reach a trace sink. No raw args, prompts, identities or secrets.
@@ -31,6 +33,16 @@ const createTraceEvent = (type, metadata) => {
   if (metadata.durationMs !== undefined) {
     if (!safeDuration(metadata.durationMs)) invalid();
     event.durationMs = metadata.durationMs;
+  }
+  for (const key of ['skillDurationMs', 'mlCallDurationMs', 'timeoutMs']) {
+    if (metadata[key] !== undefined) {
+      if (!safeDuration(metadata[key])) invalid();
+      event[key] = metadata[key];
+    }
+  }
+  if (metadata.internalCause !== undefined) {
+    if (!INTERNAL_CAUSES.includes(metadata.internalCause)) invalid();
+    event.internalCause = metadata.internalCause;
   }
   if (metadata.returnedCount !== undefined) {
     if (!safeCount(metadata.returnedCount)) invalid();
@@ -141,4 +153,4 @@ const createEvidence = options => {
   });
 };
 
-module.exports = { EVENT_TYPES, createTraceEvent, createRequestUsage, createEvidence };
+module.exports = { EVENT_TYPES, INTERNAL_CAUSES, createTraceEvent, createRequestUsage, createEvidence };

@@ -1,6 +1,14 @@
 const { createAgentOrchestrator } = require('../agents/orchestrator');
 const { EXECUTION_LIMITS, isPlainObject, isTraceId } = require('../agents/contracts');
 
+const logAgentDiagnostic = event => {
+  if (event.type !== 'error' || !event.internalCause || !event.skillId) return;
+  const fields = ['requestId', 'conversationId', 'agentRunId', 'skillCallId', 'agentId', 'skillId', 'code',
+    'internalCause', 'skillDurationMs', 'mlCallDurationMs', 'timeoutMs'];
+  const safeEvent = Object.fromEntries(fields.filter(key => event[key] !== undefined).map(key => [key, event[key]]));
+  console.error('[AgentSkillDiagnostic]', JSON.stringify(safeEvent));
+};
+
 const errors = {
   AGENT_INVALID_REQUEST: [400, 'La consulta no es válida.'],
   AGENT_SKILL_NOT_ALLOWED: [403, 'Acceso denegado.'],
@@ -11,7 +19,9 @@ const errors = {
 };
 
 // One runtime per router; memory, routing and usage belong to AG-R5, not HTTP.
-const createAgentMessagesHandler = ({ enabled, orchestrator = createAgentOrchestrator() } = {}) => async (req, res) => {
+const createAgentMessagesHandler = ({ enabled, orchestrator } = {}) => {
+  const runtime = orchestrator || createAgentOrchestrator({ onEvent: logAgentDiagnostic });
+  return async (req, res) => {
   if (enabled !== true) return res.status(404).json({ success: false, code: 'AGENT_DISABLED', message: 'Asistente no disponible.' });
   const body = req.body;
   if (!isPlainObject(body) || Object.keys(body).some(key => !['message', 'conversationId'].includes(key))
@@ -26,7 +36,7 @@ const createAgentMessagesHandler = ({ enabled, orchestrator = createAgentOrchest
     return res.status(status).json({ success: false, code: safeCode, message });
   };
   try {
-    const result = await orchestrator.handle(req, { message: body.message.trim(),
+    const result = await runtime.handle(req, { message: body.message.trim(),
       ...(body.conversationId ? { conversationId: body.conversationId } : {}) });
     if (result.code && !['AGENT_CLARIFICATION_REQUIRED', 'AGENT_UNSUPPORTED_QUERY'].includes(result.code)) return fail(result.code);
     // Explicit public envelope: never serialize provider responses or internal prompts.
@@ -36,6 +46,7 @@ const createAgentMessagesHandler = ({ enabled, orchestrator = createAgentOrchest
   } catch (error) {
     return fail(error.code);
   }
+  };
 };
 
-module.exports = { createAgentMessagesHandler };
+module.exports = { createAgentMessagesHandler, logAgentDiagnostic };
