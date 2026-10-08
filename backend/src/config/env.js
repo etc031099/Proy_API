@@ -162,6 +162,8 @@ const validateEnvironment = (environment = process.env, options = {}) => {
   const geminiModel = environment.GEMINI_MODEL === undefined || !hasText(environment.GEMINI_MODEL)
     ? DEFAULT_GEMINI_MODEL : environment.GEMINI_MODEL.trim();
   if (!/^[a-z0-9][a-z0-9._-]{0,79}$/.test(geminiModel)) issues.push('GEMINI_MODEL must be a valid model identifier');
+  try { require('../agents/providers/failover').parseFallbackModels(environment.GEMINI_FALLBACK_MODELS, geminiModel); }
+  catch { issues.push('GEMINI_FALLBACK_MODELS must contain at most two valid model identifiers'); }
   const geminiTimeoutText = environment.GEMINI_TIMEOUT_MS === undefined
     ? String(DEFAULT_GEMINI_TIMEOUT_MS) : String(environment.GEMINI_TIMEOUT_MS).trim();
   const geminiTimeoutMs = Number(geminiTimeoutText);

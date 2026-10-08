@@ -679,6 +679,44 @@ curl -X POST http://localhost:5000/api/products \\
 - Verify required fields
 - Review field length limits
 
+## Disponibilidad del asistente Gemini
+
+El modo AUTO se configura solo en el servidor:
+
+```dotenv
+GEMINI_MODEL=gemini-3.8-flash
+GEMINI_FALLBACK_MODELS=gemini-3.7-flash,gemini-3.6-flash
+GEMINI_TIMEOUT_MS=15000
+```
+
+Sin `GEMINI_FALLBACK_MODELS` no se habilitan respaldos. La lista admite hasta dos
+identificadores únicos, sin espacios ni entradas vacías. Todos usan la misma
+`GEMINI_API_KEY` y proyecto; nunca se rotan cuentas ni se eluden cuotas.
+
+Solo 500/502/503/504, timeout o error de red transitorio permiten el retry del
+principal y, si vuelve a fallar transitoriamente, un intento por respaldo.
+401/403/404/429, JSON/schema inválido, truncamiento y errores de presupuesto
+detienen la generación, también si ocurren en un respaldo.
+
+Máximo: cuatro intentos físicos, una llamada LLM lógica. Cada intento conserva
+el límite configurado (15 s por defecto); el deadline total es 40 s incluyendo
+backoff de 1 s. Un intento final puede tener menos tiempo y no se inicia si
+quedan menos de 2 s útiles. Se conservan thinking low y tech ceilings 512/768/1024.
+
+`usage.providerGenerations` distingue `logicalGenerationUsage` (resultado final)
+de `providerAttemptUsage` (cada intento). `totalKnownUsage` es un subtotal de
+métricas reportadas, no una estimación del consumo desconocido; valores ausentes
+son `null`. La UI muestra modelo final, respaldo, intentos y consumo parcial.
+Los logs contienen IDs, modelos, estados, tiempos y métricas, nunca prompts,
+respuestas crudas ni secretos. No se admite elegir modelo desde el mensaje.
+
+Capacidades verificadas en la documentación oficial:
+[Gemini 3.7 Flash](https://ai.google.dev/gemini-api/docs/models/gemini-3.7-flash),
+[Gemini 3.6 Flash](https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash) y
+[thinking](https://ai.google.dev/gemini-api/docs/thinking).
+La disponibilidad efectiva para el proyecto depende del proveedor; no se
+provocan fallos ni se consumen llamadas reales para probar el failover.
+
 ## 📞 Support
 
 For issues and questions:

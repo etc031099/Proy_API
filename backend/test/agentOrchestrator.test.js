@@ -90,6 +90,7 @@ const fixture = ({ products = [product(1), product(2), product(3, 'B')], provide
   const fakeProvider = provider || { generateStructured: async () => { throw Error('unexpected LLM'); }, generateWithTools: async () => { throw Error('unexpected LLM'); } };
   const adapter = { async generateStructured(input) { calls.push({ type: 'structured', input }); return fakeProvider.generateStructured(input); },
     async generateWithTools(input) { calls.push({ type: 'tools', input }); return fakeProvider.generateWithTools(input); } };
+  if (fakeProvider.forModel) adapter.forModel = (model, timeoutMs) => fakeProvider.forModel(model, timeoutMs);
   const orchestrator = createAgentOrchestrator({ provider: adapter, memory, clock: now, onEvent,
     dependencies: { models: { Product, Transaction }, forecastService, toObjectId: value => value } });
   return { calls, reads, orchestrator, run: (message, conversationId, request = req()) => orchestrator.handle(request, { message, ...(conversationId ? { conversationId } : {}) }) };
@@ -188,6 +189,30 @@ test('multi-evidence business summary coordinates two specialists with one gener
   assert.equal(result.code, null); assert.equal(result.evidence.length, 2);
   assert.equal(result.usage.totalLlmCalls, 1); assert.equal(result.usage.totalSkillCalls, 2);
   assert.match(result.answer, /productos activos/); assert.match(result.answer, /necesita 3 más/);
+});
+test('business synthesis fallback preserves facts, evidence, one call and final model in public usage', async t => {
+  const original = process.env.GEMINI_FALLBACK_MODELS;
+  process.env.GEMINI_FALLBACK_MODELS = 'gemini-3.7-flash,gemini-3.6-flash';
+  t.after(() => original === undefined ? delete process.env.GEMINI_FALLBACK_MODELS : process.env.GEMINI_FALLBACK_MODELS = original);
+  const models = [];
+  const provider = { generateStructured: async () => {}, generateWithTools: async () => {}, forModel: model => ({
+    generateStructured: async () => {
+      models.push(model);
+      if (model === 'gemini-3.8-flash') throw Object.assign(new Error('transient'), { status: 503 });
+      return { ...generated({ sections: [0, 1] }), model };
+    }
+  }) };
+  const f = fixture({ provider });
+  const result = await f.run('Resume cómo está mi negocio y qué debería vigilar');
+  assert.equal(result.code, null);
+  assert.equal(result.usage.totalLlmCalls, 1);
+  assert.equal(result.usage.totalSkillCalls, 2);
+  assert.equal(result.usage.totalTokens, 17);
+  assert.equal(result.participants.find(row => row.agentId === 'analyst').model, 'gemini-3.7-flash');
+  assert.equal(result.usage.providerGenerations[0].fallbackUsed, true);
+  assert.deepEqual(models, ['gemini-3.8-flash', 'gemini-3.8-flash', 'gemini-3.7-flash']);
+  assert.equal(result.evidence.length, 2);
+  assert.match(result.answer, /productos activos/);
 });
 
 const octoberClock = () => new Date('2026-10-08T12:00:00Z');

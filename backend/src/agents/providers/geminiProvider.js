@@ -23,7 +23,7 @@ const GEMINI_ERROR_MESSAGES = Object.freeze({
 
 class GeminiProviderError extends AgentError {
   constructor(code, { httpStatus = null, providerCode = null, retryable = false, diagnostics = null,
-    timeoutMs = null, usageAvailable = false, metricsComplete = false } = {}) {
+    timeoutMs = null, usageAvailable = false, metricsComplete = false, usage = null } = {}) {
     super(Object.hasOwn(GEMINI_ERROR_MESSAGES, code) ? code : 'GEMINI_UNAVAILABLE');
     this.name = 'GeminiProviderError';
     this.code = Object.hasOwn(GEMINI_ERROR_MESSAGES, code) ? code : 'GEMINI_UNAVAILABLE';
@@ -34,8 +34,9 @@ class GeminiProviderError extends AgentError {
     this.retryable = retryable === true;
     if (diagnostics) this.diagnostics = diagnostics;
     this.timeoutMs = Number.isSafeInteger(timeoutMs) && timeoutMs >= 1000 && timeoutMs <= 20000 ? timeoutMs : null;
-    this.usageAvailable = usageAvailable === true;
+    this.usageAvailable = usageAvailable === true || usage?.usageAvailable === true;
     this.metricsComplete = metricsComplete === true;
+    if (usage) this.usage = Object.freeze(require('./failover').safeUsage(usage));
   }
 }
 
@@ -242,7 +243,7 @@ const createGeminiProvider = ({ apiKey, model = DEFAULT_GEMINI_MODEL,
       })]);
     } catch (error) {
       if (!apiKey && error instanceof GeminiProviderError) throw error;
-      if (controller.signal.aborted) throw new GeminiProviderError('GEMINI_TIMEOUT', { retryable: true });
+      if (controller.signal.aborted) throw new GeminiProviderError('GEMINI_TIMEOUT', { retryable: true, timeoutMs });
       const normalized = providerError(error);
       throw new GeminiProviderError(normalized.code, { httpStatus: normalized.httpStatus,
         providerCode: normalized.providerCode, retryable: normalized.retryable, timeoutMs,
@@ -254,7 +255,7 @@ const createGeminiProvider = ({ apiKey, model = DEFAULT_GEMINI_MODEL,
     const text = readResponseText(response);
     const calls = readFunctionCalls(response);
     const diagnostics = responseDiagnostics(response, kind, text, calls);
-    const responseErrorOptions = { diagnostics, timeoutMs, usageAvailable: usage.usageAvailable,
+    const responseErrorOptions = { diagnostics, timeoutMs, usage, usageAvailable: usage.usageAvailable,
       metricsComplete: usage.usageAvailable && Object.entries(usage).filter(([key]) => key !== 'usageAvailable').every(([, value]) => value !== null) };
     let toolCalls;
     try { toolCalls = parseToolCalls(response, diagnostics); }
@@ -280,6 +281,9 @@ const createGeminiProvider = ({ apiKey, model = DEFAULT_GEMINI_MODEL,
   };
 
   return Object.freeze({
+    // Trusted server-only selection. Reuses the same client and API key, never request arguments.
+    forModel: (selectedModel, selectedTimeoutMs = timeoutMs) => createGeminiProvider({
+      apiKey, model: selectedModel, timeoutMs: Math.min(selectedTimeoutMs, timeoutMs), client: getClient(), now }),
     generate: input => request(input, 'text'),
     generateStructured: input => request(input, 'structured', input?.schema),
     generateWithTools: input => request(input, 'tools')

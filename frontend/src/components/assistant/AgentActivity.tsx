@@ -49,6 +49,21 @@ export function AgentActivity({ response }: { response?: AgentResponse }) {
         <details className="mt-2"><summary className="text-sm cursor-pointer">Detalle de tokens de {names[p.agentId]}</summary><div className="mt-2"><Tokens usage={p} /></div></details>
       </div>)}
     </section>
+    {!!u.providerGenerations?.length && <section aria-label="Modelos utilizados" className="space-y-2">
+      <h3 className="font-medium">Modelo utilizado</h3>
+      {u.providerGenerations.map((generation, index) => <div key={index} className="text-sm">
+        <p className="break-all">{generation.finalModel}{generation.fallbackUsed ? ' · respaldo' : ''}</p>
+        <details><summary className="cursor-pointer text-xs">Detalle de disponibilidad</summary>
+          <p>Principal: {generation.requestedModel}</p>
+          <p>Intentos del proveedor: {generation.providerAttempts} · 1 llamada IA lógica</p>
+          <p>Tokens conocidos de todos los intentos: {metric(generation.totalKnownUsage.totalTokens)}</p>
+          {!generation.attemptMetricsComplete && <p className="text-xs text-muted-foreground">Consumo parcial: algunos intentos no reportaron métricas; no equivalen a cero.</p>}
+          <ul>{generation.providerAttemptUsage.map(attempt => <li key={attempt.providerAttempt}>
+            {attempt.model} · intento {attempt.providerAttempt} · tokens: {metric(attempt.usage.totalTokens)}
+          </li>)}</ul>
+        </details>
+      </div>)}
+    </section>}
     <section><h3 className="font-medium">Acciones realizadas</h3><ul className="mt-2 space-y-2 text-sm">
       {response.actions.map((a, i) => <li key={`${a.skillId}-${i}`}>
         {a.status === 'SUCCEEDED' ? '✓' : '•'} {labels[a.skillId] || 'Consultó datos del sistema'}

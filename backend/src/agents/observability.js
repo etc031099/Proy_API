@@ -79,7 +79,7 @@ const createTraceEvent = (type, metadata) => {
   }
   for (const key of ['providerAttempt', 'providerAttempts']) {
     if (metadata[key] !== undefined) {
-      if (!Number.isSafeInteger(metadata[key]) || metadata[key] < 1 || metadata[key] > 2) invalid();
+      if (!Number.isSafeInteger(metadata[key]) || metadata[key] < 1 || metadata[key] > 4) invalid();
       event[key] = metadata[key];
     }
   }
@@ -87,7 +87,11 @@ const createTraceEvent = (type, metadata) => {
     if (metadata.retryReason !== null && !['GEMINI_UNAVAILABLE', 'GEMINI_NETWORK_ERROR', 'GEMINI_TIMEOUT'].includes(metadata.retryReason)) invalid();
     event.retryReason = metadata.retryReason;
   }
-  for (const key of ['hasText', 'hasFunctionCall', 'hasUsageMetadata', 'metricsComplete', 'retryScheduled']) {
+  if (metadata.fallbackIndex !== undefined) {
+    if (!Number.isSafeInteger(metadata.fallbackIndex) || metadata.fallbackIndex < 0 || metadata.fallbackIndex > 2) invalid();
+    event.fallbackIndex = metadata.fallbackIndex;
+  }
+  for (const key of ['hasText', 'hasFunctionCall', 'hasUsageMetadata', 'metricsComplete', 'retryScheduled', 'fallbackScheduled', 'fallbackUsed']) {
     if (metadata[key] !== undefined) {
       if (typeof metadata[key] !== 'boolean') invalid();
       event[key] = metadata[key];
@@ -97,9 +101,11 @@ const createTraceEvent = (type, metadata) => {
     if (!safeCount(metadata.returnedCount)) invalid();
     event.returnedCount = metadata.returnedCount;
   }
-  if (metadata.model !== undefined) {
-    if (typeof metadata.model !== 'string' || !/^[\w.:/-]{1,100}$/.test(metadata.model)) invalid();
-    event.model = metadata.model;
+  for (const key of ['model', 'requestedModel', 'finalModel']) {
+    if (metadata[key] !== undefined) {
+      if (typeof metadata[key] !== 'string' || !/^[\w.:/-]{1,100}$/.test(metadata[key])) invalid();
+      event[key] = metadata[key];
+    }
   }
   for (const field of TOKEN_FIELDS) {
     if (metadata[field] !== undefined && metadata[field] !== null && !safeCount(metadata[field])) invalid();

@@ -78,3 +78,25 @@ it('unknown error is generic, no raw payload and no automatic retry', async () =
   send.mockRejectedValue(new Error('private secret')); render(<AssistantPage />); submit(); await screen.findByRole('alert');
   expect(screen.getByText('No fue posible consultar el asistente.')).toBeTruthy(); expect(screen.queryByText('private secret')).toBeNull(); expect(send).toHaveBeenCalledTimes(1);
 });
+it('shows final fallback model, physical attempts and partial known usage without treating fallback as an error', async () => {
+  const reported = { usageAvailable: true, inputTokens: 10, outputTokens: 3, thoughtTokens: 2,
+    cachedInputTokens: null, toolUseTokens: null, totalTokens: 15 };
+  const unknown = { usageAvailable: false, inputTokens: null, outputTokens: null, thoughtTokens: null,
+    cachedInputTokens: null, toolUseTokens: null, totalTokens: null };
+  send.mockResolvedValue({ success: true, data: { ...response, usage: { ...response.usage, totalLlmCalls: 1,
+    providerGenerations: [{ agentId: 'analyst', requestedModel: 'gemini-3.8-flash', finalModel: 'gemini-3.7-flash',
+      fallbackUsed: true, fallbackIndex: 1, providerAttempts: 3, deadlineMs: 40000,
+      logicalGenerationUsage: reported, totalKnownUsage: reported, attemptMetricsComplete: false,
+      providerAttemptUsage: [
+        { providerAttempt: 1, model: 'gemini-3.8-flash', status: 'FAILED', durationMs: 10, usage: unknown },
+        { providerAttempt: 2, model: 'gemini-3.8-flash', status: 'FAILED', durationMs: 10, usage: unknown },
+        { providerAttempt: 3, model: 'gemini-3.7-flash', status: 'SUCCEEDED', durationMs: 10, usage: reported }
+      ] }] } } });
+  render(<AssistantPage />); submit(); await screen.findByText(response.answer);
+  expect(screen.getByText('gemini-3.7-flash · respaldo')).toBeTruthy();
+  expect(screen.getByText('Intentos del proveedor: 3 · 1 llamada IA lógica')).toBeTruthy();
+  expect(screen.getByText('Tokens conocidos de todos los intentos: 15')).toBeTruthy();
+  expect(screen.getByText(/Consumo parcial/)).toBeTruthy();
+  expect(screen.getByText('gemini-3.8-flash · intento 1 · tokens: —')).toBeTruthy();
+  expect(screen.queryByRole('alert')).toBeNull();
+});

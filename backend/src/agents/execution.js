@@ -6,6 +6,7 @@ const { createTraceEvent, createRequestUsage, createEvidence } = require('./obse
 const { createSkillExecutors } = require('./executors');
 const { getGeminiProvider, providerError } = require('./providers/geminiProvider');
 const { DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_TIMEOUT_MS } = require('../config/env');
+const { LOGICAL_DEADLINE_MS, MIN_ATTEMPT_MS, parseFallbackModels, safeUsage, knownUsage } = require('./providers/failover');
 
 const GEMINI_CAUSES = new Set(['GEMINI_AUTHENTICATION_FAILED', 'GEMINI_PERMISSION_DENIED', 'GEMINI_MODEL_NOT_FOUND',
   'GEMINI_RATE_LIMITED', 'GEMINI_TIMEOUT', 'GEMINI_NETWORK_ERROR', 'GEMINI_UNAVAILABLE', 'GEMINI_INVALID_RESPONSE',
@@ -71,6 +72,7 @@ const createAgentExecution = options => {
   let active = 0;
   let skillCalls = 0;
   const llmRecords = [];
+  const providerGenerations = [];
   const llmCallsByAgent = new Map();
   const emit = (type, metadata = {}) => {
     const event = createTraceEvent(type, {
@@ -79,7 +81,8 @@ const createAgentExecution = options => {
     events.push(event);
     try { onEvent(event); } catch { /* A trace sink cannot break domain execution. */ }
   };
-  const usage = () => createRequestUsage({ llmRecords, totalSkillCalls: skillCalls, agentIds: [...participants] });
+  const usage = () => deepFreeze({ ...createRequestUsage({ llmRecords, totalSkillCalls: skillCalls, agentIds: [...participants] }),
+    providerGenerations: [...providerGenerations] });
   emit('request_started', { status: 'STARTED' });
 
   return Object.freeze({
@@ -212,7 +215,17 @@ const createAgentExecution = options => {
     const agentRunId = randomUUID();
     const start = performance.now();
     const model = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
+    const fallbackModels = parseFallbackModels(process.env.GEMINI_FALLBACK_MODELS, model);
+    const attempts = [];
+    let finalModel = model;
+    let fallbackIndex = 0;
+    const generationSummary = logicalGenerationUsage => ({ agentId: agent.id, requestedModel: model,
+      finalModel, fallbackUsed: fallbackIndex > 0, fallbackIndex, providerAttempts: attempts.length,
+      logicalGenerationUsage: safeUsage(logicalGenerationUsage), providerAttemptUsage: attempts,
+      totalKnownUsage: knownUsage(attempts), attemptMetricsComplete: attempts.every(attempt =>
+        usageMetricsComplete(attempt.usage)), deadlineMs: LOGICAL_DEADLINE_MS });
     const configuredTimeoutMs = providerTimeoutMs();
+    let finalTimeoutMs = configuredTimeoutMs;
     const attemptState = { providerAttempts: 0, firstAttemptDurationMs: null, retryDelayMs: 0,
       secondAttemptDurationMs: null, totalProviderDurationMs: 0, retryReason: null };
     active++;
@@ -234,24 +247,41 @@ const createAgentExecution = options => {
         }
         return result;
       };
-      const attempt = async (providerAttempt, retryReason = null) => {
+      const attempt = async (providerAttempt, retryReason = null, selectedModel = model, selectedIndex = 0) => {
         attemptState.providerAttempts = providerAttempt;
+        finalModel = selectedModel;
+        fallbackIndex = selectedIndex;
         const attemptStart = performance.now();
+        const remainingMs = LOGICAL_DEADLINE_MS - (attemptStart - start);
+        const attemptTimeoutMs = Math.min(configuredTimeoutMs, Math.floor(remainingMs));
+        finalTimeoutMs = attemptTimeoutMs;
         try {
-          const result = validateResult(await providerClient[method](providerInput));
+          const selectedClient = typeof providerClient.forModel === 'function'
+            ? providerClient.forModel(selectedModel, attemptTimeoutMs) : providerClient;
+          if (selectedIndex > 0 && typeof providerClient.forModel !== 'function') throw new AgentError('GEMINI_NOT_CONFIGURED');
+          let timer;
+          let result;
+          try {
+            result = validateResult(await Promise.race([selectedClient[method](providerInput), new Promise((resolve, reject) => {
+              timer = setTimeout(() => reject(providerError({ name: 'TimeoutError' })), attemptTimeoutMs);
+            })]));
+          } finally { clearTimeout(timer); }
+          if (result.model !== selectedModel) throw new AgentError('GEMINI_INVALID_RESPONSE');
           const durationMs = performance.now() - attemptStart;
+          attempts.push({ providerAttempt, model: selectedModel, status: 'SUCCEEDED', durationMs, usage: safeUsage(result.usage) });
           if (providerAttempt === 1) attemptState.firstAttemptDurationMs = durationMs;
-          else attemptState.secondAttemptDurationMs = durationMs;
+          else if (providerAttempt === 2) attemptState.secondAttemptDurationMs = durationMs;
           attemptState.totalProviderDurationMs = performance.now() - start;
           emit('provider_attempt', { agentId: agent.id, agentRunId, model: result.model,
             providerAttempt, providerAttempts: providerAttempt, status: 'SUCCEEDED', durationMs,
-            ...promptMetrics, ...result.usage, providerStatus: null,
+            ...promptMetrics, ...result.usage, providerStatus: null, requestedModel: model, finalModel: selectedModel,
+            fallbackUsed: selectedIndex > 0, fallbackIndex: selectedIndex, fallbackScheduled: false,
             ...(retryReason ? { retryReason } : {}), retryScheduled: false,
             firstAttemptDurationMs: attemptState.firstAttemptDurationMs,
             retryDelayMs: attemptState.retryDelayMs,
             secondAttemptDurationMs: attemptState.secondAttemptDurationMs,
             totalProviderDurationMs: attemptState.totalProviderDurationMs,
-            timeoutMs: configuredTimeoutMs, llmCallsBeforeFailure,
+            timeoutMs: attemptTimeoutMs, llmCallsBeforeFailure,
             ...(result.diagnostics ? {
               responseKind: result.diagnostics.responseKind,
               candidateCount: result.diagnostics.candidateCount,
@@ -266,16 +296,22 @@ const createAgentExecution = options => {
         } catch (error) {
           const safeError = GEMINI_CAUSES.has(error?.code) ? error : providerError(error);
           const durationMs = performance.now() - attemptStart;
+          attempts.push({ providerAttempt, model: selectedModel, status: 'FAILED', durationMs, usage: safeUsage(safeError.usage) });
           if (providerAttempt === 1) attemptState.firstAttemptDurationMs = durationMs;
-          else attemptState.secondAttemptDurationMs = durationMs;
+          else if (providerAttempt === 2) attemptState.secondAttemptDurationMs = durationMs;
           attemptState.totalProviderDurationMs = performance.now() - start;
-          const retryScheduled = providerAttempt === 1 && shouldRetryProviderFailure(safeError);
+          const retryScheduled = providerAttempt === 1 && shouldRetryProviderFailure(safeError)
+            && LOGICAL_DEADLINE_MS - (performance.now() - start) >= RETRY_DELAY_MS + MIN_ATTEMPT_MS;
+          const fallbackScheduled = providerAttempt > 1 && shouldRetryProviderFailure(safeError)
+            && selectedIndex < fallbackModels.length && LOGICAL_DEADLINE_MS - (performance.now() - start) >= MIN_ATTEMPT_MS;
           if (retryScheduled) attemptState.retryDelayMs = RETRY_DELAY_MS;
           const effectiveTimeoutMs = Number.isSafeInteger(safeError.timeoutMs) ? safeError.timeoutMs
-            : safeError.code === 'GEMINI_BUDGET_EXCEEDED' ? null : configuredTimeoutMs;
-          emit('provider_attempt', { agentId: agent.id, agentRunId, model,
+            : safeError.code === 'GEMINI_BUDGET_EXCEEDED' ? null : attemptTimeoutMs;
+          emit('provider_attempt', { agentId: agent.id, agentRunId, model: selectedModel,
             providerAttempt, providerAttempts: providerAttempt, status: 'FAILED', code: safeError.code, ...promptMetrics,
-            publicCode: retryScheduled ? null : safeError.code === 'GEMINI_BUDGET_EXCEEDED'
+            requestedModel: model, finalModel: selectedModel, fallbackUsed: selectedIndex > 0,
+            fallbackIndex: selectedIndex, fallbackScheduled, ...safeUsage(safeError.usage),
+            publicCode: retryScheduled || fallbackScheduled ? null : safeError.code === 'GEMINI_BUDGET_EXCEEDED'
               ? 'AGENT_BUDGET_EXCEEDED' : 'AGENT_PROVIDER_FAILED',
             internalCause: GEMINI_CAUSES.has(safeError.code) ? safeError.code : 'GEMINI_UNAVAILABLE',
             providerStatus: safeError.httpStatus ?? null, providerCode: safeError.providerCode ?? null,
@@ -295,23 +331,29 @@ const createAgentExecution = options => {
             } : {}),
             usageAvailable: safeError.usageAvailable === true,
             metricsComplete: safeError.metricsComplete === true });
-          return { error: safeError, retryScheduled };
+          return { error: safeError, retryScheduled, fallbackScheduled };
         }
       };
 
       let outcome = await attempt(1);
-      if (outcome.error && outcome.retryScheduled) {
+      if (outcome.error && outcome.retryScheduled && LOGICAL_DEADLINE_MS - (performance.now() - start) >= RETRY_DELAY_MS + MIN_ATTEMPT_MS) {
         attemptState.retryReason = outcome.error.code;
         attemptState.retryDelayMs = RETRY_DELAY_MS;
         await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
         outcome = await attempt(2, attemptState.retryReason);
       }
+      for (let index = 0; outcome.error && shouldRetryProviderFailure(outcome.error) && attemptState.providerAttempts >= 2 && index < fallbackModels.length; index++) {
+        if (LOGICAL_DEADLINE_MS - (performance.now() - start) < MIN_ATTEMPT_MS) break;
+        outcome = await attempt(attemptState.providerAttempts + 1, outcome.error.code, fallbackModels[index], index + 1);
+      }
       if (outcome.error) throw outcome.error;
       const result = outcome.result;
+      providerGenerations.push(generationSummary(result.usage));
       const providerDurationMs = attemptState.providerAttempts > 1
         ? attemptState.totalProviderDurationMs : result.latencyMs;
       llmRecords.push({ agentId: agent.id, model: result.model, latencyMs: providerDurationMs, ...result.usage });
       emit('llm_finished', { agentId: agent.id, agentRunId, model: result.model,
+        requestedModel: model, finalModel: result.model, fallbackUsed: fallbackIndex > 0, fallbackIndex,
         durationMs: providerDurationMs, status: 'SUCCEEDED', ...attemptState, ...result.usage });
       emit('agent_finished', { agentId: agent.id, agentRunId, durationMs: performance.now() - start, status: 'SUCCEEDED' });
       return result;
@@ -320,13 +362,15 @@ const createAgentExecution = options => {
       const safeError = GEMINI_CAUSES.has(error?.code) ? error : providerError(error);
       const llmDurationMs = performance.now() - start;
       const timeoutMs = Number.isSafeInteger(safeError.timeoutMs) ? safeError.timeoutMs
-        : safeError.code === 'GEMINI_BUDGET_EXCEEDED' ? null : providerTimeoutMs();
+        : safeError.code === 'GEMINI_BUDGET_EXCEEDED' ? null : finalTimeoutMs;
       const diagnostics = safeError.diagnostics && isPlainObject(safeError.diagnostics) ? safeError.diagnostics : null;
       const publicCode = safeError.code === 'GEMINI_BUDGET_EXCEEDED' ? 'AGENT_BUDGET_EXCEEDED' : 'AGENT_PROVIDER_FAILED';
-      llmRecords.push({ agentId: agent.id, model, latencyMs: llmDurationMs, usageAvailable: false });
+      providerGenerations.push(generationSummary(null));
+      llmRecords.push({ agentId: agent.id, model: finalModel, latencyMs: llmDurationMs, usageAvailable: false });
       emit('error', { agentId: agent.id, agentRunId, status: 'FAILED', code: safeError.code,
         publicCode, internalCause: GEMINI_CAUSES.has(safeError.code) ? safeError.code : 'GEMINI_UNAVAILABLE',
-        model, llmDurationMs, timeoutMs, llmCallsBeforeFailure, ...attemptState,
+        model: finalModel, requestedModel: model, finalModel, fallbackUsed: fallbackIndex > 0, fallbackIndex,
+        llmDurationMs, timeoutMs, llmCallsBeforeFailure, ...attemptState,
         providerStatus: safeError.httpStatus ?? null, providerCode: safeError.providerCode ?? null,
         ...(diagnostics ? {
           responseKind: diagnostics.responseKind,

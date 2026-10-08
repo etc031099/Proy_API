@@ -14,6 +14,7 @@ export interface AgentUsage {
 }
 export interface Participant extends AgentUsage { skillCalls: number; providerLatencyMs: number }
 export interface RequestUsage {
+  providerGenerations?: ProviderGeneration[];
   totalLlmCalls: number;
   totalSkillCalls: number;
   totalInputTokens: number | null;
@@ -27,6 +28,21 @@ export interface RequestUsage {
   totalLatencyMs: number;
   toolSelectionCycles: number;
   agents: AgentUsage[];
+}
+export type ProviderTokenUsage = Pick<AgentUsage, 'inputTokens' | 'outputTokens' | 'thoughtTokens' | 'cachedInputTokens' | 'toolUseTokens' | 'totalTokens'>;
+export interface ProviderGeneration {
+  agentId: AgentId;
+  requestedModel: string;
+  finalModel: string;
+  fallbackUsed: boolean;
+  fallbackIndex: number;
+  providerAttempts: number;
+  deadlineMs: number;
+  logicalGenerationUsage: ProviderTokenUsage & { usageAvailable: boolean };
+  providerAttemptUsage: { providerAttempt: number; model: string; status: 'SUCCEEDED' | 'FAILED'; durationMs: number;
+    usage: ProviderTokenUsage & { usageAvailable: boolean } }[];
+  totalKnownUsage: ProviderTokenUsage;
+  attemptMetricsComplete: boolean;
 }
 export interface AgentAction { skillId: string; agentId: AgentId; status: 'SUCCEEDED' | 'FAILED'; durationMs: number }
 export interface AgentEvidence {

@@ -19,7 +19,8 @@ const logAgentProviderDiagnostic = event => {
     'hasText', 'hasFunctionCall', 'hasUsageMetadata', 'providerAttempt', 'providerAttempts', 'retryReason', 'retryScheduled',
     'firstAttemptDurationMs', 'retryDelayMs', 'secondAttemptDurationMs', 'totalProviderDurationMs',
     'promptChars', 'promptBytesApprox', 'evidenceCount', 'selectedItemsCount', 'messageCount', 'dtoFieldCount',
-    'inputTokens', 'outputTokens', 'thoughtTokens', 'cachedInputTokens', 'toolUseTokens', 'totalTokens'];
+    'inputTokens', 'outputTokens', 'thoughtTokens', 'cachedInputTokens', 'toolUseTokens', 'totalTokens',
+    'requestedModel', 'finalModel', 'fallbackUsed', 'fallbackIndex', 'fallbackScheduled'];
   const safeEvent = Object.fromEntries(fields.filter(key => event[key] !== undefined).map(key => [key, event[key]]));
   console.error('[AgentProviderDiagnostic]', JSON.stringify(safeEvent));
 };
