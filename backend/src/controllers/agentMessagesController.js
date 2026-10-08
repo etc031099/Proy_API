@@ -10,11 +10,14 @@ const logAgentDiagnostic = event => {
 };
 
 const logAgentProviderDiagnostic = event => {
-  if (event.type !== 'error' || !String(event.internalCause || '').startsWith('GEMINI_')) return;
-  const fields = ['requestId', 'conversationId', 'agentRunId', 'agentId', 'model', 'publicCode',
-    'internalCause', 'providerStatus', 'providerCode', 'finishReason', 'llmDurationMs', 'timeoutMs',
+  const providerAttempt = event.type === 'provider_attempt';
+  if (providerAttempt && event.providerAttempt === 1 && event.status === 'SUCCEEDED') return;
+  if (!providerAttempt && (event.type !== 'error' || !String(event.internalCause || '').startsWith('GEMINI_'))) return;
+  const fields = ['requestId', 'conversationId', 'agentRunId', 'agentId', 'model', 'publicCode', 'status',
+    'internalCause', 'providerStatus', 'providerCode', 'finishReason', 'llmDurationMs', 'durationMs', 'timeoutMs',
     'llmCallsBeforeFailure', 'usageAvailable', 'metricsComplete', 'responseKind', 'candidateCount',
-    'hasText', 'hasFunctionCall', 'hasUsageMetadata'];
+    'hasText', 'hasFunctionCall', 'hasUsageMetadata', 'providerAttempt', 'providerAttempts', 'retryReason', 'retryScheduled',
+    'firstAttemptDurationMs', 'retryDelayMs', 'secondAttemptDurationMs', 'totalProviderDurationMs'];
   const safeEvent = Object.fromEntries(fields.filter(key => event[key] !== undefined).map(key => [key, event[key]]));
   console.error('[AgentProviderDiagnostic]', JSON.stringify(safeEvent));
 };

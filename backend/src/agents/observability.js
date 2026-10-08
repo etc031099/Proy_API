@@ -8,7 +8,7 @@ const { getSkillDefinition } = require('./skills');
 
 const EVENT_TYPES = Object.freeze([
   'request_started', 'agent_started', 'llm_started', 'llm_finished',
-  'skill_called', 'skill_finished', 'agent_finished', 'request_finished', 'error'
+  'provider_attempt', 'skill_called', 'skill_finished', 'agent_finished', 'request_finished', 'error'
 ]);
 const TOKEN_FIELDS = ['inputTokens', 'outputTokens', 'thoughtTokens', 'cachedInputTokens', 'toolUseTokens', 'totalTokens'];
 const safeCount = value => Number.isSafeInteger(value) && value >= 0;
@@ -39,7 +39,8 @@ const createTraceEvent = (type, metadata) => {
     if (!safeDuration(metadata.durationMs)) invalid();
     event.durationMs = metadata.durationMs;
   }
-  for (const key of ['skillDurationMs', 'mlCallDurationMs', 'llmDurationMs', 'timeoutMs']) {
+  for (const key of ['skillDurationMs', 'mlCallDurationMs', 'llmDurationMs', 'timeoutMs', 'firstAttemptDurationMs',
+    'retryDelayMs', 'secondAttemptDurationMs', 'totalProviderDurationMs']) {
     if (metadata[key] !== undefined) {
       if (metadata[key] !== null && !safeDuration(metadata[key])) invalid();
       event[key] = metadata[key];
@@ -50,7 +51,7 @@ const createTraceEvent = (type, metadata) => {
     event.internalCause = metadata.internalCause;
   }
   if (metadata.publicCode !== undefined) {
-    if (!['AGENT_PROVIDER_FAILED', 'AGENT_BUDGET_EXCEEDED'].includes(metadata.publicCode)) invalid();
+    if (metadata.publicCode !== null && !['AGENT_PROVIDER_FAILED', 'AGENT_BUDGET_EXCEEDED'].includes(metadata.publicCode)) invalid();
     event.publicCode = metadata.publicCode;
   }
   if (metadata.providerStatus !== undefined) {
@@ -75,7 +76,17 @@ const createTraceEvent = (type, metadata) => {
       event[key] = metadata[key];
     }
   }
-  for (const key of ['hasText', 'hasFunctionCall', 'hasUsageMetadata', 'metricsComplete']) {
+  for (const key of ['providerAttempt', 'providerAttempts']) {
+    if (metadata[key] !== undefined) {
+      if (!Number.isSafeInteger(metadata[key]) || metadata[key] < 1 || metadata[key] > 2) invalid();
+      event[key] = metadata[key];
+    }
+  }
+  if (metadata.retryReason !== undefined) {
+    if (metadata.retryReason !== null && !['GEMINI_UNAVAILABLE', 'GEMINI_NETWORK_ERROR', 'GEMINI_TIMEOUT'].includes(metadata.retryReason)) invalid();
+    event.retryReason = metadata.retryReason;
+  }
+  for (const key of ['hasText', 'hasFunctionCall', 'hasUsageMetadata', 'metricsComplete', 'retryScheduled']) {
     if (metadata[key] !== undefined) {
       if (typeof metadata[key] !== 'boolean') invalid();
       event[key] = metadata[key];
@@ -105,7 +116,7 @@ const createTraceEvent = (type, metadata) => {
     if (!Object.hasOwn(ERROR_MESSAGES, metadata.code)) invalid();
     event.code = metadata.code;
   }
-  if (/^(agent_|llm_|skill_)/.test(type) && (!event.agentId || !event.agentRunId)) invalid();
+  if (/^(agent_|llm_|skill_|provider_attempt)/.test(type) && (!event.agentId || !event.agentRunId)) invalid();
   if (type.startsWith('skill_') && (!event.skillId || !event.skillCallId)) invalid();
   return Object.freeze(event);
 };

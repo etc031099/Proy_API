@@ -307,7 +307,7 @@ test('trace allowlist omits secrets, raw arguments, tenant identities and reason
   assert.deepEqual(Object.keys(event).sort(), ['requestId', 'status', 'timestamp', 'type']);
   assert.equal(JSON.stringify(event).includes('secret'), false);
   assert.ok(Object.isFrozen(event));
-  assert.equal(EVENT_TYPES.length, 9);
+  assert.equal(EVENT_TYPES.length, 10);
   assert.throws(() => createTraceEvent('arbitrary', { requestId: randomUUID() }), expectCode('AGENT_INVALID_REQUEST'));
   assert.throws(() => createTraceEvent('skill_called', { requestId: randomUUID() }), expectCode('AGENT_INVALID_REQUEST'));
 });

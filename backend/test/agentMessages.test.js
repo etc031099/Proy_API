@@ -106,6 +106,33 @@ test('provider diagnostic logger emits safe Gemini metadata and excludes request
   const serialized = JSON.stringify(logged);
   for (const forbidden of ['do not log', 'Authorization', 'secret', 'headers', 'apiKey']) assert.equal(serialized.includes(forbidden), false);
 });
+test('provider diagnostic log distinguishes transient first failure from successful retry', () => {
+  const original = console.error;
+  const logged = [];
+  console.error = (...args) => logged.push(args);
+  const base = { type: 'provider_attempt', requestId: '22222222-2222-4222-8222-222222222222', conversationId,
+    agentRunId: '33333333-3333-4333-8333-333333333333', agentId: 'analyst', model: 'gemini-3.8-flash',
+    timeoutMs: 15000, llmCallsBeforeFailure: 0, usageAvailable: false, metricsComplete: false };
+  try {
+    logAgentProviderDiagnostic({ ...base, providerAttempt: 1, providerAttempts: 1, status: 'FAILED',
+      publicCode: null, internalCause: 'GEMINI_UNAVAILABLE', providerStatus: 503, providerCode: 'UNAVAILABLE',
+      retryReason: 'GEMINI_UNAVAILABLE', retryScheduled: true, durationMs: 80, retryDelayMs: 1000,
+      responseKind: 'empty', candidateCount: 0, hasText: false, hasFunctionCall: false, hasUsageMetadata: false });
+    logAgentProviderDiagnostic({ ...base, providerAttempt: 2, providerAttempts: 2, status: 'SUCCEEDED',
+      retryReason: 'GEMINI_UNAVAILABLE', retryScheduled: false, durationMs: 170,
+      firstAttemptDurationMs: 80, retryDelayMs: 1000, secondAttemptDurationMs: 170, totalProviderDurationMs: 1250,
+      responseKind: 'structured', candidateCount: 1, hasText: true, hasFunctionCall: false, hasUsageMetadata: true,
+      output: 'must-not-log', prompt: 'must-not-log' });
+    logAgentProviderDiagnostic({ ...base, providerAttempt: 1, providerAttempts: 1, status: 'SUCCEEDED' });
+  } finally { console.error = original; }
+  assert.equal(logged.length, 2);
+  const first = JSON.parse(logged[0][1]); const second = JSON.parse(logged[1][1]);
+  assert.equal(first.providerAttempt, 1); assert.equal(first.providerStatus, 503); assert.equal(first.retryScheduled, true);
+  assert.equal(second.providerAttempt, 2); assert.equal(second.status, 'SUCCEEDED');
+  assert.equal(second.retryDelayMs, 1000); assert.equal(second.totalProviderDurationMs, 1250);
+  const serialized = JSON.stringify(logged);
+  assert.equal(serialized.includes('must-not-log'), false);
+});
 test('messages limits requests per authenticated user to 20 per minute', async t => {
   let calls = 0;
   const post = await setup(t, { orchestrator: { async handle() { calls++; return response; } } });

@@ -303,6 +303,113 @@ test('response parsing failures carry safe response metadata into the correlated
   }
 });
 
+test('one 503 retry stays one logical LLM call and counts only successful-attempt usage', async () => {
+  let calls = 0;
+  const events = [];
+  const provider = { async generateStructured() {
+    calls++;
+    if (calls === 1) throw Object.assign(new Error('temporary provider failure'), { status: 503 });
+    return { output: { intent: 'business_query', targetAgent: 'analyst', requiresClarification: false },
+      ...llmRecord({ usageAvailable: true, inputTokens: 41, outputTokens: 8, thoughtTokens: 3,
+        cachedInputTokens: 4, toolUseTokens: 5, totalTokens: 63 }) };
+  }, async generateWithTools() { throw new Error('unused'); } };
+  const execution = createAgentExecution({ context: context(), provider, onEvent: event => events.push(event) });
+  const result = await execution.generateStructured({ agentId: 'coordinator', systemInstruction: 'Classify.',
+    messages: [{ role: 'user', text: 'Synthetic question.' }], schema: { type: 'OBJECT' } });
+  const usage = execution.finish();
+  assert.equal(calls, 2); assert.equal(result.output.intent, 'business_query');
+  assert.equal(usage.totalLlmCalls, 1); assert.equal(usage.totalTokens, 63);
+  assert.equal(usage.totalInputTokens, 41); assert.equal(usage.totalOutputTokens, 8);
+  assert.ok(usage.totalProviderLatencyMs >= 1000);
+  const attempts = events.filter(event => event.type === 'provider_attempt');
+  assert.equal(attempts.length, 2); assert.equal(attempts[0].providerAttempt, 1);
+  assert.equal(attempts[0].status, 'FAILED'); assert.equal(attempts[0].providerStatus, 503);
+  assert.equal(attempts[0].internalCause, 'GEMINI_UNAVAILABLE'); assert.equal(attempts[0].retryScheduled, true);
+  assert.equal(attempts[0].retryReason, 'GEMINI_UNAVAILABLE'); assert.equal(attempts[0].retryDelayMs, 1000);
+  assert.equal(attempts[1].providerAttempt, 2); assert.equal(attempts[1].status, 'SUCCEEDED');
+  assert.equal(attempts[1].retryReason, 'GEMINI_UNAVAILABLE'); assert.equal(attempts[1].providerAttempts, 2);
+  assert.ok(Number.isFinite(attempts[0].firstAttemptDurationMs));
+  assert.ok(Number.isFinite(attempts[1].secondAttemptDurationMs));
+  assert.ok(attempts[1].totalProviderDurationMs >= 1000);
+  const finished = events.find(event => event.type === 'llm_finished');
+  assert.equal(finished.providerAttempts, 2); assert.equal(finished.totalTokens, 63);
+  assert.equal(events.filter(event => event.type === 'llm_started').length, 1);
+});
+
+test('a second transient failure returns the final provider error with two attempts and one logical call', async () => {
+  let calls = 0;
+  const events = [];
+  const execution = createAgentExecution({ context: context(), onEvent: event => events.push(event), provider: {
+    async generateStructured() { calls++; throw Object.assign(new Error('temporary'), { status: 503 }); },
+    async generateWithTools() { throw new Error('unused'); }
+  } });
+  await assert.rejects(execution.generateStructured({ agentId: 'coordinator', systemInstruction: 'Classify.',
+    messages: [{ role: 'user', text: 'Synthetic question.' }], schema: { type: 'OBJECT' } }), agentErrorCode('GEMINI_UNAVAILABLE'));
+  const usage = execution.finish();
+  assert.equal(calls, 2); assert.equal(usage.totalLlmCalls, 1); assert.equal(usage.totalTokens, null);
+  const attempts = events.filter(event => event.type === 'provider_attempt');
+  assert.equal(attempts.length, 2); assert.equal(attempts[0].retryScheduled, true);
+  assert.equal(attempts[1].providerAttempt, 2); assert.equal(attempts[1].status, 'FAILED');
+  assert.equal(attempts[1].retryScheduled, false); assert.equal(attempts[1].publicCode, 'AGENT_PROVIDER_FAILED');
+  assert.equal(attempts[1].providerStatus, 503);
+});
+
+test('normalized timeout and network failures may each use the single bounded retry', async () => {
+  for (const transient of [
+    new GeminiProviderError('GEMINI_TIMEOUT', { retryable: true, timeoutMs: 15000 }),
+    new GeminiProviderError('GEMINI_NETWORK_ERROR', { retryable: true })
+  ]) {
+    let calls = 0;
+    const events = [];
+    const execution = createAgentExecution({ context: context(), onEvent: event => events.push(event), provider: {
+      async generateStructured() {
+        calls++;
+        if (calls === 1) throw transient;
+        return { output: { intent: 'business_query', targetAgent: 'analyst', requiresClarification: false },
+          ...llmRecord({ usageAvailable: true, inputTokens: 41, outputTokens: 8, thoughtTokens: null,
+            cachedInputTokens: null, toolUseTokens: null, totalTokens: 49 }) };
+      },
+      async generateWithTools() { throw new Error('unused'); }
+    } });
+    const result = await execution.generateStructured({ agentId: 'coordinator', systemInstruction: 'Classify.',
+      messages: [{ role: 'user', text: 'Synthetic question.' }], schema: { type: 'OBJECT' } });
+    const usage = execution.finish();
+    assert.equal(result.output.intent, 'business_query');
+    assert.equal(calls, 2);
+    assert.equal(usage.totalLlmCalls, 1);
+    assert.equal(usage.totalTokens, 49);
+    const attempts = events.filter(event => event.type === 'provider_attempt');
+    assert.equal(attempts.length, 2);
+    assert.equal(attempts[0].internalCause, transient.code);
+    assert.equal(attempts[0].retryScheduled, true);
+    assert.equal(attempts[1].providerAttempt, 2);
+    assert.equal(attempts[1].status, 'SUCCEEDED');
+  }
+});
+
+test('auth, permission, model, 429 and invalid response failures never retry', async () => {
+  const cases = [
+    [Object.assign(new Error('auth'), { status: 401 }), 'GEMINI_AUTHENTICATION_FAILED'],
+    [Object.assign(new Error('permission'), { status: 403 }), 'GEMINI_PERMISSION_DENIED'],
+    [Object.assign(new Error('missing model'), { status: 404 }), 'GEMINI_MODEL_NOT_FOUND'],
+    [Object.assign(new Error('quota'), { status: 429 }), 'GEMINI_RATE_LIMITED'],
+    [new GeminiProviderError('GEMINI_INVALID_JSON'), 'GEMINI_INVALID_JSON']
+  ];
+  for (const [providerErrorValue, expected] of cases) {
+    let calls = 0;
+    const events = [];
+    const execution = createAgentExecution({ context: context(), onEvent: event => events.push(event), provider: {
+      async generateStructured() { calls++; throw providerErrorValue; }, async generateWithTools() { throw new Error('unused'); }
+    } });
+    await assert.rejects(execution.generateStructured({ agentId: 'coordinator', systemInstruction: 'Classify.',
+      messages: [{ role: 'user', text: 'Synthetic question.' }], schema: { type: 'OBJECT' } }), agentErrorCode(expected));
+    assert.equal(execution.finish().totalLlmCalls, 1);
+    assert.equal(calls, 1, expected);
+    assert.equal(events.filter(event => event.type === 'provider_attempt').length, 1);
+    assert.equal(events.find(event => event.type === 'provider_attempt').retryScheduled, false);
+  }
+});
+
 test('the SDK timeout abort signal fires and the error is sanitized', async () => {
   let signal;
   const client = { models: { async generateContent({ config }) {

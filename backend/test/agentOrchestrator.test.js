@@ -483,6 +483,23 @@ test('provider failures keep a safe internal category and correlation while pres
   }
 });
 
+test('orchestrator maps two exhausted 503 provider attempts to AGENT_PROVIDER_FAILED without double-counting calls', async () => {
+  let calls = 0;
+  const events = [];
+  const f = fixture({ onEvent: event => events.push(event), provider: {
+    async generateStructured() { calls++; throw Object.assign(new Error('temporary 503'), { status: 503 }); },
+    async generateWithTools() { throw new Error('unused'); }
+  } });
+  const result = await f.run('Resume cómo está mi negocio y qué debería vigilar');
+  assert.equal(result.code, 'AGENT_PROVIDER_FAILED'); assert.equal(calls, 2);
+  assert.equal(result.usage.totalLlmCalls, 1); assert.equal(result.usage.totalTokens, null);
+  const attempts = events.filter(event => event.type === 'provider_attempt');
+  assert.equal(attempts.length, 2); assert.equal(attempts[0].retryScheduled, true);
+  assert.equal(attempts[1].status, 'FAILED'); assert.equal(attempts[1].publicCode, 'AGENT_PROVIDER_FAILED');
+  assert.equal(attempts[1].internalCause, 'GEMINI_UNAVAILABLE');
+  assert.equal(result.actions.length, 2); assert.equal(result.actions.every(action => action.status === 'SUCCEEDED'), true);
+});
+
 test('partial metadata with known cached tokens never coerces unknown input to zero', async () => {
   const f = fixture({ provider: { generateStructured: async () => ({ ...generated({ intent: 'clarification', targetAgent: 'coordinator', requiresClarification: true }),
     usage: { ...usage, inputTokens: null, cachedInputTokens: 4 } }) } });
