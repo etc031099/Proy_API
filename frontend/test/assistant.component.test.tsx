@@ -1,0 +1,80 @@
+import type { ReactNode } from 'react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { beforeEach, expect, it, vi } from 'vitest';
+import AssistantPage from '@/app/assistant/page';
+import { apiClient, AgentApiError } from '@/lib/api';
+import type { AgentResponse } from '@/types/agent';
+vi.mock('@/components/ProtectedRoute', () => ({ ProtectedRoute: ({ children }: { children: ReactNode }) => <>{children}</> }));
+vi.mock('@/components/Layout', () => ({ Layout: ({ children }: { children: ReactNode }) => <main>{children}</main> }));
+vi.mock('@/lib/api', async importOriginal => ({ ...await importOriginal<typeof import('@/lib/api')>(), apiClient: { sendAgentMessage: vi.fn() } }));
+const send = vi.mocked(apiClient.sendAgentMessage);
+const response: AgentResponse = {
+  requestId: '22222222-2222-4222-8222-222222222222',
+  conversationId: '11111111-1111-4111-8111-111111111111', answer: 'Hay dos productos con stock bajo.', intent: 'low_stock', agent: 'operations',
+  requiresClarification: false, clarificationQuestion: null, latencyMs: 100,
+  participants: [{ agentId: 'operations', model: null, llmCalls: 0, skillCalls: 1, inputTokens: 0, outputTokens: 0, thoughtTokens: 0,
+    cachedInputTokens: 0, toolUseTokens: 0, totalTokens: 0, latencyMs: 90, providerLatencyMs: 0, usageAvailable: true }],
+  actions: [{ skillId: 'get_low_stock_products', agentId: 'operations', status: 'SUCCEEDED', durationMs: 90 }],
+  evidence: [{ evidenceId: 'e1', sourceType: 'skill', skillId: 'get_low_stock_products', label: 'Inventario del negocio', recordCount: 2 }],
+  usage: { totalLlmCalls: 0, totalSkillCalls: 1, totalInputTokens: 0, totalOutputTokens: 0, totalTokens: 0,
+    totalThoughtTokens: 0, totalCachedInputTokens: 0, totalToolUseTokens: 0, totalProviderLatencyMs: 0,
+    totalLatencyMs: 100, toolSelectionCycles: 0, metricsComplete: true, agents: [] }
+};
+beforeEach(() => { send.mockReset(); });
+function submit(text = 'stock bajo') { fireEvent.change(screen.getByLabelText('Tu consulta'), { target: { value: text } }); fireEvent.click(screen.getByRole('button', { name: 'Enviar' })); }
+it('renders initial suggestions and sends a suggested query', async () => {
+  send.mockResolvedValue({ success: true, data: response }); render(<AssistantPage />);
+  expect(screen.getByRole('heading', { name: 'Asistente Inteligente' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Muéstrame los productos con stock bajo' }));
+  await screen.findByText(response.answer); expect(send).toHaveBeenCalledWith({ message: 'Muéstrame los productos con stock bajo' });
+});
+it('displays loading, prevents parallel sends, and renders response, participants, evidence and zero tokens', async () => {
+  let resolve!: (value: { success: boolean; data: AgentResponse }) => void;
+  send.mockReturnValue(new Promise(done => { resolve = done; })); render(<AssistantPage />); submit();
+  expect(screen.getByRole('status')).toBeTruthy(); expect(screen.getByRole('button', { name: 'Enviar' }).hasAttribute('disabled')).toBe(true);
+  fireEvent.keyDown(screen.getByLabelText('Tu consulta'), { key: 'Enter' }); fireEvent.click(screen.getByRole('button', { name: 'Enviar' }));
+  expect(send).toHaveBeenCalledTimes(1);
+  await act(async () => resolve({ success: true, data: response }));
+  expect(screen.getByText('Respuesta determinística · 0 tokens IA')).toBeTruthy();
+  expect(screen.getByText('operations')).toBeTruthy(); expect(screen.getByText('Inventario del negocio')).toBeTruthy();
+  expect(screen.getByText('get_low_stock_products · Completada')).toBeTruthy(); expect(screen.getByText('2 registros')).toBeTruthy();
+});
+it('reuses conversationId and starts a clean new conversation', async () => {
+  send.mockResolvedValue({ success: true, data: response }); render(<AssistantPage />); submit(); await screen.findByText(response.answer);
+  submit('¿y sus ventas?'); await screen.findAllByText(response.answer);
+  expect(send.mock.calls[1][0]).toEqual({ message: '¿y sus ventas?', conversationId: response.conversationId });
+  fireEvent.click(screen.getByRole('button', { name: 'Nueva conversación' }));
+  expect(screen.queryByText(response.answer)).toBeNull(); expect(screen.queryByText('Inventario del negocio')).toBeNull();
+  submit('ventas del mes'); await screen.findByText(response.answer); expect(send.mock.calls[2][0]).toEqual({ message: 'ventas del mes' });
+});
+it('shows clarification normally and preserves conversation', async () => {
+  send.mockResolvedValue({ success: true, data: { ...response, requiresClarification: true, clarificationQuestion: '¿Qué SKU necesitas?' } });
+  render(<AssistantPage />); submit('su predicción'); await screen.findByText('¿Qué SKU necesitas?'); expect(screen.queryByRole('alert')).toBeNull();
+  submit('SKU-001'); await screen.findAllByText('¿Qué SKU necesitas?'); expect(send.mock.calls[1][0].conversationId).toBe(response.conversationId);
+});
+it('keeps missing metrics as dashes and shows historical forecast evidence', async () => {
+  send.mockResolvedValue({ success: true, data: { ...response,
+    participants: [{ ...response.participants[0], agentId: 'analyst', llmCalls: 1, totalTokens: null, thoughtTokens: null }],
+    usage: { ...response.usage, totalLlmCalls: 1, totalTokens: null, totalThoughtTokens: null, metricsComplete: false },
+    evidence: [{ evidenceId: 'e2', sourceType: 'skill', skillId: 'get_demand_forecast', label: 'Forecast', asOf: '2025-07-01' }] } });
+  render(<AssistantPage />); submit(); await screen.findByText(response.answer);
+  const panel = screen.getByRole('complementary', { name: 'Actividad multiagente' });
+  expect(within(panel).getAllByText('—').length).toBeGreaterThan(0); expect(screen.queryByText('Respuesta determinística · 0 tokens IA')).toBeNull();
+  expect(screen.getByText('Ancla histórica: 2025-07-01')).toBeTruthy();
+});
+it('supports Enter send and Shift+Enter without sending', async () => {
+  send.mockResolvedValue({ success: true, data: response }); render(<AssistantPage />);
+  const input = screen.getByLabelText('Tu consulta'); fireEvent.change(input, { target: { value: 'stock bajo' } });
+  fireEvent.keyDown(input, { key: 'Enter', shiftKey: true }); expect(send).not.toHaveBeenCalled();
+  fireEvent.keyDown(input, { key: 'Enter' }); await screen.findByText(response.answer); expect(send).toHaveBeenCalledTimes(1);
+});
+it('shows safe error and recovers on explicit retry without duplicating user message', async () => {
+  send.mockRejectedValueOnce(new AgentApiError(503)).mockResolvedValueOnce({ success: true, data: response });
+  render(<AssistantPage />); submit(); await screen.findByRole('alert');
+  fireEvent.click(screen.getByRole('button', { name: 'Reintentar consulta' })); await screen.findByText(response.answer);
+  expect(send).toHaveBeenCalledTimes(2); expect(screen.getAllByText('stock bajo')).toHaveLength(1); expect(screen.queryByRole('alert')).toBeNull();
+});
+it('unknown error is generic, no raw payload and no automatic retry', async () => {
+  send.mockRejectedValue(new Error('private secret')); render(<AssistantPage />); submit(); await screen.findByRole('alert');
+  expect(screen.getByText('No fue posible consultar el asistente.')).toBeTruthy(); expect(screen.queryByText('private secret')).toBeNull(); expect(send).toHaveBeenCalledTimes(1);
+});

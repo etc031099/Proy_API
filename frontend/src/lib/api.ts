@@ -1,5 +1,14 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import { ApiResponse, DemandForecastResponse } from '@/types';
+import type { AgentMessageRequest, AgentResponse } from '@/types/agent';
+
+export class AgentApiError extends Error {
+  constructor(readonly status?: number) {
+    super('No fue posible consultar el asistente.');
+    this.name = 'AgentApiError';
+  }
+  get retryable() { return this.status === undefined || this.status === 503 || this.status === 429; }
+}
 
 export class DemandForecastApiError extends Error {
   readonly code: 'ML_NOT_READY' | 'ML_SERVICE_UNAVAILABLE';
@@ -360,6 +369,15 @@ class ApiClient {
         }
       }
       throw error;
+    }
+  }
+
+  async sendAgentMessage(input: AgentMessageRequest): Promise<ApiResponse<AgentResponse>> {
+    try {
+      const response = await this.instance.post('/agent/messages', input);
+      return response.data;
+    } catch (error) {
+      throw new AgentApiError(axios.isAxiosError(error) ? error.response?.status : 500);
     }
   }
 }

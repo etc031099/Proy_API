@@ -21,7 +21,8 @@ import {
   User,
   Menu,
   Globe,
-  BrainCircuit
+  BrainCircuit,
+  MessageSquare
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useLanguage } from '@/contexts/LanguageContext';
@@ -35,6 +36,7 @@ const navigation = [
   { key: 'reports', href: '/reports', icon: BarChart3 },
   { key: 'integrations', href: '/integrations', icon: Globe },
   { key: 'demandForecast', href: '/demand-forecast', icon: BrainCircuit },
+  { key: 'assistant', href: '/assistant', icon: MessageSquare },
 ];
 
 interface LayoutProps {

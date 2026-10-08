@@ -20,6 +20,7 @@ export const dictionary = {
       reports: 'Reports',
       integrations: 'Integrations',
       demandForecast: 'Demand Forecast',
+      assistant: 'Assistant',
     },
     dashboard: {
       title: 'Dashboard',
@@ -265,6 +266,7 @@ export const dictionary = {
       reports: 'Reportes',
       integrations: 'Integraciones',
       demandForecast: 'Predicción de demanda',
+      assistant: 'Asistente',
     },
     dashboard: {
       title: 'Panel',

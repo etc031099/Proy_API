@@ -11,6 +11,8 @@ export default defineConfig({
       'test/mlForecast.api.test.ts',
       'test/mlForecast.component.test.tsx',
       'test/systemPagination.component.test.tsx',
+      'test/assistant.api.test.ts',
+      'test/assistant.component.test.tsx',
     ],
     environment: 'jsdom',
     setupFiles: ['./test/setup.ts'],

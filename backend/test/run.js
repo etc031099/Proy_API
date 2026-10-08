@@ -14,3 +14,4 @@ require('./agentSkills.test');
 require('./agentGemini.test');
 require('./agentSmoke.test');
 require('./agentOrchestrator.test');
+require('./agentMessages.test');
