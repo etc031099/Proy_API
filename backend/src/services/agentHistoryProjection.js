@@ -8,10 +8,11 @@ const tokenUsage = { ...tokens, usageAvailable: true };
 const period = { startDate: true, endDate: true };
 const actionItem = { sku: true, name: true, quantity: true, stock: true, resultingStock: true, price: true, total: true };
 const shape = {
+  suggestions: [{ label: true, message: true, detail: true }],
   pendingAction: { pendingActionId: true, action: true, summary: true, status: true, expiresAt: true,
     requiresConfirmation: true, fields: { name: true, sku: true, price: true, currency: true, stock: true, resultingStock: true,
-      minStockLevel: true, category: true, costPrice: true, description: true, total: true, paymentMethod: true, contact: true },
-    items: [actionItem], result: { id: true, type: true, currency: true, total: true, sku: true, name: true, stock: true, items: [actionItem] } },
+      minStockLevel: true, category: true, costPrice: true, description: true, supplierCosts: true, total: true, paymentMethod: true, contact: true },
+    items: [actionItem], result: { id: true, type: true, currency: true, total: true, sku: true, name: true, stock: true, needsSupplierSetup: true, items: [actionItem] } },
   requestId: true, conversationId: true, answer: true, intent: true, agent: true,
   requiresClarification: true, clarificationQuestion: true, latencyMs: true,
   participants: [{ ...agent, skillCalls: true, providerLatencyMs: true }],
@@ -34,6 +35,7 @@ const project = (value, schema) => {
 };
 const publicResponse = result => project(result, shape);
 const snapshot = state => ({
+  operationDraft: require('../automations/operationDraft').compactDraft(state.operationDraft),
   lastIntent: text(state.lastIntent, 40), lastAgent: ['operations', 'analyst'].includes(state.lastAgent) ? state.lastAgent : null,
   lastEntity: compactEntity(state.lastEntity),
   recentEntities: (state.recentEntities || []).map(compactEntity).filter(Boolean).slice(0, 4),

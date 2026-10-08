@@ -5,7 +5,7 @@ import { apiClient } from '@/lib/api';
 import type { PendingActionPreview } from '@/types/agent';
 const labels: Record<string, string> = { name: 'Nombre', sku: 'SKU', price: 'Precio', currency: 'Moneda', stock: 'Stock inicial',
   resultingStock: 'Stock resultante', minStockLevel: 'Stock mínimo', category: 'Categoría', costPrice: 'Costo', description: 'Descripción',
-  total: 'Total', paymentMethod: 'Pago', contact: 'Cliente / Proveedor' };
+  total: 'Total', paymentMethod: 'Pago', contact: 'Cliente / Proveedor', supplierCosts: 'Proveedor y precio de compra' };
 const statuses = { PENDING: 'Pendiente', CONFIRMED: 'Confirmada', EXECUTED: 'Ejecutada', CANCELLED: 'Cancelada', EXPIRED: 'Expirada', FAILED: 'Fallida' };
 export function PendingActionCard({ action, conversationId }: { action: PendingActionPreview; conversationId: string }) {
   const [current, setCurrent] = useState(action);
@@ -46,6 +46,7 @@ export function PendingActionCard({ action, conversationId }: { action: PendingA
     {current.status === 'EXPIRED' && <p>Esta acción expiró.</p>}
     {current.result && <div role="status"><p>Operación registrada correctamente.</p>
       {current.result.sku && <p>{current.result.sku} · Stock: {current.result.stock}</p>}
+      {current.result.needsSupplierSetup && <p>Todavía no tiene proveedor con precio de compra. Configúralo desde Productos antes de registrar compras.</p>}
       {current.result.items?.map((item, index) => <p key={index}>{item.quantity} unidades de {item.sku} · Stock resultante: {item.stock}</p>)}
       {current.result.total !== undefined && <p>Total: {current.result.total} {current.result.currency}</p>}
       <p className="break-all">Identificador: {current.result.id}</p>

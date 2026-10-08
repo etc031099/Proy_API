@@ -26,6 +26,22 @@ const response: AgentResponse = {
 beforeEach(() => { send.mockReset(); localStorage.clear(); vi.mocked(apiClient.listAgentConversations).mockResolvedValue({ success: true,
   data: { items: [], pagination: { page: 1, limit: 10, total: 0, totalPages: 1 } } }); });
 function submit(text = 'stock bajo') { fireEvent.change(screen.getByLabelText('Tu consulta'), { target: { value: text } }); fireEvent.click(screen.getByRole('button', { name: 'Enviar' })); }
+it('guided candidates show real costs and send only the selection in the same conversation', async () => {
+  send.mockResolvedValueOnce({ success: true, data: { ...response, answer: 'Elige un proveedor.', suggestions: [
+    { label: '1. Distribuidora Inka', message: 'Opción 1', detail: 'COC500: 2.8 PEN' }, { label: '2. Central', message: 'Opción 2' }] } })
+    .mockResolvedValueOnce({ success: true, data: response });
+  render(<AssistantPage />); submit('Compra 2 coca');
+  const first = await screen.findByRole('button', { name: /1. Distribuidora Inka/ });
+  expect(screen.getByText('COC500: 2.8 PEN')).toBeTruthy();
+  fireEvent.click(first); fireEvent.click(first); await screen.findByText(response.answer);
+  expect(send).toHaveBeenCalledTimes(2); expect(send.mock.calls[1][0]).toEqual({ message: 'Opción 1', conversationId: response.conversationId });
+  expect(first.hasAttribute('disabled')).toBe(true);
+});
+it('single digit candidate choices can be typed and do not confirm actions', async () => {
+  send.mockResolvedValue({ success: true, data: response }); render(<AssistantPage />); submit('1');
+  await screen.findByText(response.answer); expect(send.mock.calls[0][0].message).toBe('1');
+  expect(apiClient.decideAgentAction).not.toHaveBeenCalled();
+});
 it('assistant renders action preview and confirms using its bound conversation without another chat generation', async () => {
   const pending: NonNullable<AgentResponse['pendingAction']> = { pendingActionId: '33333333-3333-4333-8333-333333333333',
     action: 'create_product', summary: 'Crear producto demostrativo', fields: { name: 'Demostrativo', stock: 0 },

@@ -1,4 +1,4 @@
-const { Product } = require('../models');
+const { Product, Contact } = require('../models');
 const InventoryAlert = require('../models/InventoryAlert');
 const { normalizeSku } = require('../utils/sku');
 const { createProductRecord } = require('../services/productCreationService');
@@ -40,6 +40,7 @@ const createActionExecutors = () => ({
   create_purchase: transactionExecutor('purchase'),
   create_product: {
     async preview(args, context) {
+      const suppliers = await validateSuppliers(args, context);
       const sku = normalizeSku(args.sku);
       if (!sku || await Product.exists({ businessId: context.businessId, sku }).maxTimeMS(5000)) fail('ACTION_CONFLICT');
       // Same model validation as CRUD, plus stricter bounded action input schemas.
@@ -49,13 +50,15 @@ const createActionExecutors = () => ({
         name: redact(args.name), sku: redact(sku), price: args.price, currency: args.currency,
         stock: args.stock, resultingStock: args.stock, minStockLevel: args.minStockLevel, category: args.category,
         ...(args.costPrice !== undefined ? { costPrice: args.costPrice } : {}),
-        ...(args.description ? { description: args.description } : {}) } };
+        ...(args.description ? { description: args.description } : {}),
+        ...(args.supplierPrices?.length ? { supplierCosts: args.supplierPrices.map(row => `${redact(suppliers.find(supplier => String(supplier._id) === row.supplierId).name)}: ${row.purchasePrice} ${args.currency}`).join(', ') } : {}) } };
     },
     async execute(args, context, session, actionId) {
+      await validateSuppliers(args, context, session);
       const product = await createProductRecord({ productData: { ...args, sku: normalizeSku(args.sku), businessId: context.businessId },
         initialStock: args.stock, session });
       await recordEvents(context, actionId, product._id, ['PRODUCT_CREATED', ...(args.stock > 0 ? ['INVENTORY_CHANGED'] : [])], session);
-      return { id: product._id.toString(), sku: product.sku, name: redact(product.name), stock: product.stock };
+      return { id: product._id.toString(), sku: product.sku, name: redact(product.name), stock: product.stock, needsSupplierSetup: !args.supplierPrices?.length };
     }
   },
   create_inventory_alert: {
@@ -70,4 +73,12 @@ const createActionExecutors = () => ({
     }
   }
 });
+async function validateSuppliers(args, context, session) {
+  if (!args.supplierPrices) return;
+  const ids = args.supplierPrices.map(row => row.supplierId);
+  if (new Set(ids).size !== ids.length) fail('ACTION_VALIDATION_FAILED');
+  const suppliers = await Contact.find({ businessId: context.businessId, type: 'vendor', isActive: true, _id: { $in: ids } }).select('_id name').session(session || null).lean().maxTimeMS(5000);
+  if (suppliers.length !== ids.length) fail('ACTION_VALIDATION_FAILED');
+  return suppliers;
+}
 module.exports = { createActionExecutors };

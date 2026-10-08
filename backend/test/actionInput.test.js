@@ -25,7 +25,7 @@ test('multi-item sale keeps all requested items, purchase requires supplier', as
   assert.equal(extraction.supplierRef, 'Distribuidor Demo');
   const result = await resolveAction(extraction, context(), resolver);
   assert.equal(result.args.vendorId, 'bbbbbbbbbbbbbbbbbbbbbbbb');
-  delete extraction.supplierRef; assert.match((await resolveAction(extraction, context(), resolver)).clarification, /proveedor/);
+  delete extraction.supplierRef; assert.match((await resolveAction(extraction, context(), resolver, async () => [])).clarification, /proveedor/);
 });
 test('credit without registered customer asks rather than creating a contact', async () => {
   const result = await resolveAction(parseAction('Vende 3 unidades de SKU-001 a crédito', 'create_sale'), context(), resolver);
@@ -37,7 +37,9 @@ test('ambiguous reference never prepares a write', async () => {
 });
 test('reference queries are tenant scoped and regex is literal', async () => {
   const original = Product.find; let filter;
-  Product.find = value => { filter = value; return { select() { return this; }, limit(n) { assert.equal(n, 2); return this; }, lean() { return this; }, maxTimeMS: async () => [] }; };
+  Product.find = value => { if (value.$or) filter = value; return { select() { return this; }, sort() { return this; },
+    limit(n) { assert.equal(n, 2); return this; }, lean() { return this; }, maxTimeMS() { return this; },
+    then(resolve) { resolve([]); }, async *cursor() {} }; };
   try { assert.ok((await resolveReference(Product, context(), '.*')).clarification);
     assert.equal(filter.businessId, 'SYNTHETIC'); assert.equal(filter.$or[1].name.source, '^\\.\\*$');
   } finally { Product.find = original; }
@@ -65,8 +67,9 @@ test('missing product category is requested, never inferred; bounded draft accep
   const adapter = withActionAssistant({}, { prepare: async value => { prepared = value.args; return { summary: 'Producto' }; } });
   const conversationId = randomUUID();
   const first = await adapter.handle(req(), { conversationId, message: 'Agrega un producto Agua, SKU AGUA, precio S/ 3, stock 50, mínimo 10' });
-  assert.match(first.answer, /category/); assert.equal(prepared, undefined);
-  await adapter.handle(req(), { conversationId, message: 'Categoría Bebidas' }); assert.equal(prepared.category, 'Bebidas');
+  assert.match(first.answer, /categoría/); assert.equal(prepared, undefined);
+  await adapter.handle(req(), { conversationId, message: 'Categoría Bebidas' }); assert.equal(prepared, undefined);
+  await adapter.handle(req(), { conversationId, message: 'Continuar sin proveedor' }); assert.equal(prepared.category, 'Bebidas');
 });
 test('ambiguous extraction uses structured provider and preserves official token total', async () => {
   const provider = { generateWithTools() { throw Error('tools forbidden'); }, async generateStructured() {

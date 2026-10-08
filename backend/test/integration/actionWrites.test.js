@@ -12,6 +12,7 @@ const { createActionService } = require('../../src/automations/execution');
 const { createActionRepository } = require('../../src/automations/repository');
 const { createActionExecutors } = require('../../src/automations/executors');
 const { resolveReference } = require('../../src/automations/actionInput');
+const { withActionAssistant } = require('../../src/automations/assistant');
 const { createAgentConversationService } = require('../../src/services/agentConversationService');
 const { createTransaction } = require('../../src/controllers/transactionController');
 const businessId = `auto-r2-${randomUUID()}`, foreignBusiness = `auto-r2-${randomUUID()}`;
@@ -49,6 +50,61 @@ test.after(async () => {
     await InventoryMovement.collection.deleteMany(filter); // Fixture-only cleanup; production remains append-only.
   }
   await mongoose.disconnect();
+});
+
+test('guided fuzzy lookup covers the actual tenant and hides foreign products/vendors', async () => {
+  const p = await newProduct({ name: 'Azúcar Morena 500ML', sku: 'GUIDED-AZUCAR' });
+  await Product.create({ businessId: foreignBusiness, name: 'Azúcar Morena 500ML', sku: 'FOREIGN-AZUCAR', category: 'Sintético', price: 1 });
+  const exact = await resolveReference(Product, context(), 'azucar morena 500 ml'); assert.equal(String(exact.value._id), String(p._id));
+  const fuzzy = await resolveReference(Product, context(), 'azucar morna'); assert.ok(fuzzy.candidates.some(row => String(row._id) === String(p._id)));
+  assert.ok(fuzzy.candidates.every(row => row.businessId === undefined));
+  const supplier = await resolveReference(Contact, context(), 'proveedor sintetico', 'vendor'); assert.equal(String(supplier.value._id), String(vendor._id));
+  assert.equal((await resolveReference(Contact, createActionContext(req(foreignBusiness)), String(vendor._id), 'vendor')).confidence, 'NOT_FOUND');
+});
+test('guided purchase retrieves real supplier costs and preview remains read-only', async () => {
+  const p = await newProduct({ name: 'Arroz Superior Guiado', sku: 'GUIDED-ARROZ' });
+  const adapter = withActionAssistant({}, service);
+  const before = await counts();
+  const first = await adapter.handle(req(), { conversationId, message: `Compré dos de ${p.sku}` });
+  assert.match(first.suggestions[0].detail, /4 PEN/); assert.deepEqual(await counts(), before);
+  const second = await adapter.handle(req(), { conversationId, message: 'Opción 1' });
+  assert.equal(second.pendingAction.fields.total, 8); assert.equal(second.usage.totalTokens, 0); assert.deepEqual(await counts(), before);
+  await service.cancelPendingAction(context(), second.pendingAction.pendingActionId);
+});
+test('guided product enrichment persists supplier association only after confirmation', async () => {
+  const adapter = withActionAssistant({}, service);
+  const first = await adapter.handle(req(), { conversationId, message: 'Agrega un producto Producto Guiado, SKU GUIDED-NUEVO, precio S/ 5, stock 2, mínimo 1, categoría Sintético' });
+  assert.equal(first.pendingAction, undefined);
+  await adapter.handle(req(), { conversationId, message: 'Elegir proveedor' });
+  await adapter.handle(req(), { conversationId, message: '1' });
+  const preview = await adapter.handle(req(), { conversationId, message: 'precio de compra 2.50' });
+  assert.match(preview.pendingAction.fields.supplierCosts, /Proveedor sintético: 2.5 PEN/);
+  assert.equal(await Product.exists({ businessId, sku: 'GUIDED-NUEVO' }), null);
+  await service.confirmPendingAction(context(), preview.pendingAction.pendingActionId);
+  const product = await Product.findOne({ businessId, sku: 'GUIDED-NUEVO' });
+  assert.equal(String(product.supplierPrices[0].supplierId), String(vendor._id)); assert.equal(product.supplierPrices[0].purchasePrice, 2.5);
+});
+test('supplier association rejects a foreign vendor during preview', async () => {
+  const [foreign] = await Contact.create([{ businessId: foreignBusiness, name: 'Proveedor ajeno', type: 'vendor', phone: '000' }]);
+  await assert.rejects(prepare('create_product', { name: 'Ajeno', sku: 'GUIDED-REJECT', price: 2, currency: 'PEN', stock: 0,
+    minStockLevel: 1, category: 'Sintético', supplierPrices: [{ supplierId: String(foreign._id), purchasePrice: 1 }] }), { code: 'ACTION_VALIDATION_FAILED' });
+  assert.equal(await Product.exists({ businessId, sku: 'GUIDED-REJECT' }), null);
+});
+test('Mongo history restores a guided candidate draft after runtime restart without business writes', async () => {
+  await newProduct({ name: 'Refresco Guiado 500ml', sku: 'GUIDED-REF-500' });
+  await newProduct({ name: 'Refresco Guiado 1.5L', sku: 'GUIDED-REF-1500' });
+  const firstRuntime = withActionAssistant({}, service);
+  const history = createAgentConversationService({ runtime: firstRuntime, actionService: service });
+  const before = await counts();
+  const first = await history.send(req(), { message: 'Vende dos de refresco guiado' }, randomUUID());
+  assert.equal(first.suggestions.length, 2); assert.deepEqual(await counts(), before);
+  const restart = withActionAssistant({}, service);
+  const resumed = createAgentConversationService({ runtime: restart, actionService: service });
+  await resumed.get(req(), first.conversationId, 1, 20); assert.deepEqual(await counts(), before);
+  const next = await resumed.send(req(), { message: '2', conversationId: first.conversationId }, randomUUID());
+  assert.equal(next.pendingAction.status, 'PENDING'); assert.equal(next.usage.totalTokens, 0);
+  assert.deepEqual(await counts(), before);
+  await service.cancelPendingAction(createActionContext(req(), { conversationId: first.conversationId }), next.pendingAction.pendingActionId);
 });
 test('real product preview writes no business record, confirmation creates one opening and two outbox records', async () => {
   const args = { name: 'Producto asistente', sku: 'AUTO-NEW', category: 'Sintético', price: 2, currency: 'PEN', stock: 5, minStockLevel: 1 };

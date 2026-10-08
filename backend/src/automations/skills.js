@@ -1,7 +1,8 @@
 const { schema, string, objectId, number, integer, validateArgs, assertContext, fail, deepFreeze } = require('./contracts');
 const currency = { ...string(3), enum: ['PEN', 'USD', 'EUR'] };
 const productFields = { name: string(100), sku: string(100), price: number(), currency, stock: integer(1000000),
-  minStockLevel: integer(1000000), category: string(50), costPrice: number(), description: string(500) };
+  minStockLevel: integer(1000000), category: string(50), costPrice: number(), description: string(500),
+  supplierPrices: { type: 'array', maxItems: 5, items: schema({ supplierId: objectId, purchasePrice: number() }) } };
 const transaction = schema({ products: { type: 'array', maxItems: 20, items: schema({ productId: objectId, quantity: { ...integer(1000000), minimum: 1 } }) },
   currency, customerId: objectId, vendorId: objectId, notes: string(500),
   paymentMethod: { ...string(20), enum: ['cash', 'credit', 'bank_transfer', 'card', 'crypto', 'bitcoin', 'tether', 'wallet', 'other'] } }, ['products', 'currency']);

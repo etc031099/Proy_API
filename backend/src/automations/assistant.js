@@ -1,103 +1,122 @@
 const { createActionContext, randomUUID, zeroUsage } = require('./contracts');
-const { getActionSkill } = require('./skills');
 const { performance } = require('node:perf_hooks');
-const { actionIntent, parseAction, resolveAction, extractionSchema, validateExtraction } = require('./actionInput');
+const { actionIntent, parseAction, extractionSchema, validateExtraction } = require('./actionInput');
 const { createAgentExecution } = require('../agents/execution');
 const { redact } = require('../services/agentHistoryProjection');
+const { compactDraft, updateDraft, resolveDraft, applyResolution, TTL_MS } = require('./operationDraft');
+const { resolveReference, configuredSuppliers } = require('./entityResolution');
+const { Product } = require('../models');
 const resultAnswer = pending => pending.status !== 'EXECUTED' ? 'Acción cancelada.' : pending.result?.type
   ? `${pending.result.type === 'sale' ? 'Venta' : 'Compra'} registrada correctamente. ${pending.result.items.map(item => `${item.quantity} unidades de ${item.sku}; stock resultante: ${item.stock}`).join('. ')}. Total: ${pending.result.total} ${pending.result.currency}. Operación: ${pending.result.id}.`
-  : `Producto registrado correctamente. SKU: ${pending.result?.sku || '—'}. Stock: ${pending.result?.stock ?? '—'}.`;
-// Drafts contain only bounded extraction fields, isolated by authenticated user/business/conversation.
-// They expire with the pending-action horizon; they never authorize a mutation.
+  : `Producto registrado correctamente. SKU: ${pending.result?.sku || '—'}. Stock: ${pending.result?.stock ?? '—'}.${pending.result?.needsSupplierSetup ? ' Todavía no tiene proveedor con precio de compra; configúralo desde Productos antes de registrar compras.' : ''}`;
+// Bounded draft slots never authorize writes. Restored candidate IDs are looked up
+// again before preparation. A separate per-conversation queue serialises updates.
 const withActionAssistant = (runtime, service, options = {}) => {
-  const drafts = new Map();
-  return ({
-  ...runtime,
-  async handle(req, input) {
-    const normalized = input.message.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-    for (const [key, draft] of drafts) if (draft.expiresAt <= Date.now()) drafts.delete(key);
-    const draftKey = JSON.stringify([String(req.user?._id), req.businessId, input.conversationId]);
-    const previousDraft = /^(?:muestrame|busca|dime|cuanto|que|resume|explica|lista|cuales)\b|[¿?]/.test(normalized)
-      && !actionIntent(input.message) ? undefined : drafts.get(draftKey);
-    const skillId = actionIntent(input.message) || previousDraft?.action;
-    const decision = /^(?:si|confirmar|confirmo|hazlo|no|cancelar|cancelo|no lo hagas)[.!?]*$/.test(normalized);
+  const drafts = new Map(), locks = new Map(), now = options.clock || Date.now;
+  const keyFor = (req, id) => JSON.stringify([String(req.user?._id), req.businessId, id]);
+  async function handle(req, input) {
+    const normalized = input.message.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/^[¿¡]/, '').replace(/[?!.]$/, '');
+    for (const [key, draft] of drafts) if (draft.expiresAt <= now()) drafts.delete(key);
+    const draftKey = keyFor(req, input.conversationId);
+    let previous = drafts.get(draftKey);
+    const explicit = actionIntent(input.message);
+    const contextual = /que me falta|que datos|que proveedores|^(?:mejor|cambia|en vez|no es|opcion|el |la |si\b|no\b|cancel|confirm|hazlo|crear proveedor|elegir proveedor|continuar sin)/.test(normalized)
+      || /^(?:\d+|sku\b|proveedor\b|precio de compra\b|categoria\b)/.test(normalized);
+    if (previous && !explicit && !contextual && /^(?:muestrame|busca|dime|cuanto|que|resume|explica|lista|cuales)\b|[¿?]/.test(normalized)) previous = undefined;
+    const skillId = explicit || previous?.action;
+    const decision = /^(?:si|confirmar|confirmo|hazlo|no|cancelar|cancelo|no lo hagas|mejor cancela eso)[.!?]*$/.test(normalized);
     if (!skillId && !decision) return runtime.handle(req, input);
-    const started = performance.now();
-    const conversationId = input.conversationId || randomUUID();
-    const context = createActionContext(req, { conversationId });
-    let pendingAction, answer, clarification = false, execution;
-    if (decision) {
-      const pending = await service.resolvePending(context);
-      if (!pending) { answer = 'No hay una única acción pendiente. Selecciona Confirmar o Cancelar en su tarjeta.'; clarification = true; }
+    const started = performance.now(), conversationId = input.conversationId || randomUUID();
+    const context = createActionContext(req, { conversationId }), key = keyFor(req, conversationId);
+    let pendingAction, answer, clarification = false, execution, suggestions = [];
+    if (previous?.items && /que proveedores/.test(normalized)) {
+      const products = [];
+      for (const item of previous.items) {
+        const result = await (options.resolver || resolveReference)(Product, context, item.ref);
+        if (!result.value) return response('Primero elige el producto para consultar sus proveedores.', undefined, true);
+        products.push(result.value);
+      }
+      const suppliers = await (options.supplierLookup || configuredSuppliers)(products, context);
+      const labels = suppliers.map(row => `${row.name}${row.costs ? `: ${row.costs.map(cost => `${cost.purchasePrice} ${cost.currency}`).join(', ')}` : ''}`);
+      return response(labels.length ? `Proveedores configurados: ${labels.join('; ')}. Tu borrador sigue disponible.`
+        : 'No hay proveedor común con precio de compra configurado. Tu borrador sigue disponible; configúralo desde Productos o cancela.', undefined, true);
+    }
+    if (decision && (!previous || previous.pendingActionId || /^(no|cancel|mejor cancela)/.test(normalized))) {
+      if (previous && !previous.pendingActionId) { drafts.delete(key); answer = 'Borrador cancelado. No se guardó ninguna operación.'; }
       else {
-        pendingAction = await (/^(si|confirm|hazlo)/.test(normalized) ? service.confirmPendingAction : service.cancelPendingAction)(context, pending.pendingActionId);
-        answer = resultAnswer(pendingAction);
+        const pending = await service.resolvePending(context);
+        if (!pending) { answer = 'No hay una única acción pendiente. Selecciona Confirmar o Cancelar en su tarjeta.'; clarification = true; }
+        else {
+          pendingAction = await (/^(si|confirm|hazlo)/.test(normalized) ? service.confirmPendingAction : service.cancelPendingAction)(context, pending.pendingActionId);
+          answer = resultAnswer(pendingAction); drafts.delete(key);
+        }
       }
     } else {
-      const skill = getActionSkill(skillId);
-      if (skill.status !== 'READY') answer = 'Esta acción todavía no está habilitada. Utiliza el formulario habitual de ventas o compras; no se realizó ninguna escritura.';
-      else {
-        let extracted = parseAction(input.message, skillId);
-        if (previousDraft && !actionIntent(input.message)) {
-          if (skillId === 'create_product') {
-            extracted.product = { ...(previousDraft.product || previousDraft.direct), ...extracted.product };
-            const missing = skill.inputSchema.required.filter(key => extracted.product[key] === undefined);
-            if (missing.length === 1 && !Object.keys(parseAction(input.message, skillId).product || {}).length) {
-              const key = missing[0], value = input.message.trim();
-              if (['name', 'sku', 'category', 'currency'].includes(key)) extracted.product[key] = key === 'currency' ? value.toUpperCase() : value;
-              else if (/^\d+(?:[.,]\d+)?$/.test(value)) extracted.product[key] = Number(value.replace(',', '.'));
-            }
-          } else {
-            const reference = /^(?:SKU|producto|productId)\s*[:=]?\s+(.+)$/i.exec(input.message.trim());
-            extracted = { ...previousDraft, ...extracted, items: extracted.items.length ? extracted.items : previousDraft.items,
-              paymentMethod: /cr[eé]dito|contado/i.test(input.message) ? extracted.paymentMethod : previousDraft.paymentMethod };
-            if (reference && extracted.items?.length === 1) extracted.items = [{ ...extracted.items[0], ref: reference[1] }];
-          }
-        }
-        const unclear = !extracted.direct && (skillId === 'create_product'
-          ? !Object.keys(extracted.product || {}).length || ['price', 'stock', 'minStockLevel'].some(key =>
-            extracted.product?.[key] === undefined && { price: /precio/, stock: /\bstock\b/, minStockLevel: /minimo/ }[key].test(normalized))
-          : !extracted.items?.length);
-        if (unclear && !previousDraft) {
-          execution = createAgentExecution({ context: context.agentContext, ...(options.onEvent ? { onEvent: options.onEvent } : {}),
-            ...(options.provider ? { provider: options.provider } : {}) });
-          try {
-            const result = await execution.generateStructured({ agentId: 'operations', schema: extractionSchema,
-              systemInstruction: 'Extrae solamente campos explícitos de la solicitud. No inventes valores, precios, monedas, clientes ni proveedores. No ejecutes acciones. Respuesta JSON breve.',
-              messages: [{ role: 'user', text: redact(input.message) }] });
-            extracted = validateExtraction(result.output);
-            if (extracted.action !== skillId) require('./contracts').fail('ACTION_VALIDATION_FAILED');
-          } finally { execution.finish(); }
-        }
-        const missing = extracted.direct ? skill.inputSchema.required.filter(key => !Object.hasOwn(extracted.direct, key)) : [];
-        const resolved = missing.length ? { clarification: `Para preparar la acción faltan: ${missing.join(', ')}.` }
-          : await resolveAction(extracted, context, options.resolver);
-        if (resolved.clarification) {
-          answer = resolved.clarification; clarification = true;
-          if (drafts.size < 1000 || drafts.has(draftKey)) drafts.set(JSON.stringify([context.userId, context.businessId, conversationId]),
-            { ...extracted, expiresAt: Date.now() + 600000 });
-        }
-        else {
-          drafts.delete(draftKey);
-          pendingAction = await service.prepare({ agentId: 'operations', skillId, args: resolved.args, context, externalRequestId: req.agentActionRequestId || randomUUID() });
-          answer = `${pendingAction.summary} Revisa la tarjeta antes de confirmar. La preparación no modifica el inventario.`;
+      if (previous?.pendingActionId) {
+        const stored = await service.get(context, previous.pendingActionId);
+        if (stored.status !== 'PENDING') {
+          drafts.delete(key);
+          if (!explicit) return response('Esa acción ya terminó o venció. Inicia una nueva operación para modificarla.', stored, true);
+          previous = undefined;
+        } else {
+          if (/que me falta|que datos/.test(normalized)) return response('La operación está completa. Revisa la tarjeta antes de confirmar.', stored, true);
+          await service.cancelPendingAction(context, previous.pendingActionId);
+          delete previous.pendingActionId;
         }
       }
+      let extracted = parseAction(input.message, skillId);
+      const unclear = !previous && !extracted.direct && (skillId === 'create_product' ? !Object.keys(extracted.product || {}).length
+        : !extracted.items?.length || (!extracted.items[0].quantity && /\b(?:tres|dos|cinco)\s+botellas/.test(normalized)));
+      if (unclear) {
+        execution = createAgentExecution({ context: context.agentContext, ...(options.onEvent ? { onEvent: options.onEvent } : {}), ...(options.provider ? { provider: options.provider } : {}) });
+        try {
+          const result = await execution.generateStructured({ agentId: 'operations', schema: extractionSchema,
+            systemInstruction: 'Extrae solamente campos explícitos. No inventes valores, precios, monedas, clientes ni proveedores. No ejecutes acciones. JSON breve.',
+            messages: [{ role: 'user', text: redact(input.message) }] });
+          extracted = validateExtraction(result.output);
+          if (extracted.action !== skillId) require('./contracts').fail('ACTION_VALIDATION_FAILED');
+        } finally { execution.finish(); }
+      }
+      const draft = updateDraft(explicit ? undefined : previous, extracted, input.message);
+      if (extracted.direct && (explicit || !previous)) draft.direct = extracted.direct;
+      const resolved = applyResolution(draft, await resolveDraft(draft, context, options), now());
+      suggestions = resolved.suggestions || [];
+      if (resolved.clarification) { answer = resolved.clarification; clarification = true; }
+      else {
+        pendingAction = await service.prepare({ agentId: 'operations', skillId, args: resolved.args, context, externalRequestId: req.agentActionRequestId || randomUUID() });
+        draft.pendingActionId = pendingAction.pendingActionId;
+        answer = `${pendingAction.summary} Revisa la tarjeta antes de confirmar. La preparación no modifica el inventario.`;
+      }
+      draft.updatedAt = now(); draft.expiresAt = now() + TTL_MS;
+      const safe = compactDraft(draft, now());
+      if (safe && (drafts.size < 1000 || drafts.has(key))) drafts.set(key, safe);
     }
-    const realUsage = execution?.getUsage();
-    const tokens = zeroUsage();
-    const latencyMs = performance.now() - started;
-    const participant = { agentId: 'operations', model: null, llmCalls: 0, skillCalls: 0, ...tokens,
-      usageAvailable: true, latencyMs, providerLatencyMs: 0 };
-    if (realUsage) Object.assign(participant, realUsage.agents.find(agent => agent.agentId === 'operations'));
-    return { requestId: context.requestId, conversationId, answer, intent: 'action', agent: 'operations',
-      participants: [participant], actions: [], evidence: [], usage: { totalLlmCalls: 0, totalSkillCalls: 0,
-        totalInputTokens: 0, totalOutputTokens: 0, totalThoughtTokens: 0, totalCachedInputTokens: 0,
-        totalToolUseTokens: 0, totalTokens: 0, metricsComplete: true, totalProviderLatencyMs: 0,
-        totalLatencyMs: latencyMs, toolSelectionCycles: 0, agents: [participant], ...(realUsage || {}) },
-      requiresClarification: clarification, clarificationQuestion: clarification ? answer : null, latencyMs,
-      ...(pendingAction ? { pendingAction } : {}) };
+    return response(answer, pendingAction, clarification);
+    function response(text, pending, needsClarification) {
+      const realUsage = execution?.getUsage(), latencyMs = performance.now() - started;
+      const participant = { agentId: 'operations', model: null, llmCalls: 0, skillCalls: 0, ...zeroUsage(), usageAvailable: true, latencyMs, providerLatencyMs: 0 };
+      if (realUsage) Object.assign(participant, realUsage.agents.find(agent => agent.agentId === 'operations'));
+      return { requestId: context.requestId, conversationId, answer: text, intent: 'action', agent: 'operations', participants: [participant], actions: [], evidence: [],
+        usage: { totalLlmCalls: 0, totalSkillCalls: 0, totalInputTokens: 0, totalOutputTokens: 0, totalThoughtTokens: 0,
+          totalCachedInputTokens: 0, totalToolUseTokens: 0, totalTokens: 0, metricsComplete: true, totalProviderLatencyMs: 0,
+          totalLatencyMs: latencyMs, toolSelectionCycles: 0, agents: [participant], ...(realUsage || {}) },
+        requiresClarification: needsClarification, clarificationQuestion: needsClarification ? text : null, latencyMs,
+        ...(pending ? { pendingAction: pending } : {}), ...(suggestions.length ? { suggestions } : {}) };
+    }
   }
-});
+  return { ...runtime,
+    async restoreContext(req, id, snapshot) {
+      await runtime.restoreContext?.(req, id, snapshot);
+      const key = keyFor(req, id), restored = compactDraft(snapshot.operationDraft, now());
+      if (!drafts.has(key) && restored && drafts.size < 1000) drafts.set(key, restored);
+    },
+    async getContextSnapshot(req, id) { return { ...await runtime.getContextSnapshot?.(req, id), operationDraft: compactDraft(drafts.get(keyFor(req, id)), now()) }; },
+    forgetConversation(req, id) { drafts.delete(keyFor(req, id)); return runtime.forgetConversation?.(req, id); },
+    async handle(req, input) {
+      const key = keyFor(req, input.conversationId), preceding = locks.get(key) || Promise.resolve();
+      const work = preceding.catch(() => {}).then(() => handle(req, input)); locks.set(key, work);
+      try { return await work; } finally { if (locks.get(key) === work) locks.delete(key); }
+    }
+  };
 };
 module.exports = { withActionAssistant, resultAnswer };

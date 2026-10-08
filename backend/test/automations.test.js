@@ -148,7 +148,9 @@ test('safe automatic alerts are atomic, idempotent and never need Gemini or appr
 });
 test('assistant prepares structured product and asks only missing fields for financial writes', async () => {
   const f = fixture(), adapter = withActionAssistant({ handle() { assert.fail('Gemini must not run'); } }, f.service);
-  const first = await adapter.handle(req(), { message: `Crear producto ${JSON.stringify(product)}`, conversationId: uuid });
+  const offer = await adapter.handle(req(), { message: `Crear producto ${JSON.stringify(product)}`, conversationId: uuid });
+  assert.equal(offer.requiresClarification, true);
+  const first = await adapter.handle(req(), { message: 'Continuar sin proveedor', conversationId: uuid });
   assert.equal(first.pendingAction.status, 'PENDING'); assert.equal(first.usage.totalTokens, 0);
   const done = await adapter.handle(req(), { message: 'sí', conversationId: uuid }); assert.equal(done.pendingAction.status, 'EXECUTED');
   const missing = await adapter.handle(req(), { message: 'Crear producto {"name":"Solo nombre"}', conversationId: uuid });
@@ -199,7 +201,7 @@ test('actual create_product executor shares CRUD opening movement/session and mi
   const result = await executor.execute(product, ctx(), session);
   assert.equal(insert.businessId, 'A'); assert.equal(insert.stock, 0); assert.equal(result.stock, 5);
   assert.equal(saves, 1); assert.equal(movement.type, 'opening'); assert.equal(movement.quantityDelta, 5); assert.equal(movement.businessId, 'A');
-  assert.deepEqual(Object.keys(result).sort(), ['id', 'name', 'sku', 'stock']);
+  assert.deepEqual(Object.keys(result).sort(), ['id', 'name', 'needsSupplierSetup', 'sku', 'stock']);
   movement = null;
   assert.equal((await executor.execute({ ...product, stock: 0 }, ctx(), session)).stock, 0);
   assert.equal(movement, null); assert.equal(saves, 1);
