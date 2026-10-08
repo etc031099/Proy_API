@@ -7,11 +7,9 @@ const { executeRequestedSkill } = require('./toolCalls');
 const { createConversationMemory } = require('./memory');
 const { routeDeterministically, clarify } = require('./intentRouting');
 const { buildSkillAnswer, llmObservation, safeText } = require('./responses');
+const { buildSynthesisInput } = require('./synthesis');
 
 const defaultMemory = createConversationMemory();
-const SYNTHESIS_SCHEMA = { type: 'OBJECT', additionalProperties: false, properties: {
-  sections: { type: 'ARRAY', items: { type: 'INTEGER' } }
-}, required: ['sections'] };
 const errorCode = error => error?.code === 'AGENT_BUDGET_EXCEEDED' || error?.code === 'GEMINI_BUDGET_EXCEEDED'
   ? 'AGENT_BUDGET_EXCEEDED' : String(error?.code).startsWith('GEMINI_') ? 'AGENT_PROVIDER_FAILED'
     : ['AGENT_RESOURCE_NOT_FOUND', 'AGENT_INVALID_SKILL_ARGS'].includes(error?.code) ? 'AGENT_CLARIFICATION_REQUIRED'
@@ -113,10 +111,8 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
           let sections = results.map((_, index) => index);
           if (plan.synthesize && results.every(({ result }) => result.status === 'READY'
             && (!Array.isArray(result.data) || result.data.every(row => !row.mlStatus || row.mlStatus === 'READY')))) {
-            const compact = JSON.stringify(results.map(({ skillId, result }, index) => ({ section: index, ...llmObservation(skillId, result) })));
-            const generated = await execution.generateStructured({ agentId: plan.agent, schema: SYNTHESIS_SCHEMA,
-              systemInstruction: 'Ordena las secciones verificadas: conclusión primero, luego 2–4 puntos útiles. En resumen, catálogo actual primero, actividad actual e histórica separadas y vigilancia después; incluye todas las evidencias. En reposición incluye el forecast. Devuelve solo sections. No inventes hechos ni causalidad.',
-              messages: [{ role: 'user', text: safeText(message) }, { role: 'user', text: compact.slice(0, 1900) }] });
+            const generated = await execution.generateStructured({ agentId: plan.agent,
+              ...buildSynthesisInput(plan.intent, message, results) });
             sections = generated.output.sections;
             if (Reflect.ownKeys(generated.output).some(key => key !== 'sections') || !Array.isArray(sections) || !sections.length || sections.length > results.length
               || new Set(sections).size !== sections.length || sections.some(index => !Number.isInteger(index) || index < 0 || index >= results.length)) {

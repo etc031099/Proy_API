@@ -70,7 +70,8 @@ const createTraceEvent = (type, metadata) => {
     if (!['text', 'structured', 'function_call', 'empty', 'unknown'].includes(metadata.responseKind)) invalid();
     event.responseKind = metadata.responseKind;
   }
-  for (const key of ['candidateCount', 'llmCallsBeforeFailure']) {
+  for (const key of ['candidateCount', 'llmCallsBeforeFailure', 'promptChars', 'promptBytesApprox',
+    'evidenceCount', 'selectedItemsCount', 'messageCount', 'dtoFieldCount']) {
     if (metadata[key] !== undefined) {
       if (!safeCount(metadata[key])) invalid();
       event[key] = metadata[key];

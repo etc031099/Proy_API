@@ -185,9 +185,17 @@ const createAgentExecution = options => {
   });
 
   async function runLlmCall(method, input) {
-    if (closed || !isPlainObject(input) || Reflect.ownKeys(input).some(key => !['agentId', 'systemInstruction', 'messages', 'schema'].includes(key))) {
+    if (closed || !isPlainObject(input) || Reflect.ownKeys(input).some(key => !['agentId', 'systemInstruction', 'messages', 'schema', 'diagnostics'].includes(key))) {
       throw new AgentError('AGENT_INVALID_REQUEST');
     }
+    const { diagnostics = {}, ...providerInput } = input;
+    if (!isPlainObject(diagnostics) || Object.keys(diagnostics).some(key =>
+      !['evidenceCount', 'selectedItemsCount', 'dtoFieldCount'].includes(key)
+      || !Number.isSafeInteger(diagnostics[key]) || diagnostics[key] < 0)) throw new AgentError('AGENT_INVALID_REQUEST');
+    const prompt = [input.systemInstruction, ...(Array.isArray(input.messages) ? input.messages : []).map(message => message?.text)]
+      .filter(text => typeof text === 'string');
+    const promptMetrics = { ...diagnostics, promptChars: prompt.reduce((sum, text) => sum + text.length, 0),
+      promptBytesApprox: prompt.reduce((sum, text) => sum + Buffer.byteLength(text, 'utf8'), 0), messageCount: Array.isArray(input.messages) ? input.messages.length : 0 };
     let agent;
     try { agent = require('./definitions').getAgentDefinition(input.agentId); } catch { throw new AgentError('AGENT_INVALID_REQUEST'); }
     const llmCount = llmCallsByAgent.get(agent.id) || 0;
@@ -209,7 +217,7 @@ const createAgentExecution = options => {
       secondAttemptDurationMs: null, totalProviderDurationMs: 0, retryReason: null };
     active++;
     emit('agent_started', { agentId: agent.id, agentRunId, status: 'STARTED' });
-    emit('llm_started', { agentId: agent.id, agentRunId, status: 'STARTED' });
+    emit('llm_started', { agentId: agent.id, agentRunId, status: 'STARTED', ...promptMetrics });
     try {
       const providerClient = provider || getGeminiProvider();
       const validateResult = result => {
@@ -230,13 +238,14 @@ const createAgentExecution = options => {
         attemptState.providerAttempts = providerAttempt;
         const attemptStart = performance.now();
         try {
-          const result = validateResult(await providerClient[method](input));
+          const result = validateResult(await providerClient[method](providerInput));
           const durationMs = performance.now() - attemptStart;
           if (providerAttempt === 1) attemptState.firstAttemptDurationMs = durationMs;
           else attemptState.secondAttemptDurationMs = durationMs;
           attemptState.totalProviderDurationMs = performance.now() - start;
           emit('provider_attempt', { agentId: agent.id, agentRunId, model: result.model,
             providerAttempt, providerAttempts: providerAttempt, status: 'SUCCEEDED', durationMs,
+            ...promptMetrics, ...result.usage, providerStatus: null,
             ...(retryReason ? { retryReason } : {}), retryScheduled: false,
             firstAttemptDurationMs: attemptState.firstAttemptDurationMs,
             retryDelayMs: attemptState.retryDelayMs,
@@ -265,7 +274,7 @@ const createAgentExecution = options => {
           const effectiveTimeoutMs = Number.isSafeInteger(safeError.timeoutMs) ? safeError.timeoutMs
             : safeError.code === 'GEMINI_BUDGET_EXCEEDED' ? null : configuredTimeoutMs;
           emit('provider_attempt', { agentId: agent.id, agentRunId, model,
-            providerAttempt, providerAttempts: providerAttempt, status: 'FAILED', code: safeError.code,
+            providerAttempt, providerAttempts: providerAttempt, status: 'FAILED', code: safeError.code, ...promptMetrics,
             publicCode: retryScheduled ? null : safeError.code === 'GEMINI_BUDGET_EXCEEDED'
               ? 'AGENT_BUDGET_EXCEEDED' : 'AGENT_PROVIDER_FAILED',
             internalCause: GEMINI_CAUSES.has(safeError.code) ? safeError.code : 'GEMINI_UNAVAILABLE',

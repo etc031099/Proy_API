@@ -15,4 +15,5 @@ require('./agentGemini.test');
 require('./agentSmoke.test');
 require('./agentOrchestrator.test');
 require('./agentResponses.test');
+require('./agentSynthesis.test');
 require('./agentMessages.test');

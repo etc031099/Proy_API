@@ -11,13 +11,15 @@ const logAgentDiagnostic = event => {
 
 const logAgentProviderDiagnostic = event => {
   const providerAttempt = event.type === 'provider_attempt';
-  if (providerAttempt && event.providerAttempt === 1 && event.status === 'SUCCEEDED') return;
+  if (providerAttempt && event.providerAttempt === 1 && event.status === 'SUCCEEDED' && event.evidenceCount === undefined) return;
   if (!providerAttempt && (event.type !== 'error' || !String(event.internalCause || '').startsWith('GEMINI_'))) return;
   const fields = ['requestId', 'conversationId', 'agentRunId', 'agentId', 'model', 'publicCode', 'status',
     'internalCause', 'providerStatus', 'providerCode', 'finishReason', 'llmDurationMs', 'durationMs', 'timeoutMs',
     'llmCallsBeforeFailure', 'usageAvailable', 'metricsComplete', 'responseKind', 'candidateCount',
     'hasText', 'hasFunctionCall', 'hasUsageMetadata', 'providerAttempt', 'providerAttempts', 'retryReason', 'retryScheduled',
-    'firstAttemptDurationMs', 'retryDelayMs', 'secondAttemptDurationMs', 'totalProviderDurationMs'];
+    'firstAttemptDurationMs', 'retryDelayMs', 'secondAttemptDurationMs', 'totalProviderDurationMs',
+    'promptChars', 'promptBytesApprox', 'evidenceCount', 'selectedItemsCount', 'messageCount', 'dtoFieldCount',
+    'inputTokens', 'outputTokens', 'thoughtTokens', 'cachedInputTokens', 'toolUseTokens', 'totalTokens'];
   const safeEvent = Object.fromEntries(fields.filter(key => event[key] !== undefined).map(key => [key, event[key]]));
   console.error('[AgentProviderDiagnostic]', JSON.stringify(safeEvent));
 };

@@ -252,9 +252,11 @@ test('LLM-assisted business summary keeps all current and historical evidence wi
   assert.match(result.answer, /octubre de 2026/); assert.match(result.answer, /julio de 2025/);
   assert.match(result.answer, /necesita 3 más/);
   assert.deepEqual(result.participants.map(row => row.agentId), ['coordinator', 'analyst', 'operations']);
-  assert.match(f.calls[0].input.systemInstruction, /actividad actual e histórica separadas/);
-  assert.match(f.calls[0].input.messages[1].text, /"periodMode":"current"/);
-  assert.match(f.calls[0].input.messages[1].text, /"periodMode":"latest"/);
+  assert.match(f.calls[0].input.systemInstruction, /Actual e histórico separados/);
+  const payload = JSON.parse(f.calls[0].input.messages[0].text);
+  assert.equal(f.calls[0].input.messages.length, 1);
+  assert.equal(payload.activity.period.startDate, '2026-10-01');
+  assert.equal(payload.historicalContext.period.startDate, '2025-07-01');
 });
 
 test('missing product references ask a natural clarification without calling Gemini', async () => {
@@ -628,7 +630,7 @@ test('provider failures keep a safe internal category and correlation while pres
     assert.equal(diagnostic.usageAvailable, true); assert.equal(diagnostic.metricsComplete, true);
     assert.ok(Number.isFinite(diagnostic.llmDurationMs));
     const serialized = JSON.stringify(events);
-    for (const forbidden of ['raw body', 'prompt', 'secret-key', 'rawResponse', 'must-not-log', 'Authorization']) {
+    for (const forbidden of ['raw body', '"prompt":', 'secret-key', 'rawResponse', 'must-not-log', 'Authorization']) {
       assert.equal(serialized.includes(forbidden), false, `${cause} leaked ${forbidden}`);
     }
     for (const key of ['requestId', 'conversationId', 'agentRunId']) assert.ok(diagnostic[key]);
