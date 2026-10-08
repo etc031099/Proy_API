@@ -395,6 +395,8 @@ test('replenishment selects READY positive quantities, orders top-N and shares o
   assert.equal(result.metadata.totalMatches, 2);
   assert.equal(result.metadata.truncated, true);
   assert.equal(calls, 1);
+  assert.equal(f.execution.getUsage().totalLlmCalls, 0);
+  assert.equal(f.execution.getUsage().totalTokens, 0);
   const secondRequest = fixture({ forecastService: { async getDemandForecast() { calls++; return forecastPayload([]); } } });
   await secondRequest.run('get_demand_forecast');
   assert.equal(calls, 2);

@@ -338,7 +338,7 @@ test('skill failures preserve only allowlisted internal cause and timing diagnos
     assert.equal(JSON.stringify(result).includes('internalCause'), false);
     const event = events.find(item => item.type === 'error' && item.skillId === 'get_replenishment_candidates');
     assert.equal(event.internalCause, expectedCause);
-    assert.equal(event.timeoutMs, 10000);
+    assert.equal(event.timeoutMs, 25000);
     assert.ok(event.skillDurationMs >= 0);
     assert.ok(typeof event.mlCallDurationMs === 'number');
     for (const key of ['requestId', 'conversationId', 'agentRunId', 'skillCallId']) assert.ok(event[key]);

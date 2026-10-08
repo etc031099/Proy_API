@@ -17,13 +17,16 @@ const READY_SKILL_IDS = Object.freeze([
   'get_sales_summary', 'get_top_selling_products', 'get_business_summary',
   'get_demand_forecast', 'get_replenishment_candidates', 'get_product_sales_summary'
 ]);
+// Replenishment's single ML batch exceeded its prior 10 s deadline in production.
+// 25 s accommodates a bounded Render cold start/inference without adding retries.
 const entry = (skillId, description, allowedAgents, inputSchema, maxRecords, dataSensitivity, outputDescription) => ({
   id: skillId, version: '1.0.0', description, readOnly: true, allowedAgents, inputSchema,
   outputSchema: {
     type: 'object', description: outputDescription,
     fields: { data: 'Projected records or summary', metadata: 'Period/asOf, currency when applicable, returnedCount, totalMatches and truncated' }
   },
-  maxRecords, timeoutMs: skillId.includes('forecast') || skillId === 'get_replenishment_candidates' ? 10000 : 5000,
+  maxRecords, timeoutMs: skillId === 'get_replenishment_candidates' ? 25000
+    : skillId.includes('forecast') ? 10000 : 5000,
   dataSensitivity, executorStatus: READY_SKILL_IDS.includes(skillId) ? 'READY' : 'PENDING_IMPLEMENTATION'
 });
 

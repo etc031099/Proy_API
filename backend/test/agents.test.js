@@ -46,6 +46,14 @@ test('all thirteen skills are unique read-only contracts with ten implemented ex
   assert.equal(SKILLS.filter(skill => skill.executorStatus === 'READY').length, 10);
 });
 
+test('replenishment alone has a 25 s skill deadline; every other skill retains its prior limit', () => {
+  for (const skill of SKILLS) {
+    const expected = skill.id === 'get_replenishment_candidates' ? 25000
+      : skill.id === 'get_demand_forecast' ? 10000 : 5000;
+    assert.equal(skill.timeoutMs, expected, skill.id);
+  }
+});
+
 test('permissions match in both directions for every agent and skill', () => {
   for (const agent of AGENTS) {
     assert.equal(new Set(agent.allowedSkills).size, agent.allowedSkills.length);
