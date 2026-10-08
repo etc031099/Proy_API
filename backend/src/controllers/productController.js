@@ -7,6 +7,7 @@ const { toFiniteNumber } = require('../utils/numbers');
 const { assertAllowedFields, pickAllowedFields } = require('../utils/allowedFields');
 const { SKU_INDEX_NAME, normalizeSku } = require('../utils/sku');
 const { applyStockChange } = require('../services/inventoryService');
+const { createProductRecord } = require('../services/productCreationService');
 
 const PRODUCT_CREATE_FIELDS = [
   'name', 'description', 'price', 'currency', 'costPrice', 'stock', 'category',
@@ -222,19 +223,7 @@ const createProduct = asyncHandler(async (req, res) => {
   let product;
   try {
     session.startTransaction();
-    [product] = await Product.create([productData], { session });
-    if (initialStock > 0) {
-      await applyStockChange({
-        product,
-        quantityDelta: initialStock,
-        type: 'opening',
-        occurredAt: historical?.createdAt,
-        source: historical ? 'historical_import' : 'api',
-        scenarioId: historical?.scenarioId || null,
-        sourceEventId: historical ? `${historical.sourceEventId}:inventory` : null,
-        session
-      });
-    }
+    product = await createProductRecord({ productData, initialStock, historical, session });
     await session.commitTransaction();
   } catch (error) {
     await session.abortTransaction();

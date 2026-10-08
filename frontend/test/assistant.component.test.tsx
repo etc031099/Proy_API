@@ -8,7 +8,7 @@ vi.mock('@/components/ProtectedRoute', () => ({ ProtectedRoute: ({ children }: {
 vi.mock('@/components/Layout', () => ({ Layout: ({ children }: { children: ReactNode }) => <main>{children}</main> }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'user-a', businessId: 'business-a' } }) }));
 vi.mock('@/lib/api', async importOriginal => ({ ...await importOriginal<typeof import('@/lib/api')>(), apiClient: {
-  sendAgentMessage: vi.fn(), listAgentConversations: vi.fn().mockResolvedValue({ success: true, data: {
+  sendAgentMessage: vi.fn(), decideAgentAction: vi.fn(), listAgentConversations: vi.fn().mockResolvedValue({ success: true, data: {
     items: [], pagination: { page: 1, limit: 10, total: 0, totalPages: 1 } } }), getAgentConversation: vi.fn(), deleteAgentConversation: vi.fn() } }));
 const send = vi.mocked(apiClient.sendAgentMessage);
 const response: AgentResponse = {
@@ -26,6 +26,19 @@ const response: AgentResponse = {
 beforeEach(() => { send.mockReset(); localStorage.clear(); vi.mocked(apiClient.listAgentConversations).mockResolvedValue({ success: true,
   data: { items: [], pagination: { page: 1, limit: 10, total: 0, totalPages: 1 } } }); });
 function submit(text = 'stock bajo') { fireEvent.change(screen.getByLabelText('Tu consulta'), { target: { value: text } }); fireEvent.click(screen.getByRole('button', { name: 'Enviar' })); }
+it('assistant renders action preview and confirms using its bound conversation without another chat generation', async () => {
+  const pending: NonNullable<AgentResponse['pendingAction']> = { pendingActionId: '33333333-3333-4333-8333-333333333333',
+    action: 'create_product', summary: 'Crear producto demostrativo', fields: { name: 'Demostrativo', stock: 0 },
+    expiresAt: '2099-01-01T00:00:00Z', requiresConfirmation: true, status: 'PENDING' };
+  send.mockResolvedValue({ success: true, data: { ...response, answer: 'Revisa y confirma.', pendingAction: pending } });
+  vi.mocked(apiClient.decideAgentAction).mockResolvedValue({ success: true, data: { ...pending, status: 'EXECUTED' } });
+  render(<AssistantPage />); submit('Crear producto {"name":"Demostrativo"}');
+  await screen.findByRole('region', { name: 'Acción pendiente' });
+  fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }));
+  expect(await screen.findByText(/Estado: EXECUTED/)).toBeTruthy();
+  expect(apiClient.decideAgentAction).toHaveBeenCalledWith(pending.pendingActionId, response.conversationId, 'confirm');
+  expect(send).toHaveBeenCalledTimes(1);
+});
 it('renders initial suggestions and sends a suggested query', async () => {
   send.mockResolvedValue({ success: true, data: response }); render(<AssistantPage />);
   expect(screen.getByRole('heading', { name: 'Asistente Inteligente' })).toBeTruthy();

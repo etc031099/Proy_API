@@ -32,6 +32,8 @@ const logAgentEvent = event => {
 };
 
 const errors = {
+  ...Object.fromEntries(Object.entries(require('../automations/contracts').ERROR_MESSAGES).map(([code, message]) => [code,
+    [code === 'ACTION_VALIDATION_FAILED' ? 400 : code === 'ACTION_NOT_ALLOWED' ? 403 : code === 'ACTION_EXECUTION_FAILED' ? 503 : 409, message]])),
   ...HISTORY_ERRORS,
   AGENT_INVALID_REQUEST: [400, 'La consulta no es válida.'],
   AGENT_SKILL_NOT_ALLOWED: [403, 'Acceso denegado.'],
@@ -67,8 +69,8 @@ const createAgentMessagesHandler = ({ enabled, orchestrator, history } = {}) => 
     if (result.code && !['AGENT_CLARIFICATION_REQUIRED', 'AGENT_UNSUPPORTED_QUERY'].includes(result.code)) return fail(result.code);
     // Explicit public envelope: never serialize provider responses or internal prompts.
     const fields = ['requestId', 'conversationId', 'answer', 'intent', 'agent', 'participants', 'actions', 'evidence',
-      'usage', 'requiresClarification', 'clarificationQuestion', 'latencyMs'];
-    return res.json({ success: true, data: Object.fromEntries(fields.map(key => [key, result[key]])) });
+      'usage', 'requiresClarification', 'clarificationQuestion', 'latencyMs', 'pendingAction'];
+    return res.json({ success: true, data: Object.fromEntries(fields.filter(key => result[key] !== undefined).map(key => [key, result[key]])) });
   } catch (error) {
     return fail(error.code);
   }

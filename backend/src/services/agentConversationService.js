@@ -51,6 +51,7 @@ const createAgentConversationService = ({ runtime, repository = createAgentHisto
         let result;
         try {
           if (conversation?.contextSnapshot) await runtime.restoreContext?.(req, id, snapshot(conversation.contextSnapshot));
+          req.agentActionRequestId = requestKey;
           result = await runtime.handle(req, { message: input.message, conversationId: id });
           if (result.code && !['AGENT_CLARIFICATION_REQUIRED', 'AGENT_UNSUPPORTED_QUERY'].includes(result.code)) {
             fail(result.code);

@@ -6,6 +6,7 @@ import { Layout } from '@/components/Layout';
 import { Button } from '@/components/ui/button';
 import { AgentActivity } from '@/components/assistant/AgentActivity';
 import { ConversationHistory } from '@/components/assistant/ConversationHistory';
+import { PendingActionCard } from '@/components/assistant/PendingActionCard';
 import { useAuth } from '@/contexts/AuthContext';
 import { activeConversationKey, readActiveConversation, writeActiveConversation } from '@/lib/agentHistory';
 import { apiClient, AgentApiError } from '@/lib/api';
@@ -154,13 +155,15 @@ export default function AssistantPage() {
           {messagePagination && conversationId && messagePagination.page < messagePagination.totalPages && <Button variant="outline" disabled={loading || historyBusy}
             onClick={() => void openConversation(conversationId, messagePagination.page + 1)}>Cargar mensajes anteriores</Button>}
           {!messages.length && <div><h2 className="font-semibold">¿Qué quieres consultar?</h2>
-            <p className="mt-2 text-sm text-muted-foreground">Las consultas claras usan skills determinísticas sin consumir tokens IA. El asistente solo consulta: no realiza compras ni cambia el inventario.</p>
+            <p className="mt-2 text-sm text-muted-foreground">Las consultas claras no consumen tokens IA. Crear un producto requiere revisar y confirmar su tarjeta; ventas y compras todavía no están habilitadas.</p>
+            <details className="mt-2 text-sm"><summary>Preparar un producto</summary><p className="break-words">Envía Crear producto seguido de JSON: {'{"name":"Producto demo","sku":"DEMO-001","category":"General","price":10,"currency":"PEN","stock":0,"minStockLevel":5}'}. No se guarda hasta confirmar.</p></details>
             <div className="mt-4 flex flex-col gap-2">{suggestions.map(text => <button key={text} disabled={loading}
               onClick={() => void send(text)} className="rounded-lg border p-3 text-left text-sm hover:bg-muted disabled:opacity-50">{text}</button>)}</div>
           </div>}
           {messages.map(m => <article key={m.id} className={`rounded-lg p-4 min-w-0 ${m.role === 'user' ? 'bg-muted' : 'border'}`}>
             <p className="text-xs font-medium mb-2">{m.role === 'user' ? 'Tú' : 'Asistente'}</p>
             <p className="whitespace-pre-wrap break-words text-sm">{m.text}</p>
+            {m.response?.pendingAction && <PendingActionCard action={m.response.pendingAction} conversationId={m.response.conversationId} />}
             {m.status === 'failed' && <p className="text-xs text-muted-foreground">Consulta no completada.</p>}
             {m.status === 'pending' && <p className="text-xs text-muted-foreground">No hay un resultado confirmado para esta consulta.</p>}
             {m.response && <button className="mt-3 text-xs underline underline-offset-4" onClick={() => setActivity(m.response)}>

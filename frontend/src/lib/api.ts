@@ -388,6 +388,10 @@ class ApiClient {
     try { return (await this.instance.get('/agent/conversations', { params: { page, limit: 10 } })).data; }
     catch (error) { throw new AgentApiError(axios.isAxiosError(error) ? error.response?.status : 500); }
   }
+  async decideAgentAction(id: string, conversationId: string, decision: 'confirm' | 'cancel'): Promise<ApiResponse<import('@/types/agent').PendingActionPreview>> {
+    try { return (await this.instance.post(`/agent/actions/${encodeURIComponent(id)}/${decision}`, { conversationId })).data; }
+    catch { throw new Error('No se pudo confirmar el estado de la acción. Revisa el historial; no envíes una acción nueva.'); }
+  }
   async getAgentConversation(id: string, page = 1): Promise<ApiResponse<AgentConversationDetail>> {
     try { return (await this.instance.get(`/agent/conversations/${encodeURIComponent(id)}`, { params: { page, limit: 50 } })).data; }
     catch (error) { throw new AgentApiError(axios.isAxiosError(error) ? error.response?.status : 500); }

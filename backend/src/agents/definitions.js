@@ -5,12 +5,13 @@ const AGENTS = deepFreeze([
     id: 'coordinator', version: '1.0.0', displayName: 'Coordinador de consultas',
     description: 'Interpreta la solicitud y delega al especialista adecuado.',
     responsibilities: ['Interpretar intención', 'Pedir aclaraciones', 'Delegar tareas'],
-    allowedSkills: [],
+    allowedSkills: [], allowedActionSkills: [],
     llmPolicy: { preferredMode: 'deterministic-first', providerEnabled: false },
     limits: { ...TOKEN_BUDGETS.coordinator, maxSkillCalls: 0, maxLlmCalls: EXECUTION_LIMITS.maxLlmCalls }
   },
   {
     id: 'operations', version: '1.0.0', displayName: 'Especialista de operaciones',
+    allowedActionSkills: ['create_product', 'create_inventory_alert'],
     description: 'Consulta hechos del catálogo, inventario y operaciones comerciales.',
     responsibilities: ['Productos e inventario', 'Proveedores', 'Transacciones', 'Ventas y compras factuales'],
     allowedSkills: ['search_products', 'get_product_details', 'get_low_stock_products', 'get_inventory_summary',
@@ -20,6 +21,7 @@ const AGENTS = deepFreeze([
   },
   {
     id: 'analyst', version: '1.0.0', displayName: 'Analista de negocio y demanda',
+    allowedActionSkills: [],
     description: 'Interpreta agregados, rankings y resultados estructurados del forecast existente.',
     responsibilities: ['Agregados y resumen del negocio', 'Rankings', 'Forecast y reposición', 'Interpretación de resultados'],
     allowedSkills: ['search_products', 'get_product_details', 'get_low_stock_products', 'get_inventory_summary',

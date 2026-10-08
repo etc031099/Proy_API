@@ -14,6 +14,7 @@ export default defineConfig({
       'test/assistant.api.test.ts',
       'test/assistant.component.test.tsx',
       'test/assistant.history.test.tsx',
+      'test/assistant.actions.test.tsx',
     ],
     environment: 'jsdom',
     setupFiles: ['./test/setup.ts'],

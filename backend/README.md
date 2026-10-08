@@ -1,5 +1,52 @@
 # Inventory & Billing Management Backend
 
+## AUTO-R1: base de automatización y acciones
+
+`src/automations/` separa contratos de canales/triggers, reglas determinísticas,
+registry de acciones, preparación/confirmación, ejecutores, auditoría y engine.
+Los canales previstos son assistant, Telegram, Node-RED y automatización; solo
+assistant se conecta en esta fase. No se activan schedulers ni listeners.
+
+Riesgos: READ_ONLY, SAFE_AUTOMATIC, REQUIRES_CONFIRMATION y RESTRICTED.
+No se registra ninguna herramienta restringida. Solo Operations puede escribir;
+Coordinator y Analyst mantienen sus skills de lectura. Las declaraciones de
+escritura no se inyectan automáticamente en Gemini.
+
+READY: `create_product` (confirmación humana) y `create_inventory_alert` (interna,
+automática). Las otras 12 acciones permanecen PENDING_IMPLEMENTATION, incluyendo
+ventas/compras: su controller combina precios canónicos, crédito, moneda,
+inventario y notificaciones; extraerlo de forma segura requiere otra fase.
+No se simulan controllers ni se duplican fórmulas financieras.
+
+En /assistant, enviar `Crear producto` seguido de JSON con name, sku, price,
+currency, stock, minStockLevel y category (obligatoria en el modelo real). Se muestra un preview; Confirmar/Cancelar usan
+`POST /api/agent/actions/:id/confirm|cancel`, auth JWT, tenant y feature flag
+existentes, rate limit de 20 solicitudes/minuto por usuario. El body de decisión
+solo admite conversationId. Ventas y compras responden que no están habilitadas.
+"Sí"/"no" solo actúan si hay una única acción pendiente en esa conversación.
+No se aceptan identidades, prompts, modelos ni argumentos nuevos al confirmar.
+
+PendingAction dura 10 minutos y liga usuario, negocio, canal y conversación.
+Los argumentos validados se congelan y verifican con SHA-256. La clave externa
+UUID más canal/usuario/negocio impide preparar duplicados; pendingActionId permite
+repetir una confirmación y recuperar el resultado original. Producto, movimiento
+de apertura, estado EXECUTED y ActionAudit se confirman en la misma transacción
+Mongo. Un error aborta la escritura; fallos seguros se auditan por separado.
+No hay retries automáticos de escrituras. Un commit incierto devuelve conflicto;
+repetir la misma confirmación consulta su estado, no crea otra acción.
+Se necesita replica set y los índices únicos habituales de Mongoose.
+
+El engine usa definiciones de servidor (la definición de alertas está desactivada),
+una lectura batch y hasta tres alertas internas por ejecución. AutomationRun
+deduplica eventId por negocio/definición, conserva resultados parciales y uso real
+determinístico: 0 LLM/0 tokens. No crea compras a partir de forecast. Un proceso
+interrumpido con RUNNING necesita reconciliación futura; no se reejecuta a ciegas.
+
+Pruebas: `node --test test/automations.test.js`, `npm test` y tests frontend de
+tarjetas. Usan fixtures/modelos simulados: no prueban Atlas ni crean datos cloud.
+Queda pendiente la validación transaccional con Mongo real en una fase controlada.
+No se registra contenido sensible, credenciales, prompts ni chain-of-thought.
+
 A comprehensive backend system for small businesses to manage products, customers, vendors, transactions, and generate reports with JWT-based authentication.
 
 ## 🚀 Features

@@ -7,6 +7,9 @@ const agent = { agentId: true, model: true, llmCalls: true, ...tokens, latencyMs
 const tokenUsage = { ...tokens, usageAvailable: true };
 const period = { startDate: true, endDate: true };
 const shape = {
+  pendingAction: { pendingActionId: true, action: true, summary: true, status: true, expiresAt: true,
+    requiresConfirmation: true, fields: { name: true, sku: true, price: true, currency: true, stock: true, resultingStock: true,
+      minStockLevel: true, category: true, costPrice: true, description: true } },
   requestId: true, conversationId: true, answer: true, intent: true, agent: true,
   requiresClarification: true, clarificationQuestion: true, latencyMs: true,
   participants: [{ ...agent, skillCalls: true, providerLatencyMs: true }],

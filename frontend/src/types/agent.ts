@@ -55,6 +55,7 @@ export interface AgentEvidence {
   recordCount?: number;
 }
 export interface AgentResponse {
+  pendingAction?: PendingActionPreview;
   requestId: string;
   conversationId: string;
   answer: string;
@@ -67,6 +68,11 @@ export interface AgentResponse {
   requiresClarification: boolean;
   clarificationQuestion: string | null;
   latencyMs: number;
+}
+export interface PendingActionPreview {
+  pendingActionId: string; action: string; summary: string; expiresAt: string;
+  requiresConfirmation: boolean; status: 'PENDING' | 'CONFIRMED' | 'EXECUTED' | 'CANCELLED' | 'EXPIRED' | 'FAILED';
+  fields: Record<string, string | number>;
 }
 export interface AgentMessageRequest { message: string; conversationId?: string }
 export interface HistoryPagination { page: number; limit: number; total: number; totalPages: number }
