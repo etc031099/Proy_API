@@ -61,11 +61,11 @@ function fixture({ auditFailure = false, executorFailure = false } = {}) {
     expire: () => { time = new Date(time.getTime() + 600001); } };
 }
 const prepare = (f, context = ctx(), args = product, key = randomUUID()) => f.service.prepare({ agentId: 'operations', skillId: 'create_product', args, context, externalRequestId: key });
-test('action registry is separate, closed and exposes only two real operations executors', () => {
+test('action registry is separate, closed and exposes four real operations executors', () => {
   assert.equal(ACTION_SKILLS.length, 14); assert.equal(new Set(ACTION_SKILLS.map(x => x.id)).size, 14);
-  assert.deepEqual(ACTION_SKILLS.filter(x => x.status === 'READY').map(x => x.id), ['create_product', 'create_inventory_alert']);
+  assert.deepEqual(ACTION_SKILLS.filter(x => x.status === 'READY').map(x => x.id), ['create_product', 'create_sale', 'create_purchase', 'create_inventory_alert']);
   assert.ok(ACTION_SKILLS.every(x => x.auditRequired && x.idempotent && x.riskLevel !== 'RESTRICTED'));
-  assert.equal(getActionDeclarations('operations').length, 2);
+  assert.equal(getActionDeclarations('operations').length, 4);
   for (const id of ['analyst', 'coordinator']) assert.deepEqual(getActionDeclarations(id), []);
 });
 for (const field of ['businessId', 'userId', 'role', 'model', 'apiKey', 'query', 'url', '$where']) test(`action schema rejects ${field}`, () => {
@@ -83,7 +83,7 @@ test('context comes from auth, is branded, immutable and never trusts body tenan
   assert.throws(() => validateActionInvocation({ context: { ...c }, agentId: 'operations', skillId: 'create_product', args: product }), { code: 'ACTION_NOT_ALLOWED' });
 });
 for (const [agentId, skillId] of [['coordinator', 'create_product'], ['analyst', 'create_product'], ['operations', 'executeMongoQuery'],
-  ['operations', 'create_sale'], ['operations', 'create_purchase']]) test(`denies ${agentId}/${skillId}`, async () => {
+  ['operations', 'update_product'], ['operations', 'create_supplier']]) test(`denies ${agentId}/${skillId}`, async () => {
   const f = fixture(); await assert.rejects(f.service.prepare({ agentId, skillId, args: product, context: ctx(), externalRequestId: randomUUID() }), { code: 'ACTION_NOT_ALLOWED' });
   assert.equal(f.rows().length, 0);
 });
@@ -146,15 +146,15 @@ test('safe automatic alerts are atomic, idempotent and never need Gemini or appr
   assert.equal((await f.service.prepare(invocation)).status, 'EXECUTED'); await f.service.prepare(invocation);
   assert.equal(f.writes(), 1); assert.equal(f.audits().length, 1);
 });
-test('assistant prepares structured product, asks only missing fields and rejects unimplemented financial writes', async () => {
+test('assistant prepares structured product and asks only missing fields for financial writes', async () => {
   const f = fixture(), adapter = withActionAssistant({ handle() { assert.fail('Gemini must not run'); } }, f.service);
   const first = await adapter.handle(req(), { message: `Crear producto ${JSON.stringify(product)}`, conversationId: uuid });
   assert.equal(first.pendingAction.status, 'PENDING'); assert.equal(first.usage.totalTokens, 0);
   const done = await adapter.handle(req(), { message: 'sí', conversationId: uuid }); assert.equal(done.pendingAction.status, 'EXECUTED');
   const missing = await adapter.handle(req(), { message: 'Crear producto {"name":"Solo nombre"}', conversationId: uuid });
   assert.equal(missing.requiresClarification, true); assert.ok(!missing.answer.includes('faltan: name'));
-  for (const message of ['Registrar venta', 'Registrar compra', 'Registra una venta de 5 unidades', 'Registra una compra de 20 unidades'])
-    assert.match((await adapter.handle(req(), { message, conversationId: uuid })).answer, /no está habilitada/);
+  for (const message of ['Registrar venta {}', 'Registrar compra {}'])
+    assert.match((await adapter.handle(req(), { message, conversationId: uuid })).answer, /faltan/);
   assert.equal(f.writes(), 1);
 });
 test('yes/no without unique pending never executes a write or calls Gemini', async () => {
@@ -193,6 +193,7 @@ test('actual create_product executor shares CRUD opening movement/session and mi
   t.mock.method(Product, 'create', async (docs, options) => { assert.equal(options.session, session); insert = docs[0];
     return [{ ...docs[0], _id: 'cccccccccccccccccccccccc', async save(options) { assert.equal(options.session, session); saves++; } }]; });
   t.mock.method(InventoryMovement, 'create', async (docs, options) => { assert.equal(options.session, session); movement = docs[0]; return docs; });
+  t.mock.method(require('../src/models/ActionDomainEvent'), 'create', async (docs, options) => { assert.equal(options.session, session); assert.equal(options.ordered, true); return docs; });
   const executor = createActionExecutors().create_product;
   const preview = await executor.preview(product, ctx()); assert.equal(preview.fields.resultingStock, 5);
   const result = await executor.execute(product, ctx(), session);

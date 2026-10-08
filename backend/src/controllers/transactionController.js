@@ -156,325 +156,35 @@ const getTransaction = asyncHandler(async (req, res) => {
  * @access  Private
  */
 const createTransaction = asyncHandler(async (req, res) => {
-  const { type, customerId, customerName, vendorId, products = [], paymentMethod, notes, currency = 'PEN' } = req.body;
-  const businessId = req.businessId;
-  const normalizedCurrency = String(currency || 'PEN').toUpperCase();
-  const targetCurrency = TRANSACTION_CURRENCIES.includes(normalizedCurrency) ? normalizedCurrency : 'PEN';
   const historical = req.historicalContext || null;
-  const transactionId = historical?.transactionId || new mongoose.Types.ObjectId();
-  const transactionDate = historical
-    ? normalizeDate(historical.date, 'transaction date')
-    : new Date();
-  const resolveExchangeRate = async (base, target) => {
-    if (!historical) return getExchangeRate({ base, target });
-    if (base === target) return { rate: 1 };
-    const rate = toFiniteNumber(historical.exchangeRates?.[`${base}/${target}`], {
-      field: `Historical exchange rate ${base}/${target}`,
-      min: Number.EPSILON
-    });
-    return { rate };
-  };
-
-  if (!Array.isArray(products) || products.length === 0) {
-    return res.status(400).json({
-      success: false,
-      message: 'At least one product is required.'
-    });
-  }
-
-  // Start a session for transaction
-  const session = await mongoose.startSession();
-
-  try {
-    session.startTransaction();
-
-    // Validate contact based on transaction type
-    let contact;
-    if (type === 'sale') {
-      if (customerId) {
-        contact = await Contact.findOne({
-          _id: customerId,
-          businessId,
-          type: 'customer',
-          isActive: true
-        }).session(session);
-
-        if (!contact) {
-          return res.status(404).json({
-            success: false,
-            message: 'Customer not found'
-          });
-        }
-      } else if ((paymentMethod || 'cash') === 'credit') {
-        throw Object.assign(
-          new Error('A registered customer is required for credit sales'),
-          { statusCode: 400 },
-        );
-      }
-    } else if (type === 'purchase') {
-      if (!vendorId) {
-        return res.status(400).json({
-          success: false,
-          message: 'Vendor ID is required for purchases'
-        });
-      }
-      contact = await Contact.findOne({
-        _id: vendorId,
-        businessId,
-        type: 'vendor',
-        isActive: true
-      }).session(session);
-
-      if (!contact) {
-        return res.status(404).json({
-          success: false,
-          message: 'Vendor not found'
-        });
-      }
-    }
-
-    // Validate and process products
-    const processedProducts = [];
-    const lowStockNotifications = [];
-    let subtotal = 0;
-
-    for (const [itemIndex, item] of products.entries()) {
-      const itemQuantity = toFiniteNumber(item.quantity, {
-        field: 'Product quantity',
-        min: 1,
-        integer: true
-      });
-      const product = await Product.findOne({
-        _id: item.productId,
-        businessId,
-        isActive: true
-      }).session(session);
-
-      if (!product) {
-        return res.status(404).json({
-          success: false,
-          message: `Product with ID ${item.productId} not found`
-        });
-      }
-
-      let canonicalSalePrice;
-      let canonicalSaleCurrency;
-      let canonicalPurchaseCost;
-      let canonicalPurchaseCurrency;
-      if (type === 'sale') {
-        canonicalSalePrice = toFiniteNumber(product.price, {
-          field: 'Product price',
-          min: 0
-        });
-        canonicalSaleCurrency = String(product.currency || '').trim().toUpperCase();
-        if (!TRANSACTION_CURRENCIES.includes(canonicalSaleCurrency)) {
-          throw Object.assign(
-            new Error(`Product currency must be one of: ${TRANSACTION_CURRENCIES.join(', ')}`),
-            { statusCode: 400, code: 'INVALID_CURRENCY' }
-          );
-        }
-      } else if (type === 'purchase') {
-        const matchingSupplierPrice = (product.supplierPrices || []).find(
-          entry => String(entry.supplierId) === String(vendorId)
-        );
-        if (!matchingSupplierPrice) {
-          throw Object.assign(
-            new Error(`Product ${product.name} is not configured for the selected vendor`),
-            { statusCode: 400 }
-          );
-        }
-        canonicalPurchaseCost = toFiniteNumber(matchingSupplierPrice.purchasePrice, {
-          field: 'Supplier purchase price',
-          min: 0
-        });
-        canonicalPurchaseCurrency = String(product.currency || '').trim().toUpperCase();
-        if (!TRANSACTION_CURRENCIES.includes(canonicalPurchaseCurrency)) {
-          throw Object.assign(
-            new Error(`Product currency must be one of: ${TRANSACTION_CURRENCIES.join(', ')}`),
-            { statusCode: 400, code: 'INVALID_CURRENCY' }
-          );
-        }
-      }
-
-      if (type === 'sale' && product.stock < itemQuantity) {
-        return res.status(400).json({
-          success: false,
-          message: `Insufficient stock for product ${product.name}. Available: ${product.stock}, Requested: ${itemQuantity}`
-        });
-      }
-
-      const previousStock = product.stock;
-      await applyStockChange({
-        product,
-        quantityDelta: type === 'sale' ? -itemQuantity : itemQuantity,
-        type,
-        transactionId,
-        occurredAt: transactionDate,
-        source: historical ? 'historical_import' : 'api',
-        scenarioId: historical?.scenarioId || null,
-        sourceEventId: historical
-          ? `${historical.sourceEventId}:inventory:${itemIndex}`
-          : null,
-        session
-      });
-      if (type === 'sale') lowStockNotifications.push({ product, previousStock });
-
-      const sourcePrice = type === 'sale' ? canonicalSalePrice : canonicalPurchaseCost;
-      const productCurrency = type === 'sale'
-        ? canonicalSaleCurrency
-        : canonicalPurchaseCurrency;
-      const itemRateResponse = await resolveExchangeRate(productCurrency, targetCurrency);
-      const itemRate = toFiniteNumber(itemRateResponse?.rate, {
-        field: 'Exchange rate',
-        min: Number.EPSILON
-      });
-      const itemPrice = toFiniteNumber(Number((sourcePrice * itemRate).toFixed(2)), {
-        field: 'Converted product price',
-        min: 0
-      });
-      const itemTotal = toFiniteNumber(Number((itemQuantity * itemPrice).toFixed(2)), {
-        field: 'Product total',
-        min: 0
-      });
-      subtotal = toFiniteNumber(subtotal + itemTotal, {
-        field: 'Transaction subtotal',
-        min: 0
-      });
-
-      processedProducts.push({
-        productId: product._id,
-        productName: product.name,
-        quantity: itemQuantity,
-        price: itemPrice,
-        ...(type === 'purchase' ? { costPrice: itemPrice } : {}),
-        total: itemTotal
-      });
-    }
-
-    const baseCurrency = 'USD';
-    const exchangeRateResponse = await resolveExchangeRate(baseCurrency, targetCurrency);
-    const resolvedRate = toFiniteNumber(exchangeRateResponse?.rate, {
-      field: 'Exchange rate',
-      min: Number.EPSILON
-    });
-    // Item prices and subtotal are already expressed in the selected transaction currency.
-    // Only store the USD equivalent separately for reports; do not convert the subtotal again.
-    const totalAmount = Number(subtotal.toFixed(2));
-    const paymentValidation = await validatePaymentMethod({
-      method: paymentMethod || 'cash',
-      amount: totalAmount
-    });
-
-    if (!paymentValidation.valid || !paymentValidation.supported) {
-      return res.status(400).json({
-        success: false,
-        message: paymentValidation.message || 'Payment method is not supported.'
-      });
-    }
-
-    // Create transaction data
-    const transactionData = {
-      _id: transactionId,
-      type,
-      products: processedProducts,
-      totalAmount,
-      originalAmount: Number((subtotal / resolvedRate).toFixed(2)),
-      businessId,
-      currency: targetCurrency,
-      exchangeRate: resolvedRate,
-      paymentMethod: paymentMethod || 'cash',
-      notes,
-      date: transactionDate,
-      cancelledAt: null,
-      scenarioId: historical?.scenarioId || null,
-      sourceEventId: historical?.sourceEventId || null,
-      ...(historical?.createdAt ? {
-        createdAt: normalizeDate(historical.createdAt, 'transaction createdAt'),
-        updatedAt: normalizeDate(historical.createdAt, 'transaction createdAt')
-      } : {})
-    };
-
-    if (type === 'sale') {
-      transactionData.customerId = customerId;
-      transactionData.customerName = contact?.name || String(customerName || 'Consumidor final').trim();
-    } else {
-      transactionData.vendorId = vendorId;
-      transactionData.supplierId = vendorId;
-      transactionData.vendorName = contact.name;
-    }
-
-    const transaction = await Transaction.create([transactionData], { session });
-
-    if (type === 'sale' && (paymentMethod || 'cash') === 'credit') {
-      const currencyBalance = toFiniteNumber(
-        contact.balancesByCurrency?.[targetCurrency]
-        || (targetCurrency === 'PEN' ? contact.currentBalance : 0),
-        { field: 'Current balance' }
-      );
-      const newBalance = toFiniteNumber(currencyBalance + totalAmount, {
-        field: 'Resulting balance'
-      });
-      if (targetCurrency === 'PEN' && Number(contact.creditLimit || 0) > 0 && newBalance > Number(contact.creditLimit)) {
-        throw Object.assign(
-          new Error(`Credit limit exceeded. Available credit: ${Math.max(0, Number(contact.creditLimit) - currencyBalance).toFixed(2)} PEN`),
-          { statusCode: 400 },
-        );
-      }
-      contact.balancesByCurrency[targetCurrency] = newBalance;
-      if (targetCurrency === 'PEN') contact.currentBalance = newBalance;
-      await contact.save({ session });
-    }
-
-    await session.commitTransaction();
-
-    if (!historical) {
-      for (const notification of lowStockNotifications) {
-        Promise.resolve()
-          .then(() => notifyLowStock(businessId, notification.product, notification.previousStock))
-          .catch((error) => console.error('[Telegram] low-stock notification failed:', error.message));
-      }
-
-      // Offline historical imports must not emit current-time operational events.
-      emitEvent('transaction.created', {
-      transactionId: transaction[0]._id,
-      businessId,
-      type,
-      totalAmount,
-      currency: targetCurrency,
-      paymentMethod: paymentMethod || 'cash',
-      customerName: transactionData.customerName || null,
-      vendorName: transactionData.vendorName || null,
-      itemCount: processedProducts.length,
-      items: processedProducts.map((item) => ({
-        name: item.productName,
-        quantity: item.quantity,
-        total: item.total
-      }))
-      });
-    }
-
-    const populatedTransaction = historical
-      ? transaction[0]
-      : await Transaction.findById(transaction[0]._id)
-        .populate('customerId', 'name phone email')
-        .populate('vendorId', 'name phone email')
-        .populate('supplierId', 'name phone email')
-        .populate('products.productId', 'name category');
-
-    res.status(201).json({
-      success: true,
-      message: `${type === 'sale' ? 'Sale' : 'Purchase'} recorded successfully`,
-      data: { transaction: populatedTransaction }
-    });
-
-  } catch (error) {
-    if (session.inTransaction()) await session.abortTransaction();
+  let result;
+  try { result = await require('../services/transactionWriteService')
+    .writeTransaction({ input: req.body, businessId: req.businessId, historical }); }
+  catch (error) {
+    if (error.directResponse) return res.status(error.statusCode).json({ success: false, message: error.message });
     throw error;
-  } finally {
-    session.endSession();
   }
+  const { transaction, transactionData, lowStockNotifications } = result;
+  if (!historical) {
+    for (const notification of lowStockNotifications) {
+      Promise.resolve().then(() => notifyLowStock(req.businessId, notification.product, notification.previousStock))
+        .catch(error => console.error('[Telegram] low-stock notification failed:', error.message));
+    }
+    emitEvent('transaction.created', {
+      transactionId: transaction._id, businessId: req.businessId, type: transactionData.type,
+      totalAmount: transactionData.totalAmount, currency: transactionData.currency,
+      paymentMethod: transactionData.paymentMethod, customerName: transactionData.customerName || null,
+      vendorName: transactionData.vendorName || null, itemCount: transactionData.products.length,
+      items: transactionData.products.map(item => ({ name: item.productName, quantity: item.quantity, total: item.total }))
+    });
+  }
+  const populatedTransaction = historical ? transaction : await Transaction.findById(transaction._id)
+    .populate('customerId', 'name phone email').populate('vendorId', 'name phone email')
+    .populate('supplierId', 'name phone email').populate('products.productId', 'name category');
+  res.status(201).json({ success: true,
+    message: `${transactionData.type === 'sale' ? 'Sale' : 'Purchase'} recorded successfully`,
+    data: { transaction: populatedTransaction } });
 });
-
 /**
  * @desc    Get sales transactions
  * @route   GET /api/transactions/sales

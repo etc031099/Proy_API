@@ -20,3 +20,4 @@ require('./agentSynthesis.test');
 require('./agentMessages.test');
 require('./agentHistory.test');
 require('./automations.test');
+require('./actionInput.test');

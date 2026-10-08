@@ -3,7 +3,8 @@ const currency = { ...string(3), enum: ['PEN', 'USD', 'EUR'] };
 const productFields = { name: string(100), sku: string(100), price: number(), currency, stock: integer(1000000),
   minStockLevel: integer(1000000), category: string(50), costPrice: number(), description: string(500) };
 const transaction = schema({ products: { type: 'array', maxItems: 20, items: schema({ productId: objectId, quantity: { ...integer(1000000), minimum: 1 } }) },
-  currency, customerId: objectId, vendorId: objectId, paymentMethod: { ...string(20), enum: ['cash', 'credit', 'bank_transfer', 'card'] } }, ['products', 'currency']);
+  currency, customerId: objectId, vendorId: objectId, notes: string(500),
+  paymentMethod: { ...string(20), enum: ['cash', 'credit', 'bank_transfer', 'card', 'crypto', 'bitcoin', 'tether', 'wallet', 'other'] } }, ['products', 'currency']);
 const entry = (id, description, inputSchema, automatic = false, status = 'PENDING_IMPLEMENTATION') => ({
   id, version: '1.0.0', description, allowedAgents: ['operations'], readOnly: false,
   riskLevel: automatic ? 'SAFE_AUTOMATIC' : 'REQUIRES_CONFIRMATION', requiresConfirmation: !automatic,
@@ -17,8 +18,8 @@ const ACTION_SKILLS = deepFreeze([
   entry('update_product', 'Modifica campos de un producto.', schema({ productId: objectId, fields: schema(productFields, []) })),
   entry('create_customer', 'Crea un cliente.', schema({ name: string(100) })),
   entry('create_supplier', 'Crea un proveedor.', schema({ name: string(100) })),
-  entry('create_sale', 'Registra una venta con precios canónicos, stock y pago validados.', transaction),
-  entry('create_purchase', 'Registra una compra con proveedor y costo configurado.', transaction),
+  entry('create_sale', 'Registra una venta con precios canónicos, stock y pago validados.', transaction, false, 'READY'),
+  entry('create_purchase', 'Registra una compra con proveedor y costo configurado.', transaction, false, 'READY'),
   entry('cancel_transaction', 'Cancela una transacción validada.', schema({ transactionId: objectId })),
   entry('register_credit_payment', 'Registra un pago de crédito.', schema({ customerId: objectId, amount: { ...number(), minimum: 0.01 }, currency,
     paymentMethod: { ...string(20), enum: ['cash', 'card', 'bank_transfer', 'wallet'] } })),

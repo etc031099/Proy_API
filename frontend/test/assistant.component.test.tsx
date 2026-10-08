@@ -35,7 +35,7 @@ it('assistant renders action preview and confirms using its bound conversation w
   render(<AssistantPage />); submit('Crear producto {"name":"Demostrativo"}');
   await screen.findByRole('region', { name: 'Acción pendiente' });
   fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }));
-  expect(await screen.findByText(/Estado: EXECUTED/)).toBeTruthy();
+  expect(await screen.findByText(/Estado: Ejecutada/)).toBeTruthy();
   expect(apiClient.decideAgentAction).toHaveBeenCalledWith(pending.pendingActionId, response.conversationId, 'confirm');
   expect(send).toHaveBeenCalledTimes(1);
 });

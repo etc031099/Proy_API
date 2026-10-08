@@ -5,7 +5,8 @@ const { redact, publicResponse, snapshot, titleFor } = require('./agentHistoryPr
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 const summary = row => Object.fromEntries(['conversationId', 'title', 'lastMessageAt', 'messageCount', 'status', 'createdAt', 'updatedAt'].map(key => [key, row[key]]));
 
-const createAgentConversationService = ({ runtime, repository = createAgentHistoryRepository(), onError = () => console.error('[AgentHistoryDiagnostic] persistence_failed') }) => {
+const createAgentConversationService = ({ runtime, repository = createAgentHistoryRepository(), actionService,
+  onError = () => console.error('[AgentHistoryDiagnostic] persistence_failed') }) => {
   const queues = new Map();
   const scopeFor = req => { const context = createAgentRequestContext(req); return { userId: context.userId, businessId: context.businessId }; };
   const serialized = async (scope, id, operation) => {
@@ -80,10 +81,18 @@ const createAgentConversationService = ({ runtime, repository = createAgentHisto
       const conversation = await owned(scope, id);
       await runtime.restoreContext?.(req, id, snapshot(conversation.contextSnapshot || {}));
       const result = await repository.messages(scope, id, page, limit);
-      return { conversation: summary(conversation), ...result, messages: result.messages.map(row => ({
+      const messages = await Promise.all(result.messages.map(async row => {
+        let response = row.response ? publicResponse(row.response) : undefined;
+        if (response?.pendingAction && actionService) {
+          const context = require('../automations/contracts').createActionContext(req, { conversationId: id });
+          try { response = publicResponse({ ...response, pendingAction: await actionService.get(context, response.pendingAction.pendingActionId) }); }
+          catch { fail('AGENT_HISTORY_PERSISTENCE_FAILED'); } // Do not invent a terminal state when authoritative lookup fails.
+        }
+        return ({
         id: row._id.toString(), role: row.role, text: redact(row.text), status: row.status, createdAt: row.createdAt,
-        ...(row.response ? { response: publicResponse(row.response) } : {})
-      })) };
+        ...(response ? { response } : {})
+      }); }));
+      return { conversation: summary(conversation), ...result, messages };
     },
     async remove(req, id) {
       const scope = scopeFor(req);

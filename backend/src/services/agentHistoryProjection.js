@@ -6,10 +6,12 @@ const tokens = { inputTokens: true, outputTokens: true, thoughtTokens: true, cac
 const agent = { agentId: true, model: true, llmCalls: true, ...tokens, latencyMs: true, usageAvailable: true };
 const tokenUsage = { ...tokens, usageAvailable: true };
 const period = { startDate: true, endDate: true };
+const actionItem = { sku: true, name: true, quantity: true, stock: true, resultingStock: true, price: true, total: true };
 const shape = {
   pendingAction: { pendingActionId: true, action: true, summary: true, status: true, expiresAt: true,
     requiresConfirmation: true, fields: { name: true, sku: true, price: true, currency: true, stock: true, resultingStock: true,
-      minStockLevel: true, category: true, costPrice: true, description: true } },
+      minStockLevel: true, category: true, costPrice: true, description: true, total: true, paymentMethod: true, contact: true },
+    items: [actionItem], result: { id: true, type: true, currency: true, total: true, sku: true, name: true, stock: true, items: [actionItem] } },
   requestId: true, conversationId: true, answer: true, intent: true, agent: true,
   requiresClarification: true, clarificationQuestion: true, latencyMs: true,
   participants: [{ ...agent, skillCalls: true, providerLatencyMs: true }],

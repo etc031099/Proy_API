@@ -155,8 +155,8 @@ export default function AssistantPage() {
           {messagePagination && conversationId && messagePagination.page < messagePagination.totalPages && <Button variant="outline" disabled={loading || historyBusy}
             onClick={() => void openConversation(conversationId, messagePagination.page + 1)}>Cargar mensajes anteriores</Button>}
           {!messages.length && <div><h2 className="font-semibold">¿Qué quieres consultar?</h2>
-            <p className="mt-2 text-sm text-muted-foreground">Las consultas claras no consumen tokens IA. Crear un producto requiere revisar y confirmar su tarjeta; ventas y compras todavía no están habilitadas.</p>
-            <details className="mt-2 text-sm"><summary>Preparar un producto</summary><p className="break-words">Envía Crear producto seguido de JSON: {'{"name":"Producto demo","sku":"DEMO-001","category":"General","price":10,"currency":"PEN","stock":0,"minStockLevel":5}'}. No se guarda hasta confirmar.</p></details>
+            <p className="mt-2 text-sm text-muted-foreground">Las consultas claras no consumen tokens IA. Puedes preparar productos, ventas y compras; revisa su tarjeta y confirma antes de guardar. Los precios proceden del catálogo.</p>
+            <details className="mt-2 text-sm"><summary>Preparar una operación</summary><p className="break-words">Ejemplos: «Vende 3 unidades de SKU-001», «Compré 50 unidades de SKU-001 al proveedor Distribuidor Demo», «Agrega un producto Agua, SKU AGUA-001, precio S/ 3.50, stock 50, mínimo 10, categoría Bebidas». No se guarda hasta confirmar.</p></details>
             <div className="mt-4 flex flex-col gap-2">{suggestions.map(text => <button key={text} disabled={loading}
               onClick={() => void send(text)} className="rounded-lg border p-3 text-left text-sm hover:bg-muted disabled:opacity-50">{text}</button>)}</div>
           </div>}

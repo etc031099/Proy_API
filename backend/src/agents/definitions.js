@@ -11,7 +11,7 @@ const AGENTS = deepFreeze([
   },
   {
     id: 'operations', version: '1.0.0', displayName: 'Especialista de operaciones',
-    allowedActionSkills: ['create_product', 'create_inventory_alert'],
+    allowedActionSkills: ['create_product', 'create_sale', 'create_purchase', 'create_inventory_alert'],
     description: 'Consulta hechos del catálogo, inventario y operaciones comerciales.',
     responsibilities: ['Productos e inventario', 'Proveedores', 'Transacciones', 'Ventas y compras factuales'],
     allowedSkills: ['search_products', 'get_product_details', 'get_low_stock_products', 'get_inventory_summary',

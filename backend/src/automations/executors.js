@@ -4,7 +4,40 @@ const { normalizeSku } = require('../utils/sku');
 const { createProductRecord } = require('../services/productCreationService');
 const { fail } = require('./contracts');
 const { redact } = require('../services/agentHistoryProjection');
+const { writeTransaction } = require('../services/transactionWriteService');
+const ActionDomainEvent = require('../models/ActionDomainEvent');
+const recordEvents = (context, actionId, entityId, types, session) => ActionDomainEvent.create(types.map(type => ({
+  businessId: context.businessId, actionId, entityId: String(entityId), type
+})), { session, ordered: true });
+const transactionExecutor = type => ({
+  async preview(args, context) {
+    try {
+      const { snapshot } = await writeTransaction({ input: { ...args, type }, businessId: context.businessId, preview: true });
+      return { snapshot, summary: `Registrar ${type === 'sale' ? 'venta' : 'compra'} de ${snapshot.items.length} producto(s).`,
+        fields: { currency: snapshot.currency, total: snapshot.totalAmount, paymentMethod: snapshot.paymentMethod,
+          contact: redact(snapshot.contactName || 'Consumidor final') },
+        items: snapshot.items.map(item => ({ sku: item.sku, name: redact(item.name), quantity: item.quantity,
+          stock: item.stock, resultingStock: item.resultingStock, price: item.convertedPrice,
+          total: Number((item.quantity * item.convertedPrice).toFixed(2)) })) };
+    } catch { fail('ACTION_VALIDATION_FAILED'); }
+  },
+  async execute(args, context, session, actionId, expectedSnapshot) {
+    if (!expectedSnapshot) fail('ACTION_CONFLICT');
+    let result;
+    try {
+      result = await writeTransaction({ input: { ...args, type }, businessId: context.businessId, session, expectedSnapshot });
+    } catch (error) {
+      if (error.statusCode === 400 || error.statusCode === 404 || error.code === 'ACTION_CONFLICT') fail('ACTION_CONFLICT');
+      throw error;
+    }
+    await recordEvents(context, actionId, result.transaction._id, [type === 'sale' ? 'SALE_CREATED' : 'PURCHASE_CREATED', 'INVENTORY_CHANGED'], session);
+    return { id: String(result.transaction._id), type, currency: result.snapshot.currency, total: result.snapshot.totalAmount,
+      items: result.snapshot.items.map(item => ({ sku: item.sku, name: redact(item.name), quantity: item.quantity, stock: item.resultingStock })) };
+  }
+});
 const createActionExecutors = () => ({
+  create_sale: transactionExecutor('sale'),
+  create_purchase: transactionExecutor('purchase'),
   create_product: {
     async preview(args, context) {
       const sku = normalizeSku(args.sku);
@@ -18,9 +51,10 @@ const createActionExecutors = () => ({
         ...(args.costPrice !== undefined ? { costPrice: args.costPrice } : {}),
         ...(args.description ? { description: args.description } : {}) } };
     },
-    async execute(args, context, session) {
+    async execute(args, context, session, actionId) {
       const product = await createProductRecord({ productData: { ...args, sku: normalizeSku(args.sku), businessId: context.businessId },
         initialStock: args.stock, session });
+      await recordEvents(context, actionId, product._id, ['PRODUCT_CREATED', ...(args.stock > 0 ? ['INVENTORY_CHANGED'] : [])], session);
       return { id: product._id.toString(), sku: product.sku, name: redact(product.name), stock: product.stock };
     }
   },
