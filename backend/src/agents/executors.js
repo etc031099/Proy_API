@@ -166,24 +166,27 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
           ranking: [{ $unwind: '$products' },
             { $group: { _id: '$products.productId', unitsSold: { $sum: '$products.quantity' }, historicalName: { $first: '$products.productName' } } },
             { $sort: { unitsSold: -1, _id: 1 } },
-            { $facet: { data: [{ $limit: limit }, { $project: { _id: 1, unitsSold: 1, historicalName: 1 } }],
-              count: [{ $count: 'total' }] } }],
+            { $limit: limit }, { $project: { _id: 1, unitsSold: 1, historicalName: 1 } }],
+          totalProducts: [{ $unwind: '$products' },
+            { $group: { _id: '$products.productId' } }, { $count: 'total' }],
           dateRange: [{ $group: { _id: null, minDate: { $min: '$date' }, maxDate: { $max: '$date' } } }]
         } }
       ], invocation);
-      const ranking = rows[0]?.ranking?.[0] || { data: [], count: [] };
+      const ranking = rows[0]?.ranking || [];
       const dateRange = rows[0]?.dateRange?.[0];
-      const totalMatches = ranking.count[0]?.total || 0;
+      const totalMatches = rows[0]?.totalProducts?.[0]?.total || 0;
       // One bounded lookup for the top-N, including inactive historical products.
       invocation.signal.throwIfAborted();
-      const ids = ranking.data.map(row => row._id);
+      const ids = ranking.map(row => row._id);
       const products = ids.length ? await models.Product.find({ businessId: invocation.context.businessId, _id: { $in: ids } })
         .select('_id sku name').limit(invocation.skill.maxRecords).maxTimeMS(invocation.skill.timeoutMs).lean().exec() : [];
       const byId = new Map(products.map(row => [String(row._id), row]));
+      const isValidDate = value => value instanceof Date && Number.isFinite(value.getTime());
+      const hasDateRange = isValidDate(dateRange?.minDate) && isValidDate(dateRange?.maxDate);
       const periodLabel = hasPeriod ? `${invocation.args.startDate} a ${invocation.args.endDate}`
-        : `Todo el historial disponible${dateRange?.minDate && dateRange?.maxDate
+        : `Todo el historial disponible${hasDateRange
           ? ` (${dateRange.minDate.toISOString().slice(0, 10)} a ${dateRange.maxDate.toISOString().slice(0, 10)})` : ''}`;
-      return listResult(ranking.data.map(row => ({ productId: String(row._id), sku: byId.get(String(row._id))?.sku ?? null,
+      return listResult(ranking.map(row => ({ productId: String(row._id), sku: byId.get(String(row._id))?.sku ?? null,
         name: byId.get(String(row._id))?.name ?? row.historicalName, unitsSold: row.unitsSold })), totalMatches,
       { asOf: asOf(), periodLabel, evidenceLabel: `Productos más vendidos · ${periodLabel}`,
         ...(hasPeriod ? { period: { startDate: invocation.args.startDate, endDate: invocation.args.endDate } } : {}) });

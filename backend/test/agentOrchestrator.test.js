@@ -22,7 +22,7 @@ const forecast = { status: 'READY', anchorOperationalDate: '2025-07-01', product
 
 // Runs the real execution layer and executors. Only the database driver/provider
 // are replaced; fakes assert tenant predicates and expose no write methods.
-const fixture = ({ products = [product(1), product(2), product(3, 'B')], provider,
+const fixture = ({ products = [product(1), product(2), product(3, 'B')], provider, emptySalesHistory = false,
   forecastService = { getDemandForecast: async () => structuredClone(forecast) }, memory = createConversationMemory(), onEvent } = {}) => {
   const calls = [];
   const reads = [];
@@ -59,10 +59,10 @@ const fixture = ({ products = [product(1), product(2), product(3, 'B')], provide
       let result;
       if (productMatch) result = [{ _id: 'PEN', units: 7, amount: 63 }];
       else if (facet) {
-        const ranking = pipeline.some(stage => stage.$unwind)
-          || pipeline.some(stage => stage.$facet?.ranking?.some(nested => nested.$unwind));
-        result = ranking ? [{ ranking: [{ data: [{ _id: id(1), unitsSold: 7, historicalName: 'Producto 1' }], count: [{ total: 1 }] }],
-          dateRange: [{ minDate: new Date('2019-01-01T12:00:00Z'), maxDate: new Date('2025-01-15T12:00:00Z') }] }]
+        const ranking = Boolean(facet.ranking);
+        result = ranking ? [{ ranking: emptySalesHistory ? [] : [{ _id: id(1), unitsSold: 7, historicalName: 'Producto 1' }],
+          totalProducts: emptySalesHistory ? [] : [{ total: 1 }],
+          dateRange: emptySalesHistory ? [] : [{ minDate: new Date('2019-01-01T12:00:00Z'), maxDate: new Date('2025-01-15T12:00:00Z') }] }]
           : [{ data: [{ _id: id(50), type: 'sale', status: 'completed', date: clock(), totalAmount: 63, currency: 'PEN', itemCount: 1 }], count: [{ total: 1 }] }];
       } else result = [{ _id: { type: 'sale', currency: 'PEN' }, count: 1, amount: 63, units: 7 }];
       return { option() { return this; }, exec: async () => result };
@@ -109,6 +109,19 @@ test('generic top-selling uses all completed history even after a current-month 
   const aggregate = f.reads.filter(row => row.model === 'Transaction').at(-1).pipeline;
   assert.equal(aggregate[0].$match.date, undefined);
   assert.equal(aggregate[0].$match.status, 'completed'); assert.equal(aggregate[0].$match.businessId, 'A');
+});
+
+test('full-history ranking with no sales is a safe deterministic NO_DATA response', async () => {
+  const f = fixture({ emptySalesHistory: true });
+  const result = await f.run('¿Cuáles son los productos más vendidos?');
+  assert.equal(result.code, null);
+  assert.equal(result.intent, 'top_selling_products');
+  assert.equal(result.usage.totalLlmCalls, 0);
+  assert.equal(result.usage.totalTokens, 0);
+  assert.equal(result.actions[0].skillId, 'get_top_selling_products');
+  assert.equal(result.evidence[0].recordCount, 0);
+  assert.equal(result.evidence[0].period, undefined);
+  assert.equal(result.answer.includes('Todo el historial disponible'), true);
 });
 
 test('top-selling respects current and previous month, while an explicit follow-up can carry the period', async () => {

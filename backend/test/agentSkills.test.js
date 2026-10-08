@@ -67,7 +67,10 @@ const evaluate = (rows, pipeline) => pipeline.reduce((data, stage) => {
     case '$set': return data.map(row => ({ ...row, ...Object.fromEntries(Object.entries(arg).map(([key, value]) => [key, expression(value, row)])) }));
     case '$count': return data.length ? [{ [arg]: data.length }] : [];
     case '$unwind': return data.flatMap(row => row[arg.slice(1)].map(item => ({ ...row, [arg.slice(1)]: item })));
-    case '$facet': return [Object.fromEntries(Object.entries(arg).map(([key, stages]) => [key, evaluate(data, stages)]))];
+    case '$facet': return [Object.fromEntries(Object.entries(arg).map(([key, stages]) => {
+      assert.equal(stages.some(nested => '$facet' in nested), false, 'MongoDB does not allow $facet inside a $facet sub-pipeline');
+      return [key, evaluate(data, stages)];
+    }))];
     case '$group': {
       const groups = new Map();
       for (const row of data) {
@@ -261,6 +264,20 @@ test('top selling groups all sales beyond page one by units, not revenue, with o
   assert.equal(result.metadata.truncated, true);
   assert.equal(f.calls.filter(call => call.name === 'Product').length, 1);
   assert.equal(f.calls[1].filter.businessId, 'A');
+  const pipeline = f.calls.find(call => call.name === 'Transaction').pipeline;
+  assert.deepEqual(pipeline[0].$match.date, { $gte: new Date('2025-01-01T00:00:00.000Z'), $lt: new Date('2025-02-01T00:00:00.000Z') });
+  assert.equal(pipeline[1].$facet.ranking.some(stage => '$facet' in stage), false);
+  f.assertNoMutation();
+});
+test('top selling full history handles no sales without date formatting or failure', async () => {
+  const f = fixture({ transactions: [] });
+  const result = await f.run('get_top_selling_products', {});
+  assert.equal(result.status, 'NO_DATA');
+  assert.deepEqual(result.data, []);
+  assert.equal(result.metadata.totalMatches, 0);
+  assert.match(result.evidence.label, /Todo el historial disponible/);
+  assert.equal(f.calls[0].pipeline[0].$match.date, undefined);
+  assert.equal(f.calls[0].pipeline[1].$facet.ranking.some(stage => '$facet' in stage), false);
   f.assertNoMutation();
 });
 test('top selling cannot load another tenant product through a malformed historical reference', async () => {
