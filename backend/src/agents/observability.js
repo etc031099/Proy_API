@@ -87,7 +87,8 @@ const createRequestUsage = (options = {}) => {
         copy[field] = null;
       }
     }
-    if (copy.usageAvailable && copy.cachedInputTokens > copy.inputTokens) invalid();
+    if (copy.usageAvailable && copy.cachedInputTokens !== null && copy.inputTokens !== null
+      && copy.cachedInputTokens > copy.inputTokens) invalid();
     return copy;
   });
   const sum = (items, field) => {
@@ -107,10 +108,14 @@ const createRequestUsage = (options = {}) => {
       latencyMs, usageAvailable: runs.every(record => record.usageAvailable)
     };
   });
+  const totalProviderLatencyMs = records.reduce((total, record) => total + record.latencyMs, 0);
+  if (!safeDuration(totalProviderLatencyMs)) invalid();
   return deepFreeze({
     totalLlmCalls: records.length, totalSkillCalls,
     totalInputTokens: sum(records, 'inputTokens'), totalOutputTokens: sum(records, 'outputTokens'),
     totalTokens: sum(records, 'totalTokens'),
+    totalThoughtTokens: sum(records, 'thoughtTokens'), totalCachedInputTokens: sum(records, 'cachedInputTokens'),
+    totalProviderLatencyMs,
     totalToolUseTokens: sum(records, 'toolUseTokens'),
     metricsComplete: records.every(record => record.usageAvailable && TOKEN_FIELDS.every(field => record[field] !== null)), agents
   });

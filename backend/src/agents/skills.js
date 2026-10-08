@@ -15,7 +15,7 @@ const both = ['operations', 'analyst'];
 const READY_SKILL_IDS = Object.freeze([
   'search_products', 'get_product_details', 'get_low_stock_products', 'get_recent_transactions',
   'get_sales_summary', 'get_top_selling_products', 'get_business_summary',
-  'get_demand_forecast', 'get_replenishment_candidates'
+  'get_demand_forecast', 'get_replenishment_candidates', 'get_product_sales_summary'
 ]);
 const entry = (skillId, description, allowedAgents, inputSchema, maxRecords, dataSensitivity, outputDescription) => ({
   id: skillId, version: '1.0.0', description, readOnly: true, allowedAgents, inputSchema,

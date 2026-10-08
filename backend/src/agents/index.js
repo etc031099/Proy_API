@@ -9,6 +9,8 @@ const { createAgentExecution } = require('./execution');
 const { GeminiProviderError, createGeminiProvider, getGeminiProvider } = require('./providers/geminiProvider');
 const { getToolDeclarations, executeRequestedSkill } = require('./toolCalls');
 const { ROUTING_SCHEMA, validateRoutingOutput, classifyAgentIntent } = require('./routing');
+const { createAgentOrchestrator } = require('./orchestrator');
+const { createConversationMemory } = require('./memory');
 
 module.exports = {
   AgentError, EXECUTION_LIMITS, TOKEN_BUDGETS, AGENTS, SKILLS, EVENT_TYPES,
@@ -16,5 +18,6 @@ module.exports = {
   getAgentDefinition, getSkillDefinition, validateSkillInvocation,
   createTraceEvent, createRequestUsage, createEvidence, createAgentExecution,
   GeminiProviderError, createGeminiProvider, getGeminiProvider,
-  getToolDeclarations, executeRequestedSkill, ROUTING_SCHEMA, validateRoutingOutput, classifyAgentIntent
+  getToolDeclarations, executeRequestedSkill, ROUTING_SCHEMA, validateRoutingOutput, classifyAgentIntent,
+  createAgentOrchestrator, createConversationMemory
 };

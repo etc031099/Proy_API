@@ -261,7 +261,7 @@ const createGeminiProvider = ({ apiKey, model = DEFAULT_GEMINI_MODEL,
     if (kind === 'tools' && toolCalls.length) return Object.freeze({ text: typeof text === 'string' ? text : '',
       toolCalls: Object.freeze(toolCalls), model, latencyMs, usage, diagnostics });
     if (!text.trim()) throw new GeminiProviderError(outputTruncated ? 'GEMINI_OUTPUT_TRUNCATED' : 'GEMINI_EMPTY_RESPONSE', { diagnostics });
-    return Object.freeze({ text, model, latencyMs, usage, diagnostics });
+    return Object.freeze({ text, ...(kind === 'tools' ? { toolCalls: Object.freeze([]) } : {}), model, latencyMs, usage, diagnostics });
   };
 
   return Object.freeze({

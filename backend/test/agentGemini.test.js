@@ -141,6 +141,14 @@ test('function call response is accepted without text and diagnostics stay struc
     hasText: false, hasFunctionCall: true, hasUsageMetadata: true });
 });
 
+test('tool selection with text but no call preserves an empty toolCalls array', async () => {
+  const provider = createGeminiProvider({ apiKey: 'synthetic-test-key', client: call(response('Necesito aclaración.')) });
+  const result = await provider.generateWithTools({ agentId: 'operations', systemInstruction: 'Solo tools permitidas.',
+    messages: [{ role: 'user', text: 'Ayuda.' }] });
+  assert.deepEqual(result.toolCalls, []);
+  assert.equal(result.text, 'Necesito aclaración.');
+});
+
 test('malformed function calls fail safely with structural diagnostics', async () => {
   const provider = createGeminiProvider({ apiKey: 'synthetic-test-key', client: call({
     candidates: [{ finishReason: 'STOP', content: { parts: [{ functionCall: { name: 'invalid name', args: {} } }] } }]

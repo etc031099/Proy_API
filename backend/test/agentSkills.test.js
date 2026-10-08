@@ -146,13 +146,13 @@ const fixture = (options = {}) => {
   assertNoMutation() { assert.equal(mutations, 0); assert.deepEqual(rows, before); } };
 };
 
-test('AG-R3 implements exactly the nine prioritized skills; four remain pending', () => {
+test('AG-R3 skills and AG-R5 product sales are ready; three remain pending', () => {
   assert.deepEqual(SKILLS.filter(skill => skill.executorStatus === 'READY').map(skill => skill.id), [
     'search_products', 'get_product_details', 'get_low_stock_products', 'get_recent_transactions',
-    'get_sales_summary', 'get_business_summary', 'get_top_selling_products', 'get_demand_forecast', 'get_replenishment_candidates'
+    'get_sales_summary', 'get_business_summary', 'get_top_selling_products', 'get_product_sales_summary', 'get_demand_forecast', 'get_replenishment_candidates'
   ]);
   assert.deepEqual(SKILLS.filter(skill => skill.executorStatus !== 'READY').map(skill => skill.id), [
-    'get_inventory_summary', 'get_purchase_summary', 'get_supplier_details', 'get_product_sales_summary'
+    'get_inventory_summary', 'get_purchase_summary', 'get_supplier_details'
   ]);
 });
 test('product search caps active tenant matches, projects DTOs and reports truncation', async () => {
@@ -194,6 +194,18 @@ test('foreign IDs and SKUs are indistinguishable from missing products', async (
     await assert.rejects(fixture().run('get_product_details', selector), code('AGENT_RESOURCE_NOT_FOUND'));
   }
   assert.equal((await fixture({ tenant: 'B' }).run('get_product_details', { productId: id(5) })).data.id, id(5));
+});
+test('product sales totals cover all completed lines in the period and never another tenant', async () => {
+  const f = fixture();
+  const result = await f.run('get_product_sales_summary', { sku: 'SKU-1', ...dates }, 'operations');
+  assert.equal(result.data.product.id, id(1));
+  assert.equal(result.data.totalUnitsSold, 4);
+  assert.deepEqual(result.data.amountsByCurrency, [
+    { currency: 'PEN', amount: 12, label: 'Importe de líneas vendidas' },
+    { currency: 'USD', amount: 12, label: 'Importe de líneas vendidas' }
+  ]);
+  await assert.rejects(f.run('get_product_sales_summary', { sku: 'ONLY-B', ...dates }), code('AGENT_RESOURCE_NOT_FOUND'));
+  f.assertNoMutation();
 });
 test('low stock includes equality, orders greatest deficit first and counts beyond limit', async () => {
   const f = fixture();

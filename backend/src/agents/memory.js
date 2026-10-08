@@ -1,0 +1,79 @@
+const { AgentError, assertAgentRequestContext, deepFreeze, isObjectId, isDate } = require('./contracts');
+
+const TTL_MS = 30 * 60 * 1000;
+const label = (value, max) => typeof value === 'string' ? value.replace(/[\r\n\t]/g, ' ')
+  .replace(/\bBearer\s+\S+|AIza[\w-]{20,}|[\w.+-]+@[a-z\d.-]+\.[a-z]{2,}/gi, '[omitido]').slice(0, max) : null;
+const compactEntity = value => value && isObjectId(value.id || value.productId) ? {
+  type: 'product', id: value.id || value.productId, sku: label(value.sku, 100), label: label(value.name || value.label, 80)
+} : null;
+
+/** Demo-only, bounded in-process memory. Render restarts erase conversations.
+ * Only domain references are retained: no messages, provider responses or reasoning.
+ * A per-key queue serializes read/commit so concurrent follow-ups see committed state.
+ */
+const createConversationMemory = ({ now = Date.now, ttlMs = TTL_MS, maxEntries = 1000 } = {}) => {
+  if (typeof now !== 'function' || !Number.isSafeInteger(ttlMs) || ttlMs < 1
+    || !Number.isSafeInteger(maxEntries) || maxEntries < 1) throw new AgentError('AGENT_INVALID_REQUEST');
+  const entries = new Map();
+  const queues = new Map();
+  const keyFor = context => {
+    assertAgentRequestContext(context);
+    if (!context.conversationId) throw new AgentError('AGENT_INVALID_REQUEST');
+    return JSON.stringify([context.userId, context.businessId, context.conversationId]);
+  };
+  const purge = () => {
+    for (const [key, entry] of entries) if (entry.expiresAt <= now() && !queues.has(key)) entries.delete(key);
+  };
+  return Object.freeze({
+    async withConversation(context, operation) {
+      const key = keyFor(context);
+      if (typeof operation !== 'function') throw new AgentError('AGENT_INVALID_REQUEST');
+      purge();
+      if (!queues.has(key) && queues.size >= maxEntries) throw new AgentError('AGENT_BUDGET_EXCEEDED');
+      const previous = queues.get(key) || { tail: Promise.resolve(), count: 0 };
+      if (previous.count >= 4) throw new AgentError('AGENT_BUDGET_EXCEEDED');
+      const record = { count: previous.count + 1 };
+      const task = previous.tail.catch(() => {}).then(async () => {
+        const entry = entries.get(key);
+        const state = entry && entry.expiresAt > now() ? entry.state : Object.freeze({});
+        let pending;
+        const commit = patch => {
+          const entities = Array.isArray(patch.recentEntities)
+            ? patch.recentEntities.map(compactEntity).filter(Boolean).slice(0, 4) : state.recentEntities || [];
+          const entity = compactEntity(patch.lastEntity);
+          const period = patch.lastPeriod;
+          pending = deepFreeze({
+            lastIntent: label(patch.lastIntent ?? state.lastIntent, 40),
+            lastAgent: ['operations', 'analyst'].includes(patch.lastAgent) ? patch.lastAgent : state.lastAgent || null,
+            lastEntity: entity || (entities.length === 1 ? entities[0] : null), recentEntities: entities,
+            lastPeriod: period && isDate(period.startDate) && isDate(period.endDate)
+              ? { startDate: period.startDate, endDate: period.endDate } : state.lastPeriod || null,
+            lastTransactionFilters: patch.lastTransactionFilters ? {
+              periodRequested: patch.lastTransactionFilters.periodRequested === true,
+              type: ['sale', 'purchase'].includes(patch.lastTransactionFilters.type) ? patch.lastTransactionFilters.type : null,
+              status: ['completed', 'pending', 'cancelled'].includes(patch.lastTransactionFilters.status) ? patch.lastTransactionFilters.status : null
+            } : state.lastTransactionFilters || null,
+            lastCurrency: label(patch.lastCurrency ?? state.lastCurrency, 8),
+            lastSearchQuery: label(patch.lastSearchQuery ?? state.lastSearchQuery, 100),
+            listLimit: Number.isSafeInteger(patch.listLimit) ? Math.min(20, Math.max(1, patch.listLimit)) : state.listLimit || 5
+          });
+        };
+        const result = await operation(state, commit);
+        if (pending) {
+          entries.delete(key);
+          entries.set(key, { state: pending, expiresAt: now() + ttlMs });
+          while (entries.size > maxEntries) entries.delete(entries.keys().next().value);
+        }
+        return result;
+      });
+      record.tail = task;
+      queues.set(key, record);
+      try { return await task; } finally {
+        if (queues.get(key) === record) queues.delete(key);
+        else { const current = queues.get(key); if (current) current.count--; }
+      }
+    }
+  });
+};
+
+module.exports = { createConversationMemory, compactEntity, TTL_MS };

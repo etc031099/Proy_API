@@ -172,6 +172,24 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
         name: byId.get(String(row._id))?.name ?? row.historicalName, unitsSold: row.unitsSold })), result.total,
       { asOf: asOf(), period: { startDate: invocation.args.startDate, endDate: invocation.args.endDate } });
     },
+    async get_product_sales_summary(invocation) {
+      invocation.signal.throwIfAborted();
+      const { args, context, skill } = invocation;
+      const product = await getModels().Product.findOne({ businessId: context.businessId,
+        ...(args.productId ? { _id: objectId(args.productId) } : { sku: args.sku.trim() }) })
+        .select(productFields).maxTimeMS(skill.timeoutMs).lean().exec();
+      if (!product) throw new AgentError('AGENT_RESOURCE_NOT_FOUND');
+      const rows = await aggregate(getModels().Transaction, [
+        { $match: { businessId: context.businessId, type: 'sale', status: 'completed', date: dateFilter(args) } },
+        { $unwind: '$products' }, { $match: { 'products.productId': product._id } },
+        { $group: { _id: '$currency', units: { $sum: '$products.quantity' }, amount: { $sum: '$products.total' } } }
+      ], invocation);
+      return { status: rows.length ? 'READY' : 'NO_DATA', data: { product: productDto(product),
+        totalUnitsSold: rows.reduce((sum, row) => sum + row.units, 0),
+        amountsByCurrency: rows.map(row => ({ currency: row._id, amount: row.amount, label: 'Importe de líneas vendidas' })) },
+      metadata: { asOf: asOf(), period: { startDate: args.startDate, endDate: args.endDate },
+        amountBasis: 'completed_product_line_total_native_currency', returnedCount: 1 } };
+    },
     async get_business_summary(invocation) {
       const { Product, Transaction } = getModels();
       let anchor = clock();

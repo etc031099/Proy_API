@@ -30,7 +30,7 @@ test('registry contains exactly three distinct immutable agent definitions', () 
   assert.equal(getAgentDefinition('analyst').llmPolicy.preferredMode, 'hybrid');
 });
 
-test('all thirteen skills are unique read-only contracts with nine implemented executors', () => {
+test('all thirteen skills are unique read-only contracts with ten implemented executors', () => {
   assert.equal(SKILLS.length, 13);
   assert.equal(new Set(SKILLS.map(skill => skill.id)).size, 13);
   for (const skill of SKILLS) {
@@ -43,7 +43,7 @@ test('all thirteen skills are unique read-only contracts with nine implemented e
     assert.ok(Object.isFrozen(skill.inputSchema.properties));
     assert.equal(new Set(skill.allowedAgents).size, skill.allowedAgents.length);
   }
-  assert.equal(SKILLS.filter(skill => skill.executorStatus === 'READY').length, 9);
+  assert.equal(SKILLS.filter(skill => skill.executorStatus === 'READY').length, 10);
 });
 
 test('permissions match in both directions for every agent and skill', () => {

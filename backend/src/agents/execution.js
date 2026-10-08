@@ -66,6 +66,32 @@ const createAgentExecution = options => {
   emit('request_started', { status: 'STARTED' });
 
   return Object.freeze({
+    async runAgent(agentId, operation) {
+      if (closed || typeof operation !== 'function') throw new AgentError('AGENT_INVALID_REQUEST');
+      require('./definitions').getAgentDefinition(agentId);
+      participants.add(agentId);
+      const agentRunId = randomUUID();
+      const start = performance.now();
+      active++;
+      emit('agent_started', { agentId, agentRunId, status: 'STARTED' });
+      try {
+        const result = await operation();
+        emit('agent_finished', { agentId, agentRunId, status: 'SUCCEEDED', durationMs: performance.now() - start });
+        return result;
+      } catch (error) {
+        failed = true;
+        emit('agent_finished', { agentId, agentRunId, status: 'FAILED', durationMs: performance.now() - start });
+        throw error;
+      } finally { active--; }
+    },
+    recordError(code) { failed = true; emit('error', { status: 'FAILED', code }); },
+    async selectTools(input) {
+      if (closed) throw new AgentError('AGENT_INVALID_REQUEST');
+      try { budget.consume('toolSelectionCycles'); } catch (error) {
+        failed = true; emit('error', { status: 'FAILED', code: error.code }); throw error;
+      }
+      return runLlmCall('generateWithTools', input);
+    },
     async generateStructured(input) { return runLlmCall('generateStructured', input); },
     async generateWithTools(input) { return runLlmCall('generateWithTools', input); },
     async executeSkill(input) {
@@ -121,6 +147,7 @@ const createAgentExecution = options => {
       } finally { active--; }
     },
     getUsage: usage,
+    getBudget: () => budget.snapshot(),
     getEvents: () => Object.freeze([...events]),
     finish() {
       if (active) throw new AgentError('AGENT_INVALID_REQUEST');
