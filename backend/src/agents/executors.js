@@ -132,6 +132,11 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
     const suppliers = validIds.length ? await Contact.find({ businessId: invocation.context.businessId,
       type: 'vendor', isActive: true, _id: { $in: validIds } }).select('_id businessId name type isActive')
       .maxTimeMS(invocation.skill.timeoutMs).lean().exec() : [];
+    let supplierDirectory = suppliers;
+    if (invocation.args.supplierRef) {
+      supplierDirectory = await Contact.find({ businessId: invocation.context.businessId, type: 'vendor', isActive: true })
+        .select('_id businessId name type isActive').limit(500).maxTimeMS(invocation.skill.timeoutMs).lean().exec();
+    }
     const productBySku = new Map(products.map(row => [row.sku, row]));
     const rows = batch.data.map(row => {
       const product = productBySku.get(row.sku);
@@ -141,7 +146,7 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
       productMissing: !product };
     });
     const { selectOffer } = require('./replenishmentPlanning');
-    return { status: 'READY', rows, suppliers, metadata: batch.metadata };
+    return { status: 'READY', rows, suppliers, supplierDirectory, metadata: batch.metadata };
   };
 
   const commercialProducts = async (invocation, productRef, department) => {
@@ -162,12 +167,44 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
     if (rows.some(row => row.mlStatus === 'READY' && (!Number.isSafeInteger(row.recommendedQty)
       || row.recommendedQty < 0 || !Number.isFinite(row.predictedDemand7d) || row.predictedDemand7d < 0
       || !Number.isFinite(row.stockAtAnchor) || row.stockAtAnchor < 0))) throw new AgentError('AGENT_SKILL_EXECUTION_FAILED');
-    const { selectOffer } = require('./replenishmentPlanning');
+    const { selectOffer, resolveSupplier } = require('./replenishmentPlanning');
     return { status: 'READY', rows: rows.map(row => {
       if (row.productMissing) return { ...row, exclusionReason: 'PRODUCT_NOT_CONFIGURED' };
-      const selected = selectOffer(row, loaded.suppliers, invocation.args.supplierRef);
+      let supplierRef = invocation.args.supplierRef;
+      let supplierMatch;
+      if (supplierRef) {
+        const availableOffers = row.offers || selectOffer(row, loaded.suppliers).offers;
+        const resolution = resolveSupplier(supplierRef, availableOffers, loaded.supplierDirectory || loaded.suppliers);
+        if (resolution.status !== 'MATCH') {
+          const candidates = (resolution.status === 'AMBIGUOUS' || resolution.status === 'AMBIGUOUS_SUPPLIER'
+            ? resolution.candidates : resolution.status === 'NO_OFFER' || resolution.status === 'NOT_FOUND' ? availableOffers : resolution.candidates)
+            .slice(0, 20);
+          const suggestions = candidates.slice(0, 5).map(offer => ({
+            label: offer.supplierName || offer.name,
+            message: offer.supplierName || offer.name,
+            ...(offer.unitCost !== undefined ? { detail: `${offer.unitCost.toFixed(2)} PEN por unidad` } : {})
+          }));
+          const clarificationQuestion = resolution.status === 'NO_OFFER'
+            ? `Encontré ${resolution.supplier.name}, pero no tiene una oferta configurada para ${row.sku}.${suggestions.length ? ' Estas son las ofertas disponibles:' : ''}`
+            : resolution.status === 'AMBIGUOUS' || resolution.status === 'AMBIGUOUS_SUPPLIER'
+              ? `No estoy seguro de cuál proveedor quisiste decir con «${supplierRef}». Elige una opción:`
+              : `No encontré un proveedor suficientemente parecido a «${supplierRef}» para ${row.sku}.${suggestions.length ? ' Puedes elegir una oferta disponible:' : ' Puedes pedirme que muestre los proveedores disponibles para este producto.'}`;
+          const resumeArgs = Object.fromEntries(Object.entries(invocation.args).filter(([key]) => key !== 'supplierRef'));
+          return { ...row, supplierResolution: { status: resolution.status, supplierRef,
+            skillId: invocation.skill.id, args: resumeArgs,
+            query: supplierRef, offset: 0, candidates: candidates.map(offer => ({ id: String(offer.supplierId || offer._id),
+              name: offer.supplierName || offer.name,
+              ...(offer.unitCost !== undefined ? { detail: `${offer.unitCost.toFixed(2)} PEN por unidad` } : {}) })) },
+          clarificationQuestion, suggestions };
+        }
+        supplierRef = resolution.offer.supplierId;
+        supplierMatch = { requested: /^[a-f\d]{24}$/i.test(invocation.args.supplierRef) ? null : invocation.args.supplierRef,
+          resolved: resolution.offer.supplierName,
+          confidence: resolution.confidence };
+      }
+      const selected = selectOffer(row, loaded.suppliers, supplierRef);
       return { ...row, selected: selected.selected, offers: selected.offers,
-        selectionRule: selected.selectionRule,
+        selectionRule: supplierMatch ? 'USER_SPECIFIED' : selected.selectionRule, supplierMatch,
         exclusionReason: row.currency !== 'PEN' ? 'UNSUPPORTED_CURRENCY'
           : selected.offers.length ? selected.selectionRule === 'USER_SPECIFIED_UNAVAILABLE' ? 'SUPPLIER_OFFER_UNAVAILABLE' : null
             : 'NO_USABLE_OFFER' };
@@ -328,6 +365,7 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
         .find(row => row.businessId === invocation.context.businessId)?.scenarioId || null;
       const mapLine = row => ({ sku: row.sku, productName: row.name, recommendedQty: row.recommendedQty,
         selectedSupplier: row.selected?.supplierName || null, selectionRule: row.selectionRule || 'NO_USABLE_OFFER',
+        supplierMatch: row.supplierMatch || null,
         unitCost: row.selected?.unitCost ?? null, currency: row.currency || null,
         replenishmentCost: row.selected ? fromCents(row.recommendedQty * row.selected.unitCostCents) : null,
         inventoryStatus: row.inventoryStatus, predictedDemand7d: row.predictedDemand7d,
@@ -337,6 +375,13 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
         if (!row) return { status: 'NO_DATA', data: {}, metadata: { ...loaded.metadata, returnedCount: 0 } };
         if (row.mlStatus !== 'READY') return { status: 'ML_NOT_READY', data: [], metadata: { ...loaded.metadata,
           returnedCount: 0, reason: row.mlStatus } };
+        if (row.supplierResolution) return { status: 'CLARIFICATION', data: [], metadata: { ...loaded.metadata,
+          returnedCount: row.supplierResolution.candidates.length, suggestions: row.suggestions,
+          ...(row.supplierResolution.candidates.length > 5 ? { suggestionsPagination: { query: row.supplierResolution.query,
+            offset: row.supplierResolution.offset, limit: 5, totalMatches: row.supplierResolution.candidates.length,
+            hasMore: row.supplierResolution.offset + 5 < row.supplierResolution.candidates.length,
+            hasPrevious: row.supplierResolution.offset > 0 } } : {}),
+          clarificationQuestion: row.clarificationQuestion, supplierResolution: row.supplierResolution } };
         const line = mapLine(row);
         return { status: 'READY', data: { scenarioId, anchor: loaded.metadata.anchor, pricingAsOf,
           ...line, currency: line.currency || 'PEN' }, metadata: { ...loaded.metadata, returnedCount: 1,
@@ -381,6 +426,13 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
       };
       const row = loaded.rows[0];
       if (!row || row.productMissing) return { status: 'NO_DATA', data: [], metadata: { ...loaded.metadata, returnedCount: 0 } };
+      if (row.supplierResolution) return { status: 'CLARIFICATION', data: [], metadata: { ...loaded.metadata,
+        returnedCount: row.supplierResolution.candidates.length, suggestions: row.suggestions,
+        ...(row.supplierResolution.candidates.length > 5 ? { suggestionsPagination: { query: row.supplierResolution.query,
+          offset: row.supplierResolution.offset, limit: 5, totalMatches: row.supplierResolution.candidates.length,
+          hasMore: row.supplierResolution.offset + 5 < row.supplierResolution.candidates.length,
+          hasPrevious: row.supplierResolution.offset > 0 } } : {}),
+        clarificationQuestion: row.clarificationQuestion, supplierResolution: row.supplierResolution } };
       const selected = row;
       const offers = [...selected.offers].sort((a, b) => Number(b.supplierId === selected.selected?.supplierId)
         - Number(a.supplierId === selected.selected?.supplierId) || a.unitCostCents - b.unitCostCents

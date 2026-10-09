@@ -11,8 +11,9 @@ const routeCommercial = (message, memory = {}) => {
   const text = normalize(message);
   if (/shell|ejecuta codigo|mongo query|ignora.*instruccion|api.?key|password|jwt|system prompt/.test(text)) return null;
   const sku = message.match(/\bM5-[A-Z]+_\d+_\d+\b/i)?.[0];
-  const explicitSupplier = message.match(/\b(?:con|usando)\s+(?:el\s+)?proveedor\s+(.+?)(?=\s+para\s+(?:reponer|el producto)|[?!.]|$)/i)?.[1]?.trim()
-    || message.match(/\bproveedor\s+(.+?)\s+para\s+(?:reponer|el producto)\b/i)?.[1]?.trim();
+  const explicitSupplier = message.match(/\b(?:con|usando)\s+(?:el\s+)?(?:proveedor|supplier)\s+(.+?)(?=\s+(?:para|por)\s+(?:reponer|el producto)|[?!.]|$)/i)?.[1]?.trim()
+    || message.match(/\bproveedor\s+(?!deber[ií]a\b|debe\b|usar\b|conviene\b)(.+?)(?=\s+(?:para|por)\s+(?:reponer|el producto)|[?!.]|$)/i)?.[1]?.trim()
+    || message.match(/\b(?:con|usando)\s+(?:el|la)\s+(.+?)(?=\s+(?:para|por)\s+(?:reponer|el producto)|[?!.]|$)/i)?.[1]?.trim();
   const currency = /\bUSD|\$|dolares?\b/i.test(message) ? 'USD'
     : /\bEUR|€|euros?\b/i.test(message) ? 'EUR' : /\bS\s*\/|\bPEN\b/i.test(message) ? 'PEN' : null;
   const department = message.match(/\b(?:FOODS|HOBBIES|HOUSEHOLD)_\d+\b/i)?.[0]?.toUpperCase();

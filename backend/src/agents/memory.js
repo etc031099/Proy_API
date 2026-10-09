@@ -12,6 +12,21 @@ const compactProductSelection = (value, now) => {
   return deepFreeze({ sourceIntent: value.sourceIntent,
     items: value.items.map(compactEntity).filter(Boolean).slice(0, 5), createdAt: now() });
 };
+const SUPPLIER_SELECTION_TTL_MS = 20 * 60 * 1000;
+const compactSupplierResolution = (value, now = Date.now()) => {
+  if (!value || !['get_replenishment_cost', 'compare_supplier_costs'].includes(value.skillId)
+    || !value.args || typeof value.args.productRef !== 'string' || value.args.productRef.length > 100
+    || !Number.isSafeInteger(value.expiresAt) || value.expiresAt <= now || value.expiresAt > now + SUPPLIER_SELECTION_TTL_MS
+    || !Array.isArray(value.candidates) || value.candidates.length < 1 || value.candidates.length > 20
+    || !Number.isSafeInteger(value.offset || 0) || (value.offset || 0) < 0 || (value.offset || 0) % 5 !== 0) return null;
+  const candidates = value.candidates.filter(row => /^[a-f\d]{24}$/i.test(row?.id || '') && typeof row.name === 'string' && row.name.trim())
+    .map(row => ({ id: row.id, name: label(row.name, 100), ...(typeof row.detail === 'string' ? { detail: label(row.detail, 80) } : {}) }));
+  if (!candidates.length) return null;
+  return deepFreeze({ skillId: value.skillId, args: { ...(value.skillId === 'get_replenishment_cost' && value.args.mode === 'single' ? { mode: 'single' } : {}),
+    productRef: value.args.productRef }, candidates, offset: value.offset || 0,
+    ...(typeof value.query === 'string' ? { query: label(value.query, 100) } : {}), refining: value.refining === true,
+    expiresAt: value.expiresAt });
+};
 
 /** Demo-only, bounded in-process working context. Render restarts erase this cache,
  * not the separate Mongo conversation history; a compact snapshot may be restored.
@@ -55,6 +70,8 @@ const createConversationMemory = ({ now = Date.now, ttlMs = TTL_MS, maxEntries =
           const entity = compactEntity(patch.lastEntity);
           const productSelection = Object.hasOwn(patch, 'lastProductSelection')
             ? compactProductSelection(patch.lastProductSelection, now) : state.lastProductSelection || null;
+          const supplierResolution = Object.hasOwn(patch, 'supplierResolution')
+            ? compactSupplierResolution(patch.supplierResolution, now) : state.supplierResolution || null;
           const period = patch.lastPeriod;
           pending = deepFreeze({
             lastForecastAnalytics: Object.hasOwn(patch, 'lastForecastAnalytics')
@@ -63,6 +80,7 @@ const createConversationMemory = ({ now = Date.now, ttlMs = TTL_MS, maxEntries =
             lastAgent: ['operations', 'analyst'].includes(patch.lastAgent) ? patch.lastAgent : state.lastAgent || null,
             lastEntity: entity || (entities.length === 1 ? entities[0] : null), recentEntities: entities,
             lastProductSelection: productSelection,
+            supplierResolution,
             lastPeriod: period && isDate(period.startDate) && isDate(period.endDate)
               ? { startDate: period.startDate, endDate: period.endDate } : state.lastPeriod || null,
             lastPeriodExplicit: typeof patch.lastPeriodExplicit === 'boolean'
@@ -95,4 +113,4 @@ const createConversationMemory = ({ now = Date.now, ttlMs = TTL_MS, maxEntries =
   });
 };
 
-module.exports = { createConversationMemory, compactEntity, compactProductSelection, TTL_MS };
+module.exports = { createConversationMemory, compactEntity, compactProductSelection, compactSupplierResolution, SUPPLIER_SELECTION_TTL_MS, TTL_MS };

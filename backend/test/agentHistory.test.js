@@ -165,6 +165,25 @@ test('metadata and compact snapshot drop unexpected nested properties, redact se
   assert.equal(snapshot({ messages: ['private'], apiKey: 'private' }).messages, undefined);
 });
 
+test('supplier candidate context survives history snapshot only while valid and remains closed/bounded', () => {
+  const now = Date.now();
+  const state = snapshot({ supplierResolution: { skillId: 'get_replenishment_cost', args: { mode: 'single', productRef: 'SKU-001', businessId: 'attacker' },
+    expiresAt: now + 60000, candidates: [{ id: 'bbbbbbbbbbbbbbbbbbbbbbbb', name: 'Proveedor 055 Foods', email: 'private@example.com' },
+      { id: 'cccccccccccccccccccccccc', name: 'Proveedor 058 Foods' }] }, apiKey: 'private' });
+  assert.equal(state.supplierResolution.skillId, 'get_replenishment_cost');
+  assert.deepEqual(state.supplierResolution.args, { mode: 'single', productRef: 'SKU-001' });
+  assert.equal(state.supplierResolution.candidates.length, 2);
+  assert.equal(state.supplierResolution.candidates[0].email, undefined);
+  assert.equal(state.supplierResolution.apiKey, undefined);
+  const oversized = snapshot({ supplierResolution: { skillId: 'get_replenishment_cost', args: { productRef: 'SKU-001' },
+    expiresAt: now + 60000, candidates: Array.from({ length: 6 }, (_, index) => ({ id: `${index}`.padStart(24, '0'), name: `Vendor ${index}` })) } });
+  assert.equal(oversized.supplierResolution.candidates.length, 6);
+  assert.equal(oversized.supplierResolution.candidates[5].name, 'Vendor 5');
+  const expired = snapshot({ supplierResolution: { skillId: 'get_replenishment_cost', args: { productRef: 'SKU-001' },
+    expiresAt: now - 1, candidates: [{ id: 'bbbbbbbbbbbbbbbbbbbbbbbb', name: 'Proveedor' }] } });
+  assert.equal(expired.supplierResolution, null);
+});
+
 test('real compact memory hydrates on restart/TTL with ordinal references and zero provider calls, scoped by auth', async () => {
   let now = 0;
   const runtime = createAgentOrchestrator({ memory: createConversationMemory({ now: () => now, ttlMs: 10 }),

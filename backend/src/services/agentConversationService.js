@@ -85,8 +85,10 @@ const createAgentConversationService = ({ runtime, repository = createAgentHisto
         let response = row.response ? publicResponse(row.response) : undefined;
         if (response?.suggestions?.length) {
           const draft = require('../automations/operationDraft').compactDraft(conversation.contextSnapshot?.operationDraft);
-          // Saved choices remain readable, but only the current valid draft can act.
-          if (!draft || draft.expiresAt !== response.suggestionsExpiresAt) response.suggestionsExpiresAt = 0;
+          const supplier = require('../agents/memory').compactSupplierResolution(conversation.contextSnapshot?.supplierResolution, Date.now());
+          // Saved choices remain readable, but only a current draft or supplier resolution can act.
+          if ((!draft || draft.expiresAt !== response.suggestionsExpiresAt)
+            && (!supplier || supplier.expiresAt !== response.suggestionsExpiresAt)) response.suggestionsExpiresAt = 0;
         }
         if (response?.pendingAction && actionService) {
           const context = require('../automations/contracts').createActionContext(req, { conversationId: id });

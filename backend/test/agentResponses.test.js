@@ -75,6 +75,25 @@ test('replenishment prioritizes existing quantities and explains the historical 
   assert.deepEqual(result, before);
 });
 
+test('supplier cost and comparison responses humanize selection rules and hide internal enums', () => {
+  const cost = buildSkillAnswer('get_replenishment_cost', { status: 'READY', data: { sku: 'SKU-001', productName: 'Producto',
+    recommendedQty: 2, unitCost: 15.67, replenishmentCost: 31.34, currency: 'PEN', selectedSupplier: 'Proveedor 055 Foods',
+    selectionRule: 'USER_SPECIFIED', supplierMatch: { requested: '55 foods', resolved: 'Proveedor 055 Foods' },
+    stockAtAnchor: 1, predictedDemand7d: 2, inventoryStatus: 'REPONER', mlStatus: 'READY' },
+  metadata: { anchor: '2026-05-17', pricingAsOf: '2026-10-09T00:00:00.000Z', interpretation: 'historical_replay' } });
+  assert.match(cost, /Tomé «55 foods» como Proveedor 055 Foods/);
+  assert.match(cost, /Se utilizó el proveedor que indicaste/);
+  assert.doesNotMatch(cost, /USER_SPECIFIED|USER_SPECIFIED_UNAVAILABLE|PREFERRED_SUPPLIER|LOWEST_VALID_PRICE/);
+  const comparison = buildSkillAnswer('compare_supplier_costs', { status: 'READY', data: [
+    { sku: 'SKU-001', productName: 'Producto', supplier: 'Proveedor 055 Foods', unitCost: 15.67, currency: 'PEN', preferred: true, selected: true },
+    { sku: 'SKU-001', productName: 'Producto', supplier: 'Proveedor 058 Foods', unitCost: 15.99, currency: 'PEN', preferred: false, selected: false }
+  ], metadata: { selectionRule: 'PREFERRED_SUPPLIER', selectedSupplier: 'Proveedor 055 Foods', pricingAsOf: '2026-10-09' } });
+  assert.match(comparison, /2 proveedores con ofertas válidas/);
+  assert.match(comparison, /Proveedor 055 Foods: 15\.67 PEN por unidad/);
+  assert.match(comparison, /porque es el proveedor preferido configurado/);
+  assert.doesNotMatch(comparison, /PREFERRED_SUPPLIER|USER_SPECIFIED/);
+});
+
 test('individual forecast separates demand, security stock and recommendation, including zero and non-READY', () => {
   const answer = buildSkillAnswer('get_demand_forecast', list([forecastRow]));
   assert.match(answer, /estima 8\.25 unidades para 7 días/);

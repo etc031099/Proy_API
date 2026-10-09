@@ -1,4 +1,4 @@
-const { compactEntity, compactProductSelection } = require('../agents/memory');
+const { compactEntity, compactProductSelection, compactSupplierResolution } = require('../agents/memory');
 const { isDate } = require('../agents/contracts');
 const redact = value => String(value).replace(/\bBearer\s+\S+|AIza[\w-]{20,}|\beyJ[\w-]+\.[\w-]+\.[\w-]+|(?:password|api[_-]?key|jwt|secret|token)\s*[:=]\s*\S+/gi, '[secreto omitido]');
 const text = (value, max = 100) => typeof value === 'string' ? redact(value).slice(0, max) : null;
@@ -43,6 +43,7 @@ const snapshot = state => ({
   lastEntity: compactEntity(state.lastEntity),
   recentEntities: (state.recentEntities || []).map(compactEntity).filter(Boolean).slice(0, 4),
   lastProductSelection: compactProductSelection(state.lastProductSelection, Date.now),
+  supplierResolution: compactSupplierResolution(state.supplierResolution, Date.now()),
   lastPeriod: state.lastPeriod && isDate(state.lastPeriod.startDate) && isDate(state.lastPeriod.endDate)
     ? { startDate: state.lastPeriod.startDate, endDate: state.lastPeriod.endDate } : null,
   lastPeriodExplicit: state.lastPeriodExplicit === true,

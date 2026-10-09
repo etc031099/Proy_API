@@ -8,6 +8,60 @@ const { createConversationMemory } = require('./memory');
 const { routeDeterministically, clarify } = require('./intentRouting');
 const { buildSkillAnswer, llmObservation, safeText } = require('./responses');
 const { buildSynthesisInput } = require('./synthesis');
+const { normalizeSupplier, resolveSupplier } = require('./replenishmentPlanning');
+const { SUPPLIER_SELECTION_TTL_MS } = require('./memory');
+
+const supplierSelection = (message, state, now) => {
+  const pending = state.supplierResolution;
+  if (!pending) return null;
+  const text = message.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim().replace(/[?.!¿¡]/g, '');
+  const command = text.replace(/\s+/g, ' ');
+  if (pending.expiresAt <= now && (/^(?:ver mas|siguiente|anterior|refinar busqueda)$/.test(command) || pending.refining)) return { expired: true };
+  if (/^(?:ver mas|siguiente)$/.test(command) && (pending.offset || 0) + 5 < pending.candidates.length) {
+    return { pageOffset: (pending.offset || 0) + 5 };
+  }
+  if (/^anterior$/.test(command) && (pending.offset || 0) >= 5) return { pageOffset: pending.offset - 5 };
+  if (/^refinar busqueda$/.test(command)) return { refine: true };
+  if (pending.refining) {
+    const refinedQuery = normalizeSupplier(message);
+    const candidates = pending.candidates.filter(candidate => normalizeSupplier(candidate.name).includes(refinedQuery));
+    if (candidates.length === 1) {
+      const candidate = candidates[0];
+      return { plan: { intent: 'replenishment_commercial', agent: 'analyst', skillId: pending.skillId,
+        args: { ...pending.args, supplierRef: candidate.id }, supplierSelectedName: candidate.name } };
+    }
+    if (candidates.length > 1) return { filteredCandidates: candidates, query: message.trim() };
+    return { noRefinementMatch: true };
+  }
+  const number = /^(?:opcion\s+)?([1-5])$/.exec(text);
+  const ordinal = /^(?:(?:el|la)\s+)?(primer[oa]?|segund[oa]|tercer[oa]?|cuart[oa]|quint[oa])$/.exec(text);
+  const ordinals = { primero: 0, primera: 0, primer: 0, segundo: 1, segunda: 1, tercero: 2, tercera: 2,
+    tercer: 2, cuarto: 3, cuarta: 3, quinto: 4, quinta: 4 };
+  let index = number ? (pending.offset || 0) + Number(number[1]) - 1
+    : ordinal ? (pending.offset || 0) + ordinals[ordinal[1]] : -1;
+  if (index < 0) {
+    const key = normalizeSupplier(message);
+    index = pending.candidates.findIndex(candidate => normalizeSupplier(candidate.name) === key);
+    if (index < 0) {
+      const match = resolveSupplier(message, pending.candidates.map(candidate => ({ supplierId: candidate.id,
+        supplierName: candidate.name })), []);
+      if (match.status === 'MATCH') index = pending.candidates.findIndex(candidate => candidate.id === match.offer.supplierId);
+    }
+  }
+  if (index < 0 || !pending.candidates[index]) return null;
+  if (pending.expiresAt <= now) return { expired: true };
+  const candidate = pending.candidates[index];
+  return { plan: { intent: 'replenishment_commercial', agent: 'analyst', skillId: pending.skillId,
+    args: { ...pending.args, supplierRef: candidate.id }, supplierSelectedName: candidate.name } };
+};
+const supplierPageView = (resolution, offset) => ({
+  answer: `Opciones de proveedor ${offset + 1}–${Math.min(offset + 5, resolution.candidates.length)} de ${resolution.candidates.length}: elige una opción o refina la búsqueda.`,
+  suggestions: resolution.candidates.slice(offset, offset + 5).map((candidate, index) => ({
+    label: `${index + 1}. ${candidate.name}`, message: candidate.name, ...(candidate.detail ? { detail: candidate.detail } : {})
+  })),
+  ...(resolution.candidates.length > 5 ? { suggestionsPagination: { query: resolution.query || 'proveedores', offset,
+    limit: 5, totalMatches: resolution.candidates.length, hasMore: offset + 5 < resolution.candidates.length, hasPrevious: offset > 0 } } : {})
+});
 
 const defaultMemory = createConversationMemory();
 const errorCode = error => error?.code === 'AGENT_BUDGET_EXCEEDED' || error?.code === 'GEMINI_BUDGET_EXCEEDED'
@@ -45,13 +99,22 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
         dependencies: { ...dependencies, clock: dependencies?.clock || clock } });
       const results = [];
       let plan = { intent: 'ambiguous_query', agent: 'coordinator' }, answer, code = null, question = null;
+      let supplierResolutionExpiry;
+      let supplierPageResponse;
       const run = async (agentId, skillId, args = {}) => {
         const result = await execution.executeSkill({ agentId, skillId, args });
         results.push({ skillId, result });
         return result;
       };
       try {
-        const deterministicPlan = await execution.runAgent('coordinator', () => routeDeterministically(message, state, clock()));
+        const selectedSupplier = supplierSelection(message, state, Date.now());
+        const deterministicPlan = await execution.runAgent('coordinator', () => selectedSupplier?.expired
+          ? clarify('Estas opciones de proveedor ya expiraron. Repite la consulta indicando el producto y el proveedor.')
+          : selectedSupplier?.pageOffset !== undefined ? clarify('Elige un proveedor de la página mostrada.')
+            : selectedSupplier?.refine ? clarify('Escribe una parte más específica del nombre del proveedor.')
+              : selectedSupplier?.filteredCandidates ? clarify('Elige una de las coincidencias refinadas.')
+                : selectedSupplier?.noRefinementMatch ? clarify('No encontré ese texto entre las opciones actuales. Prueba otra parte del nombre del proveedor.')
+          : selectedSupplier?.plan || routeDeterministically(message, state, clock()));
         plan = deterministicPlan || plan;
         if (!deterministicPlan) {
           const routing = await classifyAgentIntent(execution, message);
@@ -126,6 +189,27 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
           answer = 'Puedo consultar y explicar inventario, ventas y demanda. Las acciones de escritura no están disponibles.';
         } else if (plan.clarificationQuestion) {
           question = plan.clarificationQuestion; code = 'AGENT_CLARIFICATION_REQUIRED'; answer = question;
+          const supplierResult = results.find(({ result }) => result.status === 'CLARIFICATION' && result.metadata.supplierResolution);
+          if (supplierResult) {
+            supplierResolutionExpiry = Date.now() + SUPPLIER_SELECTION_TTL_MS;
+            commit({ supplierResolution: { ...supplierResult.result.metadata.supplierResolution, expiresAt: supplierResolutionExpiry } });
+          } else if (selectedSupplier?.expired) commit({ supplierResolution: null });
+          else if (selectedSupplier?.pageOffset !== undefined) {
+            const resolution = { ...state.supplierResolution, offset: selectedSupplier.pageOffset };
+            supplierResolutionExpiry = resolution.expiresAt;
+            commit({ supplierResolution: resolution }); supplierPageResponse = supplierPageView(resolution, resolution.offset); answer = supplierPageResponse.answer;
+          } else if (selectedSupplier?.refine) {
+            supplierResolutionExpiry = state.supplierResolution.expiresAt;
+            commit({ supplierResolution: { ...state.supplierResolution, refining: true } });
+          } else if (selectedSupplier?.filteredCandidates) {
+            const resolution = { ...state.supplierResolution, candidates: selectedSupplier.filteredCandidates,
+              query: selectedSupplier.query, offset: 0, refining: false };
+            supplierResolutionExpiry = resolution.expiresAt;
+            commit({ supplierResolution: resolution }); supplierPageResponse = supplierPageView(resolution, 0); answer = supplierPageResponse.answer;
+          } else if (selectedSupplier?.noRefinementMatch) {
+            supplierResolutionExpiry = state.supplierResolution.expiresAt;
+            commit({ supplierResolution: { ...state.supplierResolution, refining: true } });
+          }
           const search = results.find(({ skillId }) => skillId === 'search_products');
           if (search) commit({ lastIntent: 'search_product', lastAgent: 'operations',
             recentEntities: search.result.data, lastSearchQuery: plan.lookupQuery, listLimit: 2 });
@@ -144,6 +228,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
               && !sections.some(index => results[index].skillId === 'get_demand_forecast')) throw new AgentError('GEMINI_SCHEMA_VALIDATION_FAILED');
           }
           answer = sections.map(index => buildSkillAnswer(results[index].skillId, results[index].result)).join('\n\n');
+          if (plan.supplierSelectedName) answer = `Seleccionaste ${plan.supplierSelectedName}.\n${answer}`;
           const productSkills = ['search_products', 'get_product_details', 'get_low_stock_products', 'get_top_selling_products',
             'get_product_sales_summary', 'get_demand_forecast', 'get_replenishment_candidates', 'analyze_demand_forecast'];
           const productResult = [...results].reverse().find(({ skillId }) => productSkills.includes(skillId));
@@ -154,6 +239,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             && skillId === 'get_business_summary' && result.metadata.periodMode === 'latest'))?.result;
           const productListIntents = ['search_product', 'low_stock', 'top_selling_products', 'replenishment_candidates', 'demand_forecast', 'ml_analytics'];
           commit({ lastIntent: plan.intent, lastAgent: plan.agent, recentEntities: entities,
+            supplierResolution: null,
             lastForecastAnalytics: plan.intent === 'ml_analytics' ? plan.analyticsArgs : null,
             lastEntity: entities?.length === 1 ? entities[0] : undefined,
             ...(productResult && productListIntents.includes(plan.intent) && Array.isArray(raw)
@@ -182,8 +268,12 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
         latencyMs: events.filter(event => event.type === 'agent_finished' && event.agentId === agent.agentId).reduce((sum, event) => sum + event.durationMs, 0) }));
       const latencyMs = performance.now() - startedAt;
       const suggested = results.find(({ result }) => result.status === 'CLARIFICATION' && result.metadata.suggestions?.length);
+      const supplierResult = results.find(({ result }) => result.status === 'CLARIFICATION' && result.metadata.supplierResolution);
       return deepFreeze({ requestId: context.requestId, conversationId, answer, intent: plan.intent, agent: plan.agent,
-        ...(suggested ? { suggestions: suggested.result.metadata.suggestions } : {}),
+        ...(suggested ? { suggestions: suggested.result.metadata.suggestions } : supplierPageResponse?.suggestions ? { suggestions: supplierPageResponse.suggestions } : {}),
+        ...(suggested?.result.metadata.suggestionsPagination ? { suggestionsPagination: suggested.result.metadata.suggestionsPagination }
+          : supplierPageResponse?.suggestionsPagination ? { suggestionsPagination: supplierPageResponse.suggestionsPagination } : {}),
+        ...(supplierResolutionExpiry && (suggested || supplierPageResponse) ? { suggestionsExpiresAt: supplierResolutionExpiry } : {}),
         participants, actions, evidence: results.map(({ result }) => ({ ...result.evidence, recordCount: result.metadata.returnedCount })),
         usage: { ...usage, toolSelectionCycles: execution.getBudget().toolSelectionCycles, totalLatencyMs: latencyMs }, requiresClarification: Boolean(question), clarificationQuestion: question,
         code, latencyMs });
@@ -191,4 +281,4 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
   }
 });
 
-module.exports = { createAgentOrchestrator };
+module.exports = { createAgentOrchestrator, supplierSelection };

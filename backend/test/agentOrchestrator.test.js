@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
 const { createAgentOrchestrator, createConversationMemory, createAgentExecution, createAgentRequestContext, AgentError } = require('../src/agents');
+const { supplierSelection } = require('../src/agents/orchestrator');
 const { routeDeterministically } = require('../src/agents/intentRouting');
 const { TTL_MS } = require('../src/agents/memory');
 const { logAgentEvent } = require('../src/controllers/agentMessagesController');
@@ -23,7 +24,7 @@ const forecast = { status: 'READY', anchorOperationalDate: '2025-07-01', product
 
 // Runs the real execution layer and executors. Only the database driver/provider
 // are replaced; fakes assert tenant predicates and expose no write methods.
-const fixture = ({ products = [product(1), product(2), product(3, 'B')], provider, emptySalesHistory = false, emptyProductSalesHistory = false,
+const fixture = ({ products = [product(1), product(2), product(3, 'B')], contacts = [], provider, emptySalesHistory = false, emptyProductSalesHistory = false,
   forecastService = { getDemandForecast: async () => structuredClone(forecast) }, memory = createConversationMemory(), onEvent,
   businessHistory, now = clock } = {}) => {
   const calls = [];
@@ -39,7 +40,8 @@ const fixture = ({ products = [product(1), product(2), product(3, 'B')], provide
     find(match) {
       assert.ok(match.businessId); reads.push({ model: 'Product', match });
       return { select() { return this; }, limit() { return this; }, maxTimeMS() { return this; }, lean() { return this; },
-        exec: async () => products.filter(row => row.businessId === match.businessId && match._id.$in.includes(row._id)) };
+        exec: async () => products.filter(row => row.businessId === match.businessId
+          && (!match._id || match._id.$in.includes(row._id)) && (!match.sku || match.sku.$in.includes(row.sku))) };
     },
     aggregate(pipeline) {
       const match = pipeline[0].$match; assert.ok(match.businessId); reads.push({ model: 'Product', pipeline });
@@ -53,6 +55,10 @@ const fixture = ({ products = [product(1), product(2), product(3, 'B')], provide
       return { option() { return this; }, exec: async () => result };
     }
   };
+  const Contact = { find(match) { assert.ok(match.businessId); reads.push({ model: 'Contact', match });
+    return { select() { return this; }, limit() { return this; }, maxTimeMS() { return this; }, lean() { return this; },
+      exec: async () => contacts.filter(row => row.businessId === match.businessId && (!match.type || row.type === match.type)
+        && (!match.isActive || row.isActive === match.isActive) && (!match._id || match._id.$in.includes(row._id))) }; } };
   const Transaction = {
     findOne(match) {
       assert.ok(match.businessId); reads.push({ model: 'Transaction', match });
@@ -92,7 +98,7 @@ const fixture = ({ products = [product(1), product(2), product(3, 'B')], provide
     async generateWithTools(input) { calls.push({ type: 'tools', input }); return fakeProvider.generateWithTools(input); } };
   if (fakeProvider.forModel) adapter.forModel = (model, timeoutMs) => fakeProvider.forModel(model, timeoutMs);
   const orchestrator = createAgentOrchestrator({ provider: adapter, memory, clock: now, onEvent,
-    dependencies: { models: { Product, Transaction }, forecastService, toObjectId: value => value } });
+    dependencies: { models: { Product, Transaction, Contact }, forecastService, toObjectId: value => value } });
   return { calls, reads, orchestrator, run: (message, conversationId, request = req()) => orchestrator.handle(request, { message, ...(conversationId ? { conversationId } : {}) }) };
 };
 
@@ -346,6 +352,60 @@ test('ordinal outside the compact visible selection asks clarification without r
   assert.equal(result.requiresClarification, true); assert.equal(result.usage.totalLlmCalls, 0);
   assert.equal(result.usage.totalTokens, 0); assert.equal(result.usage.totalSkillCalls, 0);
   assert.equal(f.reads.length, before);
+});
+
+test('supplier candidate choice resumes the frozen cost request by number with tenant-scoped memory and zero LLM', async () => {
+  const supplierA = { _id: id(101), businessId: 'A', type: 'vendor', isActive: true, name: 'Proveedor sintético 055 FOOD' };
+  const supplierB = { _id: id(102), businessId: 'A', type: 'vendor', isActive: true, name: 'Proveedor sintético 055 FOODS' };
+  const productRow = { ...product(10), sku: 'M5-FOODS_3_511', currency: 'PEN', preferredSupplierId: supplierB._id,
+    supplierPrices: [{ supplierId: supplierA._id, purchasePrice: 15.67 }, { supplierId: supplierB._id, purchasePrice: 15.99 }] };
+  const forecastService = { getDemandForecast: async ({ businessId }) => ({ status: 'READY', anchorOperationalDate: '2026-05-17',
+    products: [{ productId: productRow._id, sku: productRow.sku, name: productRow.name, mlStatus: 'READY',
+      predictedDemand7d: 80, stockAtAnchor: 2, salesLast7Days: 5, safetyStock: 10, recommendedQty: 88, inventoryStatus: 'REPONER' }],
+    businessId }) };
+  const f = fixture({ products: [productRow], contacts: [supplierA, supplierB], forecastService });
+  const conversationId = randomUUID();
+  const first = await f.run('¿Cuánto cuesta reponer M5-FOODS_3_511 usando proveedor 55 foo?', conversationId);
+  assert.equal(first.requiresClarification, true); assert.equal(first.suggestions.length, 2);
+  assert.ok(first.suggestionsExpiresAt > Date.now()); assert.match(first.answer, /no estoy seguro/i);
+  assert.doesNotMatch(JSON.stringify(first), new RegExp(`${supplierA._id}|${supplierB._id}|USER_SPECIFIED_UNAVAILABLE`));
+  const second = await f.run('1', conversationId);
+  assert.equal(second.requiresClarification, false); assert.equal(second.conversationId, conversationId);
+  assert.equal(second.actions[0].skillId, 'get_replenishment_cost');
+  assert.match(second.answer, /M5-FOODS_3_511/); assert.match(second.answer, /Proveedor sintético 055 FOOD/);
+  assert.match(second.answer, /1,378\.96 PEN/);
+  assert.doesNotMatch(second.answer, new RegExp(supplierA._id));
+  assert.equal(second.usage.totalLlmCalls, 0); assert.equal(second.usage.totalTokens, 0);
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.reads.filter(read => read.model === 'Contact').every(read => read.match.businessId === 'A'), true);
+  const savedSelection = { supplierResolution: { skillId: 'get_replenishment_cost',
+    args: { productRef: productRow.sku, mode: 'single' }, expiresAt: Date.now() + 10000,
+    candidates: [{ id: supplierA._id, name: supplierA.name }] } };
+  assert.equal(supplierSelection('el primero', savedSelection, Date.now()).plan.args.productRef, productRow.sku);
+  assert.equal(supplierSelection('proveedor 55 food', savedSelection, Date.now()).plan.args.supplierRef, supplierA._id);
+  assert.equal(supplierSelection('1', { supplierResolution: { skillId: 'get_replenishment_cost',
+    args: { productRef: productRow.sku }, expiresAt: Date.now() - 1,
+    candidates: [{ id: supplierA._id, name: supplierA.name }] } }, Date.now()).expired, true);
+});
+
+test('supplier candidates paginate five at a time and selection on the next page resumes the original SKU', async () => {
+  const contacts = Array.from({ length: 6 }, (_, index) => ({ _id: id(110 + index), businessId: 'A', type: 'vendor',
+    isActive: true, name: `Proveedor sintético 055 FOODS ${String.fromCharCode(65 + index)}` }));
+  const productRow = { ...product(20), sku: 'M5-FOODS_3_511', currency: 'PEN', preferredSupplierId: contacts[0]._id,
+    supplierPrices: contacts.map((vendor, index) => ({ supplierId: vendor._id, purchasePrice: 15.50 + index / 100 })) };
+  const forecastService = { getDemandForecast: async () => ({ status: 'READY', anchorOperationalDate: '2026-05-17',
+    products: [{ productId: productRow._id, sku: productRow.sku, name: productRow.name, mlStatus: 'READY',
+      predictedDemand7d: 20, stockAtAnchor: 1, salesLast7Days: 2, safetyStock: 3, recommendedQty: 4, inventoryStatus: 'REPONER' }] }) };
+  const f = fixture({ products: [productRow], contacts, forecastService }); const conversationId = randomUUID();
+  const first = await f.run('¿Cuánto cuesta reponer M5-FOODS_3_511 con proveedor 55 foods?', conversationId);
+  assert.equal(first.suggestions.length, 5); assert.equal(first.suggestionsPagination.totalMatches, 6);
+  const next = await f.run('Ver más', conversationId);
+  assert.equal(next.suggestions.length, 1); assert.equal(next.suggestionsPagination.offset, 5);
+  assert.equal(next.usage.totalSkillCalls, 0); assert.equal(next.usage.totalTokens, 0);
+  const selected = await f.run('1', conversationId);
+  assert.equal(selected.requiresClarification, false); assert.equal(selected.actions[0].skillId, 'get_replenishment_cost');
+  assert.match(selected.answer, /M5-FOODS_3_511/); assert.match(selected.answer, /Proveedor sintético 055 FOODS F/);
+  assert.equal(selected.usage.totalLlmCalls, 0); assert.equal(selected.usage.totalTokens, 0);
 });
 
 test('a new product list replaces the previous ordinal selection', async () => {
