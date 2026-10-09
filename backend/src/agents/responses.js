@@ -25,6 +25,9 @@ const historicalNote = (rows, metadata) => {
   const anchors = [...new Set(rows.map(row => row.anchor || metadata.anchor).filter(Boolean))];
   return anchors.length ? `Estas ${anchors.length === 1 ? 'estimaciones y recomendaciones corresponden al escenario histórico con fecha de referencia' : 'estimaciones y recomendaciones corresponden a escenarios históricos con fechas de referencia'} ${anchors.map(dateLabel).join(' y ')}.` : '';
 };
+const historicalPriceNote = metadata => metadata.anchor
+  ? `Propuesta basada en el forecast histórico con fecha de corte ${dateLabel(metadata.anchor)} y en los precios configurados consultados actualmente; no es una predicción actual ni una cotización confirmada.`
+  : 'Los precios corresponden a la configuración consultada actualmente y no constituyen una cotización confirmada.';
 const readinessLabel = status => ({
   INSUFFICIENT_HISTORY: 'todavía no tiene suficiente historial para generar una predicción',
   MISSING_LINEAGE: 'todavía no tiene la configuración de origen necesaria',
@@ -63,6 +66,25 @@ const buildSkillAnswer = (skillId, result) => {
   if (skillId === 'analyze_demand_forecast') return require('./forecastResponses').buildForecastAnalysisAnswer(result);
   const { data, metadata, status } = result;
   if (status === 'ML_NOT_READY') return 'Este negocio aún no cuenta con historial o configuración suficiente para generar predicciones.';
+  if (skillId === 'get_replenishment_cost') {
+    if (Array.isArray(data)) return metadata.clarificationQuestion || 'Indica el SKU exacto del producto.';
+    if (data.sku) return `${data.sku} (${data.productName}): ${format(data.recommendedQty)} unidades recomendadas × ${format(data.unitCost)} ${data.currency} = ${data.replenishmentCost === null ? 'costo no disponible' : `${format(data.replenishmentCost)} ${data.currency}`} .\nProveedor: ${data.selectedSupplier || 'sin oferta utilizable'} (${data.selectionRule}). Stock al ancla: ${format(data.stockAtAnchor)}; demanda prevista: ${format(data.predictedDemand7d)}; estado: ${data.inventoryStatus || data.mlStatus}.\n${historicalPriceNote(metadata)}`;
+    const coverage = data.coverageProducts;
+    return `Costo conocido para la reposición recomendada: ${format(data.knownCostSubtotal)} ${data.currency}. Productos considerados: ${data.consideredProducts}; con costo válido: ${data.costedProducts}; excluidos: ${data.excludedProducts}; unidades recomendadas: ${data.recommendedUnits}.${data.excludedProducts > 0 || coverage?.eligible > coverage?.costed ? ' El subtotal es incompleto porque hay productos sin costo utilizable o sin forecast READY.' : ''}\n${historicalPriceNote(metadata)}`;
+  }
+  if (skillId === 'compare_supplier_costs') {
+    const offers = Array.isArray(data) ? data : [];
+    if (!offers.length) return 'No encontré ofertas activas y válidas en PEN para ese producto.';
+    return `Ofertas configuradas para ${offers[0].sku} (${offers[0].productName}):\n${offers.map(row => `• ${row.supplier}${row.selected ? ' (seleccionado)' : ''}${row.preferred ? ' (preferido)' : ''}: ${format(row.unitCost)} ${row.currency}`).join('\n')}\nRegla aplicada: ${metadata.selectionRule}. Proveedor seleccionado: ${metadata.selectedSupplier || 'ninguno'}. Precios consultados: ${metadata.pricingAsOf || 'fecha no disponible'}.`;
+  }
+  if (skillId === 'plan_replenishment_budget') {
+    const items = data.items || [];
+    const lines = items.map(row => `• ${row.sku} (${row.productName}): ${format(row.plannedQty)}/${format(row.recommendedQty)} unidades con ${row.supplierName}, ${format(row.plannedCost)} PEN. ${row.reason}.`);
+    return [`Con S/ ${format(data.budget)}, la propuesta asigna S/ ${format(data.spent)} y deja S/ ${format(data.remaining)}.`,
+      `${format(data.plannedUnits)} unidades planificadas; ${format(data.unplannedUnits)} quedan pendientes.`, ...lines,
+      data.excludedProducts ? `No se pudieron costear ${data.excludedProducts} productos recomendados: ${JSON.stringify(data.exclusionsByReason)}.` : '',
+      historicalPriceNote(metadata)].filter(Boolean).join('\n');
+  }
   if (skillId === 'get_sales_summary') return !data.completedSalesCount
     ? `No se registraron ventas completadas durante ${periodLabel(metadata)}.`
     : `Durante ${periodLabel(metadata)} registraste ${countLabel(data.completedSalesCount, 'venta completada', 'ventas completadas')}, con ${format(data.totalUnitsSold)} unidades vendidas. El importe de ventas es ${amounts(data.amountsByCurrency)}.`;

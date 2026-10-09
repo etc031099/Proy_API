@@ -7,6 +7,54 @@ const monthPeriod = (now, previous = false) => {
     endDate: new Date(Date.UTC(now.getUTCFullYear(), month + 1, 0)).toISOString().slice(0, 10) };
 };
 const clarify = question => ({ intent: 'ambiguous_query', agent: 'coordinator', clarificationQuestion: question });
+const routeCommercial = (message, memory = {}) => {
+  const text = normalize(message);
+  if (/shell|ejecuta codigo|mongo query|ignora.*instruccion|api.?key|password|jwt|system prompt/.test(text)) return null;
+  const sku = message.match(/\bM5-[A-Z]+_\d+_\d+\b/i)?.[0];
+  const currency = /\bUSD|\$|dolares?\b/i.test(message) ? 'USD'
+    : /\bEUR|€|euros?\b/i.test(message) ? 'EUR' : /\bS\s*\/|\bPEN\b/i.test(message) ? 'PEN' : null;
+  const department = message.match(/\b(?:FOODS|HOBBIES|HOUSEHOLD)_\d+\b/i)?.[0]?.toUpperCase();
+  const make = (skillId, args) => ({ intent: 'replenishment_commercial', agent: 'analyst', skillId, args });
+  if (/proveedor/.test(text) && /reponer|reposicion|costo|usar|conviene/.test(text)) {
+    const productRef = sku || (/este producto|ese producto|este sku/.test(text) ? memory.lastEntity?.sku : null);
+    if (!productRef) return { intent: 'replenishment_budget_required', agent: 'coordinator',
+      clarificationQuestion: 'Indica el SKU del producto para comparar sus proveedores configurados.' };
+    return make('compare_supplier_costs', { productRef });
+  }
+  const amountMatch = message.match(/(?:S\s*\/|PEN|USD|EUR|\$|€)\s*([\d.,]+)/i);
+  const hasBudgetIntent = /tengo|presupuesto|que puedo reponer|que productos deberia comprar|que debo comprar/.test(text);
+  if (amountMatch && hasBudgetIntent) {
+    const raw = amountMatch[1];
+    const normalizedAmount = raw.includes(',') && raw.includes('.') && raw.lastIndexOf(',') > raw.lastIndexOf('.')
+      ? raw.replace(/\./g, '').replace(',', '.')
+      : raw.includes(',') && !raw.includes('.') && /,\d{1,2}$/.test(raw) ? raw.replace(',', '.') : raw.replace(/,/g, '');
+    const budget = Number(normalizedAmount);
+    if (!Number.isFinite(budget) || budget <= 0) return { intent: 'replenishment_budget_required', agent: 'coordinator',
+      clarificationQuestion: 'Indica un presupuesto positivo en soles para preparar una propuesta.' };
+    if (currency !== 'PEN') return { intent: 'replenishment_budget_required', agent: 'coordinator',
+      clarificationQuestion: 'La planificación inicial solo admite presupuestos en PEN (S/). No convertiré monedas automáticamente.' };
+    return make('plan_replenishment_budget', { budget, currency: 'PEN', ...(department ? { department } : {}) });
+  }
+  if (/prioriza.*(compras|reponer)|que comprar primero/.test(text)) return {
+    intent: 'replenishment_budget_required', agent: 'coordinator',
+    clarificationQuestion: 'Puedo priorizar una propuesta de compra. ¿Qué presupuesto tienes disponible en soles (S/)?'
+  };
+  const total = /todo|todos|todas|total|cubrir|presupuesto necesito/.test(text);
+  const costIntent = /cuanto|costaria|costo|cuesta|presupuesto/.test(text)
+    && /reponer|reposicion|rep(o|u)ner|recomendad|reponer todo|productos reponer/.test(text);
+  if (costIntent) {
+    if (sku || /este producto|ese producto/.test(text)) {
+      const productRef = sku || memory.lastEntity?.sku;
+      if (!productRef) return { intent: 'replenishment_budget_required', agent: 'coordinator',
+        clarificationQuestion: 'Indica el SKU del producto para calcular su costo de reposición.' };
+      return make('get_replenishment_cost', { mode: 'single', productRef });
+    }
+    if (total) return make('get_replenishment_cost', { mode: 'total', ...(department ? { department } : {}) });
+    return { intent: 'replenishment_budget_required', agent: 'coordinator',
+      clarificationQuestion: '¿Quieres calcular el costo de un producto? Indica su SKU, o dime si deseas el total de toda la reposición recomendada.' };
+  }
+  return null;
+};
 const PERIOD_INTENTS = ['sales_summary', 'top_selling_products', 'product_sales_summary', 'recent_transactions'];
 const ordinalReference = text => {
   if (/\bel de arriba\b/.test(text)) return { matched: true, index: 0 };
@@ -23,6 +71,8 @@ const ordinalReference = text => {
 
 /** High-confidence routing only. Unrecognized language is delegated, never guessed. */
 const routeDeterministically = (message, memory, now) => {
+  const commercialPlan = routeCommercial(message, memory);
+  if (commercialPlan) return commercialPlan;
   const forecastPlan = require('./forecastRouting').routeForecastAnalytics(message, memory);
   if (forecastPlan) return forecastPlan;
   const text = normalize(message);
@@ -118,4 +168,4 @@ const routeDeterministically = (message, memory, now) => {
   return { ...plan, period, periodExplicit: Boolean(explicitPeriod), limit: plan.limit || 5 };
 };
 
-module.exports = { routeDeterministically, monthPeriod, clarify };
+module.exports = { routeDeterministically, routeCommercial, monthPeriod, clarify };

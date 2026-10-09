@@ -117,6 +117,63 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
     });
   };
 
+  const loadCommercialRows = async invocation => {
+    const batch = forecastResult(await readForecast({ ...invocation, args: {} }),
+      { ...invocation, args: {}, skill: { ...invocation.skill, maxRecords: 60 } });
+    if (batch.status === 'ML_NOT_READY') return batch;
+    const { Product, Contact } = getModels();
+    const skus = batch.data.map(row => row.sku).filter(Boolean);
+    const products = await Product.find({ businessId: invocation.context.businessId, isActive: true, sku: { $in: skus } })
+      .select('_id businessId sku name currency supplierPrices preferredSupplierId isActive')
+      .maxTimeMS(invocation.skill.timeoutMs).lean().exec();
+    const supplierIds = [...new Set(products.flatMap(row => (row.supplierPrices || []).map(offer => String(offer.supplierId)))
+      .concat(products.map(row => row.preferredSupplierId && String(row.preferredSupplierId)).filter(Boolean)))];
+    const validIds = supplierIds.filter(value => /^[a-f\d]{24}$/i.test(value)).map(objectId);
+    const suppliers = validIds.length ? await Contact.find({ businessId: invocation.context.businessId,
+      type: 'vendor', isActive: true, _id: { $in: validIds } }).select('_id businessId name type isActive')
+      .maxTimeMS(invocation.skill.timeoutMs).lean().exec() : [];
+    const productBySku = new Map(products.map(row => [row.sku, row]));
+    const rows = batch.data.map(row => {
+      const product = productBySku.get(row.sku);
+      return { ...row, ...(product ? { productId: String(product._id), currency: product.currency,
+        supplierPrices: product.supplierPrices, preferredSupplierId: product.preferredSupplierId,
+        businessId: product.businessId } : {}),
+      productMissing: !product };
+    });
+    const { selectOffer } = require('./replenishmentPlanning');
+    return { status: 'READY', rows, suppliers, metadata: batch.metadata };
+  };
+
+  const commercialProducts = async (invocation, productRef, department) => {
+    const loaded = await loadCommercialRows(invocation);
+    if (loaded.status === 'ML_NOT_READY') return loaded;
+    let rows = loaded.rows;
+    if (department) rows = rows.filter(row => String(row.department || '').toLowerCase() === department.toLowerCase());
+    if (productRef) {
+      const ranked = require('../automations/entityResolution').rankEntities(rows.map(row => ({ ...row,
+        _id: row.productId || row.sku })), productRef);
+      if (!ranked.value) return { status: 'CLARIFICATION', rows: [], suggestions: (ranked.candidates || []).slice(0, 5),
+        metadata: { ...loaded.metadata, returnedCount: 0, totalMatches: ranked.pagination?.totalMatches || 0,
+          clarificationQuestion: ranked.candidates?.length
+            ? `Encontré varios productos parecidos a «${productRef}». Indica el SKU exacto.`
+            : `No encontré «${productRef}» en el forecast de este negocio. Indica un SKU exacto.` } };
+      rows = [rows.find(row => row.sku === ranked.value.sku)];
+    }
+    if (rows.some(row => row.mlStatus === 'READY' && (!Number.isSafeInteger(row.recommendedQty)
+      || row.recommendedQty < 0 || !Number.isFinite(row.predictedDemand7d) || row.predictedDemand7d < 0
+      || !Number.isFinite(row.stockAtAnchor) || row.stockAtAnchor < 0))) throw new AgentError('AGENT_SKILL_EXECUTION_FAILED');
+    const { selectOffer } = require('./replenishmentPlanning');
+    return { status: 'READY', rows: rows.map(row => {
+      if (row.productMissing) return { ...row, exclusionReason: 'PRODUCT_NOT_CONFIGURED' };
+      const selected = selectOffer(row, loaded.suppliers, invocation.args.supplierRef);
+      return { ...row, selected: selected.selected, offers: selected.offers,
+        selectionRule: selected.selectionRule,
+        exclusionReason: row.currency !== 'PEN' ? 'UNSUPPORTED_CURRENCY'
+          : selected.offers.length ? selected.selectionRule === 'USER_SPECIFIED_UNAVAILABLE' ? 'SUPPLIER_OFFER_UNAVAILABLE' : null
+            : 'NO_USABLE_OFFER' };
+    }), suppliers: loaded.suppliers, metadata: loaded.metadata };
+  };
+
   return Object.freeze({
     async search_products(invocation) {
       const { args, context } = invocation;
@@ -252,6 +309,90 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
       if (batch.status === 'ML_NOT_READY') return batch;
       const configuration = Object.values(require('../config/mlScenarios.json')).find(row => row.businessId === invocation.context.businessId);
       return require('./forecastAnalytics').analyzeForecast(batch, invocation.args, configuration?.scenarioId);
+    },
+    async get_replenishment_cost(invocation) {
+      const { buildBudgetPlan, fromCents } = require('./replenishmentPlanning');
+      const loaded = await commercialProducts(invocation, invocation.args.mode === 'single' ? invocation.args.productRef : undefined,
+        invocation.args.department);
+      if (loaded.status === 'ML_NOT_READY' || loaded.status === 'CLARIFICATION') return {
+        status: loaded.status, data: loaded.suggestions || [], metadata: { ...loaded.metadata, returnedCount: loaded.metadata.returnedCount }
+      };
+      const rows = loaded.rows;
+      const eligible = rows.filter(row => row.mlStatus === 'READY' && row.recommendedQty > 0);
+      const excluded = eligible.filter(row => !row.selected);
+      const costed = eligible.filter(row => row.selected);
+      const notReady = rows.filter(row => row.mlStatus !== 'READY');
+      const subtotalCents = costed.reduce((sum, row) => sum + row.recommendedQty * row.selected.unitCostCents, 0);
+      if (!Number.isSafeInteger(subtotalCents)) throw new AgentError('AGENT_SKILL_EXECUTION_FAILED');
+      const pricingAsOf = asOf(), scenarioId = Object.values(require('../config/mlScenarios.json'))
+        .find(row => row.businessId === invocation.context.businessId)?.scenarioId || null;
+      const mapLine = row => ({ sku: row.sku, productName: row.name, recommendedQty: row.recommendedQty,
+        selectedSupplier: row.selected?.supplierName || null, selectionRule: row.selectionRule || 'NO_USABLE_OFFER',
+        unitCost: row.selected?.unitCost ?? null, currency: row.currency || null,
+        replenishmentCost: row.selected ? fromCents(row.recommendedQty * row.selected.unitCostCents) : null,
+        inventoryStatus: row.inventoryStatus, predictedDemand7d: row.predictedDemand7d,
+        stockAtAnchor: row.stockAtAnchor, mlStatus: row.mlStatus });
+      if (invocation.args.mode === 'single') {
+        const row = rows[0];
+        if (!row) return { status: 'NO_DATA', data: {}, metadata: { ...loaded.metadata, returnedCount: 0 } };
+        if (row.mlStatus !== 'READY') return { status: 'ML_NOT_READY', data: [], metadata: { ...loaded.metadata,
+          returnedCount: 0, reason: row.mlStatus } };
+        const line = mapLine(row);
+        return { status: 'READY', data: { scenarioId, anchor: loaded.metadata.anchor, pricingAsOf,
+          ...line, currency: line.currency || 'PEN' }, metadata: { ...loaded.metadata, returnedCount: 1,
+          evidenceLabel: `Costo de reposición · ${scenarioId || 'escenario histórico'} · ${loaded.metadata.anchor} · ${row.sku} · ${line.selectionRule} · precios consultados ${pricingAsOf}` } };
+      }
+      const limit = invocation.args.limit || 20, offset = invocation.args.offset || 0;
+      const lines = costed.map(mapLine).slice(offset, offset + limit);
+      return { status: 'READY', data: { scenarioId, anchor: loaded.metadata.anchor, pricingAsOf,
+        consideredProducts: rows.length, costedProducts: costed.length, excludedProducts: excluded.length + notReady.length,
+        nonReadyProducts: notReady.length,
+        recommendedUnits: eligible.reduce((sum, row) => sum + row.recommendedQty, 0),
+        knownCostSubtotal: fromCents(subtotalCents), currency: 'PEN', coverageProducts: { costed: costed.length, eligible: eligible.length },
+        exclusionsByReason: [...notReady.map(row => row.mlStatus), ...excluded.map(row => row.exclusionReason || 'NO_USABLE_OFFER')]
+          .reduce((out, reason) => { const key = notReady.some(row => row.mlStatus === reason) ? `FORECAST_${reason}` : reason;
+            out[key] = (out[key] || 0) + 1; return out; }, {}), items: lines }, metadata: { ...loaded.metadata, totalMatches: costed.length,
+        returnedCount: lines.length, offset, limit, truncated: offset + limit < costed.length,
+        evidenceLabel: `Costo conocido de reposición · ${scenarioId || 'escenario histórico'} · ${loaded.metadata.anchor} · PEN · ${pricingAsOf}` } };
+    },
+    async plan_replenishment_budget(invocation) {
+      const { buildBudgetPlan, selectOffer } = require('./replenishmentPlanning');
+      const loaded = await commercialProducts(invocation, undefined, invocation.args.department);
+      if (loaded.status === 'ML_NOT_READY') return { status: loaded.status, data: [], metadata: { ...loaded.metadata, returnedCount: 0 } };
+      const rows = loaded.rows.map(row => {
+        const offer = row.selected ? row : { ...row, ...selectOffer(row, loaded.suppliers) };
+        return { ...offer, exclusionReason: row.exclusionReason || offer.exclusionReason };
+      });
+      const plan = buildBudgetPlan({ rows, budget: invocation.args.budget,
+        limit: invocation.args.limit || 20, offset: invocation.args.offset || 0 });
+      const pricingAsOf = asOf(), scenarioId = Object.values(require('../config/mlScenarios.json'))
+        .find(row => row.businessId === invocation.context.businessId)?.scenarioId || null;
+      const data = { scenarioId, anchor: loaded.metadata.anchor, pricingAsOf, currency: 'PEN', ...plan,
+        coverageProducts: { costed: plan.costedProducts, eligible: loaded.rows.filter(row => row.mlStatus === 'READY' && row.recommendedQty > 0).length } };
+      return { status: 'READY', data, metadata: { ...loaded.metadata,
+        totalMatches: plan.pagination.total, returnedCount: plan.pagination.returnedCount, offset: plan.pagination.offset,
+        limit: plan.pagination.limit, truncated: plan.pagination.truncated,
+        evidenceLabel: `Plan de presupuesto · ${scenarioId || 'escenario histórico'} · ${loaded.metadata.anchor} · PEN · ${pricingAsOf}` } };
+    },
+    async compare_supplier_costs(invocation) {
+      const loaded = await commercialProducts(invocation, invocation.args.productRef);
+      if (loaded.status === 'ML_NOT_READY' || loaded.status === 'CLARIFICATION') return {
+        status: loaded.status, data: loaded.suggestions || [], metadata: { ...loaded.metadata, returnedCount: loaded.metadata.returnedCount }
+      };
+      const row = loaded.rows[0];
+      if (!row || row.productMissing) return { status: 'NO_DATA', data: [], metadata: { ...loaded.metadata, returnedCount: 0 } };
+      const selected = row;
+      const offers = [...selected.offers].sort((a, b) => Number(b.supplierId === selected.selected?.supplierId)
+        - Number(a.supplierId === selected.selected?.supplierId) || a.unitCostCents - b.unitCostCents
+        || String(a.supplierName).localeCompare(String(b.supplierName))).slice(0, invocation.skill.maxRecords);
+      const pricingAsOf = asOf(), scenarioId = Object.values(require('../config/mlScenarios.json'))
+        .find(config => config.businessId === invocation.context.businessId)?.scenarioId || null;
+      return { status: offers.length ? 'READY' : 'NO_DATA', data: offers.map(offer => ({ sku: row.sku,
+        productName: row.name, supplier: offer.supplierName, unitCost: offer.unitCost, currency: row.currency,
+        preferred: offer.preferred, selected: offer.supplierId === selected.selected?.supplierId })), metadata: { ...loaded.metadata,
+        returnedCount: offers.length, totalMatches: selected.offers.length,
+        pricingAsOf, evidenceLabel: `Ofertas de ${row.sku} · ${scenarioId || 'escenario histórico'} · ancla ${loaded.metadata.anchor} · PEN · ${pricingAsOf}`,
+        selectedSupplier: selected.selected?.supplierName || null, selectionRule: selected.selectionRule } };
     },
     async get_demand_forecast(invocation) { return forecastResult(await readForecast(invocation), invocation); },
     async get_replenishment_candidates(invocation) { return forecastResult(await readForecast(invocation), invocation, true); }

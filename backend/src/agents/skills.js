@@ -15,7 +15,8 @@ const both = ['operations', 'analyst'];
 const READY_SKILL_IDS = Object.freeze([
   'search_products', 'get_product_details', 'get_low_stock_products', 'get_recent_transactions',
   'get_sales_summary', 'get_top_selling_products', 'get_business_summary',
-  'get_demand_forecast', 'get_replenishment_candidates', 'get_product_sales_summary', 'analyze_demand_forecast'
+  'get_demand_forecast', 'get_replenishment_candidates', 'get_product_sales_summary', 'analyze_demand_forecast',
+  'get_replenishment_cost', 'plan_replenishment_budget', 'compare_supplier_costs'
 ]);
 // Replenishment's single ML batch exceeded its prior 10 s deadline in production.
 // 25 s accommodates a bounded Render cold start/inference without adding retries.
@@ -25,7 +26,8 @@ const entry = (skillId, description, allowedAgents, inputSchema, maxRecords, dat
     type: 'object', description: outputDescription,
     fields: { data: 'Projected records or summary', metadata: 'Period/asOf, currency when applicable, returnedCount, totalMatches and truncated' }
   },
-  maxRecords, timeoutMs: ['get_replenishment_candidates', 'analyze_demand_forecast'].includes(skillId) ? 25000
+  maxRecords, timeoutMs: ['get_replenishment_candidates', 'analyze_demand_forecast', 'get_replenishment_cost',
+    'plan_replenishment_budget', 'compare_supplier_costs'].includes(skillId) ? 25000
     : skillId.includes('forecast') ? 10000 : 5000,
   dataSensitivity, executorStatus: READY_SKILL_IDS.includes(skillId) ? 'READY' : 'PENDING_IMPLEMENTATION'
 });
@@ -62,7 +64,18 @@ const SKILLS = deepFreeze([
   entry('get_demand_forecast', 'Consulta el forecast histórico existente sin modificarlo.', ['analyst'],
     schema({ productId: id }), 60, 'OPERATIONAL', 'ML readiness, model metadata, anchor and existing forecast/recommendation values'),
   entry('get_replenishment_candidates', 'Selecciona candidatos desde la recomendación existente.', ['analyst'],
-    schema({ limit: limit(20) }), 20, 'OPERATIONAL', 'READY candidates ordered by existing recommendedQty with historical anchor')
+    schema({ limit: limit(20) }), 20, 'OPERATIONAL', 'READY candidates ordered by existing recommendedQty with historical anchor'),
+  entry('get_replenishment_cost', 'Calcula el costo configurado para reposición recomendada.', ['analyst'],
+    schema({ mode: { type: 'string', enum: ['single', 'total'] }, productRef: text(100), supplierRef: text(100),
+      department: text(50), limit: limit(20), offset: { type: 'integer', minimum: 0, maximum: 60 } }, ['mode']),
+    20, 'FINANCIAL', 'Read-only replenishment cost using valid tenant supplier offers; PEN only'),
+  entry('plan_replenishment_budget', 'Propone una compra parcial priorizada dentro de un presupuesto.', ['analyst'],
+    schema({ budget: { type: 'number', minimum: Number.MIN_VALUE, maximum: 1000000000 }, currency: { ...text(3), enum: ['PEN'] },
+      department: text(50), limit: limit(20), offset: { type: 'integer', minimum: 0, maximum: 60 } }, ['budget', 'currency']),
+    20, 'FINANCIAL', 'Deterministic greedy budget proposal, historical forecast anchor and current configured prices'),
+  entry('compare_supplier_costs', 'Compara ofertas configuradas para un producto.', ['analyst'],
+    schema({ productRef: text(100), supplierRef: text(100) }, ['productRef']),
+    10, 'FINANCIAL', 'Tenant-scoped active vendor offers and deterministic selected supplier')
 ]);
 
 const getSkillDefinition = skillId => {

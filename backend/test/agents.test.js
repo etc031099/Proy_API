@@ -30,9 +30,9 @@ test('registry contains exactly three distinct immutable agent definitions', () 
   assert.equal(getAgentDefinition('analyst').llmPolicy.preferredMode, 'hybrid');
 });
 
-test('all fourteen skills are unique read-only contracts with eleven implemented executors', () => {
-  assert.equal(SKILLS.length, 14);
-  assert.equal(new Set(SKILLS.map(skill => skill.id)).size, 14);
+test('all seventeen skills are unique read-only contracts with fourteen implemented executors', () => {
+  assert.equal(SKILLS.length, 17);
+  assert.equal(new Set(SKILLS.map(skill => skill.id)).size, 17);
   for (const skill of SKILLS) {
     assert.equal(skill.readOnly, true);
     assert.ok(['READY', 'PENDING_IMPLEMENTATION'].includes(skill.executorStatus));
@@ -43,12 +43,13 @@ test('all fourteen skills are unique read-only contracts with eleven implemented
     assert.ok(Object.isFrozen(skill.inputSchema.properties));
     assert.equal(new Set(skill.allowedAgents).size, skill.allowedAgents.length);
   }
-  assert.equal(SKILLS.filter(skill => skill.executorStatus === 'READY').length, 11);
+  assert.equal(SKILLS.filter(skill => skill.executorStatus === 'READY').length, 14);
 });
 
 test('replenishment alone has a 25 s skill deadline; every other skill retains its prior limit', () => {
   for (const skill of SKILLS) {
-    const expected = ['get_replenishment_candidates', 'analyze_demand_forecast'].includes(skill.id) ? 25000
+    const expected = ['get_replenishment_candidates', 'analyze_demand_forecast', 'get_replenishment_cost',
+      'plan_replenishment_budget', 'compare_supplier_costs'].includes(skill.id) ? 25000
       : skill.id === 'get_demand_forecast' ? 10000 : 5000;
     assert.equal(skill.timeoutMs, expected, skill.id);
   }
@@ -120,7 +121,9 @@ test('all registered schemas accept their canonical minimal arguments without co
     get_low_stock_products: { limit: 20 }, get_inventory_summary: {}, get_recent_transactions: {},
     get_sales_summary: dates, get_purchase_summary: dates, get_business_summary: { period: 'latest' },
     get_supplier_details: { supplierId: productId }, get_top_selling_products: { ...dates, limit: 10 },
-    get_product_sales_summary: { ...dates, sku: 'SKU-1' }, get_demand_forecast: {}, get_replenishment_candidates: { limit: 20 }
+    get_product_sales_summary: { ...dates, sku: 'SKU-1' }, get_demand_forecast: {}, get_replenishment_candidates: { limit: 20 },
+    get_replenishment_cost: { mode: 'total' }, plan_replenishment_budget: { budget: 100, currency: 'PEN' },
+    compare_supplier_costs: { productRef: 'SKU-1' }
   };
   for (const skill of SKILLS) {
     const args = examples[skill.id];
@@ -153,7 +156,10 @@ test('list limits accept their maximum and reject records above each cap', () =>
   for (const skill of SKILLS.filter(entry => entry.inputSchema.properties.limit)) {
     const args = skill.id === 'search_products' ? { query: 'SKU' }
       : skill.id === 'analyze_demand_forecast' ? { mode: 'top' }
-      : skill.id === 'get_top_selling_products' ? { startDate: '2025-01-01', endDate: '2025-01-31' } : {};
+      : skill.id === 'get_top_selling_products' ? { startDate: '2025-01-01', endDate: '2025-01-31' }
+        : skill.id === 'get_replenishment_cost' ? { mode: 'total' }
+          : skill.id === 'plan_replenishment_budget' ? { budget: 100, currency: 'PEN' }
+            : skill.id === 'compare_supplier_costs' ? { productRef: 'SKU-1' } : {};
     const agentId = skill.allowedAgents[0];
     assert.equal(invoke(skill.id, { ...args, limit: skill.maxRecords }, agentId).args.limit, skill.maxRecords);
     assert.throws(() => invoke(skill.id, { ...args, limit: skill.maxRecords + 1 }, agentId), expectCode('AGENT_INVALID_SKILL_ARGS'));

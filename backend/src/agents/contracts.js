@@ -132,6 +132,9 @@ const validateSkillArgs = (schema, args) => {
     } else if (rule.type === 'integer') {
       if (typeof value !== 'number') invalid();
       try { toFiniteNumber(value, { integer: true, min: rule.minimum, max: rule.maximum }); } catch { invalid(); }
+    } else if (rule.type === 'number') {
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < (rule.minimum ?? -Infinity)
+        || value > (rule.maximum ?? Infinity)) invalid();
     } else invalid();
     result[key] = value;
   }

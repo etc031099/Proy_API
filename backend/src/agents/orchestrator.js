@@ -93,6 +93,11 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
               if (result.status === 'CLARIFICATION') plan.clarificationQuestion = result.metadata.clarificationQuestion;
               break;
             }
+            case 'replenishment_commercial': {
+              const result = await run('analyst', plan.skillId, plan.args);
+              if (result.status === 'CLARIFICATION') plan.clarificationQuestion = result.metadata.clarificationQuestion;
+              break;
+            }
             case 'search_product': await run(plan.agent, 'search_products', { query: plan.query || state.lastSearchQuery, limit: plan.limit }); break;
             case 'product_details': await run(plan.agent, 'get_product_details', selector); break;
             case 'low_stock': await run(plan.agent, 'get_low_stock_products', { limit: plan.limit }); break;

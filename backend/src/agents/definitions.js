@@ -26,7 +26,8 @@ const AGENTS = deepFreeze([
     responsibilities: ['Agregados y resumen del negocio', 'Rankings', 'Forecast y reposición', 'Interpretación de resultados'],
     allowedSkills: ['search_products', 'get_product_details', 'get_low_stock_products', 'get_inventory_summary',
       'get_sales_summary', 'get_purchase_summary', 'get_business_summary', 'get_top_selling_products',
-      'get_product_sales_summary', 'get_demand_forecast', 'get_replenishment_candidates', 'analyze_demand_forecast'],
+      'get_product_sales_summary', 'get_demand_forecast', 'get_replenishment_candidates', 'analyze_demand_forecast',
+      'get_replenishment_cost', 'plan_replenishment_budget', 'compare_supplier_costs'],
     llmPolicy: { preferredMode: 'hybrid', providerEnabled: false },
     limits: { ...TOKEN_BUDGETS.analyst, maxSkillCalls: EXECUTION_LIMITS.maxSkillCalls, maxLlmCalls: EXECUTION_LIMITS.maxLlmCalls }
   }
