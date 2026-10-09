@@ -1,0 +1,104 @@
+{
+  "lineage_version": "cloud-demo-lineage-v2",
+  "scenario_id": "m5-ca3-cloud-demo-v2",
+  "business_id": "ML-CLOUD-DEMO-V2",
+  "store_id": "CA_3",
+  "source_date_range": [
+    "2015-11-01",
+    "2016-05-15"
+  ],
+  "operational_date_range": [
+    "2025-11-02",
+    "2026-05-17"
+  ],
+  "source_anchor": "2016-05-15",
+  "operational_anchor": "2026-05-17",
+  "date_offset_days": 3654,
+  "products_count": 60,
+  "calendar_rows": 197,
+  "price_rows": 11820,
+  "source_bronze_sha256": "3029c1b390d96a2da02c589df9b7e750be458bea5bc04855dc5942e2cc96c8a6",
+  "scenario_config_hash": "9a9683bff3bff203c8ee915dc5561574180a7ce32635cfa0a09aee441a596655",
+  "scenario_manifest_hash": "a992ad739467d5e4d92cae10fda962e2066d3c817f844cea488c32a0b041fa3f",
+  "artifacts": {
+    "products": {
+      "path": "ml/data/serving/cloud_demo_v2/cloud_demo_product_lineage.parquet",
+      "rows": 60,
+      "sha256": "f008c7b5d31b2b3452a6ec7b3215e485f69006450574b2cb0999dc1ca073051b",
+      "logical_hash": "0e613ff9029c26ff2de2ce16a1bed8a0f2f18a4c5073aa14b2275ac34a08b814",
+      "size_bytes": 1796
+    },
+    "calendar": {
+      "path": "ml/data/serving/cloud_demo_v2/cloud_demo_calendar.parquet",
+      "rows": 197,
+      "sha256": "39b4e0a12cbdb71058c5bd4b03716ce72b322d84ec98c2f2d44a3c8e0ef2c7e8",
+      "logical_hash": "c664e9dd884218b2b6a7f53e6eef8390460a429fbcba7d444c1804b8378ebf08",
+      "size_bytes": 3486
+    },
+    "prices": {
+      "path": "ml/data/serving/cloud_demo_v2/cloud_demo_price_lineage.parquet",
+      "rows": 11820,
+      "sha256": "c9c12f40b4bf189b0900a319861f4b5adc56fbcddc9a5c0fcd8d2231c21c8997",
+      "logical_hash": "de7fab128bff9455abd9458fb1ac2ad2d3f0b63aa9811e302afeb668ac744545",
+      "size_bytes": 3812
+    }
+  },
+  "generation_timestamp_utc": "2026-10-09T17:13:09.984863+00:00",
+  "library_versions": {
+    "python": "3.12.14",
+    "duckdb": "1.5.5"
+  },
+  "rules": {
+    "active_start": "first source_date with non-null original sell_price",
+    "price_filling": "causal forward-fill per item from original M5 sell_price; never backward-fill",
+    "price_missing_active": "raw_sell_price is null before forward-fill",
+    "calendar_mapping": "demand-v1 DuckDB calendar functions on source_date",
+    "date_mapping": "operational_date = source_date + 3654 days",
+    "ordering": {
+      "products": "item_id",
+      "calendar": "source_date",
+      "prices": "item_id, source_date"
+    }
+  },
+  "validation": {
+    "status": "passed",
+    "checks": {
+      "products": 60,
+      "duplicate_products": 0,
+      "missing_product_fields": 0,
+      "inconsistent_categories": 0,
+      "active_start_after_period_start": 0,
+      "calendar_rows": 197,
+      "duplicate_calendar_dates": 0,
+      "inconsistent_calendar_values": 0,
+      "price_rows": 11820,
+      "duplicate_price_keys": 0,
+      "invalid_filled_prices": 0,
+      "invalid_missing_flags": 0
+    },
+    "bronze_equivalence_mismatches": {
+      "products": 0,
+      "calendar": 0,
+      "prices": 0
+    },
+    "future_prices_used": 0,
+    "mapping_reversible": true,
+    "deterministic_sample": {
+      "products": [
+        "FOODS_1_050",
+        "HOBBIES_1_223",
+        "HOUSEHOLD_2_427"
+      ],
+      "dates": [
+        "2015-11-01",
+        "2016-02-07",
+        "2016-05-15"
+      ],
+      "mismatches": 0
+    }
+  },
+  "performance": {
+    "elapsed_seconds": 0.925,
+    "peak_rss_bytes": 1447165952
+  }
+}

@@ -311,10 +311,15 @@ def build_cloud_demo_lineage(
     output_directory: str | Path = DEFAULT_OUTPUT_DIRECTORY,
     *,
     overwrite: bool = False,
+    expected_scenario_id: str = SCENARIO_ID,
+    business_id: str = BUSINESS_ID,
+    lineage_version: str = LINEAGE_VERSION,
 ) -> dict[str, Any]:
     config = load_scenario_config(config_path)
-    if config.scenario_id != SCENARIO_ID:
-        raise RuntimeError(f"Expected scenario {SCENARIO_ID}")
+    if config.scenario_id != expected_scenario_id:
+        raise RuntimeError(f"Expected scenario {expected_scenario_id}")
+    if expected_scenario_id != SCENARIO_ID and repository_path(output_directory).resolve() == repository_path(DEFAULT_OUTPUT_DIRECTORY).resolve():
+        raise RuntimeError("Additional scenarios require a separate lineage directory")
     if config.operational_offset_days != EXPECTED_OFFSET_DAYS:
         raise RuntimeError("Unexpected CLOUD-DEMO operational date offset")
 
@@ -410,7 +415,9 @@ def build_cloud_demo_lineage(
         artifacts = {}
         for key, temporary in temporary_outputs.items():
             artifacts[key] = {
-                "path": f"ml/data/serving/{final_outputs[key].name}",
+                "path": (final_outputs[key].relative_to(repository_path(".")).as_posix()
+                         if final_outputs[key].is_relative_to(repository_path("."))
+                         else final_outputs[key].as_posix()),
                 "rows": row_counts[key],
                 "sha256": sha256_file(temporary),
                 "logical_hash": _logical_hash(connection, temporary, orders[key]),
@@ -418,9 +425,9 @@ def build_cloud_demo_lineage(
             }
         elapsed = __import__("time").perf_counter() - started
         result = {
-            "lineage_version": LINEAGE_VERSION,
+            "lineage_version": lineage_version,
             "scenario_id": config.scenario_id,
-            "business_id": BUSINESS_ID,
+            "business_id": business_id,
             "store_id": config.source_store,
             "source_date_range": [
                 config.source_start.isoformat(), config.source_end.isoformat()

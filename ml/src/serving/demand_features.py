@@ -106,7 +106,13 @@ class DemandFeatureBuilder:
         self,
         lineage_manifest_path: str | Path = DEFAULT_LINEAGE_MANIFEST,
         feature_contract_path: str | Path = DEFAULT_FEATURE_CONTRACT,
+        *,
+        expected_business_id: str = EXPECTED_BUSINESS_ID,
+        expected_scenario_id: str = EXPECTED_SCENARIO_ID,
     ) -> None:
+        # Local opt-in only: public ModelRuntime retains the v1 defaults.
+        self.expected_business_id = expected_business_id
+        self.expected_scenario_id = expected_scenario_id
         self.manifest_path = repository_path(lineage_manifest_path).resolve()
         self.contract_path = repository_path(feature_contract_path).resolve()
         self.manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
@@ -152,9 +158,9 @@ class DemandFeatureBuilder:
         }
 
     def _validate_manifest(self) -> None:
-        if self.manifest.get("business_id") != EXPECTED_BUSINESS_ID:
+        if self.manifest.get("business_id") != self.expected_business_id:
             raise FeatureBuildError(MISSING_LINEAGE, "Unexpected lineage businessId")
-        if self.manifest.get("scenario_id") != EXPECTED_SCENARIO_ID:
+        if self.manifest.get("scenario_id") != self.expected_scenario_id:
             raise FeatureBuildError(MISSING_LINEAGE, "Unexpected lineage scenarioId")
         if self.manifest.get("date_offset_days") != 3654:
             raise FeatureBuildError(MISSING_LINEAGE, "Unexpected lineage date offset")
@@ -171,9 +177,9 @@ class DemandFeatureBuilder:
         scenario_id: str,
         anchor_strategy: str,
     ) -> tuple[date, date]:
-        if business_id is not None and business_id != EXPECTED_BUSINESS_ID:
+        if business_id is not None and business_id != self.expected_business_id:
             raise FeatureBuildError(MISSING_LINEAGE, "businessId is not supported by this lineage")
-        if scenario_id != EXPECTED_SCENARIO_ID:
+        if scenario_id != self.expected_scenario_id:
             raise FeatureBuildError(MISSING_LINEAGE, "scenarioId is not supported by this lineage")
         if anchor_strategy != EXPECTED_ANCHOR_STRATEGY:
             raise FeatureBuildError(INVALID_HISTORY, "Unsupported anchor strategy")

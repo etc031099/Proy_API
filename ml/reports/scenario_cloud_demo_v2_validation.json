@@ -1,0 +1,84 @@
+{
+  "scenarioId": "m5-ca3-cloud-demo-v2",
+  "businessId": "ML-CLOUD-DEMO-V2",
+  "parity": {
+    "ready": 60,
+    "features": 31,
+    "comparisons": 1860,
+    "differences": 0,
+    "tolerance": 1e-05
+  },
+  "departments": {
+    "FOODS_1": 8,
+    "FOODS_2": 8,
+    "FOODS_3": 12,
+    "HOBBIES_1": 8,
+    "HOBBIES_2": 8,
+    "HOUSEHOLD_1": 8,
+    "HOUSEHOLD_2": 8
+  },
+  "states": {
+    "REPONER": 33,
+    "OK": 24,
+    "VIGILAR": 3
+  },
+  "rotation": {
+    "medium": 18,
+    "low": 24,
+    "high": 18
+  },
+  "priceBands": {
+    "high": 19,
+    "low": 20,
+    "medium": 21
+  },
+  "intermittent": 24,
+  "salesUnitsByDepartment": {
+    "FOODS_1": 2886,
+    "FOODS_2": 1637,
+    "FOODS_3": 6899,
+    "HOBBIES_1": 1449,
+    "HOBBIES_2": 973,
+    "HOUSEHOLD_1": 4157,
+    "HOUSEHOLD_2": 1133
+  },
+  "prediction": {
+    "min": 0.46399809577088663,
+    "max": 73.13071837049475,
+    "median": 7.341214740191468,
+    "total": 712.7403173376174
+  },
+  "replenishment": {
+    "min": 0.0,
+    "max": 88.0,
+    "median": 1.5,
+    "total": 543.0
+  },
+  "stock": {
+    "min": 0.0,
+    "max": 68.0,
+    "median": 10.0,
+    "total": 815.0
+  },
+  "priceUsd": {
+    "min": 0.23,
+    "max": 20.97,
+    "median": 3.48,
+    "total": 279.1
+  },
+  "lineage_sha256": "12eb29f85cb082b5b8b18f9e8418af419d40227d75c71f967bfc50c1d9d7ff94",
+  "counts": {
+    "contact.created": 1261,
+    "product.created": 60,
+    "purchases": 5459,
+    "sales": 44983,
+    "transaction.cancelled": 71,
+    "credit-payment.created": 1531,
+    "window_purchases": 763,
+    "window_sales": 5940,
+    "transactions_2026": 4728,
+    "products": 60,
+    "transactions": 50442
+  },
+  "not_accuracy_evaluation": true
+}
