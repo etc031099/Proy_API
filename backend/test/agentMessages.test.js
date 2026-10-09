@@ -43,7 +43,7 @@ test('messages trims, reuses conversation and derives tenant only from authentic
 });
 for (const [name, body] of [ ['missing', {}], ['empty', { message: ' ' }], ['short', { message: '?' }],
   ['not string', { message: 123 }], ['too long', { message: 'x'.repeat(2001) }], ['invalid conversation', { message: 'hi', conversationId: 'bad' }],
-  ...['businessId', 'userId', 'agent', 'model', 'skills', 'apiKey', 'systemPrompt', 'role', 'tenant', 'tokenBudgets'].map(key => [key, { message: 'hello', [key]: 'forbidden' }]) ]) {
+  ...['businessId', 'userId', 'agent', 'model', 'skills', 'apiKey', 'systemPrompt', 'role', 'tenant', 'tokenBudgets', 'offset', 'query'].map(key => [key, { message: 'hello', [key]: 'forbidden' }]) ]) {
   test(`messages rejects ${name}`, async t => {
     const post = await setup(t, { orchestrator: { handle() { assert.fail('must not run'); } } });
     assert.equal((await post(body)).status, 400);
@@ -59,15 +59,17 @@ test('clarification is normal success preserving conversationId', async t => {
 test('HTTP transports safe candidate choices and accepts single digit selection', async t => {
   const { publicResponse } = require('../src/services/agentHistoryProjection');
   const suggestions = [{ label: '1. Foods A — FOOD-A', message: 'Opción 1', internalId: 'private' }];
+  const suggestionsPagination = { query: 'food', offset: 5, limit: 5, totalMatches: 28, hasMore: true, hasPrevious: true };
   const post = await setup(t, { orchestrator: { async handle(req, input) {
     assert.equal(input.message, '1');
-    return publicResponse({ ...response, suggestions, suggestionsExpiresAt: Date.now() + 10000 });
+    return publicResponse({ ...response, suggestions, suggestionsPagination, suggestionsExpiresAt: Date.now() + 10000 });
   } } });
   const res = await post({ message: '1', conversationId });
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.deepEqual(body.data.suggestions, [{ label: '1. Foods A — FOOD-A', message: 'Opción 1' }]);
   assert.ok(body.data.suggestionsExpiresAt > Date.now());
+  assert.deepEqual(body.data.suggestionsPagination, suggestionsPagination);
   assert.equal(body.data.usage.totalLlmCalls, 0);
 });
 for (const [code, status] of [['AGENT_PROVIDER_FAILED', 503], ['AGENT_SKILL_FAILED', 503], ['AGENT_BUDGET_EXCEEDED', 429], ['AGENT_INTERNAL_ERROR', 500]]) {

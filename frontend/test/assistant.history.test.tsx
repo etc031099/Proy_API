@@ -36,12 +36,17 @@ beforeEach(() => {
 for (const expired of [false, true]) it(`restores food choices from history, expired=${expired}`, async () => {
   vi.mocked(apiClient.getAgentConversation).mockResolvedValue({ success: true, data: { ...detail, messages: [
     detail.messages[0], { ...detail.messages[1], response: { ...response, suggestionsExpiresAt: expired ? 0 : Date.now() + 120000,
+      suggestionsPagination: { query: 'food', offset: 5, limit: 5, totalMatches: 28, hasMore: true, hasPrevious: true },
       suggestions: [{ label: '1. Foods A — FOOD-A', message: 'Opción 1' }] } }
   ] } });
   vi.mocked(apiClient.sendAgentMessage).mockResolvedValue({ success: true, data: response });
   render(<AssistantPage />);
   const choice = await screen.findByRole('button', { name: '1. Foods A — FOOD-A' });
   await waitFor(() => expect(choice.hasAttribute('disabled')).toBe(expired));
+  expect(screen.getByText('28 coincidencias para «food» · Mostrando 6–6')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Ver más' }).hasAttribute('disabled')).toBe(expired);
+  expect(screen.getByRole('button', { name: 'Anterior' }).hasAttribute('disabled')).toBe(expired);
+  expect(screen.getByRole('button', { name: 'Refinar búsqueda' }).hasAttribute('disabled')).toBe(expired);
   fireEvent.click(choice);
   if (expired) {
     expect(screen.getByText(/Estas opciones vencieron/)).toBeTruthy(); expect(apiClient.sendAgentMessage).not.toHaveBeenCalled();

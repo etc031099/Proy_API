@@ -77,7 +77,7 @@ async function resolveAction(extracted, context, resolver = resolveReference, su
   const products = [], quantities = new Map();
   for (const [index, item] of extracted.items.entries()) {
     const result = await resolver(Product, context, item.ref);
-    if (!result.value) return { ...result, selection: { slot: 'product', index, candidates: result.candidates || [] } };
+    if (!result.value) return { ...result, selection: { slot: 'product', index, candidates: result.candidates || [], ...(result.pagination || {}) } };
     if (result.value.isActive === false) return { clarification: `Encontré ${result.value.name}, pero está inactivo. Elige otro producto.` };
     // Keep previously resolved slots; later ambiguous items must not discard them.
     item.ref = String(result.value._id);

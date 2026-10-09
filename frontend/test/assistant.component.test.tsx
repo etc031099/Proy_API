@@ -26,6 +26,31 @@ const response: AgentResponse = {
 beforeEach(() => { send.mockReset(); localStorage.clear(); vi.mocked(apiClient.listAgentConversations).mockResolvedValue({ success: true,
   data: { items: [], pagination: { page: 1, limit: 10, total: 0, totalPages: 1 } } }); });
 function submit(text = 'stock bajo') { fireEvent.change(screen.getByLabelText('Tu consulta'), { target: { value: text } }); fireEvent.click(screen.getByRole('button', { name: 'Enviar' })); }
+it('navigates five visible candidates with real totals and starts refinement in the same conversation', async () => {
+  const page = (offset: number): AgentResponse => ({ ...response, answer: `Opciones ${offset}`, suggestionsExpiresAt: Date.now() + 120000,
+    suggestionsPagination: { query: 'food', offset, limit: 5, totalMatches: 28, hasMore: offset < 25, hasPrevious: offset > 0 },
+    suggestions: Array.from({ length: offset === 25 ? 3 : 5 }, (_, i) => ({ label: `${i + 1}. Food ${offset + i} — SKU-${offset + i}`, message: `Opción ${i + 1}` })) });
+  send.mockResolvedValueOnce({ success: true, data: page(0) }).mockResolvedValueOnce({ success: true, data: page(5) })
+    .mockResolvedValueOnce({ success: true, data: page(0) }).mockResolvedValueOnce({ success: true, data: page(25) })
+    .mockResolvedValueOnce({ success: true, data: { ...response, answer: 'Escribe una búsqueda más específica.' } })
+    .mockResolvedValueOnce({ success: true, data: response });
+  render(<AssistantPage />); submit('vende 2 food');
+  await screen.findByText('28 coincidencias para «food» · Mostrando 1–5');
+  const choices = () => screen.getAllByLabelText('Opciones de la operación').at(-1)!;
+  expect(within(choices()).queryByRole('button', { name: 'Anterior' })).toBeNull();
+  fireEvent.click(within(choices()).getByRole('button', { name: 'Ver más' }));
+  await screen.findByText('28 coincidencias para «food» · Mostrando 6–10');
+  expect(screen.getByRole('button', { name: '1. Food 5 — SKU-5' })).toBeTruthy();
+  fireEvent.click(within(choices()).getByRole('button', { name: 'Anterior' }));
+  await screen.findAllByText('Opciones 0');
+  fireEvent.click(within(choices()).getByRole('button', { name: 'Ver más' }));
+  await screen.findByText('28 coincidencias para «food» · Mostrando 26–28');
+  expect(within(choices()).queryByRole('button', { name: 'Ver más' })).toBeNull();
+  fireEvent.click(within(choices()).getByRole('button', { name: 'Refinar búsqueda' }));
+  await screen.findByText('Escribe una búsqueda más específica.'); submit('food 3'); await screen.findByText(response.answer);
+  expect(send.mock.calls.slice(1).map(call => call[0].message)).toEqual(['Ver más', 'Anterior', 'Ver más', 'Refinar búsqueda', 'food 3']);
+  expect(send.mock.calls.slice(1).every(call => call[0].conversationId === response.conversationId)).toBe(true);
+});
 it('food choices show names/SKUs and numbered fallback, and click sends deterministic selection', async () => {
   const answer = 'Elige una coincidencia.\n1. Foods A — FOOD-A\n2. Foods B — FOOD-B';
   send.mockResolvedValueOnce({ success: true, data: { ...response, answer, suggestionsExpiresAt: Date.now() + 120000,

@@ -20,15 +20,17 @@ const withActionAssistant = (runtime, service, options = {}) => {
     const draftKey = keyFor(req, input.conversationId);
     let previous = drafts.get(draftKey);
     const explicit = actionIntent(input.message);
-    const contextual = /que me falta|que datos|que proveedores|^(?:mejor|cambia|en vez|no es|opcion|el |la |si\b|no\b|cancel|confirm|hazlo|crear proveedor|elegir proveedor|continuar sin)/.test(normalized)
+    const contextual = (previous?.selection?.slot === 'product' && /^busca(?:r)?\b/.test(normalized)) || /que me falta|que datos|que proveedores|^(?:mejor|cambia|en vez|no es|opcion|el |la |si\b|no\b|cancel|confirm|hazlo|crear proveedor|elegir proveedor|continuar sin)/.test(normalized)
       || /^(?:\d+|sku\b|proveedor\b|precio de compra\b|categoria\b)/.test(normalized);
     if (previous && !explicit && !contextual && /^(?:muestrame|busca|dime|cuanto|que|resume|explica|lista|cuales)\b|[¿?]/.test(normalized)) previous = undefined;
     const skillId = explicit || previous?.action;
     const decision = /^(?:si|confirmar|confirmo|hazlo|no|cancelar|cancelo|no lo hagas|mejor cancela eso)[.!?]*$/.test(normalized);
-    if (!skillId && !decision) return runtime.handle(req, input);
+    const candidateCommand = /^(?:ver mas|siguiente|anterior|anteriores|refinar busqueda|mas especifico)$/.test(normalized);
+    if (!skillId && !decision && !candidateCommand) return runtime.handle(req, input);
     const started = performance.now(), conversationId = input.conversationId || randomUUID();
     const context = createActionContext(req, { conversationId }), key = keyFor(req, conversationId);
-    let pendingAction, answer, clarification = false, execution, suggestions = [], suggestionsExpiresAt;
+    let pendingAction, answer, clarification = false, execution, suggestions = [], suggestionsExpiresAt, suggestionsPagination;
+    if (!previous && candidateCommand) return response('No hay una búsqueda de productos vigente. Inicia nuevamente la operación.', undefined, true);
     if (previous?.items && /que proveedores/.test(normalized)) {
       const products = [];
       for (const item of previous.items) {
@@ -81,6 +83,7 @@ const withActionAssistant = (runtime, service, options = {}) => {
       if (extracted.direct && (explicit || !previous)) draft.direct = extracted.direct;
       const resolved = applyResolution(draft, await resolveDraft(draft, context, options), now());
       suggestions = resolved.suggestions || [];
+      suggestionsPagination = resolved.suggestionsPagination;
       if (resolved.clarification) { answer = resolved.clarification; clarification = true; }
       else {
         pendingAction = await service.prepare({ agentId: 'operations', skillId, args: resolved.args, context, externalRequestId: req.agentActionRequestId || randomUUID() });
@@ -102,7 +105,8 @@ const withActionAssistant = (runtime, service, options = {}) => {
           totalCachedInputTokens: 0, totalToolUseTokens: 0, totalTokens: 0, metricsComplete: true, totalProviderLatencyMs: 0,
           totalLatencyMs: latencyMs, toolSelectionCycles: 0, agents: [participant], ...(realUsage || {}) },
         requiresClarification: needsClarification, clarificationQuestion: needsClarification ? text : null, latencyMs,
-        ...(pending ? { pendingAction: pending } : {}), ...(suggestions.length ? { suggestions, suggestionsExpiresAt } : {}) };
+        ...(pending ? { pendingAction: pending } : {}), ...(suggestions.length ? { suggestions, suggestionsExpiresAt } : {}),
+        ...(suggestionsPagination ? { suggestionsPagination } : {}) };
     }
   }
   return { ...runtime,

@@ -112,6 +112,30 @@ test('Mongo history restores a guided candidate draft after runtime restart with
   assert.deepEqual(await counts(), before);
   await service.cancelPendingAction(createActionContext(req(), { conversationId: first.conversationId }), next.pendingAction.pendingActionId);
 });
+
+test('real Mongo paginates 28 tenant matches and restores page two without business mutations', async () => {
+  await Promise.all(Array.from({ length: 28 }, (_, i) => newProduct({ name: `PageFood group ${i}`, sku: `PAGEFOOD-${i}` })));
+  await newProduct({ businessId: foreignBusiness, name: 'PageFood foreign', sku: 'PAGEFOOD-FOREIGN' });
+  const before = await counts();
+  const history = createAgentConversationService({ runtime: withActionAssistant({}, service), actionService: service });
+  const first = await history.send(req(), { message: 'vende 2 PageFood' }, randomUUID());
+  assert.equal(first.suggestionsPagination.totalMatches, 28); assert.equal(first.suggestions.length, 5);
+  const second = await history.send(req(), { message: 'Ver más', conversationId: first.conversationId }, randomUUID());
+  assert.equal(second.suggestionsPagination.offset, 5); assert.equal(second.suggestionsPagination.totalMatches, 28);
+  assert.ok(second.suggestions.every(row => !first.suggestions.some(other => other.label.slice(3) === row.label.slice(3))));
+  assert.ok(!JSON.stringify(second).includes('FOREIGN')); assert.equal(second.usage.totalLlmCalls, 0);
+  const resumed = createAgentConversationService({ runtime: withActionAssistant({}, service), actionService: service });
+  const loaded = await resumed.get(req(), first.conversationId, 1, 50);
+  const restored = loaded.messages.filter(row => row.response?.suggestions).at(-1).response;
+  assert.deepEqual(restored.suggestionsPagination, second.suggestionsPagination);
+  assert.deepEqual(restored.suggestions, JSON.parse(JSON.stringify(second.suggestions)));
+  assert.equal(restored.suggestionsExpiresAt, second.suggestionsExpiresAt);
+  assert.deepEqual(await counts(), before);
+  const selected = await resumed.send(req(), { message: 'el primero', conversationId: first.conversationId }, randomUUID());
+  assert.equal(selected.pendingAction.items[0].quantity, 2); assert.equal(selected.usage.totalTokens, 0);
+  assert.ok(second.suggestions[0].label.includes(selected.pendingAction.items[0].sku));
+  await service.cancelPendingAction(createActionContext(req(), { conversationId: first.conversationId }), selected.pendingAction.pendingActionId);
+});
 test('real product preview writes no business record, confirmation creates one opening and two outbox records', async () => {
   const args = { name: 'Producto asistente', sku: 'AUTO-NEW', category: 'Sintético', price: 2, currency: 'PEN', stock: 5, minStockLevel: 1 };
   const before = await counts(); const pending = await prepare('create_product', args);

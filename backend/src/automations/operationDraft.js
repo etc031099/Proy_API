@@ -14,6 +14,8 @@ const draftSchema = schema({ action: { ...string(30), enum: ['create_product', '
   currency: { ...string(3), enum: ['PEN', 'USD', 'EUR'] }, paymentMethod: { ...string(20), enum: ['cash', 'credit', 'card', 'bank_transfer', 'wallet', 'other'] },
   customerRef: string(100), supplierRef: string(100), supplierId: objectId, purchasePrice: number(), enrichment: string(20),
   selection: schema({ slot: { ...string(20), enum: ['product', 'supplier', 'customer', 'productSupplier'] }, index: integer(20),
+    query: string(100), offset: integer(Number.MAX_SAFE_INTEGER), limit: { type: 'integer', enum: [5] },
+    totalMatches: integer(Number.MAX_SAFE_INTEGER), hasMore: { type: 'boolean' }, hasPrevious: { type: 'boolean' }, refining: { type: 'boolean' },
     candidates: { type: 'array', maxItems: 5, items: candidateSchema } }, ['slot', 'candidates']),
   missingFields: { type: 'array', maxItems: 10, items: string(30) }, itemIndex: integer(20),
   pendingActionId: string(36), updatedAt: number(Number.MAX_SAFE_INTEGER), expiresAt: number(Number.MAX_SAFE_INTEGER) }, ['action', 'updatedAt', 'expiresAt']);
@@ -45,6 +47,24 @@ function updateDraft(previous, extracted, message) {
   const draft = previous ? structuredClone(previous) : { action: extracted.action };
   const text = normalize(numericWords(message));
   if (draft.selection) {
+    const selection = draft.selection;
+    if (selection.slot === 'product' && selection.query) {
+      if (/^(?:ver mas|siguiente|anteriores|anterior)$/.test(text)) {
+        if (/^(?:ver mas|siguiente)$/.test(text) && selection.hasMore) { selection.offset += 5; selection.refresh = true; }
+        if (/^(?:anteriores|anterior)$/.test(text) && selection.hasPrevious) { selection.offset -= 5; selection.refresh = true; }
+        return draft;
+      }
+      if (/^(?:refinar busqueda|mas especifico)$/.test(text)) { selection.refining = true; return draft; }
+      const refinement = /^(?:buscar?|buscar producto)\s+(.+)$/.exec(text);
+      if (refinement) {
+        draft.items[selection.index].ref = refinement[1]; delete draft.selection; return draft;
+      }
+      const exactVisible = selection.candidates.some(row => normalize(row.name) === text || normalize(row.sku || '') === text);
+      if (!exactVisible && !/^[a-f\d]{24}$|^(?:opcion\s+)?\d+$|^(?:el|la)\s+(?:primer|segund|tercer|cuart|quint)/.test(text)
+        && (selection.refining || text.startsWith(`${normalize(selection.query)} `))) {
+        draft.items[selection.index].ref = message.trim(); delete draft.selection; return draft;
+      }
+    }
     const selected = choose(draft.selection, message);
     if (selected) {
       const { slot, index } = draft.selection;
@@ -111,6 +131,17 @@ function updateDraft(previous, extracted, message) {
 }
 async function resolveDraft(draft, context, options = {}) {
   const resolver = options.resolver || resolveReference;
+  if (draft.selection?.slot === 'product' && draft.selection.refresh) {
+    const { query, offset, index } = draft.selection;
+    const result = await resolver(require('../models').Product, context, query, undefined, offset);
+    delete draft.selection.refresh;
+    if (result.value) {
+      // Even if the catalogue now has one exact match, navigation is not consent.
+      return { clarification: 'La búsqueda ahora tiene una única coincidencia. Selecciónala para continuar.',
+        selection: { slot: 'product', index, query, offset: 0, limit: 5, totalMatches: 1, hasMore: false, hasPrevious: false, candidates: [result.value] } };
+    }
+    return { ...result, selection: { slot: 'product', index, candidates: result.candidates || [], ...(result.pagination || {}) } };
+  }
   if (draft.direct && draft.action !== 'create_product') {
     const missing = getActionSkill(draft.action).inputSchema.required.filter(key => draft.direct[key] === undefined);
     if (missing.length) return { clarification: `Para preparar la operación faltan: ${missing.join(', ')}.` };
@@ -138,7 +169,9 @@ async function resolveDraft(draft, context, options = {}) {
     return { clarification: 'Puedes elegir un proveedor existente o continuar sin proveedor. Crear proveedores desde el asistente todavía no está habilitado.', suggestions: [
       { label: 'Elegir proveedor', message: 'Elegir proveedor' }, { label: 'Continuar sin proveedor', message: 'Continuar sin proveedor' }] };
   }
-  if (draft.selection?.candidates?.length) return { clarification: 'Elige una opción de la lista; también puedes indicar el SKU o corregir la búsqueda.', selection: draft.selection };
+  if (draft.selection?.candidates?.length) return { clarification: draft.selection.refining
+    ? 'Escribe una búsqueda más específica. Conservaré la cantidad de tu operación.'
+    : 'Elige una opción de la lista; también puedes indicar el SKU o corregir la búsqueda.', selection: draft.selection };
   return resolveAction(draft, context, resolver, options.supplierLookup || configuredSuppliers);
 }
 function applyResolution(draft, result, now) {
@@ -152,8 +185,13 @@ function applyResolution(draft, result, now) {
   if (result.itemIndex !== undefined) draft.itemIndex = result.itemIndex;
   draft.updatedAt = now; draft.expiresAt = now + TTL_MS;
   const candidates = suggestionsFor(draft.selection);
+  const selection = draft.selection;
+  const pagination = selection?.slot === 'product' && selection.query ? Object.fromEntries(
+    ['query', 'offset', 'limit', 'totalMatches', 'hasMore', 'hasPrevious'].map(key => [key, selection[key]])) : undefined;
+  const intro = pagination ? `Encontré ${pagination.totalMatches} coincidencias para «${pagination.query}». Mostrando ${candidates.length ? pagination.offset + 1 : 0}–${pagination.offset + candidates.length}.\n${selection.refining ? 'Escribe una búsqueda más específica.' : 'Puedes seleccionar un producto, ver más resultados o escribir una búsqueda más específica. Los números y ordinales se refieren a esta lista visible.'}` : result.clarification;
   return { ...result,
-    ...(candidates.length && result.clarification ? { clarification: `${result.clarification}\n${candidates.map(option => option.label).join('\n')}` } : {}),
+    ...(pagination ? { suggestionsPagination: pagination } : {}),
+    ...(candidates.length && result.clarification ? { clarification: `${intro}\n${candidates.map(option => option.label).join('\n')}` } : {}),
     suggestions: [...candidates, ...(result.suggestions || [])] };
 }
 module.exports = { TTL_MS, compactDraft, updateDraft, resolveDraft, applyResolution };

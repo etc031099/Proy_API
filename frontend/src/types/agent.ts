@@ -57,6 +57,7 @@ export interface AgentEvidence {
 export interface AgentResponse {
   suggestions?: { label: string; message: string; detail?: string }[];
   suggestionsExpiresAt?: number;
+  suggestionsPagination?: { query: string; offset: number; limit: 5; totalMatches: number; hasMore: boolean; hasPrevious: boolean };
   pendingAction?: PendingActionPreview;
   requestId: string;
   conversationId: string;

@@ -14,12 +14,12 @@ const request = (businessId = 'SYNTHETIC', userId = 'aaaaaaaaaaaaaaaaaaaaaaaa') 
   user: { _id: userId, businessId, role: 'user', isActive: true } });
 function fixture({ products = [p1, p2], suppliers = [vendor], configured = [vendor], clock = Date.now } = {}) {
   const prepared = [], cancelled = [], pending = new Map();
-  const resolver = async (model, context, ref) => {
+  const resolver = async (model, context, ref, type, offset = 0) => {
     assert.equal(context.businessId, 'SYNTHETIC');
     const rows = model === Product ? products : suppliers;
     const exact = rows.find(row => row._id === ref || row.sku === ref);
     if (exact) return { value: structuredClone(exact), confidence: 'EXACT' };
-    const result = rankEntities(rows, ref);
+    const result = rankEntities(rows, ref, offset);
     return result.value ? result : { ...result, clarification: result.candidates.length ? 'Elige una coincidencia.' : 'No encontré esa entidad.' };
   };
   const service = {
@@ -35,6 +35,67 @@ function fixture({ products = [p1, p2], suppliers = [vendor], configured = [vend
   const send = message => adapter.handle(request(), { message, conversationId });
   return { adapter, runtime, service, options, conversationId, send, prepared, cancelled };
 }
+const pagedProducts = () => Array.from({ length: 28 }, (_, i) => ({ ...p1, _id: (i + 1).toString(16).padStart(24, '0'),
+  name: `Food ${i % 4} variant ${i}`, sku: `PAGE-${i}` }));
+test('28 matches are counted exactly with stable five-item pages, no duplicates and a short last page', () => {
+  const rows = pagedProducts(), seen = [];
+  for (let offset = 0; offset < 28; offset += 5) {
+    const result = rankEntities(rows.slice().reverse(), 'food', offset);
+    assert.equal(result.pagination.totalMatches, 28); assert.equal(result.pagination.offset, offset);
+    assert.equal(result.pagination.hasMore, offset < 25); assert.equal(result.pagination.hasPrevious, offset > 0);
+    assert.equal(result.candidates.length, offset === 25 ? 3 : 5);
+    assert.deepEqual(result.candidates.map(row => row._id), rows.slice(offset, offset + 5).map(row => row._id));
+    seen.push(...result.candidates.map(row => row._id));
+  }
+  assert.equal(new Set(seen).size, 28);
+  assert.throws(() => rankEntities(rows, 'food', -5)); assert.throws(() => rankEntities(rows, 'food', 3));
+});
+for (const choice of ['1', 'el primero', 'el segundo', 'PAGE-5']) test(`page 2 selection ${choice} retains two units and consumes zero tokens`, async () => {
+  const f = fixture({ products: pagedProducts() });
+  const first = publicResponse(await f.send('vende 2 food'));
+  assert.equal(first.suggestionsPagination.totalMatches, 28); assert.match(first.answer, /Mostrando 1–5/);
+  const second = await f.send('Ver más');
+  assert.match(second.answer, /Mostrando 6–10/); assert.equal(second.suggestionsPagination.offset, 5);
+  assert.equal(second.usage.totalLlmCalls, 0); assert.equal(second.usage.totalTokens, 0);
+  await f.send(choice);
+  assert.equal(f.prepared[0].products[0].productId, pagedProducts()[choice === 'el segundo' ? 6 : 5]._id);
+  assert.equal(f.prepared[0].products[0].quantity, 2);
+});
+test('previous and next pages preserve draft, ordering and final-page boundary', async () => {
+  const f = fixture({ products: pagedProducts() });
+  const first = await f.send('vende 2 food'); await f.send('Ver más');
+  assert.deepEqual((await f.send('Anterior')).suggestions, first.suggestions);
+  for (let i = 0; i < 5; i++) await f.send('Ver más');
+  const last = await f.send('Ver más');
+  assert.equal(last.suggestionsPagination.offset, 25); assert.equal(last.suggestions.length, 3);
+  assert.equal(last.suggestionsPagination.hasMore, false); assert.equal(f.prepared.length, 0);
+});
+for (const query of ['buscar food 3', 'food 3']) test(`refinement ${query} resets page and preserves quantity`, async () => {
+  const f = fixture({ products: pagedProducts() }); await f.send('vende 2 food'); await f.send('Ver más');
+  await f.send('Refinar búsqueda'); const result = await f.send(query);
+  assert.equal(result.suggestionsPagination.query, 'food 3'); assert.equal(result.suggestionsPagination.offset, 0);
+  assert.ok(result.suggestionsPagination.totalMatches < 28);
+  assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
+  await f.send('1'); assert.equal(f.prepared[0].products[0].quantity, 2);
+});
+test('page metadata restores on restart, stays tenant/user scoped and expires without revival', async () => {
+  let now = Date.now(); const f = fixture({ products: pagedProducts(), clock: () => now });
+  await f.send('vende 2 food'); await f.send('Ver más');
+  const state = snapshot(await f.adapter.getContextSnapshot(request(), f.conversationId));
+  assert.equal(state.operationDraft.selection.offset, 5); assert.equal(state.operationDraft.selection.query, 'food');
+  const restart = withActionAssistant(f.runtime, f.service, f.options);
+  await restart.restoreContext(request(), f.conversationId, state);
+  const next = await restart.handle(request(), { message: 'Anterior', conversationId: f.conversationId });
+  assert.equal(next.suggestionsPagination.offset, 0);
+  const foreign = await restart.handle(request('OTHER'), { message: 'Ver más', conversationId: f.conversationId });
+  assert.match(foreign.answer, /No hay una búsqueda/); assert.equal(foreign.usage.totalLlmCalls, 0);
+  const otherUser = await restart.handle(request('SYNTHETIC', 'eeeeeeeeeeeeeeeeeeeeeeee'), { message: '1', conversationId: f.conversationId });
+  assert.equal(otherUser.answer, 'Lectura');
+  now += TTL_MS + 1;
+  const expired = await restart.handle(request(), { message: 'Ver más', conversationId: f.conversationId });
+  assert.match(expired.answer, /No hay una búsqueda/); assert.equal(expired.usage.totalLlmCalls, 0);
+  assert.equal(f.prepared.length, 0);
+});
 
 for (const choice of ['Opción 1', '1', 'el primero', 'el segundo', 'FOOD-0']) test(`food candidates survive public projection and select ${choice}`, async () => {
   const products = Array.from({ length: 7 }, (_, i) => ({ ...p1, _id: String(i + 1).padStart(24, '0'), name: `Foods ${i}`, sku: `FOOD-${i}` }));
