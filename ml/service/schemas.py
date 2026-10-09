@@ -58,6 +58,9 @@ class PredictionResult(StrictSchema):
     status: str
     predictedDemand7d: float | None = None
     message: str | None = None
+    # Descriptive lineage only; never an additional model feature.
+    category: str | None = None
+    department: str | None = None
 
 
 class PredictionResponse(StrictSchema):

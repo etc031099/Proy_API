@@ -23,6 +23,8 @@ const ordinalReference = text => {
 
 /** High-confidence routing only. Unrecognized language is delegated, never guessed. */
 const routeDeterministically = (message, memory, now) => {
+  const forecastPlan = require('./forecastRouting').routeForecastAnalytics(message, memory);
+  if (forecastPlan) return forecastPlan;
   const text = normalize(message);
   const dates = message.match(/\d{4}-\d{2}-\d{2}/g);
   if (!dates && /ayer|semana|ano pasado|hoy/.test(text) && /venta|vendi/.test(text)) return clarify('Indica el periodo con dos fechas YYYY-MM-DD o usa este mes / mes pasado.');

@@ -229,6 +229,11 @@ class ModelRuntime:
                     predictedDemand7d=value,
                 )
         finalized = [result for result in results if result is not None]
+        for result in finalized:
+            lineage = builder.products.get(result.sku.removeprefix("M5-"))
+            if lineage is not None:
+                result.category = lineage.cat_id
+                result.department = lineage.dept_id
         ready = sum(result.status == "READY" for result in finalized)
         return BatchPrediction(
             results=finalized,

@@ -99,6 +99,7 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
       || result.products.length > 60) throw new AgentError('AGENT_SKILL_EXECUTION_FAILED');
     const mapped = result.products.map(row => ({
       productId: row.productId, sku: row.sku, name: row.name, mlStatus: row.mlStatus,
+      category: row.category ?? null, department: row.department ?? null,
       predictedDemand7d: row.mlStatus === 'READY' ? row.predictedDemand7d : null,
       stockAtAnchor: row.stockAtAnchor, salesLast7Days: row.salesLast7Days,
       safetyStock: row.mlStatus === 'READY' ? row.safetyStock : null,
@@ -244,6 +245,13 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
         sales: financialDto(finances, 'sale'), purchases: financialDto(finances, 'purchase') },
       metadata: { asOf: asOf(), period, periodMode: invocation.args.period ?? 'current',
         amountBasis: 'transaction_total_native_currency', inventoryBasis: 'current_active_products', returnedCount: 1 } };
+    },
+    async analyze_demand_forecast(invocation) {
+      const batch = forecastResult(await readForecast({ ...invocation, args: {} }),
+        { ...invocation, args: {}, skill: { ...invocation.skill, maxRecords: 60 } });
+      if (batch.status === 'ML_NOT_READY') return batch;
+      const configuration = Object.values(require('../config/mlScenarios.json')).find(row => row.businessId === invocation.context.businessId);
+      return require('./forecastAnalytics').analyzeForecast(batch, invocation.args, configuration?.scenarioId);
     },
     async get_demand_forecast(invocation) { return forecastResult(await readForecast(invocation), invocation); },
     async get_replenishment_candidates(invocation) { return forecastResult(await readForecast(invocation), invocation, true); }

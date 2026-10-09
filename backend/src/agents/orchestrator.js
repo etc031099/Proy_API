@@ -88,6 +88,11 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             selector = { productId: product.data.id };
           }
           if (!plan.clarificationQuestion) switch (plan.intent) {
+            case 'ml_analytics': {
+              const result = await run('analyst', 'analyze_demand_forecast', plan.analyticsArgs);
+              if (result.status === 'CLARIFICATION') plan.clarificationQuestion = result.metadata.clarificationQuestion;
+              break;
+            }
             case 'search_product': await run(plan.agent, 'search_products', { query: plan.query || state.lastSearchQuery, limit: plan.limit }); break;
             case 'product_details': await run(plan.agent, 'get_product_details', selector); break;
             case 'low_stock': await run(plan.agent, 'get_low_stock_products', { limit: plan.limit }); break;
@@ -135,15 +140,16 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
           }
           answer = sections.map(index => buildSkillAnswer(results[index].skillId, results[index].result)).join('\n\n');
           const productSkills = ['search_products', 'get_product_details', 'get_low_stock_products', 'get_top_selling_products',
-            'get_product_sales_summary', 'get_demand_forecast', 'get_replenishment_candidates'];
+            'get_product_sales_summary', 'get_demand_forecast', 'get_replenishment_candidates', 'analyze_demand_forecast'];
           const productResult = [...results].reverse().find(({ skillId }) => productSkills.includes(skillId));
           const raw = productResult?.result.data;
           const entities = raw?.product ? [raw.product] : Array.isArray(raw) ? raw : raw?.id ? [raw] : undefined;
           // Additional historical context must not replace the current period in conversational state.
           const latest = [...results].reverse().find(({ skillId, result }) => !(plan.intent === 'business_summary'
             && skillId === 'get_business_summary' && result.metadata.periodMode === 'latest'))?.result;
-          const productListIntents = ['search_product', 'low_stock', 'top_selling_products', 'replenishment_candidates', 'demand_forecast'];
+          const productListIntents = ['search_product', 'low_stock', 'top_selling_products', 'replenishment_candidates', 'demand_forecast', 'ml_analytics'];
           commit({ lastIntent: plan.intent, lastAgent: plan.agent, recentEntities: entities,
+            lastForecastAnalytics: plan.intent === 'ml_analytics' ? plan.analyticsArgs : null,
             lastEntity: entities?.length === 1 ? entities[0] : undefined,
             ...(productResult && productListIntents.includes(plan.intent) && Array.isArray(raw)
               ? { lastProductSelection: { sourceIntent: plan.intent, items: raw.slice(0, 5) } } : {}),
@@ -170,7 +176,9 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
         skillCalls: events.filter(event => event.type === 'skill_called' && event.agentId === agent.agentId).length,
         latencyMs: events.filter(event => event.type === 'agent_finished' && event.agentId === agent.agentId).reduce((sum, event) => sum + event.durationMs, 0) }));
       const latencyMs = performance.now() - startedAt;
+      const suggested = results.find(({ result }) => result.status === 'CLARIFICATION' && result.metadata.suggestions?.length);
       return deepFreeze({ requestId: context.requestId, conversationId, answer, intent: plan.intent, agent: plan.agent,
+        ...(suggested ? { suggestions: suggested.result.metadata.suggestions } : {}),
         participants, actions, evidence: results.map(({ result }) => ({ ...result.evidence, recordCount: result.metadata.returnedCount })),
         usage: { ...usage, toolSelectionCycles: execution.getBudget().toolSelectionCycles, totalLatencyMs: latencyMs }, requiresClarification: Boolean(question), clarificationQuestion: question,
         code, latencyMs });

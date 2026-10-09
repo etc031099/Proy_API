@@ -134,6 +134,25 @@ const readyMlClient = (capture = []) => ({
   }
 });
 
+test('descriptive lineage travels with READY/non-READY rows without changing numerical forecasts', async () => {
+  const baselineClient = readyMlClient();
+  const descriptiveClient = { predictDemand: async request => {
+    const result = await baselineClient.predictDemand(request);
+    return { ...result, results: result.results.map(row => ({ ...row, category: 'FOODS', department: 'FOODS_1' })) };
+  } };
+  const baseline = await createDemandForecastService({ repositories: makeRepositories(), mlClient: baselineClient })
+    .getDemandForecast({ businessId: 'ML-CLOUD-DEMO' });
+  const extended = await createDemandForecastService({ repositories: makeRepositories(), mlClient: descriptiveClient })
+    .getDemandForecast({ businessId: 'ML-CLOUD-DEMO' });
+  for (let index = 0; index < extended.products.length; index++) {
+    assert.equal(extended.products[index].category, 'FOODS');
+    assert.equal(extended.products[index].department, 'FOODS_1');
+    for (const field of ['predictedDemand7d', 'recommendedQty', 'safetyStock', 'stockAtAnchor', 'inventoryStatus', 'mlStatus']) {
+      assert.equal(extended.products[index][field], baseline.products[index][field]);
+    }
+  }
+});
+
 test('v2 is selected by server business and uses a bounded 197-day history', async () => {
   const requests = [];
   const repositories = makeRepositories({ findScenarioStart: async () => ({ occurredAt: new Date('2025-11-01') }) });

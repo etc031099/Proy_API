@@ -26,6 +26,12 @@ const withActionAssistant = (runtime, service, options = {}) => {
     const skillId = explicit || previous?.action;
     const decision = /^(?:si|confirmar|confirmo|hazlo|no|cancelar|cancelo|no lo hagas|mejor cancela eso)[.!?]*$/.test(normalized);
     const candidateCommand = /^(?:ver mas|siguiente|anterior|anteriores|refinar busqueda|mas especifico)$/.test(normalized);
+    // Read-only ML paging is not an operation-draft command. Active drafts keep
+    // their existing selection flow; do not prepare/cancel a write for analytics.
+    if (!previous && candidateCommand && input.conversationId) {
+      const state = await runtime.getContextSnapshot?.(req, input.conversationId);
+      if (state?.lastForecastAnalytics) return runtime.handle(req, input);
+    }
     if (!skillId && !decision && !candidateCommand) return runtime.handle(req, input);
     const started = performance.now(), conversationId = input.conversationId || randomUUID();
     const context = createActionContext(req, { conversationId }), key = keyFor(req, conversationId);

@@ -6,7 +6,7 @@ const label = (value, max) => typeof value === 'string' ? value.replace(/[\r\n\t
 const compactEntity = value => value && isObjectId(value.id || value.productId) ? {
   type: 'product', id: value.id || value.productId, sku: label(value.sku, 100), label: label(value.name || value.label, 80)
 } : null;
-const LIST_INTENTS = new Set(['search_product', 'low_stock', 'top_selling_products', 'replenishment_candidates', 'demand_forecast']);
+const LIST_INTENTS = new Set(['search_product', 'low_stock', 'top_selling_products', 'replenishment_candidates', 'demand_forecast', 'ml_analytics']);
 const compactProductSelection = (value, now) => {
   if (!value || !LIST_INTENTS.has(value.sourceIntent) || !Array.isArray(value.items)) return null;
   return deepFreeze({ sourceIntent: value.sourceIntent,
@@ -57,6 +57,8 @@ const createConversationMemory = ({ now = Date.now, ttlMs = TTL_MS, maxEntries =
             ? compactProductSelection(patch.lastProductSelection, now) : state.lastProductSelection || null;
           const period = patch.lastPeriod;
           pending = deepFreeze({
+            lastForecastAnalytics: Object.hasOwn(patch, 'lastForecastAnalytics')
+              ? require('./forecastAnalytics').compactAnalyticsContext(patch.lastForecastAnalytics) : state.lastForecastAnalytics || null,
             lastIntent: label(patch.lastIntent ?? state.lastIntent, 40),
             lastAgent: ['operations', 'analyst'].includes(patch.lastAgent) ? patch.lastAgent : state.lastAgent || null,
             lastEntity: entity || (entities.length === 1 ? entities[0] : null), recentEntities: entities,

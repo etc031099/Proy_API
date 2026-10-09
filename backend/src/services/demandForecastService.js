@@ -250,6 +250,8 @@ const createDemandForecastService = ({
         productId: String(product._id),
         sku: product.sku,
         name: product.name,
+        category: typeof result.category === 'string' ? result.category : null,
+        department: typeof result.department === 'string' ? result.department : null,
         stockAtAnchor: stocks[index],
         salesLast7Days: dailySales.slice(-7).reduce((sum, day) => sum + day.unitsSold, 0)
       };

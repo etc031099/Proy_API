@@ -60,6 +60,7 @@ const businessAnswer = (data, metadata) => {
 
 /** Every displayed number is taken from a verified skill DTO; no ML recalculation. */
 const buildSkillAnswer = (skillId, result) => {
+  if (skillId === 'analyze_demand_forecast') return require('./forecastResponses').buildForecastAnalysisAnswer(result);
   const { data, metadata, status } = result;
   if (status === 'ML_NOT_READY') return 'Este negocio aún no cuenta con historial o configuración suficiente para generar predicciones.';
   if (skillId === 'get_sales_summary') return !data.completedSalesCount

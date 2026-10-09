@@ -37,6 +37,7 @@ const project = (value, schema) => {
 };
 const publicResponse = result => project(result, shape);
 const snapshot = state => ({
+  lastForecastAnalytics: require('../agents/forecastAnalytics').compactAnalyticsContext(state.lastForecastAnalytics),
   operationDraft: require('../automations/operationDraft').compactDraft(state.operationDraft),
   lastIntent: text(state.lastIntent, 40), lastAgent: ['operations', 'analyst'].includes(state.lastAgent) ? state.lastAgent : null,
   lastEntity: compactEntity(state.lastEntity),

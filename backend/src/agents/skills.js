@@ -15,7 +15,7 @@ const both = ['operations', 'analyst'];
 const READY_SKILL_IDS = Object.freeze([
   'search_products', 'get_product_details', 'get_low_stock_products', 'get_recent_transactions',
   'get_sales_summary', 'get_top_selling_products', 'get_business_summary',
-  'get_demand_forecast', 'get_replenishment_candidates', 'get_product_sales_summary'
+  'get_demand_forecast', 'get_replenishment_candidates', 'get_product_sales_summary', 'analyze_demand_forecast'
 ]);
 // Replenishment's single ML batch exceeded its prior 10 s deadline in production.
 // 25 s accommodates a bounded Render cold start/inference without adding retries.
@@ -25,12 +25,17 @@ const entry = (skillId, description, allowedAgents, inputSchema, maxRecords, dat
     type: 'object', description: outputDescription,
     fields: { data: 'Projected records or summary', metadata: 'Period/asOf, currency when applicable, returnedCount, totalMatches and truncated' }
   },
-  maxRecords, timeoutMs: skillId === 'get_replenishment_candidates' ? 25000
+  maxRecords, timeoutMs: ['get_replenishment_candidates', 'analyze_demand_forecast'].includes(skillId) ? 25000
     : skillId.includes('forecast') ? 10000 : 5000,
   dataSensitivity, executorStatus: READY_SKILL_IDS.includes(skillId) ? 'READY' : 'PENDING_IMPLEMENTATION'
 });
 
 const SKILLS = deepFreeze([
+  entry('analyze_demand_forecast', 'Analiza el batch histórico: demanda, stock, readiness, comparación y resumen.', ['analyst'],
+    schema({ mode: { type: 'string', enum: ['top', 'exceeding_stock', 'not_ready', 'compare', 'summary'] },
+      limit: limit(20), offset: { type: 'integer', minimum: 0, maximum: 60 }, department: text(50),
+      category: text(50), first: text(100), second: text(100) }, ['mode']),
+    20, 'OPERATIONAL', 'Bounded forecast DTOs, historical anchor, model, scenario and deterministic totals; comparison references resolve only within tenant batch'),
   entry('search_products', 'Busca productos activos por texto.', both,
     schema({ query: text(100), category: text(50), limit: limit(20) }, ['query']), 20, 'OPERATIONAL', 'Product identity and category matches'),
   entry('get_product_details', 'Consulta un producto por ID o SKU.', both,

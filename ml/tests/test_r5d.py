@@ -106,6 +106,14 @@ class R5DServiceTests(unittest.TestCase):
         )
         self.assertEqual(self.client.get("/ready").json(), {"status": "ready"})
 
+    def test_descriptive_metadata_comes_from_lineage(self) -> None:
+        response = self.client.post("/v1/predict/demand", json=payload(), headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        row = response.json()["results"][0]
+        self.assertEqual(row["category"], "FOODS")
+        self.assertEqual(row["department"], "FOODS_1")
+        self.assertEqual(response.json()["featureSetVersion"], "demand-v1")
+
     def test_secret_missing_and_incorrect(self) -> None:
         self.assertEqual(
             self.client.post("/v1/predict/demand", json=payload()).status_code, 401

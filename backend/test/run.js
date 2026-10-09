@@ -12,6 +12,7 @@ require('./demandForecastService.test');
 require('./transactionsRoutes.test');
 require('./agents.test');
 require('./agentSkills.test');
+require('./forecastAnalytics.test');
 require('./agentGemini.test');
 require('./agentFailover.test');
 require('./agentSmoke.test');
