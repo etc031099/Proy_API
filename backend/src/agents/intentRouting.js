@@ -11,15 +11,19 @@ const routeCommercial = (message, memory = {}) => {
   const text = normalize(message);
   if (/shell|ejecuta codigo|mongo query|ignora.*instruccion|api.?key|password|jwt|system prompt/.test(text)) return null;
   const sku = message.match(/\bM5-[A-Z]+_\d+_\d+\b/i)?.[0];
+  const explicitSupplier = message.match(/\b(?:con|usando)\s+(?:el\s+)?proveedor\s+(.+?)(?=\s+para\s+(?:reponer|el producto)|[?!.]|$)/i)?.[1]?.trim()
+    || message.match(/\bproveedor\s+(.+?)\s+para\s+(?:reponer|el producto)\b/i)?.[1]?.trim();
   const currency = /\bUSD|\$|dolares?\b/i.test(message) ? 'USD'
     : /\bEUR|€|euros?\b/i.test(message) ? 'EUR' : /\bS\s*\/|\bPEN\b/i.test(message) ? 'PEN' : null;
   const department = message.match(/\b(?:FOODS|HOBBIES|HOUSEHOLD)_\d+\b/i)?.[0]?.toUpperCase();
   const make = (skillId, args) => ({ intent: 'replenishment_commercial', agent: 'analyst', skillId, args });
-  if (/proveedor/.test(text) && /reponer|reposicion|costo|usar|conviene/.test(text)) {
+  const asksSupplierComparison = /proveedor/.test(text)
+    && /que proveedor|cual proveedor|usar|conviene|barat|compar/.test(text);
+  if (asksSupplierComparison) {
     const productRef = sku || (/este producto|ese producto|este sku/.test(text) ? memory.lastEntity?.sku : null);
     if (!productRef) return { intent: 'replenishment_budget_required', agent: 'coordinator',
       clarificationQuestion: 'Indica el SKU del producto para comparar sus proveedores configurados.' };
-    return make('compare_supplier_costs', { productRef });
+    return make('compare_supplier_costs', { productRef, ...(explicitSupplier ? { supplierRef: explicitSupplier } : {}) });
   }
   const amountMatch = message.match(/(?:S\s*\/|PEN|USD|EUR|\$|€)\s*([\d.,]+)/i);
   const hasBudgetIntent = /tengo|presupuesto|que puedo reponer|que productos deberia comprar|que debo comprar/.test(text);
@@ -47,7 +51,7 @@ const routeCommercial = (message, memory = {}) => {
       const productRef = sku || memory.lastEntity?.sku;
       if (!productRef) return { intent: 'replenishment_budget_required', agent: 'coordinator',
         clarificationQuestion: 'Indica el SKU del producto para calcular su costo de reposición.' };
-      return make('get_replenishment_cost', { mode: 'single', productRef });
+      return make('get_replenishment_cost', { mode: 'single', productRef, ...(explicitSupplier ? { supplierRef: explicitSupplier } : {}) });
     }
     if (total) return make('get_replenishment_cost', { mode: 'total', ...(department ? { department } : {}) });
     return { intent: 'replenishment_budget_required', agent: 'coordinator',

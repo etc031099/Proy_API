@@ -97,10 +97,10 @@ test('single and total costs honor preferred offers, exclude zero cost and prese
   const reads = [];
   const { execution } = makeExecution({ forecastRows, products, contacts: vendors, reads });
   const single = await execution.executeSkill({ agentId: 'analyst', skillId: 'get_replenishment_cost',
-    args: { mode: 'single', productRef: 'SKU-1' } });
-  assert.equal(single.data.selectedSupplier, 'Proveedor Z');
-  assert.equal(single.data.selectionRule, 'PREFERRED_SUPPLIER');
-  assert.equal(single.data.replenishmentCost, 10);
+    args: { mode: 'single', productRef: 'SKU-1', supplierRef: 'Proveedor A' } });
+  assert.equal(single.data.selectedSupplier, 'Proveedor A');
+  assert.equal(single.data.selectionRule, 'USER_SPECIFIED');
+  assert.equal(single.data.replenishmentCost, 6);
   const total = await execution.executeSkill({ agentId: 'analyst', skillId: 'get_replenishment_cost', args: { mode: 'total' } });
   assert.equal(total.data.knownCostSubtotal, 10);
   assert.equal(total.data.costedProducts, 1);
@@ -130,9 +130,12 @@ test('cost routing is deterministic and never inherits another skill or current-
     ['¿Cuánto cuesta reponer M5-FOODS_3_511?', 'get_replenishment_cost'],
     ['¿Cuánto costaría reponer todo lo recomendado?', 'get_replenishment_cost'],
     ['¿Qué proveedor debería usar para M5-FOODS_3_511?', 'compare_supplier_costs'],
+    ['¿Cuánto cuesta reponer M5-FOODS_3_511 con proveedor Proveedor A?', 'get_replenishment_cost'],
     ['Tengo S/ 1000, ¿qué productos debería comprar primero?', 'plan_replenishment_budget']
   ];
   for (const [message, skillId] of routes) assert.equal(routeDeterministically(message, {}).skillId, skillId);
+  assert.equal(routeDeterministically('¿Cuánto cuesta reponer M5-FOODS_3_511 con proveedor Proveedor A?', {})
+    .args.supplierRef, 'Proveedor A');
   const needBudget = routeDeterministically('Prioriza mis compras según demanda prevista y stock', {});
   assert.equal(needBudget.intent, 'replenishment_budget_required');
   assert.match(needBudget.clarificationQuestion, /presupuesto/);
