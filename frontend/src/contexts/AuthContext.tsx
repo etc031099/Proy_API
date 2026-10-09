@@ -4,7 +4,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiClient } from '@/lib/api';
 import { clearActiveConversations } from '@/lib/agentHistory';
-import { User, LoginCredentials, RegisterData, AuthContextType } from '@/types';
+import { User, LoginCredentials, RegisterData, DemoV2RegisterData, AuthContextType } from '@/types';
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -96,6 +96,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const registerDemoV2 = async (data: DemoV2RegisterData) => {
+    setError(null);
+    setLoading(true);
+    try {
+      const response = await apiClient.registerDemoV2(data);
+      if (!response.success || !response.data?.user) throw new Error('Registro no completado.');
+      clearActiveConversations();
+      setUser(response.data.user);
+      router.push('/dashboard');
+    } catch (error: unknown) {
+      const failure = error as { response?: { status?: number; data?: { code?: string } } };
+      const code = failure.response?.data?.code;
+      const message = code === 'BUSINESS_EXISTS' ? 'La cuenta demo V2 ya existe. Inicia sesión con esa cuenta.'
+        : code === 'EMAIL_EXISTS' ? 'Ese correo ya tiene una cuenta. Utiliza otro correo para V2.'
+        : failure.response?.status === 404 ? 'El registro demo V2 está deshabilitado.'
+        : failure.response?.status === 403 ? 'No estás autorizado o el correo no coincide con el configurado.'
+        : failure.response?.status === 400 ? 'Revisa el nombre, correo y requisitos de la contraseña.'
+        : 'No se pudo crear la cuenta demo V2. Inténtalo más tarde.';
+      setError(message);
+      throw new Error(message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const logout = async () => {
     try {
       await apiClient.logout();
@@ -114,6 +139,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     user,
     login,
     register,
+    registerDemoV2,
     logout,
     loading,
     error,

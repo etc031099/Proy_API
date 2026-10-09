@@ -1,5 +1,35 @@
 # Inventory & Billing Management Backend
 
+## AUTH-V2: provisioning temporal de la cuenta demo
+
+`businessId` es un identificador lógico string; no existe una colección Business.
+V2 usa `ML-CLOUD-DEMO-V2`, asignado por el servidor desde el registry de escenarios.
+El registro público normal sigue disponible, pero reserva ese identificador.
+
+Después de desplegar esta fase (no se publica automáticamente):
+
+1. Configurar temporalmente en el backend `DEMO_V2_REGISTRATION_ENABLED=true`
+   y `DEMO_V2_REGISTRATION_EMAIL` con el correo autorizado de la nueva cuenta.
+   Usar el correo normalizado por el registro existente (minúsculas y, para Gmail,
+   sin puntos ni alias `+`). No compartir contraseñas ni tokens.
+2. Iniciar sesión normalmente con la cuenta V1 y abrir en el frontend
+   `/register-demo-v2`. Introducir únicamente nombre, correo y contraseña.
+3. El formulario llama a `POST /api/auth/register-demo-v2`: exige JWT, acceso
+   al negocio V1 y coincidencia del correo configurado. Rechaza campos extra;
+   reutiliza validación, hashing bcrypt y los índices únicos existentes.
+   Contraseña: reglas normales y máximo 72 bytes para evitar truncamiento bcrypt.
+4. Un registro exitoso cambia solo la sesión de este navegador a V2. La cuenta
+   V1 queda intacta y puede iniciar sesión de nuevo. Duplicados devuelven 409.
+5. Desactivar `DEMO_V2_REGISTRATION_ENABLED=false` después del provisioning.
+   El endpoint devuelve 404 cuando está desactivado; el login V2 sigue funcionando.
+
+No se importan productos ni transacciones en este flujo. La allowlist por sí sola
+no acredita propiedad de un correo: la autorización depende también de la sesión
+V1. Se reutiliza el límite de autenticación de 50 intentos/15 minutos por IP.
+Pruebas: `node --test test/demoV2Registration.test.js`, `npm test` y
+`npm run test:integration:demo-v2`. Esta última solo permite Mongo local y crea
+fixtures en una base de pruebas aislada; nunca conecta a Atlas.
+
 ## AUTO-R1: base de automatización y acciones
 
 `src/automations/` separa contratos de canales/triggers, reglas determinísticas,

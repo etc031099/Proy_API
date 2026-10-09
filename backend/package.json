@@ -16,6 +16,7 @@
     "test:integration:sku": "node test/integration/skuUniqueness.run.js",
     "test:integration:business-id": "node test/integration/businessIdUniqueness.run.js",
     "test:integration:ml-prep": "node test/integration/mlPrep.run.js",
+    "test:integration:demo-v2": "node --test test/integration/demoV2Registration.test.js",
     "import:historical-scenario": "node scripts/import-historical-scenario.js",
     "reset:historical-scenario": "node scripts/reset-historical-scenario.js",
     "backfill:inventory-openings": "node scripts/backfill-inventory-openings.js",

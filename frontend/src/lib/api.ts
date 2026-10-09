@@ -1,5 +1,5 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
-import { ApiResponse, DemandForecastResponse } from '@/types';
+import { ApiResponse, DemandForecastResponse, DemoV2RegisterData } from '@/types';
 import type { AgentMessageRequest, AgentResponse, AgentConversationList, AgentConversationDetail } from '@/types/agent';
 
 export class AgentApiError extends Error {
@@ -131,6 +131,16 @@ class ApiClient {
 
   async register(name: string, email: string, password: string, businessId: string): Promise<ApiResponse> {
     const response = await this.instance.post('/auth/register', { name, email, password, businessId });
+    if (response.data.success && response.data.data.token) {
+      this.setToken(response.data.data.token);
+    }
+    return response.data;
+  }
+
+  async registerDemoV2(input: DemoV2RegisterData): Promise<ApiResponse> {
+    // Explicit projection: never transport a caller-supplied tenant or role.
+    const { name, email, password } = input;
+    const response = await this.instance.post('/auth/register-demo-v2', { name, email, password });
     if (response.data.success && response.data.data.token) {
       this.setToken(response.data.data.token);
     }

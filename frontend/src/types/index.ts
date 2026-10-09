@@ -20,6 +20,7 @@ export interface RegisterData {
   password: string;
   businessId: string;
 }
+export type DemoV2RegisterData = Omit<RegisterData, 'businessId'>;
 
 // Product types
 export interface Product {
@@ -244,6 +245,7 @@ export interface AuthContextType {
   user: User | null;
   login: (credentials: LoginCredentials) => Promise<void>;
   register: (data: RegisterData) => Promise<void>;
+  registerDemoV2: (data: DemoV2RegisterData) => Promise<void>;
   logout: () => void;
   loading: boolean;
   error: string | null;

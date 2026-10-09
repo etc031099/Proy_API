@@ -1,6 +1,7 @@
 const { User } = require('../models');
 const { generateAuthTokens } = require('../utils/jwt');
 const { asyncHandler } = require('../middleware/validation');
+const { v1, v2 } = require('../config/mlScenarios.json');
 
 const isDuplicateField = (error, field, indexName) => error?.code === 11000 && (
   error?.index === indexName
@@ -13,13 +14,12 @@ const isDuplicateField = (error, field, indexName) => error?.code === 11000 && (
  * @route   POST /api/auth/register
  * @access  Public
  */
-const register = asyncHandler(async (req, res) => {
+const registerWithBusiness = async (body, res, businessId) => {
   // Normalize input. Emails are case-insensitive, so always store/compare them
   // in lowercase to avoid duplicated accounts such as "User@x.com" vs "user@x.com".
-  const name = (req.body.name || '').trim();
-  const email = (req.body.email || '').trim().toLowerCase();
-  const password = req.body.password;
-  const businessId = (req.body.businessId || '').trim();
+  const name = (body.name || '').trim();
+  const email = (body.email || '').trim().toLowerCase();
+  const password = body.password;
 
   // Check if a user with this email already exists
   const existingUser = await User.findOne({ email });
@@ -84,6 +84,39 @@ const register = asyncHandler(async (req, res) => {
       ...tokens
     }
   });
+};
+
+const register = asyncHandler(async (req, res) => {
+  const businessId = (req.body.businessId || '').trim();
+  // V2 is reserved: the public registration route must not bypass provisioning.
+  if (businessId.toLowerCase() === v2.businessId.toLowerCase()) {
+    return res.status(403).json({ success: false, code: 'DEMO_REGISTRATION_REQUIRED',
+      message: 'This demo account requires controlled provisioning.' });
+  }
+  return registerWithBusiness(req.body, res, businessId);
+});
+
+const registerDemoV2 = asyncHandler(async (req, res) => {
+  if (process.env.DEMO_V2_REGISTRATION_ENABLED !== 'true') {
+    return res.status(404).json({ success: false, message: 'Not found' });
+  }
+  // One-owner architecture: only the authenticated V1 owner can provision V2.
+  // An email allowlist alone would not prove ownership of that email address.
+  if (req.user?.businessId !== v1.businessId || req.businessId !== v1.businessId) {
+    return res.status(403).json({ success: false, code: 'DEMO_REGISTRATION_DENIED',
+      message: 'Demo registration is not authorized.' });
+  }
+  const allowedEmail = (process.env.DEMO_V2_REGISTRATION_EMAIL || '').trim().toLowerCase();
+  if (!allowedEmail || req.body.email.trim().toLowerCase() !== allowedEmail) {
+    return res.status(403).json({ success: false, code: 'DEMO_REGISTRATION_DENIED',
+      message: 'Demo registration is not authorized.' });
+  }
+  // businessId is a logical string, not a separate Business ObjectId.
+  try {
+    return await registerWithBusiness(req.body, res, v2.businessId);
+  } catch {
+    return res.status(500).json({ success: false, message: 'Demo registration could not be completed.' });
+  }
 });
 
 /**
@@ -264,6 +297,7 @@ const changePassword = asyncHandler(async (req, res) => {
 
 module.exports = {
   register,
+  registerDemoV2,
   login,
   logout,
   getProfile,

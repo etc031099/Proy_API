@@ -1,5 +1,6 @@
 require('./externalApiService.test');
 require('./env.test');
+require('./demoV2Registration.test');
 require('./numbers.test');
 require('./validations.test');
 require('./paginationControllers.test');
