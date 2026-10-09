@@ -28,7 +28,7 @@ const withActionAssistant = (runtime, service, options = {}) => {
     if (!skillId && !decision) return runtime.handle(req, input);
     const started = performance.now(), conversationId = input.conversationId || randomUUID();
     const context = createActionContext(req, { conversationId }), key = keyFor(req, conversationId);
-    let pendingAction, answer, clarification = false, execution, suggestions = [];
+    let pendingAction, answer, clarification = false, execution, suggestions = [], suggestionsExpiresAt;
     if (previous?.items && /que proveedores/.test(normalized)) {
       const products = [];
       for (const item of previous.items) {
@@ -88,6 +88,7 @@ const withActionAssistant = (runtime, service, options = {}) => {
         answer = `${pendingAction.summary} Revisa la tarjeta antes de confirmar. La preparación no modifica el inventario.`;
       }
       draft.updatedAt = now(); draft.expiresAt = now() + TTL_MS;
+      if (suggestions.length) suggestionsExpiresAt = draft.expiresAt;
       const safe = compactDraft(draft, now());
       if (safe && (drafts.size < 1000 || drafts.has(key))) drafts.set(key, safe);
     }
@@ -101,7 +102,7 @@ const withActionAssistant = (runtime, service, options = {}) => {
           totalCachedInputTokens: 0, totalToolUseTokens: 0, totalTokens: 0, metricsComplete: true, totalProviderLatencyMs: 0,
           totalLatencyMs: latencyMs, toolSelectionCycles: 0, agents: [participant], ...(realUsage || {}) },
         requiresClarification: needsClarification, clarificationQuestion: needsClarification ? text : null, latencyMs,
-        ...(pending ? { pendingAction: pending } : {}), ...(suggestions.length ? { suggestions } : {}) };
+        ...(pending ? { pendingAction: pending } : {}), ...(suggestions.length ? { suggestions, suggestionsExpiresAt } : {}) };
     }
   }
   return { ...runtime,

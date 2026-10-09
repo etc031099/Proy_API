@@ -83,6 +83,11 @@ const createAgentConversationService = ({ runtime, repository = createAgentHisto
       const result = await repository.messages(scope, id, page, limit);
       const messages = await Promise.all(result.messages.map(async row => {
         let response = row.response ? publicResponse(row.response) : undefined;
+        if (response?.suggestions?.length) {
+          const draft = require('../automations/operationDraft').compactDraft(conversation.contextSnapshot?.operationDraft);
+          // Saved choices remain readable, but only the current valid draft can act.
+          if (!draft || draft.expiresAt !== response.suggestionsExpiresAt) response.suggestionsExpiresAt = 0;
+        }
         if (response?.pendingAction && actionService) {
           const context = require('../automations/contracts').createActionContext(req, { conversationId: id });
           try { response = publicResponse({ ...response, pendingAction: await actionService.get(context, response.pendingAction.pendingActionId) }); }

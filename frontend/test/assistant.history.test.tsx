@@ -33,6 +33,20 @@ beforeEach(() => {
   vi.mocked(apiClient.getAgentConversation).mockResolvedValue({ success: true, data: detail });
   vi.mocked(apiClient.deleteAgentConversation).mockResolvedValue({ success: true, data: { deleted: true } });
 });
+for (const expired of [false, true]) it(`restores food choices from history, expired=${expired}`, async () => {
+  vi.mocked(apiClient.getAgentConversation).mockResolvedValue({ success: true, data: { ...detail, messages: [
+    detail.messages[0], { ...detail.messages[1], response: { ...response, suggestionsExpiresAt: expired ? 0 : Date.now() + 120000,
+      suggestions: [{ label: '1. Foods A — FOOD-A', message: 'Opción 1' }] } }
+  ] } });
+  vi.mocked(apiClient.sendAgentMessage).mockResolvedValue({ success: true, data: response });
+  render(<AssistantPage />);
+  const choice = await screen.findByRole('button', { name: '1. Foods A — FOOD-A' });
+  await waitFor(() => expect(choice.hasAttribute('disabled')).toBe(expired));
+  fireEvent.click(choice);
+  if (expired) {
+    expect(screen.getByText(/Estas opciones vencieron/)).toBeTruthy(); expect(apiClient.sendAgentMessage).not.toHaveBeenCalled();
+  } else await waitFor(() => expect(apiClient.sendAgentMessage).toHaveBeenCalledWith({ message: 'Opción 1', conversationId: id }, expect.any(String)));
+});
 it('loads history, restores messages/activity and stores only the active UUID without generation', async () => {
   render(<AssistantPage />); await screen.findByText(response.answer);
   fireEvent.click(screen.getByRole('button', { name: 'Conversaciones' }));

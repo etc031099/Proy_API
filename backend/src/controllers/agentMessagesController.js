@@ -50,7 +50,8 @@ const createAgentMessagesHandler = ({ enabled, orchestrator, history } = {}) => 
   if (enabled !== true) return res.status(404).json({ success: false, code: 'AGENT_DISABLED', message: 'Asistente no disponible.' });
   const body = req.body;
   if (!isPlainObject(body) || Object.keys(body).some(key => !['message', 'conversationId'].includes(key))
-    || typeof body.message !== 'string' || body.message.trim().length < 2
+    || typeof body.message !== 'string' || !body.message.trim()
+    || (body.message.trim().length === 1 && !/^[1-5]$/.test(body.message.trim()))
     || body.message.length > EXECUTION_LIMITS.maxMessageChars
     || (Object.hasOwn(body, 'conversationId') && !isTraceId(body.conversationId))) {
     return res.status(400).json({ success: false, code: 'AGENT_INVALID_REQUEST', message: errors.AGENT_INVALID_REQUEST[1] });
@@ -69,7 +70,7 @@ const createAgentMessagesHandler = ({ enabled, orchestrator, history } = {}) => 
     if (result.code && !['AGENT_CLARIFICATION_REQUIRED', 'AGENT_UNSUPPORTED_QUERY'].includes(result.code)) return fail(result.code);
     // Explicit public envelope: never serialize provider responses or internal prompts.
     const fields = ['requestId', 'conversationId', 'answer', 'intent', 'agent', 'participants', 'actions', 'evidence',
-      'usage', 'requiresClarification', 'clarificationQuestion', 'latencyMs', 'pendingAction'];
+      'usage', 'requiresClarification', 'clarificationQuestion', 'latencyMs', 'pendingAction', 'suggestions', 'suggestionsExpiresAt'];
     return res.json({ success: true, data: Object.fromEntries(fields.filter(key => result[key] !== undefined).map(key => [key, result[key]])) });
   } catch (error) {
     return fail(error.code);

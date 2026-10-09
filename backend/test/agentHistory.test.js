@@ -69,6 +69,24 @@ const fixture = () => {
     fail: value => { fails = value; }, failComplete: value => { completeFailure = value; } };
 };
 
+test('history retains safe choices while draft is valid and disables stale/expired drafts', async () => {
+  const f = fixture(), now = Date.now();
+  const draft = { action: 'create_sale', items: [{ ref: 'food', quantity: 2 }], updatedAt: now, expiresAt: now + 120000,
+    selection: { slot: 'product', index: 0, candidates: [{ _id: 'bbbbbbbbbbbbbbbbbbbbbbbb', name: 'Foods', sku: 'FOOD' }] } };
+  f.runtime.handle = async (auth, input) => ({ ...response(input.conversationId), suggestionsExpiresAt: draft.expiresAt,
+    suggestions: [{ label: '1. Foods — FOOD', message: 'Opción 1', raw: 'private' }] });
+  f.runtime.getContextSnapshot = async () => ({ operationDraft: draft });
+  const sent = await f.service.send(req(), { message: 'vende 2 food' });
+  let restored = await f.service.get(req(), sent.conversationId, 1, 50);
+  let result = restored.messages.find(row => row.response).response;
+  assert.deepEqual(result.suggestions, [{ label: '1. Foods — FOOD', message: 'Opción 1' }]);
+  assert.equal(result.suggestionsExpiresAt, draft.expiresAt);
+  f.conversations[0].contextSnapshot.operationDraft.expiresAt = now - 1;
+  restored = await f.service.get(req(), sent.conversationId, 1, 50);
+  result = restored.messages.find(row => row.response).response;
+  assert.equal(result.suggestionsExpiresAt, 0); assert.equal(result.suggestions.length, 1);
+});
+
 test('first message creates a deterministic titled conversation, both messages, counts and safe activity', async () => {
   const f = fixture(); assert.equal(f.conversations.length, 0);
   const result = await f.service.send(req(), { message: 'Muéstrame los productos con stock bajo' });

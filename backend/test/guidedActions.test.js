@@ -35,6 +35,45 @@ function fixture({ products = [p1, p2], suppliers = [vendor], configured = [vend
   const send = message => adapter.handle(request(), { message, conversationId });
   return { adapter, runtime, service, options, conversationId, send, prepared, cancelled };
 }
+
+for (const choice of ['Opción 1', '1', 'el primero', 'el segundo', 'FOOD-0']) test(`food candidates survive public projection and select ${choice}`, async () => {
+  const products = Array.from({ length: 7 }, (_, i) => ({ ...p1, _id: String(i + 1).padStart(24, '0'), name: `Foods ${i}`, sku: `FOOD-${i}` }));
+  const f = fixture({ products });
+  assert.equal(rankEntities(products, 'food').confidence, 'AMBIGUOUS');
+  const first = publicResponse(await f.send('vende 2 food'));
+  assert.equal(first.suggestions.length, 5);
+  assert.match(first.answer, /1\. Foods 0 — FOOD-0/);
+  assert.match(first.clarificationQuestion, /5\. Foods 4 — FOOD-4/);
+  assert.equal(first.suggestionsExpiresAt, (await f.adapter.getContextSnapshot(request(), f.conversationId)).operationDraft.expiresAt);
+  assert.ok(!JSON.stringify(first).includes(products[0]._id));
+  const selected = await f.send(choice);
+  assert.equal(f.prepared[0].products[0].quantity, 2);
+  assert.equal(selected.usage.totalLlmCalls, 0); assert.equal(selected.usage.totalTokens, 0);
+});
+
+test('raw ID of a real tenant product outside candidate list cannot bypass selection', async () => {
+  const other = { ...p1, _id: 'ffffffffffffffffffffffff', name: 'Other', sku: 'OTHER' };
+  const f = fixture({ products: [p1, p2, other] });
+  await f.send('vende 2 coca'); await f.send(other._id);
+  assert.equal(f.prepared.length, 0);
+});
+
+test('vende 2 food reaches the HTTP envelope with candidates and keeps quantity after selection', async () => {
+  const { createAgentMessagesHandler } = require('../src/controllers/agentMessagesController');
+  const products = [p1, p2].map((row, i) => ({ ...row, name: `Foods ${i}`, sku: `FOOD-${i}` }));
+  const f = fixture({ products });
+  const handler = createAgentMessagesHandler({ enabled: true, orchestrator: f.adapter });
+  const call = async message => {
+    let body, status = 200;
+    await handler({ ...request(), body: { message, conversationId: f.conversationId }, get: () => undefined },
+      { status(value) { status = value; return this; }, json(value) { body = value; } });
+    assert.equal(status, 200); return body.data;
+  };
+  const first = await call('vende 2 food');
+  assert.equal(first.suggestions.length, 2); assert.match(first.answer, /FOOD-0/);
+  assert.deepEqual(publicResponse(first).suggestions, first.suggestions);
+  await call('1'); assert.equal(f.prepared[0].products[0].quantity, 2);
+});
 for (const ref of ['coca cola 500 ml', 'COCA-COLA 500ML', 'cocacola 500ml']) test(`normalised exact product ${ref}`, () => {
   assert.equal(rankEntities([p1, p2], ref).value._id, p1._id);
 });

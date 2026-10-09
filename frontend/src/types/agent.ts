@@ -56,6 +56,7 @@ export interface AgentEvidence {
 }
 export interface AgentResponse {
   suggestions?: { label: string; message: string; detail?: string }[];
+  suggestionsExpiresAt?: number;
   pendingAction?: PendingActionPreview;
   requestId: string;
   conversationId: string;

@@ -100,7 +100,13 @@ test('Mongo history restores a guided candidate draft after runtime restart with
   assert.equal(first.suggestions.length, 2); assert.deepEqual(await counts(), before);
   const restart = withActionAssistant({}, service);
   const resumed = createAgentConversationService({ runtime: restart, actionService: service });
-  await resumed.get(req(), first.conversationId, 1, 20); assert.deepEqual(await counts(), before);
+  const restored = await resumed.get(req(), first.conversationId, 1, 20);
+  const choices = restored.messages.find(row => row.response?.suggestions)?.response;
+  assert.deepEqual(choices.suggestions, JSON.parse(JSON.stringify(first.suggestions)));
+  assert.equal(choices.suggestionsExpiresAt, first.suggestionsExpiresAt);
+  assert.ok(choices.suggestionsExpiresAt > Date.now());
+  assert.match(choices.answer, /1\..+GUIDED-REF/);
+  assert.deepEqual(await counts(), before);
   const next = await resumed.send(req(), { message: '2', conversationId: first.conversationId }, randomUUID());
   assert.equal(next.pendingAction.status, 'PENDING'); assert.equal(next.usage.totalTokens, 0);
   assert.deepEqual(await counts(), before);

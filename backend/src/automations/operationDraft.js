@@ -57,7 +57,9 @@ function updateDraft(previous, extracted, message) {
       delete draft.selection;
       return draft;
     }
-    if (/^(?:opcion\s+)?\d+$/.test(text) || /^(?:el|la)\s+(?:primer|segund|tercer|cuart|quint)/.test(text)) return draft;
+    // Raw IDs cannot bypass the displayed selection. Chosen candidates are
+    // resolved again under the authenticated tenant before preparation.
+    if (/^[a-f\d]{24}$/i.test(text) || /^(?:opcion\s+)?\d+$/.test(text) || /^(?:el|la)\s+(?:primer|segund|tercer|cuart|quint)/.test(text)) return draft;
     if (!/que|datos|falta|cambia|cantidad|mejor/.test(text)) {
       if (draft.selection.slot === 'product') draft.items[draft.selection.index].ref = message.trim().replace(/^SKU\s+/i, '');
       else draft.supplierRef = message.trim();
@@ -149,6 +151,9 @@ function applyResolution(draft, result, now) {
   if (result.missingFields) draft.missingFields = result.missingFields;
   if (result.itemIndex !== undefined) draft.itemIndex = result.itemIndex;
   draft.updatedAt = now; draft.expiresAt = now + TTL_MS;
-  return { ...result, suggestions: [...suggestionsFor(draft.selection), ...(result.suggestions || [])] };
+  const candidates = suggestionsFor(draft.selection);
+  return { ...result,
+    ...(candidates.length && result.clarification ? { clarification: `${result.clarification}\n${candidates.map(option => option.label).join('\n')}` } : {}),
+    suggestions: [...candidates, ...(result.suggestions || [])] };
 }
 module.exports = { TTL_MS, compactDraft, updateDraft, resolveDraft, applyResolution };

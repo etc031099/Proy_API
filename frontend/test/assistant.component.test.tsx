@@ -26,6 +26,22 @@ const response: AgentResponse = {
 beforeEach(() => { send.mockReset(); localStorage.clear(); vi.mocked(apiClient.listAgentConversations).mockResolvedValue({ success: true,
   data: { items: [], pagination: { page: 1, limit: 10, total: 0, totalPages: 1 } } }); });
 function submit(text = 'stock bajo') { fireEvent.change(screen.getByLabelText('Tu consulta'), { target: { value: text } }); fireEvent.click(screen.getByRole('button', { name: 'Enviar' })); }
+it('food choices show names/SKUs and numbered fallback, and click sends deterministic selection', async () => {
+  const answer = 'Elige una coincidencia.\n1. Foods A — FOOD-A\n2. Foods B — FOOD-B';
+  send.mockResolvedValueOnce({ success: true, data: { ...response, answer, suggestionsExpiresAt: Date.now() + 120000,
+    suggestions: [{ label: '1. Foods A — FOOD-A', message: 'Opción 1' }, { label: '2. Foods B — FOOD-B', message: 'Opción 2' }] } })
+    .mockResolvedValueOnce({ success: true, data: response });
+  render(<AssistantPage />); submit('vende 2 food');
+  const button = await screen.findByRole('button', { name: '1. Foods A — FOOD-A' });
+  expect(screen.getByText(/Elige una coincidencia/).textContent).toContain('2. Foods B — FOOD-B');
+  fireEvent.click(button); await screen.findByText(response.answer);
+  expect(send.mock.calls[1][0]).toEqual({ message: 'Opción 1', conversationId: response.conversationId });
+});
+it('does not render an empty choices container', async () => {
+  send.mockResolvedValue({ success: true, data: { ...response, suggestions: [] } });
+  render(<AssistantPage />); submit(); await screen.findByText(response.answer);
+  expect(screen.queryByLabelText('Opciones de la operación')).toBeNull();
+});
 it('guided candidates show real costs and send only the selection in the same conversation', async () => {
   send.mockResolvedValueOnce({ success: true, data: { ...response, answer: 'Elige un proveedor.', suggestions: [
     { label: '1. Distribuidora Inka', message: 'Opción 1', detail: 'COC500: 2.8 PEN' }, { label: '2. Central', message: 'Opción 2' }] } })

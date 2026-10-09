@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { AgentActivity } from '@/components/assistant/AgentActivity';
 import { ConversationHistory } from '@/components/assistant/ConversationHistory';
 import { PendingActionCard } from '@/components/assistant/PendingActionCard';
+import { ActionSuggestions } from '@/components/assistant/ActionSuggestions';
 import { useAuth } from '@/contexts/AuthContext';
 import { activeConversationKey, readActiveConversation, writeActiveConversation } from '@/lib/agentHistory';
 import { apiClient, AgentApiError } from '@/lib/api';
@@ -163,12 +164,8 @@ export default function AssistantPage() {
           {messages.map(m => <article key={m.id} className={`rounded-lg p-4 min-w-0 ${m.role === 'user' ? 'bg-muted' : 'border'}`}>
             <p className="text-xs font-medium mb-2">{m.role === 'user' ? 'Tú' : 'Asistente'}</p>
             <p className="whitespace-pre-wrap break-words text-sm">{m.text}</p>
-            {m.response?.suggestions?.length && <div aria-label="Opciones de la operación" className="mt-3 flex flex-wrap gap-2">
-              {m.response.suggestions.map(option => <button key={option.message} disabled={loading || historyBusy || m !== messages[messages.length - 1]}
-                onClick={() => void send(option.message)} className="rounded-lg border p-3 text-left text-sm hover:bg-muted disabled:opacity-50">
-                <span className="block">{option.label}</span>{option.detail && <span className="block text-xs text-muted-foreground">{option.detail}</span>}
-              </button>)}
-            </div>}
+            {m.response && <ActionSuggestions response={m.response} disabled={loading || historyBusy || m !== messages[messages.length - 1]}
+              onSelect={message => void send(message)} />}
             {m.response?.pendingAction && <PendingActionCard action={m.response.pendingAction} conversationId={m.response.conversationId} />}
             {m.status === 'failed' && <p className="text-xs text-muted-foreground">Consulta no completada.</p>}
             {m.status === 'pending' && <p className="text-xs text-muted-foreground">No hay un resultado confirmado para esta consulta.</p>}

@@ -55,6 +55,21 @@ test('clarification is normal success preserving conversationId', async t => {
   const res = await post({ message: 'su stock' }); assert.equal(res.status, 200);
   const { data } = await res.json(); assert.equal(data.conversationId, conversationId); assert.equal(data.requiresClarification, true);
 });
+
+test('HTTP transports safe candidate choices and accepts single digit selection', async t => {
+  const { publicResponse } = require('../src/services/agentHistoryProjection');
+  const suggestions = [{ label: '1. Foods A — FOOD-A', message: 'Opción 1', internalId: 'private' }];
+  const post = await setup(t, { orchestrator: { async handle(req, input) {
+    assert.equal(input.message, '1');
+    return publicResponse({ ...response, suggestions, suggestionsExpiresAt: Date.now() + 10000 });
+  } } });
+  const res = await post({ message: '1', conversationId });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.deepEqual(body.data.suggestions, [{ label: '1. Foods A — FOOD-A', message: 'Opción 1' }]);
+  assert.ok(body.data.suggestionsExpiresAt > Date.now());
+  assert.equal(body.data.usage.totalLlmCalls, 0);
+});
 for (const [code, status] of [['AGENT_PROVIDER_FAILED', 503], ['AGENT_SKILL_FAILED', 503], ['AGENT_BUDGET_EXCEEDED', 429], ['AGENT_INTERNAL_ERROR', 500]]) {
   test(`messages maps ${code} without leaking errors`, async t => {
     const post = await setup(t, { orchestrator: { async handle() { throw Object.assign(new Error('secret/raw provider/stack'), { code }); } } });

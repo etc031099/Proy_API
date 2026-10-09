@@ -1,5 +1,14 @@
 import { expect, it, vi } from 'vitest';
 import { apiClient } from '@/lib/api';
+it('preserves candidate transport including expiry in live and history API responses', async () => {
+  const data = { suggestions: [{ label: '1. Foods A — FOOD-A', message: 'Opción 1' }], suggestionsExpiresAt: 123456 };
+  const post = vi.spyOn(instance, 'post').mockResolvedValue({ data: { success: true, data } });
+  const get = vi.spyOn(instance, 'get').mockResolvedValue({ data: { success: true, data: { messages: [{ response: data }] } } });
+  try {
+    expect((await apiClient.sendAgentMessage({ message: 'vende 2 food' })).data).toEqual(data);
+    expect((await apiClient.getAgentConversation('conversation')).data?.messages[0].response).toEqual(data);
+  } finally { post.mockRestore(); get.mockRestore(); }
+});
 const instance = (apiClient as unknown as { instance: {
   post: (url: string, input: unknown, config?: unknown) => Promise<unknown>;
   get: (url: string, config?: unknown) => Promise<unknown>;
