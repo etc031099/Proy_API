@@ -10,9 +10,12 @@ const {
 const { reconstructStockAt } = require('./inventoryService');
 const { createMlServiceClient, MlServiceUnavailableError } = require('./mlServiceClient');
 
-const CLOUD_DEMO_BUSINESS_ID = 'ML-CLOUD-DEMO';
-const CLOUD_DEMO_SCENARIO_ID = 'm5-ca3-cloud-demo-v1';
-const ANCHOR_OPERATIONAL_DATE = '2025-07-01';
+const SCENARIOS = require('../config/mlScenarios.json');
+Object.values(SCENARIOS).forEach(Object.freeze);
+Object.freeze(SCENARIOS);
+const CLOUD_DEMO_BUSINESS_ID = SCENARIOS.v1.businessId;
+const CLOUD_DEMO_SCENARIO_ID = SCENARIOS.v1.scenarioId;
+const ANCHOR_OPERATIONAL_DATE = SCENARIOS.v1.anchorOperationalDate;
 const ANCHOR_STRATEGY = 'latest_eligible_historical_anchor';
 const MAX_BATCH_SIZE = 60;
 const HORIZON_DAYS = 7;
@@ -118,13 +121,15 @@ const createDemandForecastService = ({
   mlClient = createMlServiceClient()
 } = {}) => {
   const getDemandForecast = async ({ businessId, productId = null }) => {
-    if (businessId !== CLOUD_DEMO_BUSINESS_ID) {
+    const configuration = Object.values(SCENARIOS).find(entry => entry.businessId === businessId);
+    if (!configuration) {
       return { status: 'ML_NOT_READY', reason: 'Demand model is not available for this tenant' };
     }
 
+    const { scenarioId, anchorOperationalDate } = configuration;
     const scenario = await repositories.findScenario({
       businessId,
-      scenarioId: CLOUD_DEMO_SCENARIO_ID,
+      scenarioId,
       status: 'completed'
     });
     if (!scenario) {
@@ -133,7 +138,7 @@ const createDemandForecastService = ({
 
     const productQuery = {
       businessId,
-      scenarioId: CLOUD_DEMO_SCENARIO_ID,
+      scenarioId,
       isActive: true
     };
     if (productId) productQuery._id = new mongoose.Types.ObjectId(productId);
@@ -150,23 +155,26 @@ const createDemandForecastService = ({
 
     const scenarioStart = await repositories.findScenarioStart({
       businessId,
-      scenarioId: CLOUD_DEMO_SCENARIO_ID
+      scenarioId
     });
     if (!scenarioStart) return { status: 'ML_NOT_READY', reason: 'Historical range is unavailable' };
-    const historyStart = dayKey(scenarioStart.occurredAt);
-    const anchorEnd = new Date(`${ANCHOR_OPERATIONAL_DATE}T23:59:59.999Z`);
+    const historyStart = configuration.historyStart || dayKey(scenarioStart.occurredAt);
+    if (configuration.historyStart && dayKey(scenarioStart.occurredAt) > historyStart) {
+      return { status: 'ML_NOT_READY', reason: 'Historical opening coverage is unavailable' };
+    }
+    const anchorEnd = new Date(`${anchorOperationalDate}T23:59:59.999Z`);
     const productIds = products.map(product => product._id);
     const transactions = await repositories.findSales({
       businessId,
-      scenarioId: CLOUD_DEMO_SCENARIO_ID,
+      scenarioId,
       type: 'sale',
       status: 'completed',
-      date: { $lte: anchorEnd },
+      date: { $lte: anchorEnd, ...(configuration.historyStart ? { $gte: new Date(`${historyStart}T00:00:00.000Z`) } : {}) },
       'products.productId': { $in: productIds }
     });
     const histories = buildContinuousHistory({
       startDate: historyStart,
-      anchorDate: ANCHOR_OPERATIONAL_DATE,
+      anchorDate: anchorOperationalDate,
       transactions,
       productIds
     });
@@ -198,9 +206,9 @@ const createDemandForecastService = ({
         requestId: crypto.randomUUID(),
         context: {
           businessId,
-          scenarioId: CLOUD_DEMO_SCENARIO_ID,
+          scenarioId,
           anchorStrategy: ANCHOR_STRATEGY,
-          anchorOperationalDate: ANCHOR_OPERATIONAL_DATE,
+          anchorOperationalDate,
           timezone: 'UTC'
         },
         items
@@ -279,7 +287,7 @@ const createDemandForecastService = ({
         horizonDays: HORIZON_DAYS,
         execution: 'cloud'
       },
-      anchorOperationalDate: ANCHOR_OPERATIONAL_DATE,
+      anchorOperationalDate,
       products: outputProducts
     };
   };

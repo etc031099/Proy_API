@@ -332,6 +332,24 @@ test('second import of the same scenario and file is an idempotent no-op', async
   assert.equal(await InventoryMovement.countDocuments({ businessId, scenarioId }), before);
 });
 
+test('derived opening stock and currency debt import without fake historical invoices', async () => {
+  const scenarioId = `derived-opening-${runId}`;
+  const { records, ids } = scenarioRecords({ scenarioId });
+  // The opening receivable is derived offline; existing payment semantics are
+  // customer/currency based, not an invented transaction foreign key.
+  Object.assign(records[1].payload, { currentBalance: 30, balancesByCurrency: { PEN: 30 } });
+  await importHistoricalScenario({ filePath: writeNdjson(records), businessId, scenarioId });
+  const customer = await Contact.findById(ids.customerId);
+  assert.equal(customer.currentBalance, 45); // opening 30 + credit sale 20 - payment 5
+  assert.equal(customer.balancesByCurrency.PEN, 45);
+  assert.equal((await Product.findById(ids.productId)).stock, 13);
+  assert.equal(await reconstructStockAt(businessId, ids.productId, new Date(records[2].occurredAt)), 10);
+  assert.equal(await Transaction.countDocuments({ businessId, scenarioId }), 3);
+  assert.equal(await CreditPayment.countDocuments({ businessId, scenarioId }), 1);
+  assert.equal(await InventoryMovement.countDocuments({ businessId, scenarioId, type: 'opening' }), 1);
+  assert.equal(await Product.countDocuments({ businessId: otherBusinessId, scenarioId }), 0);
+});
+
 test('import rejects non-causal order and marks a partial scenario failed', async () => {
   const scenarioId = `failed-${runId}`;
   const firstId = new mongoose.Types.ObjectId();

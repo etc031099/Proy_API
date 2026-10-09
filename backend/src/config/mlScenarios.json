@@ -1,0 +1,16 @@
+{
+  "v1": {
+    "businessId": "ML-CLOUD-DEMO", "scenarioId": "m5-ca3-cloud-demo-v1",
+    "anchorOperationalDate": "2025-07-01", "sourceAnchor": "2015-06-30", "historyStart": null,
+    "manifest": "ml/data/serving/cloud_demo_lineage_manifest.json", "lineageVersion": "cloud-demo-lineage-v1",
+    "offsetDays": 3654, "productsCount": 60, "store": "CA_3", "featureSet": "demand-v1", "featuresCount": 31, "horizonDays": 7,
+    "modelSha256": "82f133a3390420556e69f090a5bdbeb4091bbe5f90f2260e790adf2b24741902"
+  },
+  "v2": {
+    "businessId": "ML-CLOUD-DEMO-V2", "scenarioId": "m5-ca3-cloud-demo-v2",
+    "anchorOperationalDate": "2026-05-17", "sourceAnchor": "2016-05-15", "historyStart": "2025-11-02",
+    "manifest": "ml/data/serving/cloud_demo_v2/cloud_demo_lineage_manifest.json", "lineageVersion": "cloud-demo-lineage-v2",
+    "offsetDays": 3654, "productsCount": 60, "store": "CA_3", "featureSet": "demand-v1", "featuresCount": 31, "horizonDays": 7,
+    "modelSha256": "82f133a3390420556e69f090a5bdbeb4091bbe5f90f2260e790adf2b24741902"
+  }
+}

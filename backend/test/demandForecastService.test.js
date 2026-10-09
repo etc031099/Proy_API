@@ -12,6 +12,72 @@ const {
 } = require('../src/services/demandForecastService');
 const { MlServiceUnavailableError } = require('../src/services/mlServiceClient');
 const { Product, Transaction, InventoryMovement } = require('../src/models');
+const SCENARIOS = require('../src/config/mlScenarios.json');
+const fs = require('node:fs');
+const path = require('node:path');
+
+test('closed registry contains exactly v1/v2 with identical frozen model contract', () => {
+  assert.deepEqual(Object.keys(SCENARIOS), ['v1', 'v2']);
+  assert.equal(SCENARIOS.v1.modelSha256, SCENARIOS.v2.modelSha256);
+  for (const scenario of Object.values(SCENARIOS)) {
+    assert.equal(scenario.productsCount, 60);
+    assert.equal(scenario.featuresCount, 31);
+    assert.equal(scenario.horizonDays, 7);
+  }
+});
+
+test('full/minimal local v2 replay preserves actual backend histories and recommendations', async t => {
+  const operational = path.resolve(__dirname, '../../ml/data/operational');
+  const files = ['scenario_cloud_demo_v2.ndjson', 'scenario_cloud_demo_v2_minimal.ndjson'];
+  if (!files.every(file => fs.existsSync(path.join(operational, file)))) {
+    return t.skip('Full/minimal local v2 datasets unavailable; no download or regeneration');
+  }
+  const manifest = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../ml/reports/scenario_cloud_demo_v2_manifest.json'), 'utf8'));
+  const expected = new Map(manifest.products.map(row => [row.productId, row]));
+  const results = [], requests = [];
+  for (const file of files) {
+    const events = fs.readFileSync(path.join(operational, file), 'utf8').trim().split('\n').map(JSON.parse);
+    const products = events.filter(e => e.eventType === 'product.created').map(e => ({ ...e.payload, _id: e.payload._id }))
+      .sort((a, b) => a.sku.localeCompare(b.sku));
+    const transactions = new Map();
+    const stocks = new Map(products.map(p => [p._id, p.stock]));
+    for (const e of events) {
+      const p = e.payload;
+      if (e.eventType === 'transaction.completed') {
+        transactions.set(p._id, { ...p, date: new Date(e.occurredAt), status: 'completed' });
+        for (const line of p.products) stocks.set(line.productId, stocks.get(line.productId) + line.quantity * (p.type === 'purchase' ? 1 : -1));
+      } else if (e.eventType === 'transaction.cancelled') {
+        const tx = transactions.get(p.transactionId);
+        tx.status = 'cancelled';
+        for (const line of tx.products) stocks.set(line.productId, stocks.get(line.productId) + line.quantity);
+      }
+    }
+    const service = createDemandForecastService({ repositories: {
+      findScenario: async () => ({ status: 'completed' }),
+      findScenarioStart: async () => ({ occurredAt: new Date(events.find(e => e.eventType === 'product.created').occurredAt) }),
+      findProducts: async () => products,
+      findSales: async q => [...transactions.values()].filter(tx => tx.type === 'sale' && tx.status === 'completed' && tx.date >= q.date.$gte && tx.date <= q.date.$lte),
+      reconstructStockAt: async (business, id) => stocks.get(String(id))
+    }, mlClient: { predictDemand: async request => {
+      requests.push(request.items);
+      return { model: 'demand_forecast_v1', modelVersion: '1.0.0', featureSetVersion: 'demand-v1',
+        results: request.items.map(item => ({ productId: item.productId, sku: item.sku, status: 'READY',
+          predictedDemand7d: expected.get(item.productId).predictedDemand7d })) };
+    } } });
+    results.push(await service.getDemandForecast({ businessId: 'ML-CLOUD-DEMO-V2' }));
+  }
+  assert.deepEqual(requests[0], requests[1]);
+  assert.deepEqual(results[0], results[1]);
+  assert.equal(results[1].products.length, 60);
+  for (const product of results[1].products) {
+    const row = expected.get(product.productId);
+    assert.equal(product.mlStatus, 'READY');
+    assert.equal(product.stockAtAnchor, row.stock);
+    assert.equal(product.safetyStock, row.safetyStock);
+    assert.equal(product.recommendedQty, row.recommendedQty);
+    assert.equal(product.inventoryStatus, row.inventoryStatus);
+  }
+});
 
 const productA = {
   _id: new mongoose.Types.ObjectId(),
@@ -66,6 +132,31 @@ const readyMlClient = (capture = []) => ({
       }))
     };
   }
+});
+
+test('v2 is selected by server business and uses a bounded 197-day history', async () => {
+  const requests = [];
+  const repositories = makeRepositories({ findScenarioStart: async () => ({ occurredAt: new Date('2025-11-01') }) });
+  const service = createDemandForecastService({ repositories, mlClient: readyMlClient(requests) });
+  const result = await service.getDemandForecast({ businessId: 'ML-CLOUD-DEMO-V2',
+    scenarioId: 'evil', anchor: '2099-01-01' });
+  assert.equal(result.status, 'READY');
+  assert.equal(result.anchorOperationalDate, '2026-05-17');
+  assert.equal(requests[0].context.scenarioId, 'm5-ca3-cloud-demo-v2');
+  assert.equal(requests[0].items[0].dailySales.length, 197);
+  assert.equal(requests[0].items[0].historyCoverage.start, '2025-11-02');
+  for (const [, query] of repositories.calls.queries) {
+    assert.equal(query.businessId, 'ML-CLOUD-DEMO-V2');
+    assert.equal(query.scenarioId, 'm5-ca3-cloud-demo-v2');
+  }
+});
+
+test('v1 cannot be switched to v2 by client-provided scenario or anchor', async () => {
+  const requests = [];
+  await createDemandForecastService({ repositories: makeRepositories(), mlClient: readyMlClient(requests) })
+    .getDemandForecast({ businessId: 'ML-CLOUD-DEMO', scenarioId: SCENARIOS.v2.scenarioId, anchor: SCENARIOS.v2.anchorOperationalDate });
+  assert.equal(requests[0].context.scenarioId, SCENARIOS.v1.scenarioId);
+  assert.equal(requests[0].context.anchorOperationalDate, SCENARIOS.v1.anchorOperationalDate);
 });
 
 test('daily history sums completed sale units and fills zero-sale days', () => {

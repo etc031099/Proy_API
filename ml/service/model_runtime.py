@@ -16,10 +16,9 @@ from sklearn.pipeline import Pipeline
 from ml.service.schemas import PredictionRequest, PredictionResult
 from ml.src.common import repository_path, sha256_file
 from ml.src.inference.demand_v1 import validate_and_order_features
+from ml.src.serving.scenarios import SCENARIOS, validate_lineage
 from ml.src.serving.demand_features import (
     EXPECTED_ANCHOR_STRATEGY,
-    EXPECTED_BUSINESS_ID,
-    EXPECTED_SCENARIO_ID,
     INVALID_HISTORY,
     FeatureBuildError,
     DemandFeatureBuilder,
@@ -71,6 +70,7 @@ class ModelRuntime:
         self.metadata: dict[str, Any] = {}
         self.contract: dict[str, Any] = {}
         self.builder: DemandFeatureBuilder | None = None
+        self.builders: dict[str, DemandFeatureBuilder] = {}
         self.joblib_sha256: str | None = None
         self.startup_seconds: float | None = None
 
@@ -95,11 +95,19 @@ class ModelRuntime:
                 raise ModelUnavailableError("Trusted artifact is not an sklearn Pipeline")
             if list(pipeline.named_steps) != ["preprocessing", "estimator"]:
                 raise ModelUnavailableError("Trusted pipeline steps are invalid")
-            builder = DemandFeatureBuilder(feature_contract_path=self.contract_path)
+            builders = {}
+            for key, scenario in SCENARIOS.items():
+                if scenario["modelSha256"] != digest or scenario["horizonDays"] != 7:
+                    raise ModelUnavailableError("Registered model contract mismatch")
+                builder = DemandFeatureBuilder(scenario["manifest"], self.contract_path,
+                    expected_business_id=scenario["businessId"], expected_scenario_id=scenario["scenarioId"])
+                validate_lineage(builder, scenario)
+                builders[key] = builder
             self.metadata = metadata
             self.contract = contract
             self.pipeline = pipeline
-            self.builder = builder
+            self.builders = builders
+            self.builder = builders["v1"]
             self.joblib_sha256 = digest
             self.error_code = None
             self.available = True
@@ -108,6 +116,7 @@ class ModelRuntime:
             self.error_code = "MODEL_UNAVAILABLE"
             self.pipeline = None
             self.builder = None
+            self.builders = {}
             if isinstance(error, ModelUnavailableError):
                 raise
             raise ModelUnavailableError("Inference runtime could not be initialized") from error
@@ -125,19 +134,20 @@ class ModelRuntime:
             "joblibSha256": self.joblib_sha256[:12] if self.joblib_sha256 else None,
         }
 
-    def validate_context(self, request: PredictionRequest) -> None:
+    def validate_context(self, request: PredictionRequest) -> DemandFeatureBuilder:
         context = request.context
-        if context.businessId != EXPECTED_BUSINESS_ID:
-            raise InvalidContextError("Unsupported businessId")
-        if context.scenarioId != EXPECTED_SCENARIO_ID:
-            raise InvalidContextError("Unsupported scenarioId")
+        key = next((key for key, entry in SCENARIOS.items()
+            if context.businessId == entry["businessId"] and context.scenarioId == entry["scenarioId"]), None)
+        if key is None:
+            raise InvalidContextError("Unsupported business/scenario pair")
         if context.anchorStrategy != EXPECTED_ANCHOR_STRATEGY:
             raise InvalidContextError("Unsupported anchor strategy")
-        if self.builder is None:
+        if key not in self.builders:
             raise ModelUnavailableError("Inference runtime is unavailable")
-        expected = self.builder.manifest["operational_anchor"]
+        expected = SCENARIOS[key]["anchorOperationalDate"]
         if context.anchorOperationalDate.isoformat() != expected:
             raise InvalidContextError("Unsupported anchorOperationalDate")
+        return self.builders[key]
 
     @staticmethod
     def _item_history(item: Any, anchor: Any) -> list[dict[str, Any]]:
@@ -168,19 +178,19 @@ class ModelRuntime:
     def predict_batch(self, request: PredictionRequest) -> BatchPrediction:
         if not self.available or self.pipeline is None or self.builder is None:
             raise ModelUnavailableError("Inference runtime is unavailable")
-        self.validate_context(request)
+        builder = self.validate_context(request)
         self._validate_batch_uniqueness(request)
         pending: list[tuple[int, pd.DataFrame]] = []
         results: list[PredictionResult | None] = [None] * len(request.items)
         source_anchor = request.context.anchorOperationalDate - timedelta(
-            days=self.builder.manifest["date_offset_days"]
+            days=builder.manifest["date_offset_days"]
         )
         for index, item in enumerate(request.items):
             try:
                 daily_sales = self._item_history(
                     item, request.context.anchorOperationalDate
                 )
-                built = self.builder.build(
+                built = builder.build(
                     item.sku,
                     request.context.anchorOperationalDate,
                     daily_sales,
