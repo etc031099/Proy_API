@@ -39,10 +39,19 @@ const fixture = ({ products = [product(1), product(2), product(3, 'B')], contact
     },
     find(match) {
       assert.ok(match.businessId); reads.push({ model: 'Product', match });
-      return { select() { return this; }, limit() { return this; }, maxTimeMS() { return this; }, lean() { return this; },
-        exec: async () => products.filter(row => row.businessId === match.businessId
-          && (!match._id || match._id.$in.includes(row._id)) && (!match.sku || match.sku.$in.includes(row.sku))) };
+      let offset = 0, limit = Infinity;
+      const selectedRows = () => products.filter(row => row.businessId === match.businessId
+        && (!match._id || match._id.$in.includes(row._id)) && (!match.sku || match.sku.$in.includes(row.sku))
+        && (!match.supplierPrices || row.supplierPrices?.some(offer => String(offer.supplierId) === String(match.supplierPrices.$elemMatch.supplierId)
+          && typeof offer.purchasePrice === 'number' && offer.purchasePrice > 0)));
+      return { select() { return this; }, sort() { return this; }, skip(value) { offset = value; return this; },
+        limit(value) { limit = value; return this; }, maxTimeMS() { return this; }, lean() { return this; },
+        exec: async () => selectedRows().slice(offset, offset + limit) };
     },
+    countDocuments(match) { assert.ok(match.businessId); reads.push({ model: 'Product.count', match });
+      return { maxTimeMS() { return this; }, exec: async () => products.filter(row => row.businessId === match.businessId
+        && row.supplierPrices?.some(offer => String(offer.supplierId) === String(match.supplierPrices.$elemMatch.supplierId)
+          && typeof offer.purchasePrice === 'number' && offer.purchasePrice > 0)).length }; },
     aggregate(pipeline) {
       const match = pipeline[0].$match; assert.ok(match.businessId); reads.push({ model: 'Product', pipeline });
       let rows = products.filter(row => row.businessId === match.businessId && row.isActive);
@@ -406,6 +415,87 @@ test('supplier candidates paginate five at a time and selection on the next page
   assert.equal(selected.requiresClarification, false); assert.equal(selected.actions[0].skillId, 'get_replenishment_cost');
   assert.match(selected.answer, /M5-FOODS_3_511/); assert.match(selected.answer, /Proveedor sintético 055 FOODS F/);
   assert.equal(selected.usage.totalLlmCalls, 0); assert.equal(selected.usage.totalTokens, 0);
+});
+
+test('supplier-to-products phrases take precedence over product search and keep sale commands in action routing', () => {
+  const cases = [
+    ['el proveedor food q productos provee?', 'food'],
+    ['qué productos provee 55 foods?', '55 foods'],
+    ['qué productos vende el proveedor 055 foods?', '055 foods'],
+    ['qué ofrece proveedor sintético 055 foods?', 'sintético 055 foods'],
+    ['muéstrame los productos de 55 foods', '55 foods'],
+    ['¿el proveedor 55 foods provee M5-FOODS_3_511?', '55 foods']
+  ];
+  for (const [message, supplierRef] of cases) {
+    const plan = routeDeterministically(message, {}, clock());
+    assert.equal(plan.intent, 'supplier_products', message);
+    assert.equal(plan.skillId, 'get_supplier_products', message);
+    assert.equal(plan.args.supplierRef, supplierRef, message);
+  }
+  assert.equal(routeDeterministically('vende 2 food', {}, clock()), null);
+});
+
+test('ambiguous supplier query offers safe candidates; number and ordinal resume supplier-to-products at zero LLM', async () => {
+  const vendors = [55, 58].map((number, index) => ({ _id: id(350 + index), businessId: 'A', type: 'vendor', isActive: true,
+    name: `Proveedor sintético 0${number} FOODS` }));
+  const rows = vendors.map((vendor, index) => ({ ...product(360 + index), sku: `M5-FOODS_3_${511 + index}`,
+    supplierPrices: [{ supplierId: vendor._id, purchasePrice: 15.67 + index / 100 }], preferredSupplierId: vendor._id }));
+  const f = fixture({ contacts: vendors, products: rows, forecastService: { getDemandForecast() { assert.fail('supplier lookup must not call ML'); } } });
+  const conversationId = randomUUID();
+  const first = await f.run('el proveedor food q productos provee?', conversationId);
+  assert.equal(first.intent, 'supplier_products'); assert.equal(first.requiresClarification, true);
+  assert.match(first.answer, /varios proveedores/i); assert.equal(first.suggestions.length, 2);
+  assert.doesNotMatch(JSON.stringify(first), new RegExp(vendors.map(row => row._id).join('|')));
+  const chosen = await f.run('1', conversationId);
+  assert.equal(chosen.requiresClarification, false); assert.equal(chosen.actions[0].skillId, 'get_supplier_products');
+  assert.match(chosen.answer, /Seleccionaste Proveedor sintético 055 FOODS/);
+  assert.match(chosen.answer, /M5-FOODS_3_511/); assert.match(chosen.answer, /S\/ 15\.67 PEN/);
+  assert.match(chosen.answer, /oferta configurada/); assert.doesNotMatch(chosen.answer, /disponible en stock|SUPPLIER_NOT_FOUND|NO_PRODUCT_OFFER/);
+  assert.equal(chosen.usage.totalLlmCalls, 0); assert.equal(chosen.usage.totalTokens, 0); assert.equal(f.calls.length, 0);
+  assert.ok(f.reads.filter(read => ['Product', 'Contact', 'Product.count'].includes(read.model)).every(read => read.match.businessId === 'A'));
+
+  const secondConversation = randomUUID();
+  const second = await f.run('proveedor food', secondConversation);
+  assert.equal(second.suggestions.length, 2);
+  const ordinal = await f.run('el primero', secondConversation);
+  assert.match(ordinal.answer, /Proveedor sintético 055 FOODS/);
+  assert.equal(ordinal.usage.totalTokens, 0);
+});
+
+test('resolved supplier lists configured offers in stable pages and supports ver más/anterior without writes or ML', async () => {
+  const vendor = { _id: id(380), businessId: 'A', type: 'vendor', isActive: true, name: 'Proveedor sintético 055 FOODS' };
+  const products = Array.from({ length: 6 }, (_, index) => ({ ...product(390 + index), sku: `OFFER-${index + 1}`,
+    supplierPrices: [{ supplierId: vendor._id, purchasePrice: 2 + index }], preferredSupplierId: vendor._id }));
+  const f = fixture({ products, contacts: [vendor], forecastService: { getDemandForecast() { assert.fail('not an ML intent'); } } });
+  const conversationId = randomUUID();
+  const pageOne = await f.run('qué productos provee 55 foods?', conversationId);
+  assert.equal(pageOne.actions[0].skillId, 'get_supplier_products');
+  assert.match(pageOne.answer, /Mostrando 1–5 de 6/); assert.match(pageOne.answer, /no son cotizaciones confirmadas/);
+  assert.equal(pageOne.usage.totalLlmCalls, 0); assert.equal(pageOne.usage.totalTokens, 0);
+  const pageTwo = await f.run('ver más', conversationId);
+  assert.match(pageTwo.answer, /Mostrando 6–6 de 6/); assert.match(pageTwo.answer, /OFFER-6/);
+  const previous = await f.run('anterior', conversationId);
+  assert.match(previous.answer, /Mostrando 1–5 de 6/);
+  for (const result of [pageTwo, previous]) { assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0); }
+  assert.equal(f.calls.length, 0);
+  assert.ok(f.reads.filter(read => ['Product', 'Contact', 'Product.count'].includes(read.model)).every(read => read.match.businessId === 'A'));
+  assert.equal(f.reads.some(read => /Transaction|InventoryMovement|PendingAction/.test(read.model)), false);
+});
+
+test('supplier product lookup answers offer yes/no, missing provider safely, and never leaks other-tenant suppliers', async () => {
+  const vendorA = { _id: id(410), businessId: 'A', type: 'vendor', isActive: true, name: 'Proveedor A 055 FOODS' };
+  const vendorB = { _id: id(411), businessId: 'B', type: 'vendor', isActive: true, name: 'Proveedor A 055 FOODS' };
+  const productWithOtherOffer = { ...product(420), sku: 'M5-FOODS_3_511', supplierPrices: [{ supplierId: vendorB._id, purchasePrice: 10 }] };
+  const f = fixture({ products: [productWithOtherOffer], contacts: [vendorA, vendorB] });
+  const yes = await f.run('¿el proveedor 55 foods provee M5-FOODS_3_511?', randomUUID());
+  assert.match(yes.answer, /no tiene una oferta configurada/);
+  assert.doesNotMatch(yes.answer, /USER_SPECIFIED_UNAVAILABLE|NO_PRODUCT_OFFER|SUPPLIER_NOT_FOUND/);
+  const absent = await f.run('qué productos provee proveedor inexistente 999?', randomUUID());
+  assert.match(absent.answer, /No encontré un proveedor suficientemente parecido/i);
+  assert.doesNotMatch(JSON.stringify(absent), new RegExp(vendorB._id));
+  assert.equal(yes.usage.totalLlmCalls, 0); assert.equal(absent.usage.totalTokens, 0); assert.equal(f.calls.length, 0);
+  assert.ok(f.reads.filter(read => read.model === 'Contact').every(read => read.match.businessId === 'A'
+    && read.match.type === 'vendor' && read.match.isActive === true));
 });
 
 test('a new product list replaces the previous ordinal selection', async () => {

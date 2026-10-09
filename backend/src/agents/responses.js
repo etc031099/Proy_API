@@ -87,6 +87,21 @@ const buildSkillAnswer = (skillId, result) => {
       ? 'es el proveedor preferido configurado' : 'es la oferta válida de menor costo'}.` : 'No hay un proveedor seleccionado.';
     return `Para ${offers[0].sku} (${offers[0].productName}) hay ${offers.length} proveedor${offers.length === 1 ? '' : 'es'} con ofertas válidas:\n${offers.map(row => `• ${row.supplier}: ${format(row.unitCost)} ${row.currency} por unidad${row.preferred ? '. Es el proveedor preferido configurado' : ''}${row.selected && !row.preferred ? '. Oferta seleccionada' : ''}.`).join('\n')}\n${selectedNote} Precios consultados: ${metadata.pricingAsOf || 'fecha no disponible'}.`;
   }
+  if (skillId === 'get_supplier_products') {
+    if (Object.hasOwn(data, 'product')) {
+      if (!data.product) return `No encontré el producto ${data.productRef} en el catálogo de este negocio.`;
+      if (!data.product.hasOffer) return `El proveedor ${data.supplierName} existe, pero no tiene una oferta configurada para ${data.product.sku} (${data.product.productName}).`;
+      const currency = data.product.currency === 'PEN' ? 'S/ ' : '';
+      return `Sí. ${data.supplierName} tiene una oferta configurada para ${data.product.sku} (${data.product.productName}) por ${currency}${format(data.product.purchasePrice)} ${data.product.currency}${data.product.preferredForProduct ? '. Es el proveedor preferido configurado para este producto' : ''}. Este precio está configurado en el sistema y no es una cotización confirmada.`;
+    }
+    const items = data.items || [];
+    if (!items.length) return `${data.supplierName} no tiene productos con ofertas configuradas en el catálogo de este negocio.`;
+    const first = metadata.offset + 1, last = metadata.offset + items.length;
+    const price = row => `${row.currency === 'PEN' ? 'S/ ' : ''}${format(row.purchasePrice)} ${row.currency}`;
+    const lines = items.map(row => `• ${row.sku || 'Sin SKU'} — ${row.productName} — ${price(row)}${row.preferredForProduct ? ' (proveedor preferido configurado)' : ''}${row.active ? '' : ' (producto inactivo)'}`);
+    return [`${data.supplierName} tiene ${countLabel(data.totalProducts, 'producto con oferta configurada', 'productos con ofertas configuradas')} en el sistema:`,
+      ...lines, `Mostrando ${first}–${last} de ${data.totalProducts}. Los precios configurados no son cotizaciones confirmadas.${data.pagination?.hasMore ? ' Puedes decir «ver más» para continuar.' : ''}`].join('\n');
+  }
   if (skillId === 'plan_replenishment_budget') {
     const items = data.items || [];
     const lines = items.map(row => `• ${row.sku} (${row.productName}): ${format(row.plannedQty)}/${format(row.recommendedQty)} unidades con ${row.supplierName}, ${format(row.plannedCost)} PEN. ${row.reason}.`);

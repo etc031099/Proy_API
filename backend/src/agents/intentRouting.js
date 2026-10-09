@@ -7,6 +7,33 @@ const monthPeriod = (now, previous = false) => {
     endDate: new Date(Date.UTC(now.getUTCFullYear(), month + 1, 0)).toISOString().slice(0, 10) };
 };
 const clarify = question => ({ intent: 'ambiguous_query', agent: 'coordinator', clarificationQuestion: question });
+const routeSupplierProducts = (message, memory = {}) => {
+  const text = normalize(message);
+  // Transactional sale language belongs to AUTO-R2.5, even if a product name happens to be “food”.
+  if (/\bvende\s+\d+\b/.test(text)) return null;
+  const asksOfferRelationship = /\b(?:provee|proveen|ofrece|ofrecen)\b/.test(text)
+    && /\b(?:que|q|cual|cuales|producto|productos|sku)\b/.test(text);
+  const asksSupplierInventory = /\bproveedor\b/.test(text)
+    && (/\b(?:que|q|cual|cuales|producto|productos|vende|provee|ofrece)\b/.test(text)
+      || /^\s*(?:el\s+)?proveedor\s+\S+/.test(text));
+  const productsOfMatch = text.match(/\b(?:muestrame|mostrar|lista|listar|dime|que|cuales)\b.*\bproductos?\s+de\s+(.+?)[?!.]*$/i);
+  const productsOf = Boolean(productsOfMatch && (memory.lastSupplier || /\d/.test(productsOfMatch[1])
+    || /\b(?:proveedor|supplier|distribuidora|distribuciones|comercial|sac|srl)\b/i.test(productsOfMatch[1])));
+  if (/\b(?:compara|comparar)\b/.test(text) || /\bque proveedor deberia usar\b/.test(text)) return null;
+  if (!asksOfferRelationship && !asksSupplierInventory && !productsOf) return null;
+
+  const sku = message.match(/\b(?:M5-[A-Z]+_\d+_\d+|SKU\s+[\w.-]{1,100})\b/i)?.[0]?.replace(/^SKU\s+/i, '');
+  const explicitSupplier = message.match(/\bproveedor\s+(.+?)(?=\s+(?:q|que)\s+productos?|\s+(?:producto|productos|provee|proveen|vende|ofrece)\b|[?!.]|$)/i)?.[1]?.trim()
+    || message.match(/\bproductos?\s+(?:que\s+)?(?:provee|proveen|vende|ofrece|ofrecen)\s+(?:(?:el|la)\s+)?(?:proveedor\s+)?(.+?)(?=[?!.]|$)/i)?.[1]?.trim()
+    || message.match(/\b(?:ofrece|vende)\s+(?:el\s+)?proveedor\s+(.+?)(?=[?!.]|$)/i)?.[1]?.trim()
+    || message.match(/\bproductos?\s+de\s+(?:(?:el|la)\s+)?(?:proveedor\s+)?(.+?)(?=[?!.]|$)/i)?.[1]?.trim();
+  const explicitName = explicitSupplier?.replace(/\s+(?:q|que)\s+$/, '').trim();
+  const remembered = /\b(?:este|ese|el mismo) proveedor\b/.test(text) ? memory.lastSupplier : null;
+  const supplierRef = explicitName || remembered?.id;
+  if (!supplierRef) return clarify('¿Qué proveedor deseas consultar? Indica su nombre o una parte para buscar coincidencias.');
+  return { intent: 'supplier_products', agent: 'operations', skillId: 'get_supplier_products',
+    args: { supplierRef, limit: 5, offset: 0, ...(sku ? { productRef: sku } : {}) }, limit: 5 };
+};
 const routeCommercial = (message, memory = {}) => {
   const text = normalize(message);
   if (/shell|ejecuta codigo|mongo query|ignora.*instruccion|api.?key|password|jwt|system prompt/.test(text)) return null;
@@ -76,6 +103,8 @@ const ordinalReference = text => {
 
 /** High-confidence routing only. Unrecognized language is delegated, never guessed. */
 const routeDeterministically = (message, memory, now) => {
+  const supplierProducts = routeSupplierProducts(message, memory);
+  if (supplierProducts) return supplierProducts;
   const commercialPlan = routeCommercial(message, memory);
   if (commercialPlan) return commercialPlan;
   const forecastPlan = require('./forecastRouting').routeForecastAnalytics(message, memory);
@@ -173,4 +202,4 @@ const routeDeterministically = (message, memory, now) => {
   return { ...plan, period, periodExplicit: Boolean(explicitPeriod), limit: plan.limit || 5 };
 };
 
-module.exports = { routeDeterministically, routeCommercial, monthPeriod, clarify };
+module.exports = { routeDeterministically, routeCommercial, routeSupplierProducts, monthPeriod, clarify };

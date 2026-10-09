@@ -27,7 +27,8 @@ const supplierSelection = (message, state, now) => {
     const candidates = pending.candidates.filter(candidate => normalizeSupplier(candidate.name).includes(refinedQuery));
     if (candidates.length === 1) {
       const candidate = candidates[0];
-      return { plan: { intent: 'replenishment_commercial', agent: 'analyst', skillId: pending.skillId,
+      const supplierProducts = pending.skillId === 'get_supplier_products';
+      return { plan: { intent: supplierProducts ? 'supplier_products' : 'replenishment_commercial', agent: supplierProducts ? 'operations' : 'analyst', skillId: pending.skillId,
         args: { ...pending.args, supplierRef: candidate.id }, supplierSelectedName: candidate.name } };
     }
     if (candidates.length > 1) return { filteredCandidates: candidates, query: message.trim() };
@@ -51,8 +52,19 @@ const supplierSelection = (message, state, now) => {
   if (index < 0 || !pending.candidates[index]) return null;
   if (pending.expiresAt <= now) return { expired: true };
   const candidate = pending.candidates[index];
-  return { plan: { intent: 'replenishment_commercial', agent: 'analyst', skillId: pending.skillId,
+  const supplierProducts = pending.skillId === 'get_supplier_products';
+  return { plan: { intent: supplierProducts ? 'supplier_products' : 'replenishment_commercial', agent: supplierProducts ? 'operations' : 'analyst', skillId: pending.skillId,
     args: { ...pending.args, supplierRef: candidate.id }, supplierSelectedName: candidate.name } };
+};
+const supplierProductPage = (message, state, now) => {
+  const listing = state.supplierProductListing;
+  if (!listing) return null;
+  const command = message.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim().replace(/[?.!¿¡]/g, '').replace(/\s+/g, ' ');
+  if (listing.expiresAt <= now && /^(?:ver mas|siguiente|anterior)$/.test(command)) return { expired: true };
+  const offset = listing.offset;
+  if (/^(?:ver mas|siguiente)$/.test(command) && offset + 5 < listing.totalProducts) return { offset: offset + 5 };
+  if (/^anterior$/.test(command) && offset >= 5) return { offset: offset - 5 };
+  return null;
 };
 const supplierPageView = (resolution, offset) => ({
   answer: `Opciones de proveedor ${offset + 1}–${Math.min(offset + 5, resolution.candidates.length)} de ${resolution.candidates.length}: elige una opción o refina la búsqueda.`,
@@ -100,6 +112,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
       const results = [];
       let plan = { intent: 'ambiguous_query', agent: 'coordinator' }, answer, code = null, question = null;
       let supplierResolutionExpiry;
+      let supplierProductListingExpiry;
       let supplierPageResponse;
       const run = async (agentId, skillId, args = {}) => {
         const result = await execution.executeSkill({ agentId, skillId, args });
@@ -108,13 +121,17 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
       };
       try {
         const selectedSupplier = supplierSelection(message, state, Date.now());
+        const productPage = supplierProductPage(message, state, Date.now());
         const deterministicPlan = await execution.runAgent('coordinator', () => selectedSupplier?.expired
           ? clarify('Estas opciones de proveedor ya expiraron. Repite la consulta indicando el producto y el proveedor.')
+          : productPage?.expired ? clarify('Esta lista de productos ya expiró. Vuelve a consultar los productos del proveedor.')
           : selectedSupplier?.pageOffset !== undefined ? clarify('Elige un proveedor de la página mostrada.')
             : selectedSupplier?.refine ? clarify('Escribe una parte más específica del nombre del proveedor.')
               : selectedSupplier?.filteredCandidates ? clarify('Elige una de las coincidencias refinadas.')
                 : selectedSupplier?.noRefinementMatch ? clarify('No encontré ese texto entre las opciones actuales. Prueba otra parte del nombre del proveedor.')
-          : selectedSupplier?.plan || routeDeterministically(message, state, clock()));
+          : selectedSupplier?.plan || (productPage && { intent: 'supplier_products', agent: 'operations', skillId: 'get_supplier_products',
+            args: { supplierRef: state.supplierProductListing.supplierId, limit: 5, offset: productPage.offset } })
+            || routeDeterministically(message, state, clock()));
         plan = deterministicPlan || plan;
         if (!deterministicPlan) {
           const routing = await classifyAgentIntent(execution, message);
@@ -161,6 +178,11 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
               if (result.status === 'CLARIFICATION') plan.clarificationQuestion = result.metadata.clarificationQuestion;
               break;
             }
+            case 'supplier_products': {
+              const result = await run('operations', 'get_supplier_products', plan.args);
+              if (result.status === 'CLARIFICATION') plan.clarificationQuestion = result.metadata.clarificationQuestion;
+              break;
+            }
             case 'search_product': await run(plan.agent, 'search_products', { query: plan.query || state.lastSearchQuery, limit: plan.limit }); break;
             case 'product_details': await run(plan.agent, 'get_product_details', selector); break;
             case 'low_stock': await run(plan.agent, 'get_low_stock_products', { limit: plan.limit }); break;
@@ -194,6 +216,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             supplierResolutionExpiry = Date.now() + SUPPLIER_SELECTION_TTL_MS;
             commit({ supplierResolution: { ...supplierResult.result.metadata.supplierResolution, expiresAt: supplierResolutionExpiry } });
           } else if (selectedSupplier?.expired) commit({ supplierResolution: null });
+          else if (productPage?.expired) commit({ supplierProductListing: null });
           else if (selectedSupplier?.pageOffset !== undefined) {
             const resolution = { ...state.supplierResolution, offset: selectedSupplier.pageOffset };
             supplierResolutionExpiry = resolution.expiresAt;
@@ -238,8 +261,13 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
           const latest = [...results].reverse().find(({ skillId, result }) => !(plan.intent === 'business_summary'
             && skillId === 'get_business_summary' && result.metadata.periodMode === 'latest'))?.result;
           const productListIntents = ['search_product', 'low_stock', 'top_selling_products', 'replenishment_candidates', 'demand_forecast', 'ml_analytics'];
+          const supplierProductsResult = [...results].reverse().find(({ skillId }) => skillId === 'get_supplier_products')?.result;
+          const supplierProductsData = supplierProductsResult?.data;
           commit({ lastIntent: plan.intent, lastAgent: plan.agent, recentEntities: entities,
+            ...(supplierProductsData?.supplierId && supplierProductsData?.supplierName
+              ? { lastSupplier: { id: supplierProductsData.supplierId, name: supplierProductsData.supplierName } } : {}),
             supplierResolution: null,
+            supplierProductListing: null,
             lastForecastAnalytics: plan.intent === 'ml_analytics' ? plan.analyticsArgs : null,
             lastEntity: entities?.length === 1 ? entities[0] : undefined,
             ...(productResult && productListIntents.includes(plan.intent) && Array.isArray(raw)
@@ -250,6 +278,12 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             lastTransactionFilters: plan.intent === 'recent_transactions' ? {
               periodRequested: plan.periodRequested, type: plan.type, status: plan.status
             } : undefined });
+          if (supplierProductsData?.supplierId && supplierProductsResult.metadata.totalMatches > 5) {
+            supplierProductListingExpiry = Date.now() + SUPPLIER_SELECTION_TTL_MS;
+            commit({ supplierProductListing: { supplierId: supplierProductsData.supplierId,
+              supplierName: supplierProductsData.supplierName, totalProducts: supplierProductsResult.metadata.totalMatches,
+              offset: supplierProductsResult.metadata.offset || 0, expiresAt: supplierProductListingExpiry } });
+          }
         }
       } catch (error) {
         code = errorCode(error);

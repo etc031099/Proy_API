@@ -184,6 +184,23 @@ test('supplier candidate context survives history snapshot only while valid and 
   assert.equal(expired.supplierResolution, null);
 });
 
+test('supplier-to-products selection and page context survive a closed history snapshot', () => {
+  const now = Date.now();
+  const state = snapshot({ lastSupplier: { id: 'bbbbbbbbbbbbbbbbbbbbbbbb', name: 'Proveedor 055 Foods', email: 'private@example.com' },
+    supplierProductListing: { supplierId: 'bbbbbbbbbbbbbbbbbbbbbbbb', supplierName: 'Proveedor 055 Foods', offset: 5,
+      totalProducts: 8, expiresAt: now + 60000 },
+    supplierResolution: { skillId: 'get_supplier_products', args: { limit: 5, offset: 0, businessId: 'attacker' },
+      candidates: [{ id: 'bbbbbbbbbbbbbbbbbbbbbbbb', name: 'Proveedor 055 Foods' }], offset: 0, expiresAt: now + 60000 } });
+  assert.deepEqual(state.lastSupplier, { id: 'bbbbbbbbbbbbbbbbbbbbbbbb', name: 'Proveedor 055 Foods' });
+  assert.deepEqual(state.supplierProductListing, { supplierId: 'bbbbbbbbbbbbbbbbbbbbbbbb', supplierName: 'Proveedor 055 Foods',
+    offset: 5, totalProducts: 8, expiresAt: now + 60000 });
+  assert.deepEqual(state.supplierResolution.args, { limit: 5, offset: 0 });
+  assert.equal(JSON.stringify(state).includes('businessId'), false);
+  const expired = snapshot({ supplierProductListing: { supplierId: 'bbbbbbbbbbbbbbbbbbbbbbbb', supplierName: 'Proveedor 055 Foods',
+    offset: 5, totalProducts: 8, expiresAt: now - 1 } });
+  assert.equal(expired.supplierProductListing, null);
+});
+
 test('real compact memory hydrates on restart/TTL with ordinal references and zero provider calls, scoped by auth', async () => {
   let now = 0;
   const runtime = createAgentOrchestrator({ memory: createConversationMemory({ now: () => now, ttlMs: 10 }),

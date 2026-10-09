@@ -155,7 +155,7 @@ test('AG-R3, AG-R5 and replenishment budgeting skills are ready; three remain pe
   assert.deepEqual(SKILLS.filter(skill => skill.executorStatus === 'READY').map(skill => skill.id), [
     'analyze_demand_forecast',
     'search_products', 'get_product_details', 'get_low_stock_products', 'get_recent_transactions',
-    'get_sales_summary', 'get_business_summary', 'get_top_selling_products', 'get_product_sales_summary', 'get_demand_forecast', 'get_replenishment_candidates',
+    'get_sales_summary', 'get_business_summary', 'get_supplier_products', 'get_top_selling_products', 'get_product_sales_summary', 'get_demand_forecast', 'get_replenishment_candidates',
     'get_replenishment_cost', 'plan_replenishment_budget', 'compare_supplier_costs'
   ]);
   assert.deepEqual(SKILLS.filter(skill => skill.executorStatus !== 'READY').map(skill => skill.id), [

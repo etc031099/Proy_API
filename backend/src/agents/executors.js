@@ -212,6 +212,68 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
   };
 
   return Object.freeze({
+    async get_supplier_products(invocation) {
+      const { Contact, Product } = getModels();
+      const { businessId } = invocation.context;
+      const supplierFilter = { businessId, type: 'vendor', isActive: true };
+      const directory = await Contact.find(supplierFilter).select('_id businessId name type isActive')
+        .limit(500).maxTimeMS(invocation.skill.timeoutMs).lean().exec();
+      const vendors = directory.map(row => ({ supplierId: String(row._id), supplierName: row.name, name: row.name }));
+      const { resolveSupplier } = require('./replenishmentPlanning');
+      const resolved = resolveSupplier(invocation.args.supplierRef, vendors, vendors);
+      if (resolved.status !== 'MATCH') {
+        const candidates = (resolved.status === 'AMBIGUOUS' || resolved.status === 'AMBIGUOUS_SUPPLIER'
+          ? resolved.candidates : []).slice(0, 20).map(row => ({ id: row.supplierId, name: row.supplierName || row.name }));
+        const suggestions = candidates.slice(0, 5).map(row => ({ label: row.name, message: row.name }));
+        const clarificationQuestion = candidates.length
+          ? `Encontré varios proveedores que podrían coincidir con «${invocation.args.supplierRef}». Elige uno y te mostraré sus productos:`
+          : `No encontré un proveedor suficientemente parecido a «${invocation.args.supplierRef}». Prueba con otra parte del nombre o el nombre completo.`;
+        return { status: 'CLARIFICATION', data: [], metadata: { returnedCount: suggestions.length,
+          totalMatches: candidates.length, suggestions, clarificationQuestion,
+          ...(candidates.length > 5 ? { suggestionsPagination: { query: invocation.args.supplierRef, offset: 0, limit: 5,
+            totalMatches: candidates.length, hasMore: true, hasPrevious: false } } : {}),
+          ...(candidates.length ? { supplierResolution: { skillId: invocation.skill.id,
+            args: Object.fromEntries(Object.entries(invocation.args).filter(([key]) => key !== 'supplierRef')),
+            query: invocation.args.supplierRef, offset: 0, candidates } } : {}) } };
+      }
+
+      const supplierId = resolved.offer.supplierId;
+      const supplierName = resolved.offer.supplierName;
+      if (invocation.args.productRef) {
+        const product = await Product.findOne({ businessId, sku: invocation.args.productRef.trim() })
+          .select('_id businessId sku name currency supplierPrices preferredSupplierId isActive')
+          .maxTimeMS(invocation.skill.timeoutMs).lean().exec();
+        if (!product) return { status: 'NO_DATA', data: { supplierName, productRef: invocation.args.productRef, product: null },
+          metadata: { returnedCount: 0, totalMatches: 0, asOf: asOf(), evidenceLabel: `Producto consultado con ${supplierName}` } };
+        const offer = (product.supplierPrices || []).find(row => String(row.supplierId) === supplierId
+          && Number.isFinite(row.purchasePrice) && row.purchasePrice > 0);
+        return { status: 'READY', data: { supplierId, supplierName, totalProducts: offer ? 1 : 0,
+          product: { sku: product.sku ?? null, productName: product.name, active: product.isActive === true,
+            hasOffer: Boolean(offer), ...(offer ? { purchasePrice: offer.purchasePrice, currency: product.currency,
+              preferredForProduct: String(product.preferredSupplierId || '') === supplierId } : {}) } },
+        metadata: { returnedCount: 1, totalMatches: 1, asOf: asOf(), supplierName,
+          evidenceLabel: `Oferta configurada de ${supplierName} para ${product.sku}` } };
+      }
+
+      const offerMatch = { businessId, supplierPrices: { $elemMatch: { supplierId: objectId(supplierId),
+        purchasePrice: { $type: 'number', $gt: 0 } } } };
+      const totalProducts = await Product.countDocuments(offerMatch).maxTimeMS(invocation.skill.timeoutMs).exec();
+      const offset = invocation.args.offset || 0, limit = invocation.args.limit || 5;
+      const products = await Product.find(offerMatch).select('_id businessId sku name currency supplierPrices preferredSupplierId isActive')
+        .sort({ sku: 1, _id: 1 }).skip(offset).limit(limit).maxTimeMS(invocation.skill.timeoutMs).lean().exec();
+      const items = products.flatMap(product => {
+        const offer = (product.supplierPrices || []).find(row => String(row.supplierId) === supplierId
+          && Number.isFinite(row.purchasePrice) && row.purchasePrice > 0);
+        return offer ? [{ sku: product.sku ?? null, productName: product.name, purchasePrice: offer.purchasePrice,
+          currency: product.currency, preferredForProduct: String(product.preferredSupplierId || '') === supplierId,
+          active: product.isActive === true }] : [];
+      });
+      return { status: items.length ? 'READY' : 'NO_DATA', data: { supplierId, supplierName, totalProducts, items,
+        pagination: { offset, limit, total: totalProducts, returnedCount: items.length, hasMore: offset + limit < totalProducts,
+          hasPrevious: offset > 0 } }, metadata: { returnedCount: items.length, totalMatches: totalProducts, offset, limit,
+        truncated: offset + items.length < totalProducts, asOf: asOf(), supplierName,
+        evidenceLabel: `Ofertas configuradas de ${supplierName} en el catálogo` } };
+    },
     async search_products(invocation) {
       const { args, context } = invocation;
       const literal = new RegExp(escapeLiteral(args.query.trim()), 'i');

@@ -16,7 +16,7 @@ const READY_SKILL_IDS = Object.freeze([
   'search_products', 'get_product_details', 'get_low_stock_products', 'get_recent_transactions',
   'get_sales_summary', 'get_top_selling_products', 'get_business_summary',
   'get_demand_forecast', 'get_replenishment_candidates', 'get_product_sales_summary', 'analyze_demand_forecast',
-  'get_replenishment_cost', 'plan_replenishment_budget', 'compare_supplier_costs'
+  'get_replenishment_cost', 'plan_replenishment_budget', 'compare_supplier_costs', 'get_supplier_products'
 ]);
 // Replenishment's single ML batch exceeded its prior 10 s deadline in production.
 // 25 s accommodates a bounded Render cold start/inference without adding retries.
@@ -57,6 +57,9 @@ const SKILLS = deepFreeze([
     schema({ period: { ...text(7), enum: ['current', 'latest'] } }), 1, 'FINANCIAL', 'Current active/low-stock counts and completed monthly sales/purchases, native currencies kept separate; no profit or inventory valuation'),
   entry('get_supplier_details', 'Consulta un proveedor o el proveedor configurado de un producto.', ['operations'],
     schema({ supplierId: id, productId: id }, [], ['supplierId', 'productId']), 1, 'CONTACT_REFERENCE', 'Supplier identity and verified relationship; excludes personal contact data'),
+  entry('get_supplier_products', 'Consulta productos con ofertas configuradas para un proveedor activo.', ['operations'],
+    schema({ supplierRef: text(100), productRef: text(100), limit: limit(5), offset: { type: 'integer', minimum: 0, maximum: 10000 } }, ['supplierRef']),
+    5, 'FINANCIAL', 'Tenant-scoped supplier offer list with configured prices, active state and bounded pagination'),
   entry('get_top_selling_products', 'Clasifica productos por unidades vendidas completadas.', ['analyst'],
     schema({ ...period, limit: limit(10) }), 10, 'OPERATIONAL', 'Product identity and completed units sold, descending; optional date range, otherwise all completed history'),
   entry('get_product_sales_summary', 'Resume ventas completadas de un producto.', both,

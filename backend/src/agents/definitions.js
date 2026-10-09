@@ -15,7 +15,8 @@ const AGENTS = deepFreeze([
     description: 'Consulta hechos del catálogo, inventario y operaciones comerciales.',
     responsibilities: ['Productos e inventario', 'Proveedores', 'Transacciones', 'Ventas y compras factuales'],
     allowedSkills: ['search_products', 'get_product_details', 'get_low_stock_products', 'get_inventory_summary',
-      'get_recent_transactions', 'get_sales_summary', 'get_purchase_summary', 'get_supplier_details', 'get_product_sales_summary'],
+      'get_recent_transactions', 'get_sales_summary', 'get_purchase_summary', 'get_supplier_details', 'get_product_sales_summary',
+      'get_supplier_products'],
     llmPolicy: { preferredMode: 'deterministic-first', providerEnabled: false },
     limits: { ...TOKEN_BUDGETS.operations, maxSkillCalls: EXECUTION_LIMITS.maxSkillCalls, maxLlmCalls: EXECUTION_LIMITS.maxLlmCalls }
   },

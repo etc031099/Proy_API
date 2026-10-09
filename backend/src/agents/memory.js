@@ -6,6 +6,8 @@ const label = (value, max) => typeof value === 'string' ? value.replace(/[\r\n\t
 const compactEntity = value => value && isObjectId(value.id || value.productId) ? {
   type: 'product', id: value.id || value.productId, sku: label(value.sku, 100), label: label(value.name || value.label, 80)
 } : null;
+const compactSupplier = value => value && isObjectId(value.id) && typeof value.name === 'string' && value.name.trim()
+  ? deepFreeze({ id: value.id, name: label(value.name, 100) }) : null;
 const LIST_INTENTS = new Set(['search_product', 'low_stock', 'top_selling_products', 'replenishment_candidates', 'demand_forecast', 'ml_analytics']);
 const compactProductSelection = (value, now) => {
   if (!value || !LIST_INTENTS.has(value.sourceIntent) || !Array.isArray(value.items)) return null;
@@ -14,8 +16,8 @@ const compactProductSelection = (value, now) => {
 };
 const SUPPLIER_SELECTION_TTL_MS = 20 * 60 * 1000;
 const compactSupplierResolution = (value, now = Date.now()) => {
-  if (!value || !['get_replenishment_cost', 'compare_supplier_costs'].includes(value.skillId)
-    || !value.args || typeof value.args.productRef !== 'string' || value.args.productRef.length > 100
+  if (!value || !['get_replenishment_cost', 'compare_supplier_costs', 'get_supplier_products'].includes(value.skillId)
+    || !value.args || (value.skillId !== 'get_supplier_products' && (typeof value.args.productRef !== 'string' || value.args.productRef.length > 100))
     || !Number.isSafeInteger(value.expiresAt) || value.expiresAt <= now || value.expiresAt > now + SUPPLIER_SELECTION_TTL_MS
     || !Array.isArray(value.candidates) || value.candidates.length < 1 || value.candidates.length > 20
     || !Number.isSafeInteger(value.offset || 0) || (value.offset || 0) < 0 || (value.offset || 0) % 5 !== 0) return null;
@@ -23,9 +25,19 @@ const compactSupplierResolution = (value, now = Date.now()) => {
     .map(row => ({ id: row.id, name: label(row.name, 100), ...(typeof row.detail === 'string' ? { detail: label(row.detail, 80) } : {}) }));
   if (!candidates.length) return null;
   return deepFreeze({ skillId: value.skillId, args: { ...(value.skillId === 'get_replenishment_cost' && value.args.mode === 'single' ? { mode: 'single' } : {}),
-    productRef: value.args.productRef }, candidates, offset: value.offset || 0,
+    ...(typeof value.args.productRef === 'string' ? { productRef: value.args.productRef } : {}),
+    ...(Number.isSafeInteger(value.args.limit) ? { limit: Math.max(1, Math.min(5, value.args.limit)) } : {}),
+    ...(Number.isSafeInteger(value.args.offset) ? { offset: Math.max(0, Math.min(10000, value.args.offset)) } : {}) }, candidates, offset: value.offset || 0,
     ...(typeof value.query === 'string' ? { query: label(value.query, 100) } : {}), refining: value.refining === true,
     expiresAt: value.expiresAt });
+};
+const compactSupplierProductListing = (value, now = Date.now()) => {
+  if (!value || !/^[a-f\d]{24}$/i.test(value.supplierId || '') || typeof value.supplierName !== 'string'
+    || !value.supplierName.trim() || !Number.isSafeInteger(value.offset) || value.offset < 0 || value.offset % 5 !== 0
+    || !Number.isSafeInteger(value.totalProducts) || value.totalProducts < 0
+    || !Number.isSafeInteger(value.expiresAt) || value.expiresAt <= now || value.expiresAt > now + SUPPLIER_SELECTION_TTL_MS) return null;
+  return deepFreeze({ supplierId: value.supplierId, supplierName: label(value.supplierName, 100),
+    offset: value.offset, totalProducts: value.totalProducts, expiresAt: value.expiresAt });
 };
 
 /** Demo-only, bounded in-process working context. Render restarts erase this cache,
@@ -68,10 +80,13 @@ const createConversationMemory = ({ now = Date.now, ttlMs = TTL_MS, maxEntries =
           const entities = Array.isArray(patch.recentEntities)
             ? patch.recentEntities.map(compactEntity).filter(Boolean).slice(0, 4) : state.recentEntities || [];
           const entity = compactEntity(patch.lastEntity);
+          const supplier = compactSupplier(patch.lastSupplier);
           const productSelection = Object.hasOwn(patch, 'lastProductSelection')
             ? compactProductSelection(patch.lastProductSelection, now) : state.lastProductSelection || null;
           const supplierResolution = Object.hasOwn(patch, 'supplierResolution')
             ? compactSupplierResolution(patch.supplierResolution, now) : state.supplierResolution || null;
+          const supplierProductListing = Object.hasOwn(patch, 'supplierProductListing')
+            ? compactSupplierProductListing(patch.supplierProductListing, now) : state.supplierProductListing || null;
           const period = patch.lastPeriod;
           pending = deepFreeze({
             lastForecastAnalytics: Object.hasOwn(patch, 'lastForecastAnalytics')
@@ -79,8 +94,10 @@ const createConversationMemory = ({ now = Date.now, ttlMs = TTL_MS, maxEntries =
             lastIntent: label(patch.lastIntent ?? state.lastIntent, 40),
             lastAgent: ['operations', 'analyst'].includes(patch.lastAgent) ? patch.lastAgent : state.lastAgent || null,
             lastEntity: entity || (entities.length === 1 ? entities[0] : null), recentEntities: entities,
+            lastSupplier: supplier || (Object.hasOwn(patch, 'lastSupplier') ? null : state.lastSupplier || null),
             lastProductSelection: productSelection,
             supplierResolution,
+            supplierProductListing,
             lastPeriod: period && isDate(period.startDate) && isDate(period.endDate)
               ? { startDate: period.startDate, endDate: period.endDate } : state.lastPeriod || null,
             lastPeriodExplicit: typeof patch.lastPeriodExplicit === 'boolean'
@@ -113,4 +130,5 @@ const createConversationMemory = ({ now = Date.now, ttlMs = TTL_MS, maxEntries =
   });
 };
 
-module.exports = { createConversationMemory, compactEntity, compactProductSelection, compactSupplierResolution, SUPPLIER_SELECTION_TTL_MS, TTL_MS };
+module.exports = { createConversationMemory, compactEntity, compactSupplier, compactProductSelection, compactSupplierResolution,
+  compactSupplierProductListing, SUPPLIER_SELECTION_TTL_MS, TTL_MS };
