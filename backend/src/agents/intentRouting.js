@@ -291,6 +291,10 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
     return clarify('No tengo una referencia clara de cuáles son “estos productos”. ¿Te refieres al último plan o lista que vimos, o a otros productos?');
   }
   const hasForecastLanguage = /prediccion|forecast|demanda|ml/.test(text);
+  if (/^por que (?:ocurre|pasa|sucede) (?:esto|eso)$/.test(text.replace(/[¿?¡!.]/g, '').trim())
+    && ['inventory_interpretation', 'executive_inventory_summary', 'forecast_risk_explanation'].includes(memory.lastIntent)) {
+    return { intent: 'inventory_causality', agent: 'coordinator' };
+  }
   const asksOpenInventoryAnalysis = /inventario|stock/.test(text) && hasForecastLanguage
     && /problema|observas|conclusion|analiza|analisis|explicame|explica|preocupar/.test(text);
   if (/riesgo|riesgos|preocupar|alerta/.test(text) && hasForecastLanguage && /stock|inventario|prediccion|forecast|demanda/.test(text)) {
@@ -301,7 +305,7 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   if (/resumen ejecutivo/.test(text) && /inventario|stock/.test(text)) {
     return { intent: 'executive_inventory_summary', agent: 'analyst', narrativeSynthesis: true, inventoryOnly: true };
   }
-  if (/analiza|analizar|preocupar/.test(text) && /inventario|stock/.test(text)) {
+  if (/analiza|analizar|preocup|resume.*riesg|riesgos principales/.test(text) && /inventario|stock/.test(text)) {
     return { intent: 'inventory_interpretation', agent: 'analyst', narrativeSynthesis: true,
       inventoryOnly: true, includeForecast: hasForecastLanguage };
   }

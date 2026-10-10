@@ -68,7 +68,8 @@ const compactFact = (value, depth = 0) => {
     'predictedDemand7d', 'stockAtAnchor', 'salesLast7Days', 'safetyStock', 'recommendedQty', 'inventoryStatus',
     'demandStockGap', 'activeProducts', 'lowStockProducts', 'shortage', 'unitsSold', 'plannedQty', 'unplannedQty',
     'plannedCost', 'unitCost', 'supplierName', 'budget', 'spent', 'remaining', 'consideredProducts', 'costedProducts',
-    'excludedProducts', 'recommendedUnits', 'plannedUnits', 'coverageProducts', 'exclusionsByReason', 'items']);
+    'excludedProducts', 'recommendedUnits', 'plannedUnits', 'coverageProducts', 'exclusionsByReason', 'items',
+    'OK', 'VIGILAR', 'REPONER', 'stock', 'minStockLevel']);
   return Object.fromEntries(Object.entries(value).filter(([key]) => allowed.has(key))
     .map(([key, item]) => [key, compactFact(item, depth + 1)]));
 };
@@ -89,6 +90,27 @@ const buildNarrativeSynthesisInput = (intent, message, results) => {
       ...(result.metadata.anchor ? { anchor: result.metadata.anchor } : {}),
       ...(result.evidence.period ? { period: result.evidence.period } : {}), facts: compactFact(data) };
   });
+  // Domain summaries retain the useful facts instead of pruning entire arrays to fit.
+  if (['inventory_interpretation', 'executive_inventory_summary'].includes(intent)) {
+    evidence.forEach((row, index) => {
+      const { skillId, result } = results[index];
+      delete row.label; delete row.status; delete row.scenarioId;
+      if (skillId === 'get_business_summary') row.facts = {
+        activeProducts: result.data.activeProducts, lowStockProducts: result.data.lowStockProducts,
+        completedSalesCount: result.data.sales?.completedTransactionsCount,
+        completedPurchasesCount: result.data.purchases?.completedTransactionsCount
+      };
+      if (Array.isArray(result.data)) row.facts = result.data.slice(0, skillId === 'get_low_stock_products' ? 3 : 2)
+        .map(item => skillId === 'get_low_stock_products'
+          ? { sku: safeText(item.sku), stock: item.stock, minStockLevel: item.minStockLevel }
+          : { sku: safeText(item.sku), predictedDemand7d: item.predictedDemand7d,
+            stockAtAnchor: item.stockAtAnchor, demandStockGap: item.demandStockGap, recommendedQty: item.recommendedQty });
+      if (result.metadata.mode === 'summary') row.facts = {
+        products: result.data.products, ready: result.data.ready, notReady: result.data.notReady,
+        states: result.data.states, recommendedTotal: result.data.recommendedTotal
+      };
+    });
+  }
   const question = String(message)
     .replace(/@[a-z\d.-]+\.[a-z]{2,}|\b\d{9,15}\b|\b[a-f\d]{24,}\b|\bBearer\s+\S+|AIza[\w-]{20,}/gi, '[omitido]')
     .replace(/[\r\n\t]/g, ' ').slice(0, 600);
@@ -103,7 +125,9 @@ const buildNarrativeSynthesisInput = (intent, message, results) => {
     serialized = serializedFor(facts);
   }
   if (serialized.length > 2000) throw new (require('./contracts').AgentError)('GEMINI_BUDGET_EXCEEDED');
-  return { schema: NARRATIVE_SCHEMA, systemInstruction: `${NARRATIVE_INSTRUCTION} Tipo de análisis: ${intent}.`,
+  return { schema: NARRATIVE_SCHEMA, systemInstruction: `${NARRATIVE_INSTRUCTION} Tipo de análisis: ${intent}.`
+    + (['inventory_interpretation', 'executive_inventory_summary'].includes(intent)
+      ? ' Prioriza presión de stock (bajo mínimo/activos), productos con brechas y reposición histórica. Cita cifras y SKU concretos. Ventas/compras sin movimiento no demuestran una causa. Inventario operativo actual y replay histórico son cortes distintos. Explica por qué cada señal merece atención, no solo revisarla. Node añade la fecha de corte: no la repitas en los hallazgos.' : ''),
     messages: [{ role: 'user', text: serialized }], diagnostics: { evidenceCount: evidence.length,
       selectedItemsCount: evidence.reduce((sum, row) => sum + (Array.isArray(row.facts) ? row.facts.length : 0), 0),
       dtoFieldCount: serialized.length } };
@@ -128,7 +152,8 @@ const validateNarrativeSynthesis = (output, results, intent) => {
       else collectFacts(item);
     });
   };
-  results.forEach(({ result }) => collectFacts(result.data));
+  results.forEach(({ result }) => { collectFacts(result.data); collectFacts(result.evidence.period); collectFacts(result.metadata.anchor); });
+  const inventoryAnalysis = ['inventory_interpretation', 'executive_inventory_summary'].includes(intent);
   const validText = (value, max) => typeof value === 'string' && value.trim().length > 0 && value.length <= max
     && !/@[a-z\d.-]+\.[a-z]{2,}|\b[a-f\d]{24,}\b|\bBearer\s+\S+|AIza[\w-]{20,}/i.test(value);
   for (const observation of output.observations) {
@@ -138,6 +163,9 @@ const validateNarrativeSynthesis = (output, results, intent) => {
     if (!Array.isArray(observation.evidenceRefs) || !observation.evidenceRefs.length || observation.evidenceRefs.length > 4
       || observation.evidenceRefs.some(ref => typeof ref !== 'string' || !refs.has(ref))) validationError('SYNTHESIS_INVALID_EVIDENCE_REF');
     for (const text of [observation.interpretation, observation.advisoryRecommendation]) {
+      if (/la causa es|debido a (?:la falta|mala|el proveedor)|proveedor se retras[oó]|mala gesti[oó]n|confianza (?:exacta|del)|perder[aá]s/i.test(text)) {
+        validationError('SYNTHESIS_UNSUPPORTED_CLAIM');
+      }
       const skuPattern = /\b(?:SKU[-_ ]?[A-Z\d][\w.-]*|M5-[A-Z\d][\w.-]*)\b/gi;
       const skuMatches = text.match(skuPattern) || [];
       if (skuMatches.some(sku => !skus.has(sku.toLowerCase()))) validationError('SYNTHESIS_UNGROUNDED_SKU');
@@ -152,6 +180,19 @@ const validateNarrativeSynthesis = (output, results, intent) => {
       validationError('SYNTHESIS_GENERIC_INTERPRETATION');
     }
   }
+  if (inventoryAnalysis) {
+    const text = output.observations.map(row => row.interpretation).join(' ');
+    const withoutSkus = text.replace(/\b(?:SKU[-_ ]?[A-Z\d][\w.-]*|M5-[A-Z\d][\w.-]*)\b/gi, '');
+    if (!/\d/.test(withoutSkus) || !/stock|m[ií]nimo|REPONER|reposici[oó]n|demanda|faltante/i.test(text)) {
+      validationError('SYNTHESIS_GENERIC_INTERPRETATION');
+    }
+    if (results.some(row => row.skillId === 'get_business_summary') && !/operativ|actual|m[ií]nimo/i.test(text)
+      || results.some(row => row.result.metadata.anchor) && !/hist[oó]ric|replay|al corte/i.test(text)
+      || results.some(row => row.result.metadata.mode === 'exceeding_stock' && row.result.data?.length)
+        && !(text.match(/\b(?:SKU[-_ ]?[A-Z\d][\w.-]*|M5-[A-Z\d][\w.-]*)\b/gi) || []).length) {
+      validationError('SYNTHESIS_GENERIC_INTERPRETATION');
+    }
+  }
   for (const text of output.limitations) {
     if (!validText(text, 140)) invalid();
     const skuPattern = /\b(?:SKU[-_ ]?[A-Z\d][\w.-]*|M5-[A-Z\d][\w.-]*)\b/gi;
@@ -162,7 +203,29 @@ const validateNarrativeSynthesis = (output, results, intent) => {
   return output;
 };
 
+const inventoryScope = results => {
+  const operational = results.some(row => ['get_business_summary', 'get_low_stock_products'].includes(row.skillId));
+  const historical = results.find(row => row.result.metadata.anchor);
+  if (!historical) return 'Alcance: inventario operativo actual; esta respuesta no consultó proyecciones de demanda ni proveedores. No hay evidencia para atribuir causas externas.';
+  const anchor = historical.result.metadata.anchor;
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(anchor)
+    ? new Intl.DateTimeFormat('es-PE', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(anchor)) : anchor;
+  return `Alcance: ${operational ? 'el inventario operativo actual y el ' : 'solo se consultó el '}escenario histórico con fecha de corte ${date} (${anchor})${operational ? ' corresponden a cortes distintos' : ''}; el replay no es un forecast actual. No hay evidencia para atribuir causas externas.`;
+};
+
 const renderNarrativeSynthesis = (intent, results, output) => {
+  if (['inventory_interpretation', 'executive_inventory_summary'].includes(intent)) {
+    const scopeText = text => text
+      .replace(/no se dispone de proyecciones(?: de demanda)?(?: ni de proveedores?)?/gi,
+        match => /proveedor/i.test(match) ? 'esta respuesta no consultó proyecciones de demanda ni proveedores' : 'esta respuesta no consultó proyecciones de demanda')
+      .replace(/no hay proyecciones(?: de demanda)?/gi, 'esta respuesta no consultó proyecciones de demanda')
+      .replace(/no se dispone de proveedores?/gi, 'esta respuesta no consultó proveedores')
+      .replace(/no se dispone de costos?/gi, 'esta respuesta no consultó costos');
+    const labels = new Map(results.map(({ result }) => [result.evidence.evidenceId, result.evidence.label.split(' · ')[0]]));
+    return ['Los principales problemas que veo son:', ...output.observations.map((row, index) =>
+      `${index + 1}. ${scopeText(row.interpretation.trim())} ${scopeText(row.advisoryRecommendation.trim())} (Evidencia: ${[...new Set(row.evidenceRefs.map(ref => labels.get(ref)))].join('; ')})`),
+      inventoryScope(results)].filter(Boolean).join('\n');
+  }
   const refs = new Map(results.map(({ result }) => [result.evidence.evidenceId, result.evidence.label]));
   let facts;
   const number = value => typeof value === 'number' && Number.isFinite(value)
@@ -225,6 +288,39 @@ const renderNarrativeSynthesis = (intent, results, output) => {
 
 const renderNarrativeFallback = (intent, results) => {
   const refs = results.map(({ result }) => result.evidence.evidenceId);
+  if (['inventory_interpretation', 'executive_inventory_summary'].includes(intent)) {
+    const summary = results.find(row => row.skillId === 'get_business_summary')?.result;
+    const low = results.find(row => row.skillId === 'get_low_stock_products')?.result;
+    const historical = results.find(row => row.result.metadata.mode === 'summary')?.result;
+    const critical = results.find(row => row.result.metadata.mode === 'exceeding_stock')?.result;
+    const number = value => Number.isFinite(value)
+      ? new Intl.NumberFormat('es-PE', { maximumFractionDigits: 2 }).format(value) : 'no disponible';
+    const observations = [];
+    if (summary) {
+      const data = summary.data;
+      const examples = (low?.data || []).slice(0, 2).map(item => `${item.sku}: stock ${number(item.stock)}, mínimo ${number(item.minStockLevel)}`).join('; ');
+      const sales = data.sales?.completedTransactionsCount, purchases = data.purchases?.completedTransactionsCount;
+      const period = summary.metadata.period;
+      observations.push({ evidenceRefs: [summary.evidence.evidenceId, ...(low ? [low.evidence.evidenceId] : [])],
+        interpretation: `Inventario operativo actual: ${data.lowStockProducts} de ${data.activeProducts} productos en mínimo o por debajo; ${data.lowStockProducts > 0 ? 'estas alertas requieren revisar el abastecimiento' : 'no hay alertas por mínimo'}.${examples ? ` Ejemplos: ${examples}.` : ''}`,
+        advisoryRecommendation: sales === 0 && purchases === 0 && period
+          ? `Entre ${period.startDate} y ${period.endDate} no hay ventas ni compras completadas; esto no demuestra por qué.` : 'Prioriza revisar los productos frente a sus mínimos configurados.' });
+    } else if (low?.data?.length) observations.push({ evidenceRefs: [low.evidence.evidenceId],
+      interpretation: `La lista operativa muestra ${low.data[0].sku} con stock ${number(low.data[0].stock)} frente a mínimo ${number(low.data[0].minStockLevel)}.`,
+      advisoryRecommendation: 'Revisa esta alerta; no se obtuvo un resumen completo del catálogo.' });
+    if (historical) {
+      const data = historical.data;
+      observations.push({ evidenceRefs: [historical.evidence.evidenceId],
+        interpretation: `En el replay histórico, ${number(data.states?.REPONER)} de ${number(data.products)} productos figuran en REPONER y la reposición recomendada suma ${number(data.recommendedTotal)} unidades.`,
+        advisoryRecommendation: 'El volumen ayuda a dimensionar el abastecimiento de ese escenario, sin convertirlo en una recomendación actual.' });
+    }
+    if (critical?.data?.length) observations.push({ evidenceRefs: [critical.evidence.evidenceId],
+      interpretation: 'Las brechas históricas destacadas son: ' + critical.data.slice(0, 2).map(item =>
+        `${item.sku}: demanda ${number(item.predictedDemand7d)}, stock al corte ${number(item.stockAtAnchor)}, diferencia ${number(item.demandStockGap)}, reposición ${number(item.recommendedQty)}`).join('; ') + '.',
+      advisoryRecommendation: 'La demanda superior al stock señala presión de abastecimiento dentro del replay; no demuestra causas externas.' });
+    if (!observations.length) return 'No se obtuvieron datos suficientes para identificar problemas de inventario o forecast.';
+    return renderNarrativeSynthesis(intent, results, { observations: observations.slice(0, 3), limitations: [] });
+  }
   if (intent === 'forecast_risk_explanation') {
     const summary = results.find(({ result }) => result.metadata.mode === 'summary')?.result;
     const shortage = results.find(({ result }) => result.metadata.mode === 'exceeding_stock')?.result;

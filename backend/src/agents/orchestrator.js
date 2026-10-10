@@ -207,6 +207,9 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
               await run('operations', 'get_sales_summary', plan.period);
               await run('operations', 'get_sales_summary', plan.comparisonPeriod);
               break;
+            case 'inventory_causality':
+              answer = 'Los datos consultados muestran alertas y brechas de stock, pero no demuestran por qué ocurren. Para atribuir causas habría que verificar hechos como movimientos, fechas de compras y entregas; no puedo deducir retrasos de proveedores ni falta de compras a partir del forecast.';
+              break;
             case 'forecast_risk_explanation': {
               await run('analyst', 'analyze_demand_forecast', { mode: 'summary', limit: 5, offset: 0 });
               await run('analyst', 'analyze_demand_forecast', { mode: 'exceeding_stock', limit: 3, offset: 0 });
@@ -217,8 +220,13 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
               if (plan.includeForecast) {
                 await run('analyst', 'get_business_summary', { period: 'current' });
                 await run('operations', 'get_low_stock_products', { limit: 3 });
-                await run('analyst', 'analyze_demand_forecast', { mode: 'summary', limit: 5, offset: 0 });
-                await run('analyst', 'analyze_demand_forecast', { mode: 'exceeding_stock', limit: 2, offset: 0 });
+                try {
+                  await run('analyst', 'analyze_demand_forecast', { mode: 'summary', limit: 5, offset: 0 });
+                  await run('analyst', 'analyze_demand_forecast', { mode: 'exceeding_stock', limit: 2, offset: 0 });
+                } catch (error) {
+                  // Keep verified operational facts when the optional remote ML read fails.
+                  if (!['ML_SERVICE_UNAVAILABLE', 'AGENT_SKILL_TIMEOUT', 'AGENT_SKILL_FAILED'].includes(error.code)) throw error;
+                }
                 break;
               }
             case 'executive_inventory_summary':
@@ -415,7 +423,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
               const reason = error?.code;
               const validationDiagnostics = { SYNTHESIS_INVALID_OUTPUT: 'INVALID_OUTPUT', SYNTHESIS_INVALID_EVIDENCE_REF: 'INVALID_EVIDENCE_REF',
                 SYNTHESIS_UNGROUNDED_SKU: 'UNGROUNDED_SKU', SYNTHESIS_UNGROUNDED_NUMBER: 'UNGROUNDED_NUMBER',
-                SYNTHESIS_GENERIC_INTERPRETATION: 'GENERIC_INTERPRETATION' };
+                SYNTHESIS_GENERIC_INTERPRETATION: 'GENERIC_INTERPRETATION', SYNTHESIS_UNSUPPORTED_CLAIM: 'UNSUPPORTED_CLAIM' };
               const parseFailures = ['GEMINI_INVALID_JSON', 'GEMINI_EMPTY_RESPONSE', 'GEMINI_INVALID_RESPONSE', 'GEMINI_SCHEMA_VALIDATION_FAILED'];
               synthesisStatus = validationDiagnostics[reason] ? 'DEGRADED_VALIDATION' : parseFailures.includes(reason)
                 ? 'DEGRADED_PARSE' : 'DEGRADED_PROVIDER';

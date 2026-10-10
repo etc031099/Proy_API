@@ -402,7 +402,7 @@ test('open inventory plus forecast problem query gets one grounded Analyst synth
   const provider = { generateStructured: async input => {
     const payload = JSON.parse(input.messages[0].text);
     return generated({ observations: [{ evidenceRefs: payload.evidence.map(item => item.ref),
-      interpretation: 'La demanda prevista supera el stock de un producto READY, mientras otros aparecen en REPONER dentro del escenario consultado.',
+      interpretation: '2 de 2 productos del inventario operativo están bajo mínimo. En el replay, SKU-001 tiene demanda 8.25 frente a stock 2; merece prioridad por esta brecha.',
       advisoryRecommendation: 'Revisa estas señales junto con la fecha de corte antes de tomar decisiones.' }],
     limitations: ['El escenario es histórico y no incorpora cambios posteriores.'] });
   } };
@@ -731,7 +731,7 @@ test('open inventory interpretation uses current business and stock skills witho
   const provider = { generateStructured: async input => {
     const payload = JSON.parse(input.messages[0].text);
     return generated({ observations: [{ evidenceRefs: payload.evidence.map(item => item.ref),
-      interpretation: 'Una parte del catálogo merece una revisión operativa prioritaria.',
+      interpretation: '2 de 2 productos están bajo mínimo, señal de presión de stock que merece revisión prioritaria.',
       advisoryRecommendation: 'Revisa los productos que aparecen en el mínimo configurado.' }],
     limitations: [] });
   } };
@@ -749,7 +749,7 @@ test('inventory synthesis says unqueried domains were not consulted, not unavail
   const provider = { generateStructured: async input => {
     const payload = JSON.parse(input.messages[0].text);
     return generated({ observations: [{ evidenceRefs: payload.evidence.map(item => item.ref),
-      interpretation: 'No se dispone de proyecciones de demanda ni de proveedores para esta revisión.',
+      interpretation: '2 productos están bajo mínimo. No se dispone de proyecciones de demanda ni de proveedores para esta revisión.',
       advisoryRecommendation: 'Compara el stock actual con la actividad consultada antes de decidir.' }], limitations: [] });
   } };
   const f = fixture({ provider });
@@ -765,7 +765,7 @@ test('inventory interpretation combines current stock and historical forecast on
   const provider = { generateStructured: async input => {
     const payload = JSON.parse(input.messages[0].text);
     return generated({ observations: [{ evidenceRefs: payload.evidence.map(item => item.ref),
-      interpretation: 'La situación actual y el replay muestran señales que conviene revisar por separado.',
+      interpretation: '2 productos activos operativos están bajo mínimo. En el replay, SKU-001 tiene demanda 8.25 frente a stock 2: la brecha merece revisión prioritaria.',
       advisoryRecommendation: 'Compara cada evidencia dentro de su propia fecha de referencia.' }],
     limitations: ['El replay no representa una predicción actual.'] });
   } };
@@ -789,6 +789,46 @@ test('open reference without a previous list is clarified before any LLM call', 
   assert.equal(result.usage.totalLlmCalls, 0);
   assert.equal(result.usage.totalSkillCalls, 0);
   assert.equal(f.calls.length, 0);
+});
+
+test('inventory interpretation provider failure keeps useful facts and causal followup costs zero calls', async () => {
+  const f = fixture({ provider: { generateStructured: async () => { throw new AgentError('GEMINI_RATE_LIMITED'); } } });
+  const result = await f.run('Explícame los principales problemas que observas en el inventario y la predicción.');
+  assert.equal(result.code, null);
+  assert.match(result.answer, /2 de 2 productos/);
+  assert.match(result.answer, /REPONER|brechas históricas/);
+  assert.doesNotMatch(result.answer, /Estos hechos describen|apoyo para una revisión humana/);
+  assert.equal(result.usage.totalLlmCalls, 1);
+  assert.equal(result.synthesisStatus, 'DEGRADED_PROVIDER');
+  const followup = await f.run('¿Por qué ocurre esto?', result.conversationId);
+  assert.equal(followup.intent, 'inventory_causality');
+  assert.equal(followup.usage.totalLlmCalls, 0);
+  assert.equal(followup.usage.totalSkillCalls, 0);
+  assert.match(followup.answer, /no demuestran por qué/);
+});
+
+test('optional forecast failure preserves inventory interpretation and makes no remote retry', async () => {
+  let remoteCalls = 0;
+  const f = fixture({ provider: { generateStructured: async () => { throw new AgentError('GEMINI_RATE_LIMITED'); } },
+    forecastService: { getDemandForecast: async () => { remoteCalls++; throw new AgentError('ML_SERVICE_UNAVAILABLE'); } } });
+  const result = await f.run('Explícame los principales problemas que observas en el inventario y la predicción.');
+  assert.equal(result.code, null);
+  assert.match(result.answer, /2 de 2 productos/);
+  assert.match(result.answer, /no consultó proyecciones/);
+  assert.doesNotMatch(result.answer, /REPONER|2025-07-01/);
+  assert.equal(remoteCalls, 1);
+  assert.equal(result.usage.totalLlmCalls, 1);
+});
+
+test('human inventory risk and priority phrases route to one Analyst synthesis without Coordinator LLM', async () => {
+  for (const query of ['Resume los riesgos principales del inventario.', '¿Qué es lo más preocupante del inventario y forecast?']) {
+    const f = fixture({ provider: { generateStructured: async () => { throw new AgentError('GEMINI_RATE_LIMITED'); } } });
+    const result = await f.run(query);
+    assert.equal(result.intent, 'inventory_interpretation', query);
+    assert.equal(result.usage.totalLlmCalls, 1, query);
+    assert.equal(f.calls[0].input.agentId, 'analyst');
+    assert.match(result.answer, /mínimo|REPONER/);
+  }
 });
 
 test('budget plan explanation is deterministic and preserves money precision and priority rules', async () => {
