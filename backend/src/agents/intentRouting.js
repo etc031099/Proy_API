@@ -92,7 +92,7 @@ const productReferenceFollowup = (message, memory = {}) => {
   if (canonicalProductSku(message) || /\bSKU-[\w.-]{1,100}\b/i.test(message)) return null;
   const referentialLanguage = /\b(?:reponerlo|reponerla|comprarlo|comprarla|venderlo|venderla|ese producto|este producto|este sku|ese sku|el mismo producto|la misma producto|su proveedor|su prediccion|su stock)\b/.test(text)
     || /^y\s+(?:cuanto\s+(?:cuesta|costaria)|cual\s+es\s+su\s+proveedor)\b/.test(text)
-    || /^cuanto\s+(?:stock|inventario)\s+tiene\b/.test(text);
+    || /^(?:y\s+)?cuanto\s+(?:stock|inventario)\s+tiene\b/.test(text);
   if (!referentialLanguage) return null;
 
   const selected = memory.selectedProductReference?.type === 'product' ? memory.selectedProductReference : null;
@@ -421,6 +421,11 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   }
   const forecastPlan = require('./forecastRouting').routeForecastAnalytics(message, memory, now, businessId);
   if (forecastPlan) return forecastPlan;
+  const bareProductQuery = text.replace(/[¿?¡!]/g, '').trim();
+  if (/^[\p{L}]{3,}(?:\s+\d+){1,2}$/u.test(bareProductQuery)
+    && !/^(?:top|otros|opcion|pagina|proveedor|cliente|producto|compra|vende|stock|minimo|cantidad|sku)\b/.test(bareProductQuery)) {
+    return { intent: 'product_details', agent: 'operations', lookupQuery: bareProductQuery, limit: 1, explicitEntity: true };
+  }
   const dates = message.match(/\d{4}-\d{2}-\d{2}/g);
   const parsedNaturalDate = !dates && /\b\d{1,2}\s+de\s+[a-z]+\s+de\s+20\d{2}\b/i.test(text)
     ? parseRequestedDate(text) : null;

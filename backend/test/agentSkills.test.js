@@ -36,6 +36,7 @@ const expression = (value, row) => {
 };
 const matches = (row, query) => Object.entries(query).every(([key, value]) => {
   if (key === '$or') return value.some(part => matches(row, part));
+  if (key === '$and') return value.every(part => matches(row, part));
   if (key === '$expr') return expression(value, row);
   const actual = field(row, key);
   if (value instanceof RegExp) return typeof actual === 'string' && value.test(actual);
@@ -152,6 +153,32 @@ const fixture = (options = {}) => {
     execution.executeSkill({ agentId, skillId, args }),
   assertNoMutation() { assert.equal(mutations, 0); assert.deepEqual(rows, before); } };
 };
+
+test('informal product components require every word and numeric component within the authenticated tenant', async () => {
+  const products = [
+    product(1, { sku: 'M5-FOODS_2_210', name: 'Alimentos M5 · FOODS_2 · Ítem 210' }),
+    product(2, { sku: 'M5-FOODS_3_210', name: 'Alimentos M5 · FOODS_3 · Ítem 210' }),
+    product(3, { sku: 'M5-FOODS_3_1210', name: 'Alimentos M5 · FOODS_3 · Ítem 1210' }),
+    product(4, { businessId: 'B', sku: 'M5-FOODS_3_210', name: 'Alimentos M5 · FOODS_3 · Ítem 210' })
+  ];
+  for (const query of ['food 210', 'foods 210', 'item 210', 'ítem 210']) {
+    const f = fixture({ products });
+    const result = await f.run('search_products', { query });
+    assert.equal(result.metadata.totalMatches, 2, query);
+    assert.deepEqual(result.data.map(row => row.sku), ['M5-FOODS_2_210', 'M5-FOODS_3_210']);
+    f.assertNoMutation();
+  }
+  for (const query of ['food 3 210', 'foods 3 210', 'M5-FOODS_3_210']) {
+    const f = fixture({ products });
+    const result = await f.run('search_products', { query });
+    assert.equal(result.metadata.totalMatches, 1, query);
+    assert.equal(result.data[0].sku, 'M5-FOODS_3_210');
+    f.assertNoMutation();
+  }
+  const f = fixture({ products });
+  assert.equal((await f.run('search_products', { query: 'inexistente 210' })).metadata.totalMatches, 0);
+  f.assertNoMutation();
+});
 
 test('AG-R3, AG-R5, replenishment budgeting and alert delivery query skills are ready; three remain pending', () => {
   assert.deepEqual(SKILLS.filter(skill => skill.executorStatus === 'READY').map(skill => skill.id), [

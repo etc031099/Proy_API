@@ -165,6 +165,17 @@ test('metadata and compact snapshot drop unexpected nested properties, redact se
   assert.equal(snapshot({ messages: ['private'], apiKey: 'private' }).messages, undefined);
 });
 
+test('deterministic temporal provenance retains its safe explanation through public history projection', () => {
+  const value = response(randomUUID());
+  value.evidence = [];
+  value.contextProvenance = { sourceType: 'deterministic_system', entityType: 'product',
+    label: 'Fecha resuelta; no hay producto inequívoco y no se consultó ML.', rawContext: 'private' };
+  const result = publicResponse(value);
+  assert.deepEqual(result.contextProvenance, { sourceType: 'deterministic_system', entityType: 'product',
+    label: value.contextProvenance.label });
+  assert.equal(result.evidence.length, 0);
+});
+
 test('supplier candidate context survives history snapshot only while valid and remains closed/bounded', () => {
   const now = Date.now();
   const state = snapshot({ supplierResolution: { skillId: 'get_replenishment_cost', args: { mode: 'single', productRef: 'SKU-001', businessId: 'attacker' },

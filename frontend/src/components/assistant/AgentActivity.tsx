@@ -81,8 +81,8 @@ export function AgentActivity({ response }: { response?: AgentResponse }) {
         <p>Consulta «{response.contextProvenance.query}» · página {response.contextProvenance.page} · {response.contextProvenance.totalMatches} coincidencias</p>
         <p className="text-xs text-muted-foreground">Continuación desde la conversación; no se ejecutó una consulta nueva.</p>
       </li>}
-      {response.contextProvenance?.sourceType === 'conversation_context' && <li className="border-l-2 pl-3">
-        <p>Contexto conversacional · producto</p>
+      {(response.contextProvenance?.sourceType === 'conversation_context' || response.contextProvenance?.sourceType === 'deterministic_system') && <li className="border-l-2 pl-3">
+        <p>{response.contextProvenance.sourceType === 'conversation_context' ? 'Contexto conversacional · producto' : 'Información determinística del sistema'}</p>
         <p className="text-xs text-muted-foreground">{response.contextProvenance.label}</p>
       </li>}
       {response.evidence.map(e => <li key={e.evidenceId} className="border-l-2 pl-3">
@@ -92,7 +92,11 @@ export function AgentActivity({ response }: { response?: AgentResponse }) {
         {e.recordCount !== undefined && <p>{e.recordCount} registros</p>}
         {['get_demand_forecast', 'get_replenishment_candidates'].includes(e.skillId) && <p className="text-xs text-muted-foreground">Replay histórico: predicción ML y recomendación de reposición son resultados distintos.</p>}
       </li>)}
-      {!response.evidence.length && !response.contextProvenance && <li className="text-muted-foreground">Sin evidencia de datos para esta respuesta.</li>}
+      {!response.evidence.length && !response.contextProvenance && <li className="text-muted-foreground">
+        {response.usage.totalSkillCalls === 0 && response.usage.totalLlmCalls === 0
+          ? 'Información determinística del sistema: respuesta basada en reglas y contexto disponible; no se ejecutaron skills ni consultas ML.'
+          : 'Sin evidencia de datos para esta respuesta.'}
+      </li>}
     </ul></section>
   </aside>;
 }

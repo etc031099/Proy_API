@@ -57,6 +57,8 @@ const fixture = ({ products = [product(1), product(2), product(3, 'B')], contact
       const match = pipeline[0].$match; assert.ok(match.businessId); reads.push({ model: 'Product', pipeline });
       let rows = products.filter(row => row.businessId === match.businessId && row.isActive);
       if (match.$or) rows = rows.filter(row => match.$or.some(part => Object.entries(part).some(([key, regex]) => regex.test(row[key]))));
+      if (match.$and) rows = rows.filter(row => match.$and.every(part => part.$or.some(clause =>
+        Object.entries(clause).some(([key, regex]) => typeof row[key] === 'string' && regex.test(row[key])))));
       if (match.$expr) rows = rows.filter(row => row.stock <= row.minStockLevel);
       rows = rows.map(row => ({ ...row, shortage: row.minStockLevel - row.stock }));
       const facet = pipeline.find(stage => stage.$facet)?.$facet;
@@ -560,6 +562,36 @@ test('explicitly named product detail overrides remembered product; ambiguous or
   assert.doesNotMatch(notFound.answer, /M5-FOODS_3_511|Producto anterior/);
   assert.equal(notFound.usage.totalLlmCalls, 0); assert.equal(notFound.usage.totalTokens, 0);
   assert.deepEqual(notFound.actions.map(action => action.skillId), ['search_products']);
+});
+
+test('informal product ambiguity clears old entity; stock followup clarifies and ordinal selection establishes new context', async () => {
+  const f = fixture({ products: [
+    { ...product(1), sku: 'M5-FOODS_3_511' },
+    { ...product(2), sku: 'M5-FOODS_2_210', name: 'Alimentos M5 · FOODS_2 · Ítem 210' },
+    { ...product(4), sku: 'M5-FOODS_3_210', name: 'Alimentos M5 · FOODS_3 · Ítem 210', stock: 1 }
+  ] });
+  const conversationId = randomUUID();
+  await f.run('¿Cuánto stock tiene M5-FOODS_3_511?', conversationId);
+  const ambiguous = await f.run('¿Cuánto stock tiene el food 210?', conversationId);
+  assert.equal(ambiguous.requiresClarification, true);
+  assert.match(ambiguous.answer, /FOODS_2.*Ítem 210/); assert.match(ambiguous.answer, /FOODS_3.*Ítem 210/);
+  assert.doesNotMatch(ambiguous.answer, /M5-FOODS_3_511/);
+  const temporal = await f.run('¿Cuál es la predicción de ayer?', conversationId);
+  assert.match(temporal.answer, /¿De qué producto/);
+  assert.equal(temporal.contextProvenance.sourceType, 'deterministic_system');
+  const unresolved = await f.run('¿Y cuánto stock tiene?', conversationId);
+  assert.equal(unresolved.code, 'AGENT_CLARIFICATION_REQUIRED');
+  assert.equal(unresolved.actions.length, 0); assert.match(unresolved.answer, /varios productos|qué producto/i);
+  const selected = await f.run('el segundo', conversationId);
+  assert.equal(selected.code, null); assert.match(selected.answer, /M5-FOODS_3_210/);
+  const followup = await f.run('¿Y cuánto stock tiene?', conversationId);
+  assert.equal(followup.code, null); assert.match(followup.answer, /M5-FOODS_3_210.*1 unidad disponible/);
+  for (const result of [ambiguous, temporal, unresolved, selected, followup]) {
+    assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
+  }
+  const newConversation = await f.run('¿Y cuánto stock tiene?', randomUUID());
+  assert.equal(newConversation.requiresClarification, true); assert.equal(newConversation.usage.totalSkillCalls, 0);
+  assert.equal(newConversation.usage.totalLlmCalls, 0); assert.equal(f.calls.length, 0);
 });
 
 test('single-day Spanish sales queries use deterministic summary without synthesis', async () => {

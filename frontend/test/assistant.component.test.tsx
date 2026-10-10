@@ -73,6 +73,22 @@ it('shows safe conversation context provenance for a clarification without imply
   expect(screen.getByText(/no se consultó ML/)).toBeTruthy();
   expect(screen.queryByText('Sin evidencia de datos para esta respuesta.')).toBeNull();
 });
+it('labels temporal clarification without a selected product as deterministic system information', async () => {
+  send.mockResolvedValue({ success: true, data: { ...response, answer: '¿De qué producto deseas consultar la predicción de ayer?',
+    actions: [], evidence: [], contextProvenance: { sourceType: 'deterministic_system', entityType: 'product',
+      label: 'Fecha resuelta; no hay producto inequívoco en esta conversación y no se consultó ML.' } } });
+  render(<AssistantPage />); submit('¿Cuál es la predicción de ayer?');
+  await screen.findByText('Información determinística del sistema');
+  expect(screen.getByText(/no se consultó ML/)).toBeTruthy();
+  expect(screen.queryByText('Sin evidencia de datos para esta respuesta.')).toBeNull();
+});
+it('does not imply missing data evidence for a zero-skill deterministic followup clarification', async () => {
+  send.mockResolvedValue({ success: true, data: { ...response, answer: '¿A qué producto te refieres?', actions: [], evidence: [],
+    usage: { ...response.usage, totalSkillCalls: 0 } } });
+  render(<AssistantPage />); submit('¿Y cuánto stock tiene?');
+  await screen.findByText(/Información determinística del sistema: respuesta basada en reglas/);
+  expect(screen.queryByText('Sin evidencia de datos para esta respuesta.')).toBeNull();
+});
 it('navigates five visible candidates with real totals and starts refinement in the same conversation', async () => {
   const page = (offset: number): AgentResponse => ({ ...response, answer: `Opciones ${offset}`, suggestionsExpiresAt: Date.now() + 120000,
     suggestionsPagination: { query: 'food', offset, limit: 5, totalMatches: 28, hasMore: offset < 25, hasPrevious: offset > 0 },

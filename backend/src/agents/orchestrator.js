@@ -518,7 +518,10 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
           }
           const search = results.find(({ skillId }) => skillId === 'search_products');
           if (search) commit({ lastIntent: 'search_product', lastAgent: 'operations',
-            recentEntities: search.result.data, lastSearchQuery: plan.lookupQuery, listLimit: 2 });
+            recentEntities: search.result.data, lastSearchQuery: plan.lookupQuery, listLimit: 5,
+            lastEntity: null, selectedProductReference: null,
+            lastProductSelection: search.result.data.length ? { sourceIntent: 'search_product',
+              items: search.result.data, createdAt: Date.now() } : null });
         } else {
           let sections = results.map((_, index) => index);
           const synthesisEligible = results.length > 0 && results.every(({ result }) => ['READY', 'NO_DATA'].includes(result.status));

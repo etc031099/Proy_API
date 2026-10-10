@@ -59,7 +59,7 @@ export interface AgentResponse {
   suggestionsEntityType?: 'product' | 'supplier' | 'customer';
   contextProvenance?:
     | { sourceType: 'candidate_snapshot'; entityType: 'supplier'; query: string; page: number; pageSize: number; totalMatches: number }
-    | { sourceType: 'conversation_context'; entityType: 'product'; label: string };
+    | { sourceType: 'conversation_context' | 'deterministic_system'; entityType: 'product'; label: string };
   suggestionsExpiresAt?: number;
   suggestionsPagination?: { query: string; offset: number; limit: 5; totalMatches: number; hasMore: boolean; hasPrevious: boolean };
   pendingAction?: PendingActionPreview;
