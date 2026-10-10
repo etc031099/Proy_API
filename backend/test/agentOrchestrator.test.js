@@ -192,6 +192,102 @@ test('inventory routing precedence preserves textual product search and priority
   assert.deepEqual(cheapest.args, { productRef: 'M5-FOODS_3_511' });
 });
 
+test('unsupported causal, confidence and financial-impact claims route deterministically before supplier/commercial fallbacks', () => {
+  for (const query of ['¿Por qué el proveedor se retrasó?', '¿Por qué llegó tarde el proveedor?',
+    '¿Qué proveedor incumplió?']) {
+    const plan = routeDeterministically(query, {}, clock());
+    assert.equal(plan.intent, 'unsupported_supplier_causality', query);
+    assert.equal(plan.skillId, undefined, query);
+    assert.equal(plan.args, undefined, query);
+  }
+  for (const query of ['¿Cuál es la confianza exacta de la predicción?', '¿Qué tan segura es la predicción?',
+    '¿Cuál es el intervalo de confianza del forecast?', '¿Cuál es la probabilidad de acertar la demanda?']) {
+    assert.equal(routeDeterministically(query, {}, clock()).intent, 'forecast_confidence', query);
+  }
+  for (const query of ['¿Cuánto dinero voy a perder si no compro?', '¿Cuánto perdería si no repongo M5-FOODS_3_511?',
+    '¿Cuánto me costará quedarme sin stock?']) {
+    assert.equal(routeDeterministically(query, {}, clock()).intent, 'unsupported_financial_impact', query);
+  }
+  assert.equal(routeDeterministically('¿Cuánto cuesta reponer M5-FOODS_3_511?', {}, clock()).skillId, 'get_replenishment_cost');
+  assert.equal(routeDeterministically('¿Cuál es la predicción de M5-FOODS_3_511?', {}, clock()).intent, 'demand_forecast');
+  assert.equal(routeDeterministically('¿Qué proveedor es más barato para M5-FOODS_3_511?', {}, clock()).intent, 'cheapest_supplier');
+});
+
+test('natural week periods use bounded operational dates and causal sales comparison uses the same weekday range', async () => {
+  const now = () => new Date('2025-01-22T12:00:00Z');
+  const simple = routeDeterministically('¿Cuánto vendimos esta semana?', {}, now());
+  assert.equal(simple.intent, 'sales_summary');
+  assert.deepEqual(simple.period, { startDate: '2025-01-20', endDate: '2025-01-22' });
+  const previous = routeDeterministically('ventas semana pasada', {}, now());
+  assert.deepEqual(previous.period, { startDate: '2025-01-13', endDate: '2025-01-19' });
+
+  const businessHistory = [
+    { businessId: 'A', type: 'sale', status: 'completed', date: new Date('2025-01-13T12:00:00Z'), currency: 'PEN', amount: 100, units: 10 },
+    { businessId: 'A', type: 'sale', status: 'completed', date: new Date('2025-01-14T12:00:00Z'), currency: 'USD', amount: 20, units: 2 },
+    { businessId: 'A', type: 'sale', status: 'completed', date: new Date('2025-01-20T12:00:00Z'), currency: 'PEN', amount: 70, units: 7 },
+    { businessId: 'A', type: 'sale', status: 'completed', date: new Date('2025-01-21T12:00:00Z'), currency: 'USD', amount: 25, units: 3 }
+  ];
+  const f = fixture({ businessHistory, now });
+  const result = await f.run('¿Por qué bajaron las ventas esta semana?');
+  assert.equal(result.code, null);
+  assert.equal(result.intent, 'sales_causality');
+  assert.deepEqual(result.actions.map(action => action.skillId), ['get_sales_summary', 'get_sales_summary']);
+  assert.deepEqual(result.evidence.map(row => row.period), [
+    { startDate: '2025-01-20', endDate: '2025-01-22' }, { startDate: '2025-01-13', endDate: '2025-01-15' }
+  ]);
+  assert.match(result.answer, /PEN: 100\.00 → 70\.00 \(disminuyeron\)/);
+  assert.match(result.answer, /USD: 20\.00 → 25\.00 \(aumentaron\)/);
+  assert.match(result.answer, /no permite determinar por qué/i);
+  assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0); assert.equal(f.calls.length, 0);
+});
+
+test('unsupported confidence and monetary-loss questions return useful limitations at zero LLM and do not alter cost/forecast routes', async () => {
+  for (const [query, intent, unsupportedPhrase] of [
+    ['¿Cuál es la confianza exacta de la predicción?', 'forecast_confidence', /no expone una confianza exacta/i],
+    ['¿Qué tan segura es la predicción?', 'forecast_confidence', /no expone una confianza exacta/i],
+    ['¿Cuánto dinero voy a perder si no compro?', 'unsupported_financial_impact', /No puedo calcular una pérdida monetaria exacta/i],
+    ['¿Cuánto perdería si no repongo M5-FOODS_3_511?', 'unsupported_financial_impact', /No puedo calcular una pérdida monetaria exacta/i],
+    ['¿Por qué el proveedor se retrasó?', 'unsupported_supplier_causality', /No tengo evidencia suficiente para afirmar/i]
+  ]) {
+    const f = fixture(); const result = await f.run(query);
+    assert.equal(result.code, null, query); assert.equal(result.intent, intent, query);
+    assert.match(result.answer, unsupportedPhrase, query);
+    assert.equal(result.actions.length, 0, query); assert.equal(result.usage.totalSkillCalls, 0, query);
+    assert.equal(result.usage.totalLlmCalls, 0, query); assert.equal(result.usage.totalTokens, 0, query);
+    assert.equal(f.calls.length, 0, query);
+    assert.doesNotMatch(result.answer, /69\.71|accuracy|confidence score/i, query);
+  }
+  const noPeriod = await fixture().run('¿Por qué bajaron las ventas?');
+  assert.equal(noPeriod.intent, 'sales_causality'); assert.equal(noPeriod.requiresClarification, true);
+  assert.equal(noPeriod.usage.totalLlmCalls, 0); assert.equal(noPeriod.usage.totalSkillCalls, 0);
+
+  const cost = await fixture().run('¿Cuánto cuesta reponer M5-FOODS_3_511?');
+  assert.equal(cost.intent, 'replenishment_commercial');
+  assert.equal(cost.actions[0].skillId, 'get_replenishment_cost');
+  assert.equal(cost.usage.totalLlmCalls, 0);
+  const cheapest = await fixture().run('¿Qué proveedor es más barato para M5-FOODS_3_511?');
+  assert.equal(cheapest.intent, 'cheapest_supplier'); assert.equal(cheapest.actions[0].skillId, 'compare_supplier_costs');
+  assert.equal(cheapest.usage.totalLlmCalls, 0);
+  const forecastResult = await fixture({ products: [{ ...product(1), sku: 'M5-FOODS_3_511' }],
+    forecastService: { getDemandForecast: async () => ({ ...structuredClone(forecast), products: [{ ...forecast.products[0],
+      productId: id(1), sku: 'M5-FOODS_3_511' }] }) } }).run('¿Cuál es la predicción de M5-FOODS_3_511?');
+  assert.equal(forecastResult.intent, 'demand_forecast');
+  assert.ok(forecastResult.actions.some(action => action.skillId === 'get_demand_forecast'));
+  assert.equal(forecastResult.usage.totalLlmCalls, 0);
+});
+
+test('unsupported-claim execution errors retain only correlation IDs, safe intent and error code', async () => {
+  const events = []; const conversationId = randomUUID();
+  const execution = createAgentExecution({ context: createAgentRequestContext(req(), { conversationId }), onEvent: event => events.push(event) });
+  execution.recordError('AGENT_INTERNAL_ERROR', 'unsupported_financial_impact');
+  const diagnostic = events.find(event => event.type === 'error');
+  assert.equal(diagnostic.intent, 'unsupported_financial_impact');
+  assert.equal(diagnostic.requestId.length > 0, true); assert.equal(diagnostic.conversationId, conversationId);
+  assert.equal(diagnostic.code, 'AGENT_INTERNAL_ERROR');
+  assert.equal(JSON.stringify(diagnostic).includes('prompt'), false);
+  assert.equal(JSON.stringify(diagnostic).includes('businessId'), false);
+});
+
 test('forecast comparison extracts explicit SKUs regardless of semantic words around them', async () => {
   const skus = ['M5-FOODS_3_511', 'M5-FOODS_3_491'];
   const products = skus.map((sku, index) => ({ productId: id(index + 1), sku, name: `Producto ${index + 1}`,

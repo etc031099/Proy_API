@@ -10,6 +10,31 @@ const dateLabel = value => {
     ? new Intl.DateTimeFormat('es-PE', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(date)
     : 'fecha no disponible';
 };
+const unsupportedClaimAnswer = intent => ({
+  unsupported_supplier_causality: 'No tengo evidencia suficiente para afirmar que un proveedor se haya retrasado. El sistema no registra de forma verificable fechas prometidas y fechas reales de recepción para determinar incumplimientos o sus causas. Si me indicas el proveedor, puedo revisar sus productos y ofertas configuradas, pero eso no confirmaría un retraso.',
+  forecast_confidence: 'El modelo entrega una predicción puntual, pero no expone una confianza exacta, probabilidad calibrada ni intervalo de predicción para este escenario. Sí puedo mostrar la demanda prevista, el stock de referencia y la recomendación de reposición; esos datos no equivalen a una medida de confianza.',
+  unsupported_financial_impact: 'No puedo calcular una pérdida monetaria exacta por no comprar con los datos disponibles. El sistema muestra demanda prevista, stock y reposición recomendada, pero no cuenta con un modelo validado de ventas perdidas, margen ni probabilidad de demanda no atendida para convertir un faltante en dinero. Sí puedo mostrar esos indicadores operativos sin presentarlos como pérdida económica.'
+}[intent] || 'No tengo evidencia suficiente para afirmar esa causa. Puedo mostrar los datos observados disponibles, pero no atribuir un motivo sin evidencia.');
+const salesCausalityAnswer = (current, previous) => {
+  if (!current?.data || !previous?.data) return 'No pude comparar ventas completadas para los periodos consultados. Aunque la comparación esté disponible, los datos de ventas por sí solos no permiten afirmar qué causó un cambio.';
+  const periodText = result => `${dateLabel(result.metadata.period.startDate)}–${dateLabel(result.metadata.period.endDate)}`;
+  const currencies = [...new Set([...(current.data.amountsByCurrency || []), ...(previous.data.amountsByCurrency || [])].map(row => row.currency))].sort();
+  const byCurrency = result => new Map((result.data.amountsByCurrency || []).map(row => [row.currency, row.amount]));
+  const currentAmounts = byCurrency(current), previousAmounts = byCurrency(previous);
+  const compare = (left, right) => left < right ? 'disminuyeron' : left > right ? 'aumentaron' : 'se mantuvieron';
+  const amountLines = currencies.length ? currencies.map(currency => {
+    const before = previousAmounts.get(currency) || 0; const after = currentAmounts.get(currency) || 0;
+    return `• Ventas en ${currency}: ${money(before)} → ${money(after)} (${compare(after, before)}).`;
+  }) : ['• No se registraron importes de ventas en ninguno de los dos periodos.'];
+  const priorUnits = Number.isFinite(previous.data.totalUnitsSold) ? previous.data.totalUnitsSold : 0;
+  const currentUnits = Number.isFinite(current.data.totalUnitsSold) ? current.data.totalUnitsSold : 0;
+  const units = `• Unidades vendidas: ${format(priorUnits)} → ${format(currentUnits)} (${compare(currentUnits, priorUnits)}).`;
+  const priorCount = Number.isFinite(previous.data.completedSalesCount) ? previous.data.completedSalesCount : 0;
+  const currentCount = Number.isFinite(current.data.completedSalesCount) ? current.data.completedSalesCount : 0;
+  return [`Comparé ventas completadas del ${periodText(previous)} con el ${periodText(current)} (mismo tramo de días).`,
+    ...amountLines, units, `• Ventas completadas: ${format(priorCount)} → ${format(currentCount)} (${compare(currentCount, priorCount)}).`,
+    'Esta comparación muestra qué cambió, pero no permite determinar por qué. No hay evidencia registrada que atribuya la variación a una causa específica.'].join('\n');
+};
 const periodLabel = metadata => {
   if (!metadata.period) return 'el periodo consultado';
   const { startDate, endDate } = metadata.period;
@@ -251,4 +276,4 @@ const llmObservation = (skillId, result) => {
 };
 
 module.exports = { buildSkillAnswer, buildCheapestSupplierAnswer, llmObservation, safeText, replenishmentExplanation,
-  budgetPlanExplanation, budgetPlanFollowupAnswer, productCountAnswer };
+  budgetPlanExplanation, budgetPlanFollowupAnswer, productCountAnswer, unsupportedClaimAnswer, salesCausalityAnswer };

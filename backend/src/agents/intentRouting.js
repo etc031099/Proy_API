@@ -18,6 +18,13 @@ const monthPeriod = (now, previous = false) => {
   return { startDate: new Date(Date.UTC(now.getUTCFullYear(), month, 1)).toISOString().slice(0, 10),
     endDate: new Date(Date.UTC(now.getUTCFullYear(), month + 1, 0)).toISOString().slice(0, 10) };
 };
+const weekPeriod = (now, weeksAgo = 0, elapsedDays = null) => {
+  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const monday = today - ((now.getUTCDay() + 6) % 7) * 86400000 - weeksAgo * 7 * 86400000;
+  const end = monday + Math.max(0, (elapsedDays ?? (weeksAgo === 0 ? Math.floor((today - monday) / 86400000) : 6))) * 86400000;
+  return { startDate: new Date(monday).toISOString().slice(0, 10), endDate: new Date(end).toISOString().slice(0, 10) };
+};
+const weekElapsedDays = period => Math.round((Date.parse(`${period.endDate}T00:00:00Z`) - Date.parse(`${period.startDate}T00:00:00Z`)) / 86400000);
 const clarify = question => ({ intent: 'ambiguous_query', agent: 'coordinator', clarificationQuestion: question });
 const canonicalProductSku = message => message.match(/\bM5-[A-Z]+_\d+_\d+\b/i)?.[0]
   || message.match(/\bSKU\s+([\w.-]{1,100})\b/i)?.[1];
@@ -171,13 +178,38 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
       ...(resolved.answer ? { deterministicAnswer: resolved.answer } : {}),
       ...(resolved.selectedProduct ? { selectedProduct: resolved.selectedProduct } : {}) };
   }
+  const text = normalize(message);
+  const hasSku = Boolean(canonicalProductSku(message));
+  if (/\bproveedor(?:es)?\b/.test(text) && /\b(?:retras|atras|demor|incumpl|llego tarde)\w*\b/.test(text)
+    && /\b(?:por que|que proveedor|caus|motivo|incumpl)\w*\b/.test(text)) {
+    return { intent: 'unsupported_supplier_causality', agent: 'coordinator' };
+  }
+  if (/\b(?:confianza|segur[oa]|intervalo de confianza|probabilidad de acertar|incertidumbre)\b/.test(text)
+    && /\b(?:prediccion|forecast|demanda|modelo)\b/.test(text)) {
+    return { intent: 'forecast_confidence', agent: 'coordinator', ...(hasSku ? { sku: canonicalProductSku(message) } : {}) };
+  }
+  if (/\b(?:perder|perderia|perdida|perdidas|costar\w*|costo de quedarme sin stock|ventas perdidas)\b/.test(text)
+    && /\b(?:si no|sin|no compro|no repongo|no repon|quedarme sin stock)\b/.test(text)) {
+    return { intent: 'unsupported_financial_impact', agent: 'coordinator', ...(hasSku ? { sku: canonicalProductSku(message) } : {}) };
+  }
+  const asksSalesCausality = /\b(?:por que|caus|motivo)\w*\b/.test(text)
+    && /\b(?:baj|disminu|cayer|caid|descend)\w*\b/.test(text) && /\b(?:venta|vend)\w*\b/.test(text);
+  if (asksSalesCausality) {
+    if (!/\b(?:esta semana|semana pasada|semana anterior)\b/.test(text)) {
+      return { intent: 'sales_causality', agent: 'operations', clarificationQuestion:
+        'Puedo comparar las ventas registradas entre periodos, pero esa comparación no demuestra la causa. Indícame un periodo, como esta semana o este mes.' };
+    }
+    const weeksAgo = /\b(?:semana pasada|semana anterior)\b/.test(text) ? 1 : 0;
+    const requestedPeriod = weekPeriod(now, weeksAgo);
+    const comparisonPeriod = weekPeriod(now, weeksAgo + 1, weekElapsedDays(requestedPeriod));
+    return { intent: 'sales_causality', agent: 'operations', period: requestedPeriod, comparisonPeriod, periodExplicit: true };
+  }
   const commercialPlan = routeCommercial(message, memory);
   if (commercialPlan) return commercialPlan;
   const productSupplierLookup = routeProductSupplierLookup(message, memory);
   if (productSupplierLookup) return productSupplierLookup;
   const supplierProducts = routeSupplierProducts(message, memory);
   if (supplierProducts) return supplierProducts;
-  const text = normalize(message);
   const inventoryText = normalizeBasicInventory(message);
   // Specific inventory questions must win before the broad generic product fallback.
   if (isLowStockQuery(inventoryText)) return { intent: 'low_stock', agent: 'operations', limit: 5 };
@@ -226,9 +258,12 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   const forecastPlan = require('./forecastRouting').routeForecastAnalytics(message, memory);
   if (forecastPlan) return forecastPlan;
   const dates = message.match(/\d{4}-\d{2}-\d{2}/g);
-  if (!dates && /ayer|semana|ano pasado|hoy/.test(text) && /venta|vendi/.test(text)) return clarify('Indica el periodo con dos fechas YYYY-MM-DD o usa este mes / mes pasado.');
+  const naturalWeek = /\b(?:esta semana|semana pasada|semana anterior)\b/.test(text);
+  if (!dates && /ayer|semana|ano pasado|hoy/.test(text) && /venta|vendi/.test(text) && !naturalWeek) return clarify('Indica un periodo como esta semana, semana pasada, este mes o mes pasado.');
   if (dates && (dates.length !== 2 || !dates.every(isDate) || dates[0] > dates[1])) return clarify('Indica un periodo válido con dos fechas YYYY-MM-DD.');
   const explicitPeriod = dates ? { startDate: dates[0], endDate: dates[1] }
+    : /semana pasada|semana anterior/.test(text) ? weekPeriod(now, 1)
+      : /esta semana/.test(text) ? weekPeriod(now)
     : /mes pasado|mes anterior/.test(text) ? monthPeriod(now, true)
       : /este mes|mes actual/.test(text) ? monthPeriod(now) : undefined;
   const period = explicitPeriod || (memory.lastPeriodExplicit === true ? memory.lastPeriod : undefined) || monthPeriod(now);
@@ -270,7 +305,7 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   if (isLowStockQuery(inventoryText)) plan = { intent: 'low_stock', agent: 'operations' };
   else if (/transacciones.*(ultim|recient)|(ultim|recient).*transacciones/.test(text)) plan = { intent: 'recent_transactions', agent: 'operations' };
   else if (/mas vendidos|mayores ventas|se venden mas/.test(text)) plan = { intent: 'top_selling_products', agent: 'analyst' };
-  else if (/vendimos|ventas del mes/.test(text)) plan = { intent: 'sales_summary', agent: 'operations' };
+  else if (/vendimos|ventas del mes|ventas?.*(?:esta semana|semana pasada|semana anterior|este mes|mes pasado|mes anterior)/.test(text)) plan = { intent: 'sales_summary', agent: 'operations' };
   else if (/vendio|cuanto.*vendido/.test(text)) plan = { intent: 'product_sales_summary', agent: 'operations', needsProduct: true };
   else if (/explica|por que/.test(text) && /repon|reposicion/.test(text)) plan = { intent: 'explain_replenishment', agent: 'analyst', needsProduct: true };
   else if (/repon|reposicion/.test(text)) plan = { intent: 'replenishment_candidates', agent: 'analyst', limit: /mayor|mas reposicion/.test(text) ? 1 : 5 };
@@ -319,4 +354,4 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   return { ...plan, period, periodExplicit: Boolean(explicitPeriod), limit: plan.limit || 5 };
 };
 
-module.exports = { routeDeterministically, routeCommercial, routeSupplierProducts, monthPeriod, clarify, budgetPlanFollowupType };
+module.exports = { routeDeterministically, routeCommercial, routeSupplierProducts, monthPeriod, weekPeriod, clarify, budgetPlanFollowupType };

@@ -7,7 +7,7 @@ const { executeRequestedSkill } = require('./toolCalls');
 const { createConversationMemory } = require('./memory');
 const { routeDeterministically, clarify, budgetPlanFollowupType } = require('./intentRouting');
 const { buildSkillAnswer, buildCheapestSupplierAnswer, llmObservation, safeText, replenishmentExplanation,
-  budgetPlanExplanation, budgetPlanFollowupAnswer, productCountAnswer } = require('./responses');
+  budgetPlanExplanation, budgetPlanFollowupAnswer, productCountAnswer, unsupportedClaimAnswer, salesCausalityAnswer } = require('./responses');
 const { buildSynthesisInput, buildNarrativeSynthesisInput, validateNarrativeSynthesis, renderNarrativeSynthesis, renderNarrativeFallback } = require('./synthesis');
 const { normalizeSupplier, resolveSupplier } = require('./replenishmentPlanning');
 const { SUPPLIER_SELECTION_TTL_MS, contextBinding } = require('./memory');
@@ -193,6 +193,15 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             selector = { productId: product.data.id };
           }
           if (!plan.clarificationQuestion) switch (plan.intent) {
+            case 'unsupported_supplier_causality':
+            case 'forecast_confidence':
+            case 'unsupported_financial_impact':
+              answer = unsupportedClaimAnswer(plan.intent);
+              break;
+            case 'sales_causality':
+              await run('operations', 'get_sales_summary', plan.period);
+              await run('operations', 'get_sales_summary', plan.comparisonPeriod);
+              break;
             case 'forecast_risk_explanation': {
               await run('analyst', 'analyze_demand_forecast', { mode: 'summary', limit: 5, offset: 0 });
               await run('analyst', 'analyze_demand_forecast', { mode: 'exceeding_stock', limit: 3, offset: 0 });
@@ -442,6 +451,13 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             sections = [];
           }
           if (sections.length) answer = sections.map(index => buildSkillAnswer(results[index].skillId, results[index].result)).join('\n\n');
+          if (['unsupported_supplier_causality', 'forecast_confidence', 'unsupported_financial_impact'].includes(plan.intent)) {
+            answer = unsupportedClaimAnswer(plan.intent); sections = [];
+          }
+          if (plan.intent === 'sales_causality') {
+            const summaries = results.filter(({ skillId }) => skillId === 'get_sales_summary').map(({ result }) => result);
+            answer = salesCausalityAnswer(summaries[0], summaries[1]); sections = [];
+          }
           if (plan.intent === 'product_list_followup') { answer = plan.deterministicAnswer; sections = []; }
           if (plan.inventoryCountOnly) {
             const summary = results.find(({ skillId }) => skillId === 'get_business_summary')?.result;
@@ -489,7 +505,8 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
               ? { lastProductSelection: { sourceIntent: plan.intent, items: raw.slice(0, 5), createdAt: Date.now() },
                 selectedProductReference: plan.selectedProduct ? { id: plan.selectedProduct.id, sku: plan.selectedProduct.sku,
                   name: plan.selectedProduct.name || plan.selectedProduct.label } : null } : {}),
-            lastPeriod: latest?.metadata.period || plan.period, lastPeriodExplicit: plan.periodExplicit === true,
+            lastPeriod: plan.intent === 'sales_causality' ? plan.period : latest?.metadata.period || plan.period,
+            lastPeriodExplicit: plan.periodExplicit === true,
             listLimit: plan.limit || 5,
             lastSearchQuery: plan.query, lastCurrency: latest?.data?.currency,
             lastTransactionFilters: plan.intent === 'recent_transactions' ? {
@@ -514,7 +531,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
           : code === 'AGENT_BUDGET_EXCEEDED' ? 'La consulta alcanzó su límite de ejecución. Haz una pregunta más concreta.'
             : 'No pude obtener la información solicitada. Vuelve a intentarlo.';
       }
-      if (code) execution.recordError(code);
+      if (code) execution.recordError(code, plan.intent);
       const usage = execution.finish();
       const events = execution.getEvents();
       const actions = events.filter(event => event.type === 'skill_finished').map(event => ({ skillId: event.skillId, agentId: event.agentId, status: event.status, durationMs: event.durationMs }));

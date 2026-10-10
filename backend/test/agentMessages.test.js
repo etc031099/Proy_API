@@ -107,6 +107,34 @@ test('internal diagnostic logger emits only allowlisted failure metadata', () =>
   assert.equal(logged[0][1].includes('must-not-log'), false);
   assert.equal(logged[0][1].includes('password'), false);
 });
+test('unsupported-claim diagnostic includes correlation and intent but excludes prompt or business content', () => {
+  const original = console.error; const logged = [];
+  console.error = (...args) => logged.push(args);
+  try {
+    logAgentDiagnostic({ type: 'error', requestId: '22222222-2222-4222-8222-222222222222', conversationId,
+      intent: 'unsupported_financial_impact', code: 'AGENT_INTERNAL_ERROR', prompt: 'private prompt',
+      businessId: 'secret-business', apiKey: 'secret-key' });
+  } finally { console.error = original; }
+  assert.equal(logged.length, 1); assert.equal(logged[0][0], '[AgentClaimDiagnostic]');
+  const value = JSON.parse(logged[0][1]);
+  assert.deepEqual(Object.keys(value).sort(), ['code', 'conversationId', 'intent', 'requestId']);
+  assert.equal(value.intent, 'unsupported_financial_impact');
+  assert.equal(JSON.stringify(value).includes('private'), false);
+  assert.equal(JSON.stringify(value).includes('secret'), false);
+});
+test('unsupported-claim diagnostic logs correlation and intent only', () => {
+  const original = console.error; const logged = [];
+  console.error = (...args) => logged.push(args);
+  try {
+    logAgentDiagnostic({ type: 'error', requestId: '22222222-2222-4222-8222-222222222222', conversationId,
+      intent: 'unsupported_financial_impact', code: 'AGENT_INTERNAL_ERROR', prompt: 'private prompt',
+      businessId: 'private-business', apiKey: 'private-key' });
+  } finally { console.error = original; }
+  assert.equal(logged.length, 1); assert.equal(logged[0][0], '[AgentClaimDiagnostic]');
+  const value = JSON.parse(logged[0][1]);
+  assert.deepEqual(Object.keys(value).sort(), ['code', 'conversationId', 'intent', 'requestId']);
+  assert.equal(JSON.stringify(value).includes('private'), false);
+});
 test('provider diagnostic logger emits safe Gemini metadata and excludes request/response contents', () => {
   const original = console.error;
   const logged = [];

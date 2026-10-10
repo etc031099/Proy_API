@@ -134,6 +134,10 @@ const createTraceEvent = (type, metadata) => {
     if (metadata.diagnosticType !== 'plan_followup') invalid();
     event.diagnosticType = metadata.diagnosticType;
   }
+  if (metadata.intent !== undefined) {
+    if (!['unsupported_supplier_causality', 'sales_causality', 'forecast_confidence', 'unsupported_financial_impact'].includes(metadata.intent)) invalid();
+    event.intent = metadata.intent;
+  }
   if (metadata.followupType !== undefined) {
     if (!PLAN_FOLLOWUP_TYPES.includes(metadata.followupType)) invalid();
     event.followupType = metadata.followupType;

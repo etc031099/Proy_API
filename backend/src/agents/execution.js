@@ -104,7 +104,11 @@ const createAgentExecution = options => {
         throw error;
       } finally { active--; }
     },
-    recordError(code) { failed = true; emit('error', { status: 'FAILED', code }); },
+    recordError(code, intent) {
+      failed = true;
+      const unsupportedClaimIntents = new Set(['unsupported_supplier_causality', 'sales_causality', 'forecast_confidence', 'unsupported_financial_impact']);
+      emit('error', { status: 'FAILED', code, ...(unsupportedClaimIntents.has(intent) ? { intent } : {}) });
+    },
     recordPlanFollowupDiagnostic(followupType, code) {
       failed = true;
       emit('error', { agentId: 'coordinator', agentRunId: randomUUID(), status: 'FAILED', code,
