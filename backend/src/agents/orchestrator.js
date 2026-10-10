@@ -185,9 +185,12 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
         } else if (!plan.clarificationQuestion && plan.intent !== 'unsupported') {
           let selector = plan.selector;
           if (plan.lookupQuery) {
-            const matched = await run('operations', 'search_products', { query: plan.lookupQuery, limit: 2 });
+            const matched = await run('operations', 'search_products', { query: plan.lookupQuery, limit: 5 });
             if (matched.metadata.totalMatches !== 1) {
-              plan.clarificationQuestion = 'No encontré un único producto con ese nombre. ¿Puedes indicarme su SKU para consultar su demanda?';
+              plan.lookupCandidates = matched.data;
+              plan.clarificationQuestion = matched.metadata.totalMatches === 0
+                ? `No encontré productos que coincidan con «${plan.lookupQuery}». Revisa el nombre o indícame el SKU.`
+                : `Encontré varias coincidencias para «${plan.lookupQuery}». Elige una o indícame su SKU.`;
             } else selector = { productId: matched.data[0].id };
           }
           if (selector?.sku && ['demand_forecast', 'explain_replenishment'].includes(plan.intent)) {
@@ -480,6 +483,9 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
           answer = 'Puedo consultar y explicar inventario, ventas y demanda. Las acciones de escritura no están disponibles.';
         } else if (plan.clarificationQuestion) {
           question = plan.clarificationQuestion; code = 'AGENT_CLARIFICATION_REQUIRED'; answer = question;
+          if (plan.lookupQuery && plan.lookupCandidates?.length) {
+            answer += `\n${plan.lookupCandidates.map((product, index) => `${index + 1}. ${product.name}${product.sku ? ` — ${product.sku}` : ''}`).join('\n')}`;
+          }
           const supplierResult = results.find(({ result }) => result.status === 'CLARIFICATION' && result.metadata.supplierResolution);
           if (supplierResult) {
             supplierResolutionExpiry = Date.now() + SUPPLIER_SELECTION_TTL_MS;
@@ -690,7 +696,8 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
       const candidateSnapshot = supplierPageResponse && (supplierResult?.result.metadata.supplierResolution || state.supplierResolution);
       const contextProvenance = candidateSnapshot ? { sourceType: 'candidate_snapshot', entityType: 'supplier',
         query: candidateSnapshot.query || 'proveedores', page: Math.floor((supplierPageResponse.suggestionsPagination?.offset || 0) / 5) + 1,
-        pageSize: 5, totalMatches: candidateSnapshot.totalMatches ?? candidateSnapshot.candidates.length } : undefined;
+        pageSize: 5, totalMatches: candidateSnapshot.totalMatches ?? candidateSnapshot.candidates.length }
+        : plan.contextProvenance;
       return deepFreeze({ requestId: context.requestId, conversationId, answer, intent: plan.intent, agent: plan.agent,
         ...(synthesisStatus ? { synthesisStatus } : {}),
         ...(synthesisDiagnostic ? { synthesisDiagnostic } : {}),

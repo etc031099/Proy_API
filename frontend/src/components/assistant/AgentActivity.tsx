@@ -81,6 +81,10 @@ export function AgentActivity({ response }: { response?: AgentResponse }) {
         <p>Consulta «{response.contextProvenance.query}» · página {response.contextProvenance.page} · {response.contextProvenance.totalMatches} coincidencias</p>
         <p className="text-xs text-muted-foreground">Continuación desde la conversación; no se ejecutó una consulta nueva.</p>
       </li>}
+      {response.contextProvenance?.sourceType === 'conversation_context' && <li className="border-l-2 pl-3">
+        <p>Contexto conversacional · producto</p>
+        <p className="text-xs text-muted-foreground">{response.contextProvenance.label}</p>
+      </li>}
       {response.evidence.map(e => <li key={e.evidenceId} className="border-l-2 pl-3">
         <p>{e.label}</p>
         {e.period && <p>Periodo: {e.period.startDate} – {e.period.endDate}</p>}

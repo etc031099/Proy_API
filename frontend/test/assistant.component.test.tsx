@@ -62,6 +62,17 @@ it('shows outbox delivery activity separately from generated alert events', asyn
   expect(screen.getByText('Eventos de distribución de alertas')).toBeTruthy();
   expect(screen.getByText('1 registros')).toBeTruthy();
 });
+it('shows safe conversation context provenance for a clarification without implying ML evidence', async () => {
+  send.mockResolvedValue({ success: true, data: { ...response, answer: 'No puedo consultar una predicción diaria para ayer.',
+    intent: 'ml_daily_granularity_clarification', actions: [], evidence: [],
+    contextProvenance: { sourceType: 'conversation_context', entityType: 'product',
+      label: 'Producto M5-FOODS_3_511 y fecha 9 de octubre de 2026 resueltos desde el contexto conversacional; no se consultó ML.' } } });
+  render(<AssistantPage />); submit('¿Cuál es la predicción de ayer?');
+  await screen.findByText(/No puedo consultar una predicción diaria/);
+  expect(screen.getByText('Contexto conversacional · producto')).toBeTruthy();
+  expect(screen.getByText(/no se consultó ML/)).toBeTruthy();
+  expect(screen.queryByText('Sin evidencia de datos para esta respuesta.')).toBeNull();
+});
 it('navigates five visible candidates with real totals and starts refinement in the same conversation', async () => {
   const page = (offset: number): AgentResponse => ({ ...response, answer: `Opciones ${offset}`, suggestionsExpiresAt: Date.now() + 120000,
     suggestionsPagination: { query: 'food', offset, limit: 5, totalMatches: 28, hasMore: offset < 25, hasPrevious: offset > 0 },

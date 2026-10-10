@@ -57,7 +57,9 @@ export interface AgentEvidence {
 export interface AgentResponse {
   suggestions?: { label: string; message: string; detail?: string }[];
   suggestionsEntityType?: 'product' | 'supplier' | 'customer';
-  contextProvenance?: { sourceType: 'candidate_snapshot'; entityType: 'supplier'; query: string; page: number; pageSize: number; totalMatches: number };
+  contextProvenance?:
+    | { sourceType: 'candidate_snapshot'; entityType: 'supplier'; query: string; page: number; pageSize: number; totalMatches: number }
+    | { sourceType: 'conversation_context'; entityType: 'product'; label: string };
   suggestionsExpiresAt?: number;
   suggestionsPagination?: { query: string; offset: number; limit: 5; totalMatches: number; hasMore: boolean; hasPrevious: boolean };
   pendingAction?: PendingActionPreview;

@@ -42,7 +42,9 @@ const routeForecastTemporalQuery = (message, memory, now, businessId) => {
     if (!product) return { intent: 'ml_daily_granularity_clarification', agent: 'coordinator',
       clarificationQuestion: `¿De qué producto deseas consultar la predicción de ${requestedPastDay} (${dateLabel(requestedPastDate)})?` };
     return { intent: 'ml_daily_granularity_clarification', agent: 'coordinator',
-      clarificationQuestion: `No puedo consultar una predicción diaria de ${product} para ${requestedPastDay} (${dateLabel(requestedPastDate)}). El modelo disponible ofrece un forecast histórico agregado de 7 días, no un valor diario para esa fecha.` };
+      clarificationQuestion: `No puedo consultar una predicción diaria de ${product} para ${requestedPastDay} (${dateLabel(requestedPastDate)}). El modelo disponible ofrece un forecast histórico agregado de 7 días, no un valor diario para esa fecha.`,
+      contextProvenance: { sourceType: 'conversation_context', entityType: 'product',
+        label: `Producto ${product} y fecha ${dateLabel(requestedPastDate)} resueltos desde el contexto conversacional; no se consultó ML.` } };
   }
   if (!forecastQuestion && !futureSalesQuestion && !(relativeFuture && ['demand_forecast', 'ml_analytics', 'forecast_risk_explanation'].includes(memory.lastIntent))) return null;
 

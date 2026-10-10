@@ -528,6 +528,59 @@ test('basic product detail questions use get_product_details deterministically w
   assert.match(result.answer, /producto está activo/);
 });
 
+test('explicitly named product detail overrides remembered product; ambiguous or missing names never fall back to memory', async () => {
+  const prior = { ...product(1), sku: 'M5-FOODS_3_511', name: 'Producto anterior', stock: 2 };
+  const explicit = { ...product(2), sku: 'SKU-210', name: 'Foods 210', stock: 20 };
+  const f = fixture({ products: [prior, explicit] });
+  const conversationId = randomUUID();
+  await f.run('¿Cuánto stock tiene M5-FOODS_3_511?', conversationId);
+  const named = await f.run('¿Cuánto stock tiene el foods 210?', conversationId);
+  assert.equal(named.code, null);
+  assert.deepEqual(named.actions.map(action => action.skillId), ['search_products', 'get_product_details']);
+  assert.match(named.answer, /Foods 210\) tiene 20 unidades disponibles/);
+  assert.doesNotMatch(named.answer, /Producto anterior|M5-FOODS_3_511/);
+  assert.equal(named.usage.totalLlmCalls, 0); assert.equal(named.usage.totalTokens, 0);
+
+  const ambiguous = fixture({ products: [prior, explicit, { ...explicit, _id: id(4), id: id(4), sku: 'SKU-211', name: 'Foods 210 Nuevo' }] });
+  await ambiguous.run('¿Cuánto stock tiene M5-FOODS_3_511?', conversationId);
+  const needsChoice = await ambiguous.run('¿Cuánto stock tiene foods 210?', conversationId);
+  assert.equal(needsChoice.requiresClarification, true);
+  assert.match(needsChoice.answer, /varias coincidencias/i);
+  assert.match(needsChoice.answer, /Foods 210.*SKU-210/);
+  assert.match(needsChoice.answer, /Foods 210 Nuevo.*SKU-211/);
+  assert.doesNotMatch(needsChoice.answer, /M5-FOODS_3_511/);
+  assert.equal(needsChoice.usage.totalLlmCalls, 0); assert.equal(needsChoice.usage.totalTokens, 0);
+  assert.deepEqual(needsChoice.actions.map(action => action.skillId), ['search_products']);
+
+  const missing = fixture({ products: [prior] });
+  await missing.run('¿Cuánto stock tiene M5-FOODS_3_511?', conversationId);
+  const notFound = await missing.run('¿Cuánto stock tiene foods 210?', conversationId);
+  assert.equal(notFound.requiresClarification, true);
+  assert.match(notFound.answer, /No encontré productos que coincidan/i);
+  assert.doesNotMatch(notFound.answer, /M5-FOODS_3_511|Producto anterior/);
+  assert.equal(notFound.usage.totalLlmCalls, 0); assert.equal(notFound.usage.totalTokens, 0);
+  assert.deepEqual(notFound.actions.map(action => action.skillId), ['search_products']);
+});
+
+test('single-day Spanish sales queries use deterministic summary without synthesis', async () => {
+  const now = () => new Date('2026-10-10T12:00:00Z');
+  for (const [history, expected] of [
+    [[], /No se registraron ventas completadas durante el 9 de octubre de 2026\./],
+    [undefined, /Durante el 9 de octubre de 2026 registraste 1 venta completada, con 7 unidades vendidas/]
+  ]) {
+    const f = fixture({ now, ...(history ? { businessHistory: history } : {}) });
+    const plan = routeDeterministically('¿Cuántas ventas hubo el 9 de octubre de 2026?', {}, now());
+    assert.equal(plan.intent, 'sales_summary');
+    assert.deepEqual(plan.period, { startDate: '2026-10-09', endDate: '2026-10-09' });
+    const result = await f.run('¿Cuántas ventas hubo el 9 de octubre de 2026?');
+    assert.equal(result.code, null);
+    assert.deepEqual(result.actions.map(action => action.skillId), ['get_sales_summary']);
+    assert.match(result.answer, expected);
+    assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
+    assert.equal(f.calls.length, 0);
+  }
+});
+
 test('prediction of yesterday clarifies without product search and reuses unambiguous product context', async () => {
   const f = fixture();
   const conversationId = randomUUID();
@@ -550,6 +603,8 @@ test('prediction of yesterday clarifies without product search and reuses unambi
   assert.equal(contextual.usage.totalLlmCalls, 0);
   assert.equal(withContext.reads.some(read => read.model === 'Product'), false);
   assert.equal(withContext.calls.length, 0);
+  assert.deepEqual(contextual.contextProvenance, { sourceType: 'conversation_context', entityType: 'product',
+    label: 'Producto M5-FOODS_3_511 y fecha 19 de enero de 2025 resueltos desde el contexto conversacional; no se consultó ML.' });
 });
 
 test('unsupported confidence and monetary-loss questions return useful limitations at zero LLM and do not alter cost/forecast routes', async () => {

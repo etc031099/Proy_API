@@ -1,5 +1,6 @@
 const { isDate } = require('./contracts');
 const { productListFollowupType, resolveProductListFollowup } = require('./productListFollowups');
+const { parseRequestedDate } = require('./forecastRouting');
 
 const normalize = value => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 const tenantScopeViolation = message => {
@@ -77,6 +78,15 @@ const previousEqualPeriod = period => {
 const clarify = question => ({ intent: 'ambiguous_query', agent: 'coordinator', clarificationQuestion: question });
 const canonicalProductSku = message => message.match(/\bM5-[A-Z]+_\d+_\d+\b/i)?.[0]
   || message.match(/\bSKU\s+([\w.-]{1,100})\b/i)?.[1];
+const explicitProductDetailQuery = message => {
+  const text = normalize(message).replace(/[¿?¡!]/g, '').trim();
+  const target = text.match(/\b(?:cuanto|cuanta)\s+(?:stock|inventario|precio|minimo)\s+(?:tiene|cuesta|es)\s+(?:el\s+)?(?:producto\s+)?(.+?)\s*$/)?.[1]
+    || text.match(/\b(?:cual\s+es\s+)?(?:el\s+)?(?:precio|stock|minimo)\s+(?:de|del|para)\s+(?:el\s+)?(?:producto\s+)?(.+?)\s*$/)?.[1];
+  if (!target || canonicalProductSku(message)) return null;
+  const cleaned = target.replace(/[.,;:]+$/, '').trim();
+  if (!cleaned || /^(?:ese|este|aquel|su|mismo|misma)\b/.test(cleaned)) return null;
+  return cleaned;
+};
 const productReferenceFollowup = (message, memory = {}) => {
   const text = normalize(message).replace(/[¿?¡!]/g, '').trim();
   if (canonicalProductSku(message) || /\bSKU-[\w.-]{1,100}\b/i.test(message)) return null;
@@ -297,6 +307,9 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
     return { intent: 'replenishment_plan_followup', agent: 'coordinator', followupType,
       ...(productRef ? { productRef } : {}) };
   }
+  const explicitProductQuery = explicitProductDetailQuery(message);
+  if (explicitProductQuery) return { intent: 'product_details', agent: 'operations', lookupQuery: explicitProductQuery, limit: 1,
+    explicitEntity: true };
   const productReference = productReferenceFollowup(message, memory);
   if (productReference) return productReference;
   const compound = routeCompoundProductList(message);
@@ -409,6 +422,8 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   const forecastPlan = require('./forecastRouting').routeForecastAnalytics(message, memory, now, businessId);
   if (forecastPlan) return forecastPlan;
   const dates = message.match(/\d{4}-\d{2}-\d{2}/g);
+  const parsedNaturalDate = !dates && /\b\d{1,2}\s+de\s+[a-z]+\s+de\s+20\d{2}\b/i.test(text)
+    ? parseRequestedDate(text) : null;
   const explicitRelativePeriod = relativeSalesPeriod(text, now);
   const periodFollowupText = text.replace(/[¿?¡!.]/g, '').trim();
   const periodOnlyFollowup = /^(?:y\s+)?(?:hoy|ayer|anteayer|ultimos?\s+(?:7|30)\s+dias)$/.test(periodFollowupText);
@@ -427,7 +442,9 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
     return clarify('Indica un periodo válido, como hoy, ayer, anteayer, últimos 7 días, esta semana o este mes.');
   }
   if (dates && (dates.length !== 2 || !dates.every(isDate) || dates[0] > dates[1])) return clarify('Indica un periodo válido con dos fechas YYYY-MM-DD.');
-  const explicitPeriod = dates ? { startDate: dates[0], endDate: dates[1] } : explicitRelativePeriod;
+  if (!dates && /\b\d{1,2}\s+de\s+[a-z]+\s+de\s+20\d{2}\b/i.test(text) && !parsedNaturalDate) return clarify('No pude validar esa fecha. Indícala con día, mes y año.');
+  const explicitPeriod = dates ? { startDate: dates[0], endDate: dates[1] }
+    : parsedNaturalDate ? { startDate: parsedNaturalDate, endDate: parsedNaturalDate } : explicitRelativePeriod;
   const period = explicitPeriod || (memory.lastPeriodExplicit === true ? memory.lastPeriod : undefined) || monthPeriod(now);
   if (/\b(crea|crear|compra|comprar|borra|elimina|editar|actualiza|cancelar)\b|shell|ejecuta codigo|mongo query|ignora.*instruccion|api.?key|password|jwt/.test(text)) {
     return { intent: 'unsupported', agent: 'coordinator' };
@@ -467,7 +484,7 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   if (isLowStockQuery(inventoryText)) plan = { intent: 'low_stock', agent: 'operations' };
   else if (/transacciones.*(ultim|recient)|(ultim|recient).*transacciones/.test(text)) plan = { intent: 'recent_transactions', agent: 'operations' };
   else if (/mas vendidos|mayores ventas|se venden mas/.test(text)) plan = { intent: 'top_selling_products', agent: 'analyst' };
-  else if (/\b(?:vendimos|ventas? del mes|ventas?|vendi)\b/.test(text)
+  else if (/\b(?:vendimos|ventas?|vendi|cuantas? ventas?|cuanto.*vendid[oa])\b/.test(text)
     && (explicitPeriod || /\b(?:vendimos|ventas del mes)\b/.test(text))) plan = { intent: 'sales_summary', agent: 'operations' };
   else if (/vendio|cuanto.*vendido/.test(text)) plan = { intent: 'product_sales_summary', agent: 'operations', needsProduct: true };
   else if (/explica|por que/.test(text) && /repon|reposicion/.test(text)) plan = { intent: 'explain_replenishment', agent: 'analyst', needsProduct: true };
