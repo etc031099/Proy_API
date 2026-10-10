@@ -6,7 +6,7 @@ const { classifyAgentIntent } = require('./routing');
 const { executeRequestedSkill } = require('./toolCalls');
 const { createConversationMemory } = require('./memory');
 const { routeDeterministically, clarify } = require('./intentRouting');
-const { buildSkillAnswer, llmObservation, safeText, replenishmentExplanation, budgetPlanExplanation, productCountAnswer } = require('./responses');
+const { buildSkillAnswer, buildCheapestSupplierAnswer, llmObservation, safeText, replenishmentExplanation, budgetPlanExplanation, productCountAnswer } = require('./responses');
 const { buildSynthesisInput, buildNarrativeSynthesisInput, validateNarrativeSynthesis, renderNarrativeSynthesis, renderNarrativeFallback } = require('./synthesis');
 const { normalizeSupplier, resolveSupplier } = require('./replenishmentPlanning');
 const { SUPPLIER_SELECTION_TTL_MS, contextBinding } = require('./memory');
@@ -217,6 +217,11 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
               if (result.status === 'CLARIFICATION') plan.clarificationQuestion = result.metadata.clarificationQuestion;
               break;
             }
+            case 'cheapest_supplier': {
+              const result = await run('analyst', 'compare_supplier_costs', plan.args);
+              if (result.status === 'CLARIFICATION') plan.clarificationQuestion = result.metadata.clarificationQuestion;
+              break;
+            }
             case 'replenishment_plan_explanation': {
               if (plan.useMemoryPlan) {
                 const saved = state.lastReplenishmentPlan?.conversationId === conversationId
@@ -357,6 +362,11 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             sections = [];
           }
           if (plan.supplierSelectedName) answer = `Seleccionaste ${plan.supplierSelectedName}.\n${answer}`;
+          if (plan.intent === 'cheapest_supplier') {
+            const comparison = [...results].reverse().find(({ skillId }) => skillId === 'compare_supplier_costs')?.result;
+            if (comparison) answer = buildCheapestSupplierAnswer(comparison);
+            sections = [];
+          }
           const productSkills = ['search_products', 'get_product_details', 'get_low_stock_products', 'get_top_selling_products',
             'get_product_sales_summary', 'get_demand_forecast', 'get_replenishment_candidates', 'analyze_demand_forecast'];
           const productResult = [...results].reverse().find(({ skillId }) => productSkills.includes(skillId));

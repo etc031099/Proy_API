@@ -172,6 +172,100 @@ test('inventory routing precedence preserves textual product search and priority
   assert.equal(routeDeterministically('¿Qué productos debería reponer?', {}, clock()).intent, 'replenishment_candidates');
   assert.equal(routeDeterministically('Tengo S/ 1000, ¿qué productos debería comprar primero?', {}, clock()).skillId, 'plan_replenishment_budget');
   assert.equal(routeDeterministically('¿Qué productos vende el proveedor 055 foods?', {}, clock()).intent, 'supplier_products');
+  assert.equal(routeDeterministically('q vende 55 food', {}, clock()).skillId, 'get_supplier_products');
+  assert.equal(routeDeterministically('producto 511', {}, clock()).intent, 'search_product');
+  for (const query of ['Compara la demanda de M5-FOODS_3_511 y M5-FOODS_3_491.',
+    'Compara M5-FOODS_3_511 con M5-FOODS_3_491.']) {
+    const plan = routeDeterministically(query, {}, clock());
+    assert.equal(plan.intent, 'ml_analytics', query);
+    assert.deepEqual({ mode: plan.analyticsArgs.mode, first: plan.analyticsArgs.first, second: plan.analyticsArgs.second },
+      { mode: 'compare', first: 'M5-FOODS_3_511', second: 'M5-FOODS_3_491' }, query);
+  }
+  for (const query of ['¿Quién provee M5-FOODS_3_511?', 'proveedor de M5-FOODS_3_511']) {
+    const plan = routeDeterministically(query, {}, clock());
+    assert.equal(plan.skillId, 'compare_supplier_costs', query);
+    assert.equal(plan.args.productRef, 'M5-FOODS_3_511', query);
+  }
+  const cheapest = routeDeterministically('¿Qué proveedor es más barato para M5-FOODS_3_511?', {}, clock());
+  assert.equal(cheapest.intent, 'cheapest_supplier');
+  assert.equal(cheapest.skillId, 'compare_supplier_costs');
+  assert.deepEqual(cheapest.args, { productRef: 'M5-FOODS_3_511' });
+});
+
+test('forecast comparison extracts explicit SKUs regardless of semantic words around them', async () => {
+  const skus = ['M5-FOODS_3_511', 'M5-FOODS_3_491'];
+  const products = skus.map((sku, index) => ({ productId: id(index + 1), sku, name: `Producto ${index + 1}`,
+    mlStatus: 'READY', predictedDemand7d: index ? 5 : 12, stockAtAnchor: 3, salesLast7Days: 2,
+    safetyStock: 2, recommendedQty: index ? 5 : 12, inventoryStatus: 'REPONER' }));
+  const f = fixture({ forecastService: { getDemandForecast: async () => ({ status: 'READY',
+    anchorOperationalDate: '2025-07-01', products, model: { horizonDays: 7 } }) } });
+  const result = await f.run('Compara la demanda de M5-FOODS_3_511 y M5-FOODS_3_491.');
+  assert.equal(result.code, null);
+  assert.equal(result.intent, 'ml_analytics');
+  assert.deepEqual(result.actions.map(action => action.skillId), ['analyze_demand_forecast']);
+  assert.equal(result.usage.totalSkillCalls, 1);
+  assert.equal(result.usage.totalLlmCalls, 0);
+  assert.equal(result.usage.totalTokens, 0);
+  assert.match(result.answer, /M5-FOODS_3_511/);
+  assert.match(result.answer, /M5-FOODS_3_491/);
+  assert.equal(result.evidence[0].recordCount, 2);
+});
+
+test('open inventory plus forecast problem query gets one grounded Analyst synthesis, not a product list', async () => {
+  const provider = { generateStructured: async input => {
+    const payload = JSON.parse(input.messages[0].text);
+    return generated({ observations: [{ evidenceRefs: payload.evidence.map(item => item.ref),
+      interpretation: 'La demanda prevista supera el stock de un producto READY, mientras otros aparecen en REPONER dentro del escenario consultado.',
+      advisoryRecommendation: 'Revisa estas señales junto con la fecha de corte antes de tomar decisiones.' }],
+    limitations: ['El escenario es histórico y no incorpora cambios posteriores.'] });
+  } };
+  const f = fixture({ provider });
+  const result = await f.run('Explícame los principales problemas que observas en el inventario y la predicción.');
+  assert.equal(result.code, null);
+  assert.equal(result.intent, 'inventory_interpretation');
+  assert.equal(result.synthesisStatus, 'SUCCESS');
+  assert.equal(result.agent, 'analyst');
+  assert.equal(result.usage.totalLlmCalls, 1);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].input.agentId, 'analyst');
+  assert.deepEqual(result.actions.map(action => action.skillId), ['get_business_summary', 'get_low_stock_products',
+    'analyze_demand_forecast', 'analyze_demand_forecast']);
+  assert.match(result.answer, /1 de julio de 2025/);
+  assert.doesNotMatch(result.answer, /no encontré predicciones disponibles/i);
+});
+
+test('product-to-supplier routes use offers for the SKU and explicitly cheapest means minimum unit cost', async () => {
+  const sku = 'M5-FOODS_3_511', supplierPreferred = id(80), supplierCheapest = id(81);
+  const productRow = { ...product(101), sku, name: 'Arroz de demostración', currency: 'PEN',
+    supplierPrices: [{ supplierId: supplierPreferred, purchasePrice: 8.5 },
+      { supplierId: supplierCheapest, purchasePrice: 5.25 }], preferredSupplierId: supplierPreferred };
+  const forecastService = { getDemandForecast: async () => ({ status: 'READY', anchorOperationalDate: '2025-07-01',
+    products: [{ productId: id(101), sku, name: productRow.name, mlStatus: 'READY', predictedDemand7d: 12,
+      stockAtAnchor: 2, salesLast7Days: 4, safetyStock: 2.4, recommendedQty: 13, inventoryStatus: 'REPONER' }] }) };
+  const contacts = [
+    { _id: supplierPreferred, businessId: 'A', name: 'Proveedor Preferido', type: 'vendor', isActive: true },
+    { _id: supplierCheapest, businessId: 'A', name: 'Proveedor Económico', type: 'vendor', isActive: true }
+  ];
+  for (const query of ['¿Quién provee M5-FOODS_3_511?', 'proveedor de M5-FOODS_3_511']) {
+    const f = fixture({ products: [productRow], contacts, forecastService });
+    const result = await f.run(query);
+    assert.equal(result.code, null, query);
+    assert.equal(result.usage.totalLlmCalls, 0, query);
+    assert.equal(result.usage.totalTokens, 0, query);
+    assert.equal(result.actions[0].skillId, 'compare_supplier_costs', query);
+    assert.match(result.answer, /Proveedor Preferido/, query);
+    assert.match(result.answer, /Proveedor Económico/, query);
+    assert.doesNotMatch(result.answer, /precio de venta|stock actual/, query);
+  }
+  const f = fixture({ products: [productRow], contacts, forecastService });
+  const cheapest = await f.run('¿Qué proveedor es más barato para M5-FOODS_3_511?');
+  assert.equal(cheapest.code, null);
+  assert.equal(cheapest.intent, 'cheapest_supplier');
+  assert.equal(cheapest.actions[0].skillId, 'compare_supplier_costs');
+  assert.equal(cheapest.usage.totalLlmCalls, 0);
+  assert.equal(cheapest.usage.totalTokens, 0);
+  assert.match(cheapest.answer, /Proveedor Económico: 5[.,]25 PEN por unidad/);
+  assert.doesNotMatch(cheapest.answer, /Proveedor Preferido es el proveedor más barato/);
 });
 
 test('generic top-selling uses all completed history even after a current-month sales query', async () => {

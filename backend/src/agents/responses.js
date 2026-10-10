@@ -193,6 +193,16 @@ const buildSkillAnswer = (skillId, result) => {
   return [header, ...lines, forecastSkill ? historicalNote(displayed, metadata) : '', listFooter(metadata, displayed.length)].filter(Boolean).join('\n');
 };
 
+const buildCheapestSupplierAnswer = result => {
+  const offers = Array.isArray(result?.data) ? result.data.filter(row => Number.isFinite(row.unitCost) && row.unitCost >= 0) : [];
+  if (!offers.length) return 'No encontré ofertas activas y válidas en PEN para ese producto.';
+  const cheapest = [...offers].sort((a, b) => a.unitCost - b.unitCost
+    || Number(b.preferred === true) - Number(a.preferred === true)
+    || String(a.supplier).localeCompare(String(b.supplier)))[0];
+  const row = offers[0];
+  return `La oferta válida de menor costo para ${row.sku} (${row.productName}) es ${cheapest.supplier}: ${money(cheapest.unitCost)} ${cheapest.currency} por unidad.${cheapest.preferred ? ' También es el proveedor preferido configurado.' : ''} Precio configurado consultado: ${result.metadata.pricingAsOf ? dateTimeLabel(result.metadata.pricingAsOf) : 'fecha no disponible'}; no es una cotización confirmada.`;
+};
+
 // Bound and redact the facts sent for LLM selection. IDs and raw documents are omitted.
 const safeText = value => String(value).replace(/@[a-z\d.-]+\.[a-z]{2,}|\b\d{9,15}\b|\b[a-f\d]{24,}\b|\bBearer\s+\S+|AIza[\w-]{20,}/gi, '[omitido]').slice(0, 120);
 const llmObservation = (skillId, result) => {
@@ -213,4 +223,4 @@ const llmObservation = (skillId, result) => {
       inventoryBasis: result.metadata.inventoryBasis, asOf: result.metadata.asOf } : {}) };
 };
 
-module.exports = { buildSkillAnswer, llmObservation, safeText, replenishmentExplanation, budgetPlanExplanation, productCountAnswer };
+module.exports = { buildSkillAnswer, buildCheapestSupplierAnswer, llmObservation, safeText, replenishmentExplanation, budgetPlanExplanation, productCountAnswer };

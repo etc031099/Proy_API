@@ -26,6 +26,10 @@ const routeForecastAnalytics = (message, memory) => {
     return make({ ...previous, limit: top ? limit : previous.limit, offset: previous.offset + previous.limit });
   }
   if (previous?.mode === 'compare' && /cual.*(comprar primero|reponer primero|mayor demanda|estos dos)/.test(text)) return make(previous);
+  const explicitSkus = message.match(/\bM5-[A-Z]+_\d+_\d+\b/gi) || [];
+  if (explicitSkus.length >= 2 && /\b(?:compara|comparar|versus|vs\.?|contra)\b/i.test(text)) {
+    return make({ mode: 'compare', first: explicitSkus[0], second: explicitSkus[1] });
+  }
   const comparison = message.match(/\bcompara(?:r)?\s+(?:(?:el )?producto\s+)?(.+?)\s+(?:con|y)\s+(?:(?:el )?producto\s+)?(.+?)[?.!]*$/i);
   if (comparison) return make({ mode: 'compare', first: comparison[1].trim(), second: comparison[2].trim() });
   if (/cual.*estos dos.*(demanda|prediccion)/.test(text)) return previous?.mode === 'compare' ? make(previous)

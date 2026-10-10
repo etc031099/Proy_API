@@ -18,10 +18,24 @@ const monthPeriod = (now, previous = false) => {
     endDate: new Date(Date.UTC(now.getUTCFullYear(), month + 1, 0)).toISOString().slice(0, 10) };
 };
 const clarify = question => ({ intent: 'ambiguous_query', agent: 'coordinator', clarificationQuestion: question });
+const canonicalProductSku = message => message.match(/\bM5-[A-Z]+_\d+_\d+\b/i)?.[0]
+  || message.match(/\bSKU\s+([\w.-]{1,100})\b/i)?.[1];
+const routeProductSupplierLookup = message => {
+  const sku = canonicalProductSku(message);
+  if (!sku) return null;
+  const text = normalize(message);
+  // An explicitly named supplier followed by "provee SKU" is supplier -> product.
+  if (/\bproveedor\s+.+\s+provee\b/.test(text)) return null;
+  const asksWhoSupplies = /\b(?:quien|quienes|que proveedores?|cuales proveedores?|proveedor(?:es)? de|provee|proveen|me vende)\b/.test(text);
+  if (!asksWhoSupplies) return null;
+  return { intent: 'replenishment_commercial', agent: 'analyst', skillId: 'compare_supplier_costs',
+    args: { productRef: sku } };
+};
 const routeSupplierProducts = (message, memory = {}) => {
   const text = normalize(message);
+  const shortSupplierQuestion = /^\s*q\s+vende\s+(?=.*[a-z]).+$/i.test(text);
   // Transactional sale language belongs to AUTO-R2.5, even if a product name happens to be “food”.
-  if (/\bvende\s+\d+\b/.test(text)) return null;
+  if (/\bvende\s+\d+\b/.test(text) && !shortSupplierQuestion) return null;
   const asksOfferRelationship = /\b(?:provee|proveen|ofrece|ofrecen)\b/.test(text)
     && /\b(?:que|q|cual|cuales|producto|productos|sku)\b/.test(text);
   const asksSupplierInventory = /\bproveedor\b/.test(text)
@@ -31,10 +45,11 @@ const routeSupplierProducts = (message, memory = {}) => {
   const productsOf = Boolean(productsOfMatch && (memory.lastSupplier || /\d/.test(productsOfMatch[1])
     || /\b(?:proveedor|supplier|distribuidora|distribuciones|comercial|sac|srl)\b/i.test(productsOfMatch[1])));
   if (/\b(?:compara|comparar)\b/.test(text) || /\bque proveedor deberia usar\b/.test(text)) return null;
-  if (!asksOfferRelationship && !asksSupplierInventory && !productsOf) return null;
+  if (!asksOfferRelationship && !asksSupplierInventory && !productsOf && !shortSupplierQuestion) return null;
 
   const sku = message.match(/\b(?:M5-[A-Z]+_\d+_\d+|SKU\s+[\w.-]{1,100})\b/i)?.[0]?.replace(/^SKU\s+/i, '');
   const explicitSupplier = message.match(/\bproveedor\s+(.+?)(?=\s+(?:q|que)\s+productos?|\s+(?:producto|productos|provee|proveen|vende|ofrece)\b|[?!.]|$)/i)?.[1]?.trim()
+    || message.match(/\bq\s+vende\s+(.+?)[?!.]*$/i)?.[1]?.trim()
     || message.match(/\bproductos?\s+(?:que\s+)?(?:provee|proveen|vende|ofrece|ofrecen)\s+(?:(?:el|la)\s+)?(?:proveedor\s+)?(.+?)(?=[?!.]|$)/i)?.[1]?.trim()
     || message.match(/\b(?:ofrece|vende)\s+(?:el\s+)?proveedor\s+(.+?)(?=[?!.]|$)/i)?.[1]?.trim()
     || message.match(/\bproductos?\s+de\s+(?:(?:el|la)\s+)?(?:proveedor\s+)?(.+?)(?=[?!.]|$)/i)?.[1]?.trim();
@@ -49,20 +64,22 @@ const routeCommercial = (message, memory = {}) => {
   const text = normalize(message);
   if (/shell|ejecuta codigo|mongo query|ignora.*instruccion|api.?key|password|jwt|system prompt/.test(text)) return null;
   const sku = message.match(/\bM5-[A-Z]+_\d+_\d+\b/i)?.[0];
+  const asksSupplierComparison = /proveedor/.test(text)
+    && /que proveedor|cual proveedor|usar|conviene|barat|compar/.test(text);
+  const asksCheapestSupplier = asksSupplierComparison && /barat|menor costo|mas economico/.test(text);
   const explicitSupplier = message.match(/\b(?:con|usando)\s+(?:el\s+)?(?:proveedor|supplier)\s+(.+?)(?=\s+(?:para|por)\s+(?:reponer|el producto)|[?!.]|$)/i)?.[1]?.trim()
-    || message.match(/\bproveedor\s+(?!deber[ií]a\b|debe\b|usar\b|conviene\b)(.+?)(?=\s+(?:para|por)\s+(?:reponer|el producto)|[?!.]|$)/i)?.[1]?.trim()
+    || (!asksSupplierComparison ? message.match(/\bproveedor\s+(?!deber[ií]a\b|debe\b|usar\b|conviene\b)(.+?)(?=\s+(?:para|por)\s+(?:reponer|el producto)|[?!.]|$)/i)?.[1]?.trim() : null)
     || message.match(/\b(?:con|usando)\s+(?:el|la)\s+(.+?)(?=\s+(?:para|por)\s+(?:reponer|el producto)|[?!.]|$)/i)?.[1]?.trim();
   const currency = /\bUSD|\$|dolares?\b/i.test(message) ? 'USD'
     : /\bEUR|€|euros?\b/i.test(message) ? 'EUR' : /\bS\s*\/|\bPEN\b/i.test(message) ? 'PEN' : null;
   const department = message.match(/\b(?:FOODS|HOBBIES|HOUSEHOLD)_\d+\b/i)?.[0]?.toUpperCase();
   const make = (skillId, args) => ({ intent: 'replenishment_commercial', agent: 'analyst', skillId, args });
-  const asksSupplierComparison = /proveedor/.test(text)
-    && /que proveedor|cual proveedor|usar|conviene|barat|compar/.test(text);
   if (asksSupplierComparison) {
     const productRef = sku || (/este producto|ese producto|este sku/.test(text) ? memory.lastEntity?.sku : null);
     if (!productRef) return { intent: 'replenishment_budget_required', agent: 'coordinator',
       clarificationQuestion: 'Indica el SKU del producto para comparar sus proveedores configurados.' };
-    return make('compare_supplier_costs', { productRef, ...(explicitSupplier ? { supplierRef: explicitSupplier } : {}) });
+    return { ...make('compare_supplier_costs', { productRef, ...(explicitSupplier ? { supplierRef: explicitSupplier } : {}) }),
+      ...(asksCheapestSupplier ? { intent: 'cheapest_supplier' } : {}) };
   }
   const amountMatch = message.match(/(?:S\s*\/|PEN|USD|EUR|\$|€)\s*([\d.,]+)/i);
   const hasBudgetIntent = /tengo|presupuesto|que puedo reponer|que productos deberia comprar|que debo comprar/.test(text);
@@ -116,10 +133,12 @@ const ordinalReference = text => {
 
 /** High-confidence routing only. Unrecognized language is delegated, never guessed. */
 const routeDeterministically = (message, memory, now, conversationId, scopeBinding) => {
-  const supplierProducts = routeSupplierProducts(message, memory);
-  if (supplierProducts) return supplierProducts;
   const commercialPlan = routeCommercial(message, memory);
   if (commercialPlan) return commercialPlan;
+  const productSupplierLookup = routeProductSupplierLookup(message);
+  if (productSupplierLookup) return productSupplierLookup;
+  const supplierProducts = routeSupplierProducts(message, memory);
+  if (supplierProducts) return supplierProducts;
   const text = normalize(message);
   const inventoryText = normalizeBasicInventory(message);
   // Specific inventory questions must win before the broad generic product fallback.
@@ -142,9 +161,13 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
     return clarify('No tengo una referencia clara de cuáles son “estos productos”. ¿Te refieres al último plan o lista que vimos, o a otros productos?');
   }
   const hasForecastLanguage = /prediccion|forecast|demanda|ml/.test(text);
+  const asksOpenInventoryAnalysis = /inventario|stock/.test(text) && hasForecastLanguage
+    && /problema|observas|conclusion|analiza|analisis|explicame|explica|preocupar/.test(text);
   if (/riesgo|riesgos|preocupar|alerta/.test(text) && hasForecastLanguage && /stock|inventario|prediccion|forecast|demanda/.test(text)) {
     return { intent: 'forecast_risk_explanation', agent: 'analyst', narrativeSynthesis: true };
   }
+  if (asksOpenInventoryAnalysis) return { intent: 'inventory_interpretation', agent: 'analyst',
+    narrativeSynthesis: true, inventoryOnly: true, includeForecast: true };
   if (/resumen ejecutivo/.test(text) && /inventario|stock/.test(text)) {
     return { intent: 'executive_inventory_summary', agent: 'analyst', narrativeSynthesis: true, inventoryOnly: true };
   }
