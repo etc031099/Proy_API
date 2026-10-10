@@ -447,6 +447,56 @@ test('natural week periods use bounded operational dates and causal sales compar
   assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0); assert.equal(f.calls.length, 0);
 });
 
+test('short relative sales periods are deterministic UTC calendar ranges and distinct from the current week', async () => {
+  const now = () => new Date('2025-01-22T12:00:00Z');
+  const cases = [
+    ['¿Qué pasó con las ventas ayer?', { startDate: '2025-01-21', endDate: '2025-01-21' }],
+    ['¿Cuánto vendí hoy?', { startDate: '2025-01-22', endDate: '2025-01-22' }],
+    ['ventas d ayer', { startDate: '2025-01-21', endDate: '2025-01-21' }],
+    ['q vendi ayer nomas', { startDate: '2025-01-21', endDate: '2025-01-21' }],
+    ['¿Cuánto vendí en los últimos 7 días?', { startDate: '2025-01-16', endDate: '2025-01-22' }],
+    ['¿Cuánto vendí en los últimos 30 días?', { startDate: '2024-12-24', endDate: '2025-01-22' }]
+  ];
+  for (const [query, period] of cases) {
+    const plan = routeDeterministically(query, {}, now());
+    assert.equal(plan.intent, 'sales_summary', query);
+    assert.deepEqual(plan.period, period, query);
+    assert.equal(plan.periodExplicit, true, query);
+    const f = fixture({ now, businessHistory: [] });
+    const result = await f.run(query);
+    assert.equal(result.code, null, query);
+    assert.equal(result.actions[0].skillId, 'get_sales_summary', query);
+    assert.deepEqual(result.evidence[0].period, period, query);
+    assert.match(result.answer, /No se registraron ventas completadas/, query);
+    assert.equal(result.usage.totalLlmCalls, 0, query);
+    assert.equal(result.usage.totalTokens, 0, query);
+  }
+
+  const currentWeek = routeDeterministically('¿Cuánto vendí esta semana?', {}, now());
+  assert.deepEqual(currentWeek.period, { startDate: '2025-01-20', endDate: '2025-01-22' });
+  assert.notDeepEqual(currentWeek.period, routeDeterministically('¿Cuánto vendí en los últimos 7 días?', {}, now()).period);
+  assert.deepEqual(routeDeterministically('¿Qué pasó anteayer?', { lastIntent: 'sales_summary' }, now()).period,
+    { startDate: '2025-01-20', endDate: '2025-01-20' });
+  assert.equal(routeDeterministically('¿Qué pasó anteayer?', {}, now()).intent, 'ambiguous_query');
+  const noSalesContext = await fixture({ now }).run('¿Qué pasó anteayer?');
+  assert.equal(noSalesContext.requiresClarification, true);
+  assert.equal(noSalesContext.usage.totalLlmCalls, 0); assert.equal(noSalesContext.usage.totalSkillCalls, 0);
+
+  const followup = fixture({ now, businessHistory: [] });
+  const conversationId = randomUUID();
+  const first = await followup.run('¿Qué pasó con las ventas ayer?', conversationId);
+  const second = await followup.run('¿Y anteayer?', conversationId);
+  assert.equal(first.usage.totalLlmCalls, 0); assert.equal(second.usage.totalLlmCalls, 0);
+  assert.deepEqual(second.evidence[0].period, { startDate: '2025-01-20', endDate: '2025-01-20' });
+
+  const causal = routeDeterministically('¿Por qué bajaron las ventas ayer?', {}, now());
+  assert.equal(causal.intent, 'sales_causality');
+  assert.deepEqual(causal.period, { startDate: '2025-01-21', endDate: '2025-01-21' });
+  assert.deepEqual(causal.comparisonPeriod, { startDate: '2025-01-20', endDate: '2025-01-20' });
+  const forecastQuestion = routeDeterministically('¿Cuál es la predicción de ayer?', {}, now(), undefined, undefined, 'ML-CLOUD-DEMO-V2');
+  assert.notEqual(forecastQuestion?.intent, 'sales_summary');
+});
+
 test('unsupported confidence and monetary-loss questions return useful limitations at zero LLM and do not alter cost/forecast routes', async () => {
   for (const [query, intent, unsupportedPhrase] of [
     ['¿Cuál es la confianza exacta de la predicción?', 'forecast_confidence', /no expone una confianza exacta/i],

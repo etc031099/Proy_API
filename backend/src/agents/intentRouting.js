@@ -44,6 +44,36 @@ const weekPeriod = (now, weeksAgo = 0, elapsedDays = null) => {
   return { startDate: new Date(monday).toISOString().slice(0, 10), endDate: new Date(end).toISOString().slice(0, 10) };
 };
 const weekElapsedDays = period => Math.round((Date.parse(`${period.endDate}T00:00:00Z`) - Date.parse(`${period.startDate}T00:00:00Z`)) / 86400000);
+// Operational periods share the UTC calendar-day convention used by existing
+// week/month helpers and the sales executor's inclusive UTC date filter.
+const dayPeriod = (now, daysAgo = 0) => {
+  const day = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) - daysAgo * 86400000;
+  const date = new Date(day).toISOString().slice(0, 10);
+  return { startDate: date, endDate: date };
+};
+const rollingPeriod = (now, days) => {
+  const endDate = dayPeriod(now).endDate;
+  const startDate = new Date(Date.parse(`${endDate}T00:00:00Z`) - (days - 1) * 86400000).toISOString().slice(0, 10);
+  return { startDate, endDate };
+};
+const relativeSalesPeriod = (text, now) => {
+  if (/\banteayer\b/.test(text)) return dayPeriod(now, 2);
+  if (/\bayer\b/.test(text)) return dayPeriod(now, 1);
+  if (/\bhoy\b/.test(text)) return dayPeriod(now);
+  if (/\bultimos?\s+7\s+dias\b/.test(text)) return rollingPeriod(now, 7);
+  if (/\bultimos?\s+30\s+dias\b/.test(text)) return rollingPeriod(now, 30);
+  if (/\bsemana pasada|semana anterior\b/.test(text)) return weekPeriod(now, 1);
+  if (/\besta semana\b/.test(text)) return weekPeriod(now);
+  if (/\bmes pasado|mes anterior\b/.test(text)) return monthPeriod(now, true);
+  if (/\beste mes|mes actual\b/.test(text)) return monthPeriod(now);
+  return undefined;
+};
+const previousEqualPeriod = period => {
+  const days = Math.round((Date.parse(`${period.endDate}T00:00:00Z`) - Date.parse(`${period.startDate}T00:00:00Z`)) / 86400000) + 1;
+  const end = Date.parse(`${period.startDate}T00:00:00Z`) - 86400000;
+  return { startDate: new Date(end - (days - 1) * 86400000).toISOString().slice(0, 10),
+    endDate: new Date(end).toISOString().slice(0, 10) };
+};
 const clarify = question => ({ intent: 'ambiguous_query', agent: 'coordinator', clarificationQuestion: question });
 const canonicalProductSku = message => message.match(/\bM5-[A-Z]+_\d+_\d+\b/i)?.[0]
   || message.match(/\bSKU\s+([\w.-]{1,100})\b/i)?.[1];
@@ -265,13 +295,14 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   const asksSalesCausality = /\b(?:por que|caus|motivo)\w*\b/.test(text)
     && /\b(?:baj|disminu|cayer|caid|descend)\w*\b/.test(text) && /\b(?:venta|vend)\w*\b/.test(text);
   if (asksSalesCausality) {
-    if (!/\b(?:esta semana|semana pasada|semana anterior)\b/.test(text)) {
+    const requestedPeriod = relativeSalesPeriod(text, now);
+    if (!requestedPeriod) {
       return { intent: 'sales_causality', agent: 'operations', clarificationQuestion:
-        'Puedo comparar las ventas registradas entre periodos, pero esa comparación no demuestra la causa. Indícame un periodo, como esta semana o este mes.' };
+        'Puedo comparar ventas registradas entre periodos, pero eso no demuestra la causa. Indícame un periodo, como ayer, esta semana o este mes.' };
     }
-    const weeksAgo = /\b(?:semana pasada|semana anterior)\b/.test(text) ? 1 : 0;
-    const requestedPeriod = weekPeriod(now, weeksAgo);
-    const comparisonPeriod = weekPeriod(now, weeksAgo + 1, weekElapsedDays(requestedPeriod));
+    const comparisonPeriod = /\b(?:esta semana|semana pasada|semana anterior)\b/.test(text)
+      ? weekPeriod(now, /\b(?:semana pasada|semana anterior)\b/.test(text) ? 2 : 1, weekElapsedDays(requestedPeriod))
+      : previousEqualPeriod(requestedPeriod);
     return { intent: 'sales_causality', agent: 'operations', period: requestedPeriod, comparisonPeriod, periodExplicit: true };
   }
   const commercialPlan = routeCommercial(message, memory);
@@ -332,14 +363,25 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   const forecastPlan = require('./forecastRouting').routeForecastAnalytics(message, memory, now, businessId);
   if (forecastPlan) return forecastPlan;
   const dates = message.match(/\d{4}-\d{2}-\d{2}/g);
-  const naturalWeek = /\b(?:esta semana|semana pasada|semana anterior)\b/.test(text);
-  if (!dates && /ayer|semana|ano pasado|hoy/.test(text) && /venta|vendi/.test(text) && !naturalWeek) return clarify('Indica un periodo como esta semana, semana pasada, este mes o mes pasado.');
+  const explicitRelativePeriod = relativeSalesPeriod(text, now);
+  const periodFollowupText = text.replace(/[¿?¡!.]/g, '').trim();
+  const periodOnlyFollowup = /^(?:y\s+)?(?:hoy|ayer|anteayer|ultimos?\s+(?:7|30)\s+dias)$/.test(periodFollowupText);
+  const contextualPeriodFollowup = periodOnlyFollowup || /^que paso (?:hoy|ayer|anteayer|ultimos?\s+(?:7|30)\s+dias)$/.test(periodFollowupText);
+  if (contextualPeriodFollowup && ['sales_summary', 'sales_causality', 'recent_transactions', 'product_sales_summary'].includes(memory.lastIntent)) {
+    if (memory.lastIntent === 'product_sales_summary' && !memory.lastEntity) return clarify('¿Qué producto deseas consultar en ese periodo?');
+    return { intent: memory.lastIntent === 'sales_causality' ? 'sales_summary' : memory.lastIntent,
+      agent: memory.lastAgent || 'operations', period: explicitRelativePeriod,
+      ...(memory.lastIntent === 'product_sales_summary' ? { selector: { productId: memory.lastEntity.id } } : {}),
+      ...(memory.lastIntent === 'recent_transactions' ? { ...memory.lastTransactionFilters, periodRequested: true } : {}),
+      periodExplicit: true, limit: memory.listLimit || 5 };
+  }
+  if (contextualPeriodFollowup) return clarify('¿Qué información deseas consultar para ese periodo? Por ejemplo, ventas o transacciones.');
+  if (!dates && /\b(?:ayer|anteayer|semana|ano pasado|hoy|ultimos?\s+(?:7|30)\s+dias)\b/.test(text)
+    && /\b(?:venta\w*|vendi\w*)\b/.test(text) && !explicitRelativePeriod) {
+    return clarify('Indica un periodo válido, como hoy, ayer, anteayer, últimos 7 días, esta semana o este mes.');
+  }
   if (dates && (dates.length !== 2 || !dates.every(isDate) || dates[0] > dates[1])) return clarify('Indica un periodo válido con dos fechas YYYY-MM-DD.');
-  const explicitPeriod = dates ? { startDate: dates[0], endDate: dates[1] }
-    : /semana pasada|semana anterior/.test(text) ? weekPeriod(now, 1)
-      : /esta semana/.test(text) ? weekPeriod(now)
-    : /mes pasado|mes anterior/.test(text) ? monthPeriod(now, true)
-      : /este mes|mes actual/.test(text) ? monthPeriod(now) : undefined;
+  const explicitPeriod = dates ? { startDate: dates[0], endDate: dates[1] } : explicitRelativePeriod;
   const period = explicitPeriod || (memory.lastPeriodExplicit === true ? memory.lastPeriod : undefined) || monthPeriod(now);
   if (/\b(crea|crear|compra|comprar|borra|elimina|editar|actualiza|cancelar)\b|shell|ejecuta codigo|mongo query|ignora.*instruccion|api.?key|password|jwt/.test(text)) {
     return { intent: 'unsupported', agent: 'coordinator' };
@@ -379,7 +421,8 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   if (isLowStockQuery(inventoryText)) plan = { intent: 'low_stock', agent: 'operations' };
   else if (/transacciones.*(ultim|recient)|(ultim|recient).*transacciones/.test(text)) plan = { intent: 'recent_transactions', agent: 'operations' };
   else if (/mas vendidos|mayores ventas|se venden mas/.test(text)) plan = { intent: 'top_selling_products', agent: 'analyst' };
-  else if (/vendimos|ventas del mes|ventas?.*(?:esta semana|semana pasada|semana anterior|este mes|mes pasado|mes anterior)/.test(text)) plan = { intent: 'sales_summary', agent: 'operations' };
+  else if (/\b(?:vendimos|ventas? del mes|ventas?|vendi)\b/.test(text)
+    && (explicitPeriod || /\b(?:vendimos|ventas del mes)\b/.test(text))) plan = { intent: 'sales_summary', agent: 'operations' };
   else if (/vendio|cuanto.*vendido/.test(text)) plan = { intent: 'product_sales_summary', agent: 'operations', needsProduct: true };
   else if (/explica|por que/.test(text) && /repon|reposicion/.test(text)) plan = { intent: 'explain_replenishment', agent: 'analyst', needsProduct: true };
   else if (/repon|reposicion/.test(text)) plan = { intent: 'replenishment_candidates', agent: 'analyst', limit: /mayor|mas reposicion/.test(text) ? 1 : 5 };
