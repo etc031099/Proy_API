@@ -1,5 +1,6 @@
 const { AgentError } = require('./contracts');
 const { performance } = require('node:perf_hooks');
+const { AGENT_ML_HTTP_TIMEOUT_MS } = require('./timeouts');
 
 const escapeLiteral = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const productFields = { _id: 1, sku: 1, name: 1, category: 1, stock: 1, minStockLevel: 1 };
@@ -16,6 +17,12 @@ const listResult = (data, totalMatches, metadata = {}) => ({
   status: data.length ? 'READY' : 'NO_DATA', data,
   metadata: { ...metadata, totalMatches, returnedCount: data.length, truncated: totalMatches > data.length }
 });
+
+const createAgentForecastService = ({ createService, createMlClient } = {}) => {
+  const serviceFactory = createService || require('../services/demandForecastService').createDemandForecastService;
+  const mlClientFactory = createMlClient || require('../services/mlServiceClient').createMlServiceClient;
+  return serviceFactory({ mlClient: mlClientFactory({ timeoutMs: AGENT_ML_HTTP_TIMEOUT_MS }) });
+};
 
 /** Trusted dependency injection for tests; arguments never select a model or query.
  * Each execution owns this factory, so forecast promises are only shared within
@@ -62,7 +69,7 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
     const { args, context } = invocation;
     const key = `${context.businessId}\0${args.productId || 'batch'}`;
     if (!forecastPromises.has(key)) {
-      forecast ||= require('../services/demandForecastService').createDemandForecastService();
+      forecast ||= createAgentForecastService();
       const pending = Promise.resolve().then(() => forecast.getDemandForecast({
         businessId: context.businessId, ...(args.productId ? { productId: args.productId } : {})
       }));
@@ -513,4 +520,4 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
   });
 };
 
-module.exports = { createSkillExecutors };
+module.exports = { createSkillExecutors, createAgentForecastService };

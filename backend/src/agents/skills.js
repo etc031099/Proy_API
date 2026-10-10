@@ -1,5 +1,6 @@
 const { AgentError, deepFreeze, isPlainObject, validateSkillArgs, assertAgentRequestContext } = require('./contracts');
 const { getAgentDefinition } = require('./definitions');
+const { skillTimeoutMs } = require('./timeouts');
 
 const text = maxLength => ({ type: 'string', minLength: 1, maxLength });
 const id = { ...text(24), format: 'object-id' };
@@ -18,17 +19,13 @@ const READY_SKILL_IDS = Object.freeze([
   'get_demand_forecast', 'get_replenishment_candidates', 'get_product_sales_summary', 'analyze_demand_forecast',
   'get_replenishment_cost', 'plan_replenishment_budget', 'compare_supplier_costs', 'get_supplier_products'
 ]);
-// Replenishment's single ML batch exceeded its prior 10 s deadline in production.
-// 25 s accommodates a bounded Render cold start/inference without adding retries.
 const entry = (skillId, description, allowedAgents, inputSchema, maxRecords, dataSensitivity, outputDescription) => ({
   id: skillId, version: '1.0.0', description, readOnly: true, allowedAgents, inputSchema,
   outputSchema: {
     type: 'object', description: outputDescription,
     fields: { data: 'Projected records or summary', metadata: 'Period/asOf, currency when applicable, returnedCount, totalMatches and truncated' }
   },
-  maxRecords, timeoutMs: ['get_replenishment_candidates', 'analyze_demand_forecast', 'get_replenishment_cost',
-    'plan_replenishment_budget', 'compare_supplier_costs'].includes(skillId) ? 25000
-    : skillId.includes('forecast') ? 10000 : 5000,
+  maxRecords, timeoutMs: skillTimeoutMs(skillId),
   dataSensitivity, executorStatus: READY_SKILL_IDS.includes(skillId) ? 'READY' : 'PENDING_IMPLEMENTATION'
 });
 

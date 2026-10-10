@@ -2,6 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createAgentExecution, createAgentRequestContext, AgentError, SKILLS } = require('../src/agents');
 const { withSkillTimeout } = require('../src/agents/execution');
+const { createAgentForecastService } = require('../src/agents/executors');
+const { AGENT_ML_HTTP_TIMEOUT_MS } = require('../src/agents/timeouts');
 
 const id = n => n.toString(16).padStart(24, '0');
 const dates = { startDate: '2025-01-01', endDate: '2025-01-31' };
@@ -458,6 +460,19 @@ test('wall-clock timeout aborts subsequent work without retries or exposing raw 
   assert.equal(signal.aborted, true);
   assert.throws(() => signal.throwIfAborted(), code('AGENT_SKILL_TIMEOUT'));
   assert.equal(calls, 1);
+});
+test('agent forecast client is configured with a bounded 20 s HTTP timeout', async () => {
+  let clientOptions, serviceOptions;
+  const service = { marker: true };
+  const created = createAgentForecastService({
+    createMlClient: options => { clientOptions = options; return { predictDemand: async () => ({ results: [] }) }; },
+    createService: options => { serviceOptions = options; return service; }
+  });
+  assert.equal(created, service);
+  assert.deepEqual(clientOptions, { timeoutMs: AGENT_ML_HTTP_TIMEOUT_MS });
+  assert.equal(clientOptions.timeoutMs, 20000);
+  assert.deepEqual(Object.keys(serviceOptions), ['mlClient']);
+  assert.equal(typeof serviceOptions.mlClient.predictDemand, 'function');
 });
 test('empty lists and empty business history have explicit safe results', async () => {
   const f = fixture({ products: [], transactions: [] });

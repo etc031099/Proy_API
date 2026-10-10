@@ -7,6 +7,8 @@ const {
   validateSkillInvocation, validateAgentMessage, createExecutionBudget,
   createTraceEvent, createRequestUsage, createEvidence, createAgentExecution
 } = require('../src/agents');
+const { DEFAULT_SKILL_TIMEOUT_MS, REMOTE_ML_SKILL_TIMEOUT_MS, AGENT_ML_HTTP_TIMEOUT_MS,
+  ML_DEPENDENT_SKILLS } = require('../src/agents/timeouts');
 
 const authenticatedRequest = () => ({
   user: { _id: '507f1f77bcf86cd799439011', businessId: 'TENANT-A', role: 'user', isActive: true },
@@ -48,13 +50,16 @@ test('all eighteen skills are unique read-only contracts with fifteen implemente
   assert.deepEqual(getSkillDefinition('get_supplier_products').allowedAgents, ['operations']);
 });
 
-test('replenishment alone has a 25 s skill deadline; every other skill retains its prior limit', () => {
+test('only remote ML-dependent skills use a 25 s deadline; local skills retain their prior limit', () => {
   for (const skill of SKILLS) {
-    const expected = ['get_replenishment_candidates', 'analyze_demand_forecast', 'get_replenishment_cost',
-      'plan_replenishment_budget', 'compare_supplier_costs'].includes(skill.id) ? 25000
-      : skill.id === 'get_demand_forecast' ? 10000 : 5000;
+    const expected = ML_DEPENDENT_SKILLS.includes(skill.id)
+      ? REMOTE_ML_SKILL_TIMEOUT_MS : DEFAULT_SKILL_TIMEOUT_MS;
     assert.equal(skill.timeoutMs, expected, skill.id);
   }
+  assert.equal(getSkillDefinition('get_demand_forecast').timeoutMs, 25000);
+  assert.equal(getSkillDefinition('analyze_demand_forecast').timeoutMs, 25000);
+  assert.equal(getSkillDefinition('get_low_stock_products').timeoutMs, 5000);
+  assert.equal(AGENT_ML_HTTP_TIMEOUT_MS, 20000);
 });
 
 test('permissions match in both directions for every agent and skill', () => {
