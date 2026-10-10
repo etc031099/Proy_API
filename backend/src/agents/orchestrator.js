@@ -509,7 +509,10 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             ...(productResult && productListIntents.includes(plan.intent) && Array.isArray(raw)
               ? { lastProductSelection: { sourceIntent: plan.intent, items: raw.slice(0, 5), createdAt: Date.now() },
                 selectedProductReference: plan.selectedProduct ? { id: plan.selectedProduct.id, sku: plan.selectedProduct.sku,
-                  name: plan.selectedProduct.name || plan.selectedProduct.label } : null } : {}),
+                  name: plan.selectedProduct.name || plan.selectedProduct.label }
+                  : plan.intent === 'demand_forecast' && (plan.selector?.productId || plan.selector?.sku || plan.lookupQuery) && entities?.length === 1
+                    ? { id: entities[0].id || entities[0].productId, sku: entities[0].sku, name: entities[0].name || entities[0].label }
+                    : null } : {}),
             lastPeriod: plan.intent === 'sales_causality' ? plan.period : latest?.metadata.period || plan.period,
             lastPeriodExplicit: plan.periodExplicit === true,
             listLimit: plan.limit || 5,

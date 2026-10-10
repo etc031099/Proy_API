@@ -145,6 +145,97 @@ test('basic product-count phrases use the grounded inventory summary, not produc
   }
 });
 
+test('product entity context resolves replenishment cost and cheapest supplier follow-ups deterministically', async () => {
+  const sku = 'M5-FOODS_3_511';
+  const selectedProduct = { ...product(1), sku };
+  const forecastService = { getDemandForecast: async () => ({ ...structuredClone(forecast), products: [
+    { ...forecast.products[0], productId: id(1), sku, name: selectedProduct.name }
+  ] }) };
+  const f = fixture({ products: [selectedProduct], forecastService });
+  const conversationId = randomUUID();
+  const first = await f.run(`¿Cuál es la predicción de ${sku}?`, conversationId);
+  assert.equal(first.intent, 'demand_forecast');
+  assert.equal(first.code, null);
+  assert.ok(first.actions.some(action => action.skillId === 'get_demand_forecast'));
+  assert.equal(first.usage.totalLlmCalls, 0);
+  const remembered = await f.orchestrator.getContextSnapshot(req(), conversationId);
+  assert.equal(remembered.selectedProductReference?.sku, sku);
+
+  const cost = await f.run('¿Y cuánto cuesta reponerlo?', conversationId);
+  assert.ok([null, 'AGENT_CLARIFICATION_REQUIRED'].includes(cost.code)); assert.equal(cost.intent, 'replenishment_commercial');
+  assert.ok(cost.actions.some(action => action.skillId === 'get_replenishment_cost'));
+  assert.equal(cost.usage.totalLlmCalls, 0); assert.equal(cost.usage.totalTokens, 0);
+
+  const supplier = await f.run('¿Y cuál es su proveedor más barato?', conversationId);
+  assert.ok([null, 'AGENT_CLARIFICATION_REQUIRED'].includes(supplier.code)); assert.equal(supplier.intent, 'cheapest_supplier');
+  assert.ok(supplier.actions.some(action => action.skillId === 'compare_supplier_costs'));
+  assert.equal(supplier.usage.totalLlmCalls, 0); assert.equal(supplier.usage.totalTokens, 0);
+  assert.equal(f.calls.length, 0);
+});
+
+test('product pronoun follow-ups require same-conversation unambiguous context and never leak across conversations', async () => {
+  const sku = 'M5-FOODS_3_511';
+  const selectedProduct = { ...product(1), sku };
+  const forecastService = { getDemandForecast: async () => ({ ...structuredClone(forecast), products: [
+    { ...forecast.products[0], productId: id(1), sku, name: selectedProduct.name }
+  ] }) };
+  const f = fixture({ products: [selectedProduct], forecastService });
+  const conversationId = randomUUID();
+  await f.run(`¿Cuál es la predicción de ${sku}?`, conversationId);
+
+  const followup = await f.run('¿Cuánto stock tiene?', conversationId);
+  assert.equal(followup.code, null); assert.equal(followup.intent, 'product_details');
+  assert.ok(followup.actions.some(action => action.skillId === 'get_product_details'));
+  assert.equal(followup.usage.totalLlmCalls, 0); assert.equal(followup.usage.totalTokens, 0);
+
+  const freshConversation = await f.run('¿Y cuánto cuesta reponerlo?', randomUUID());
+  assert.equal(freshConversation.requiresClarification, true);
+  assert.match(freshConversation.answer, /a qué producto te refieres/i);
+  assert.equal(freshConversation.actions.length, 0);
+  assert.equal(freshConversation.usage.totalSkillCalls, 0);
+  assert.equal(freshConversation.usage.totalLlmCalls, 0); assert.equal(freshConversation.usage.totalTokens, 0);
+
+  for (const otherScope of [req('A', 901), req('B', 900)]) {
+    const isolated = await f.run('¿Y cuánto cuesta reponerlo?', conversationId, otherScope);
+    assert.equal(isolated.requiresClarification, true);
+    assert.equal(isolated.actions.length, 0);
+    assert.equal(isolated.usage.totalSkillCalls, 0); assert.equal(isolated.usage.totalLlmCalls, 0);
+  }
+});
+
+test('explicit product SKU overrides remembered entity and ambiguous lists require product selection', async () => {
+  const skuA = 'M5-FOODS_3_511', skuB = 'M5-FOODS_3_016';
+  const products = [{ ...product(1), sku: skuA }, { ...product(2), sku: skuB }];
+  const forecastService = { getDemandForecast: async ({ productId }) => ({ ...structuredClone(forecast), products: productId
+    ? [{ ...forecast.products[0], productId, sku: productId === id(2) ? skuB : skuA }]
+    : [{ ...forecast.products[0], productId: id(1), sku: skuA }, { ...forecast.products[0], productId: id(2), sku: skuB }] }) };
+  const f = fixture({ products, forecastService });
+  const conversationId = randomUUID();
+  await f.run(`¿Cuál es la predicción de ${skuA}?`, conversationId);
+  const explicit = await f.run(`¿Cuánto cuesta reponer ${skuB}?`, conversationId);
+  assert.ok([null, 'AGENT_CLARIFICATION_REQUIRED'].includes(explicit.code));
+  assert.ok(explicit.actions.some(action => action.skillId === 'get_replenishment_cost'));
+  assert.equal(explicit.usage.totalLlmCalls, 0);
+  assert.match(explicit.answer, new RegExp(skuB), 'explicit SKU B must be resolved instead of the remembered SKU A');
+
+  const listConversation = randomUUID();
+  const listForecastService = { getDemandForecast: async () => ({ ...structuredClone(forecast), products: [
+    { ...forecast.products[0], productId: id(1), sku: skuA, stockAtAnchor: 4 },
+    { ...forecast.products[0], productId: id(2), sku: skuB, stockAtAnchor: 1 }
+  ] }) };
+  const listFixture = fixture({ products, forecastService: listForecastService });
+  await listFixture.run('Muéstrame los 5 productos con mayor demanda prevista', listConversation);
+  const ambiguous = await listFixture.run('¿Cuánto cuesta reponerlo?', listConversation);
+  assert.equal(ambiguous.requiresClarification, true); assert.equal(ambiguous.actions.length, 0);
+  assert.equal(ambiguous.usage.totalLlmCalls, 0); assert.equal(ambiguous.usage.totalSkillCalls, 0);
+
+  const selected = await listFixture.run('¿Cuál de esos tiene menos stock?', listConversation);
+  assert.equal(selected.usage.totalLlmCalls, 0);
+  const explain = await listFixture.run('Explícame ese producto', listConversation);
+  assert.equal(explain.code, null); assert.ok(explain.actions.some(action => action.skillId === 'get_product_details'));
+  assert.equal(explain.usage.totalLlmCalls, 0); assert.equal(explain.usage.totalTokens, 0);
+});
+
 test('low-stock phrases and narrow common typos use the existing low-stock skill at zero LLM', async () => {
   for (const query of ['¿Qué productos tienen poco stock?', 'productos bajos de stock', 'productos con stock bajo',
     'qué productos están por debajo del mínimo', 'q productos estan bajos d stock', 'prodcutos con poco stock', 'stock bajo']) {

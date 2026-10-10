@@ -39,6 +39,46 @@ const weekElapsedDays = period => Math.round((Date.parse(`${period.endDate}T00:0
 const clarify = question => ({ intent: 'ambiguous_query', agent: 'coordinator', clarificationQuestion: question });
 const canonicalProductSku = message => message.match(/\bM5-[A-Z]+_\d+_\d+\b/i)?.[0]
   || message.match(/\bSKU\s+([\w.-]{1,100})\b/i)?.[1];
+const productReferenceFollowup = (message, memory = {}) => {
+  const text = normalize(message).replace(/[¿?¡!]/g, '').trim();
+  if (canonicalProductSku(message) || /\bSKU-[\w.-]{1,100}\b/i.test(message)) return null;
+  const referentialLanguage = /\b(?:reponerlo|reponerla|comprarlo|comprarla|venderlo|venderla|ese producto|este producto|este sku|ese sku|el mismo producto|la misma producto|su proveedor|su prediccion|su stock)\b/.test(text)
+    || /^y\s+(?:cuanto\s+(?:cuesta|costaria)|cual\s+es\s+su\s+proveedor)\b/.test(text)
+    || /^cuanto\s+(?:stock|inventario)\s+tiene\b/.test(text);
+  if (!referentialLanguage) return null;
+
+  const selected = memory.selectedProductReference?.type === 'product' ? memory.selectedProductReference : null;
+  const listHasSeveral = (memory.lastProductSelection?.items?.length || 0) > 1;
+  const sku = selected?.sku;
+  const productId = selected?.id;
+  const asksCheapestSupplier = /proveedor/.test(text) && /barat|menor costo|mas economico/.test(text);
+  const asksSupplier = /proveedor/.test(text) && !asksCheapestSupplier;
+  const asksCost = /cuanto|costaria|costo|cuesta/.test(text) && /repon|reposicion|recomendad/.test(text);
+  const asksImplicitCost = /^(?:y\s+)?cuanto\s+(?:cuesta|costaria)\b/.test(text)
+    && ['demand_forecast', 'explain_replenishment', 'replenishment_candidates', 'replenishment_commercial'].includes(memory.lastIntent);
+  const asksStock = /\bstock\b|\binventario\b/.test(text);
+  const asksForecast = /prediccion|forecast|demanda/.test(text);
+  const asksDetails = /explicame|explica|muestrame|mostrar|detalle/.test(text) && /producto|ese|este/.test(text);
+  if (!asksCheapestSupplier && !asksSupplier && !asksCost && !asksImplicitCost && !asksStock && !asksForecast && !asksDetails) return null;
+
+  if (!selected) return clarify(listHasSeveral
+    ? 'Vimos varios productos y no hay uno seleccionado. ¿Cuál quieres consultar? Indica su SKU o selecciónalo de la lista.'
+    : '¿A qué producto te refieres? Indica su SKU o elígelo de la lista anterior.');
+  const selector = productId ? { productId } : sku ? { sku } : null;
+  if (asksCheapestSupplier || asksSupplier) {
+    if (!sku) return clarify('No tengo el SKU de ese producto para consultar sus proveedores. Indícalo para continuar.');
+    return { intent: asksCheapestSupplier ? 'cheapest_supplier' : 'replenishment_commercial', agent: 'analyst',
+      skillId: 'compare_supplier_costs', args: { productRef: sku }, entityContextUsed: true };
+  }
+  if (asksCost || asksImplicitCost) {
+    if (!sku) return clarify('No tengo el SKU de ese producto para calcular su costo de reposición. Indícalo para continuar.');
+    return { intent: 'replenishment_commercial', agent: 'analyst', skillId: 'get_replenishment_cost',
+      args: { mode: 'single', productRef: sku }, entityContextUsed: true };
+  }
+  if (!selector) return clarify('No puedo identificar de forma segura el producto de esta referencia. Indica su SKU.');
+  if (asksForecast) return { intent: 'demand_forecast', agent: 'analyst', selector, limit: 1, entityContextUsed: true };
+  return { intent: 'product_details', agent: 'operations', selector, limit: 1, entityContextUsed: true };
+};
 const budgetPlanFollowupType = message => {
   const text = normalize(message);
   if (/\b(?:cuanto dinero (?:sobra|sobro|me sobra)|cuanto (?:sobro|queda|me queda)|saldo restante|cuanto presupuesto queda)\b/.test(text)) return 'remaining';
@@ -105,7 +145,9 @@ const routeCommercial = (message, memory = {}) => {
   const department = message.match(/\b(?:FOODS|HOBBIES|HOUSEHOLD)_\d+\b/i)?.[0]?.toUpperCase();
   const make = (skillId, args) => ({ intent: 'replenishment_commercial', agent: 'analyst', skillId, args });
   if (asksSupplierComparison) {
-    const productRef = sku || (/este producto|ese producto|este sku/.test(text) ? memory.lastEntity?.sku : null);
+    const hasContextualProductReference = /\b(?:este|ese) producto\b|\beste sku\b|\bsu proveedor\b/.test(text);
+    const productRef = sku || (hasContextualProductReference
+      ? memory.selectedProductReference?.sku || memory.lastEntity?.sku : null);
     if (!productRef) return { intent: 'replenishment_budget_required', agent: 'coordinator',
       clarificationQuestion: 'Indica el SKU del producto para comparar sus proveedores configurados.' };
     return { ...make('compare_supplier_costs', { productRef, ...(explicitSupplier ? { supplierRef: explicitSupplier } : {}) }),
@@ -136,7 +178,7 @@ const routeCommercial = (message, memory = {}) => {
     && /reponer|reposicion|rep(o|u)ner|recomendad|reponer todo|productos reponer/.test(text);
   if (costIntent) {
     if (sku || /este producto|ese producto/.test(text)) {
-      const productRef = sku || memory.lastEntity?.sku;
+      const productRef = sku || memory.selectedProductReference?.sku || memory.lastEntity?.sku;
       if (!productRef) return { intent: 'replenishment_budget_required', agent: 'coordinator',
         clarificationQuestion: 'Indica el SKU del producto para calcular su costo de reposición.' };
       return make('get_replenishment_cost', { mode: 'single', productRef, ...(explicitSupplier ? { supplierRef: explicitSupplier } : {}) });
@@ -177,6 +219,8 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
     return { intent: 'replenishment_plan_followup', agent: 'coordinator', followupType,
       ...(productRef ? { productRef } : {}) };
   }
+  const productReference = productReferenceFollowup(message, memory);
+  if (productReference) return productReference;
   const listFollowup = productListFollowupType(message);
   if (listFollowup) {
     const resolved = resolveProductListFollowup(listFollowup, {
