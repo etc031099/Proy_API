@@ -151,7 +151,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
           : selectedSupplier?.plan || (productPage && { intent: 'supplier_products', agent: 'operations', skillId: 'get_supplier_products',
             args: { supplierRef: state.supplierProductListing.supplierId, limit: 5, offset: productPage.offset } })
                 || (() => {
-                  try { return routeDeterministically(message, state, clock(), conversationId, contextBinding(context)); }
+                  try { return routeDeterministically(message, state, clock(), conversationId, contextBinding(context), context.businessId); }
                   catch (error) {
                     const followupType = budgetPlanFollowupType(message);
                     if (!followupType) throw error;
@@ -486,7 +486,8 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
           const productListIntents = ['search_product', 'low_stock', 'top_selling_products', 'replenishment_candidates', 'demand_forecast', 'ml_analytics'];
           const supplierProductsResult = [...results].reverse().find(({ skillId }) => skillId === 'get_supplier_products')?.result;
           const supplierProductsData = supplierProductsResult?.data;
-          if (plan.intent !== 'tenant_access_denied') commit({ lastIntent: plan.intent, lastAgent: plan.agent, recentEntities: entities,
+          if (plan.intent !== 'tenant_access_denied') commit({ lastIntent: ['ml_historical_clarification', 'ml_daily_granularity_clarification'].includes(plan.intent)
+            ? state.lastIntent : plan.intent, lastAgent: plan.agent, recentEntities: entities,
             ...(['replenishment_commercial', 'replenishment_plan_explanation'].includes(plan.intent) && plan.skillId === 'plan_replenishment_budget'
               ? (() => {
                 const saved = results.find(({ skillId }) => skillId === 'plan_replenishment_budget')?.result;

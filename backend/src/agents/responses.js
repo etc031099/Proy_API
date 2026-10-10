@@ -111,7 +111,7 @@ const replenishmentExplanation = result => {
   const row = result.data?.[0];
   if (!row) return buildSkillAnswer('get_demand_forecast', result);
   if (row.mlStatus !== 'READY') return `${name(row)} ${readinessLabel(row.mlStatus)}; no se puede justificar una cantidad numérica de reposición.`;
-  return `${name(row)}: el modelo estima ${format(row.predictedDemand7d)} unidades para los próximos 7 días. En la fecha de referencia había ${format(row.stockAtAnchor)} unidades; el stock de seguridad es ${format(row.safetyStock)} y se recomienda reponer ${format(row.recommendedQty)} unidades. La recomendación combina demanda prevista, stock disponible y stock de seguridad. ${historicalNote([row], result.metadata)}`;
+  return `${name(row)}: el modelo estimó ${format(row.predictedDemand7d)} unidades en el horizonte histórico agregado de 7 días. En la fecha de referencia había ${format(row.stockAtAnchor)} unidades; el stock de seguridad es ${format(row.safetyStock)} y se recomienda reponer ${format(row.recommendedQty)} unidades. La recomendación combina demanda prevista, stock disponible y stock de seguridad. ${historicalNote([row], result.metadata)}`;
 };
 const readinessLabel = status => ({
   INSUFFICIENT_HISTORY: 'todavía no tiene suficiente historial para generar una predicción',
@@ -223,7 +223,7 @@ const buildSkillAnswer = (skillId, result) => {
     get_low_stock_products: `Encontré ${countLabel(metadata.totalMatches ?? data.length, 'producto', 'productos')} en el mínimo de stock o por debajo.`,
     get_top_selling_products: `Estos son los productos con más unidades vendidas en ${rankingPeriod}:`,
     get_recent_transactions: 'Estas son las transacciones más recientes que coinciden con tu consulta:',
-    get_demand_forecast: 'Esta es la demanda estimada para los próximos 7 días del escenario consultado:',
+    get_demand_forecast: 'Esta es la demanda estimada para el horizonte histórico agregado de 7 días del escenario consultado:',
     get_replenishment_candidates: `Te recomiendo priorizar ${displayed.length} ${displayed.length === 1 ? 'producto' : 'productos'} para reposición.\nLa mayor cantidad sugerida corresponde a ${name(displayed[0])}: ${format(displayed[0].recommendedQty)} unidades.`,
     search_products: `Encontré ${countLabel(metadata.totalMatches ?? data.length, 'producto', 'productos')} que ${metadata.totalMatches === 1 ? 'coincide' : 'coinciden'} con tu búsqueda:`
   };
@@ -237,7 +237,7 @@ const buildSkillAnswer = (skillId, result) => {
     if (skillId === 'get_demand_forecast' || skillId === 'get_replenishment_candidates') {
       if (row.mlStatus !== 'READY') return `• ${name(row)} ${readinessLabel(row.mlStatus)}; no hay predicción disponible.`;
       if (skillId === 'get_replenishment_candidates') return `• ${name(row)} — reponer ${format(row.recommendedQty)} unidades; demanda estimada de ${format(row.predictedDemand7d)} unidades y stock disponible de ${format(row.stockAtAnchor)} en la fecha de referencia.`;
-      return `• ${name(row)}: el modelo estima ${format(row.predictedDemand7d)} unidades para 7 días. En la fecha de referencia había ${format(row.stockAtAnchor)} unidades disponibles y se habían vendido ${format(row.salesLast7Days)} en los 7 días anteriores. Considerando ${format(row.safetyStock)} unidades de stock de seguridad, ${row.recommendedQty > 0 ? `se recomienda reponer ${format(row.recommendedQty)} unidades` : 'actualmente no se recomienda reposición para ese escenario'}.`;
+      return `• ${name(row)}: el modelo estimó ${format(row.predictedDemand7d)} unidades en el horizonte histórico agregado de 7 días. En la fecha de referencia había ${format(row.stockAtAnchor)} unidades disponibles y se habían vendido ${format(row.salesLast7Days)} en los 7 días anteriores. Considerando ${format(row.safetyStock)} unidades de stock de seguridad, ${row.recommendedQty > 0 ? `se recomienda reponer ${format(row.recommendedQty)} unidades` : 'no se recomienda reposición para ese escenario'}.`;
     }
     return `• ${name(row)} tiene ${format(row.stock)} unidades disponibles y un mínimo configurado de ${format(row.minStockLevel)}.`;
   });

@@ -107,12 +107,12 @@ test('budget plan explanation formats currency to two decimals and handles singu
 
 test('individual forecast separates demand, security stock and recommendation, including zero and non-READY', () => {
   const answer = buildSkillAnswer('get_demand_forecast', list([forecastRow]));
-  assert.match(answer, /estima 8\.25 unidades para 7 días/);
+  assert.match(answer, /estimó 8\.25 unidades en el horizonte histórico agregado de 7 días/);
   assert.match(answer, /vendido 3 en los 7 días anteriores/);
   assert.match(answer, /5 unidades de stock de seguridad.*reponer 12 unidades/);
   assert.match(answer, /escenario histórico.*1 de julio de 2025/);
   const zero = buildSkillAnswer('get_demand_forecast', list([{ ...forecastRow, predictedDemand7d: 0, recommendedQty: 0 }]));
-  assert.match(zero, /estima 0 unidades/);
+  assert.match(zero, /estimó 0 unidades en el horizonte histórico agregado de 7 días/);
   assert.match(zero, /no se recomienda reposición/);
   const notReady = buildSkillAnswer('get_demand_forecast', list([{ ...product, mlStatus: 'INSUFFICIENT_HISTORY', anchor: '2025-07-01' }]));
   assert.match(notReady, /suficiente historial/);

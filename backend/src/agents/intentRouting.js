@@ -204,7 +204,7 @@ const ordinalReference = text => {
 };
 
 /** High-confidence routing only. Unrecognized language is delegated, never guessed. */
-const routeDeterministically = (message, memory, now, conversationId, scopeBinding) => {
+const routeDeterministically = (message, memory, now, conversationId, scopeBinding, businessId) => {
   const tenantGuard = tenantScopeViolation(message);
   if (tenantGuard) return tenantGuard;
   const followupType = budgetPlanFollowupType(message);
@@ -312,7 +312,7 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
     if (!hasContext) return clarify('No tengo una referencia clara de cuáles son “estos productos”. ¿Te refieres al último plan o lista que vimos, o a otros productos?');
     return { intent: 'evidence_synthesis', agent: 'analyst', narrativeSynthesis: true, fromMemory: true };
   }
-  const forecastPlan = require('./forecastRouting').routeForecastAnalytics(message, memory);
+  const forecastPlan = require('./forecastRouting').routeForecastAnalytics(message, memory, now, businessId);
   if (forecastPlan) return forecastPlan;
   const dates = message.match(/\d{4}-\d{2}-\d{2}/g);
   const naturalWeek = /\b(?:esta semana|semana pasada|semana anterior)\b/.test(text);

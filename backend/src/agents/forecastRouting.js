@@ -1,11 +1,73 @@
 const { compactAnalyticsContext } = require('./forecastAnalytics');
-const routeForecastAnalytics = (message, memory) => {
+const scenarios = require('../config/mlScenarios.json');
+const normalize = value => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const parseRequestedDate = text => {
+  const iso = text.match(/\b(20\d{2})-(\d{2})-(\d{2})\b/);
+  if (iso) {
+    const value = `${iso[1]}-${iso[2]}-${iso[3]}`;
+    const date = new Date(`${value}T00:00:00.000Z`);
+    return Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value ? null : value;
+  }
+  const months = { enero: 1, febrero: 2, marzo: 3, abril: 4, mayo: 5, junio: 6,
+    julio: 7, agosto: 8, septiembre: 9, setiembre: 9, octubre: 10, noviembre: 11, diciembre: 12 };
+  const spanish = text.match(/\b(\d{1,2})\s+de\s+([a-z]+)\s+de\s+(20\d{2})\b/);
+  if (!spanish || !months[spanish[2]]) return null;
+  const date = new Date(Date.UTC(Number(spanish[3]), months[spanish[2]] - 1, Number(spanish[1])));
+  return date.getUTCFullYear() === Number(spanish[3]) && date.getUTCMonth() === months[spanish[2]] - 1
+    && date.getUTCDate() === Number(spanish[1]) ? date.toISOString().slice(0, 10) : null;
+};
+const addDays = (value, amount) => {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + amount);
+  return date.toISOString().slice(0, 10);
+};
+const dateLabel = value => new Intl.DateTimeFormat('es-PE', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })
+  .format(new Date(`${value}T00:00:00.000Z`));
+const routeForecastTemporalQuery = (message, memory, now, businessId) => {
+  const text = normalize(message);
+  const forecastQuestion = /\b(?:forecast|prediccion|predij\w*|demanda|que pasara)\b/.test(text);
+  const futureSalesQuestion = /\b(?:vendere|venderas|vendera|venderemos|venderan)\b/.test(text);
+  const tomorrow = /mañana|man\u0303ana|manana/i.test(message);
+  const dayAfterTomorrow = /pasado\s+(?:mañana|man\u0303ana|manana)/i.test(message);
+  const relativeFuture = tomorrow || dayAfterTomorrow
+    || /\b(?:hoy|actual|actualmente|esta semana|la semana que viene|proxima semana|la proxima semana|el lunes que viene|dentro de \d+ dias?)\b/.test(text);
+  const forecastFollowup = relativeFuture
+    && ['demand_forecast', 'ml_analytics', 'forecast_risk_explanation'].includes(memory.lastIntent);
+  const requestedDate = parseRequestedDate(text);
+  if (!forecastQuestion && !futureSalesQuestion && !(relativeFuture && ['demand_forecast', 'ml_analytics', 'forecast_risk_explanation'].includes(memory.lastIntent))) return null;
+
+  const scenario = Object.values(scenarios).find(row => row.businessId === businessId);
+  if (requestedDate && scenario) {
+    const firstForecastDay = addDays(scenario.anchorOperationalDate, 1);
+    const lastForecastDay = addDays(scenario.anchorOperationalDate, scenario.horizonDays || 7);
+    if (requestedDate >= firstForecastDay && requestedDate <= lastForecastDay
+      && /\b(?:que se predijo|que predijo|prediccion para|demanda para|que demanda hubo|estimacion para)\b/.test(text)) {
+      return { intent: 'ml_daily_granularity_clarification', agent: 'coordinator',
+        clarificationQuestion: `El modelo disponible entrega una estimación agregada de ${scenario.horizonDays || 7} días, no una predicción diaria para el ${dateLabel(requestedDate)}. Puedo mostrarte el forecast histórico agregado del escenario.` };
+    }
+  }
+
+  const today = now.toISOString().slice(0, 10);
+  const isFutureDate = requestedDate && requestedDate > today;
+  if ((relativeFuture || isFutureDate) && (forecastQuestion || futureSalesQuestion || forecastFollowup)) {
+    const anchor = scenario?.anchorOperationalDate;
+    const target = requestedDate ? dateLabel(requestedDate)
+      : dayAfterTomorrow ? 'pasado mañana' : tomorrow ? 'mañana'
+        : /actual/.test(text) ? 'actualmente'
+        : /hoy/.test(text) ? 'hoy' : /proxima semana|semana que viene/.test(text) ? 'la próxima semana'
+          : /esta semana/.test(text) ? 'esta semana' : /lunes que viene/.test(text) ? 'el lunes que viene'
+            : (text.match(/dentro de \d+ dias?/) || ['un periodo futuro'])[0];
+    const product = message.match(/\bM5-[A-Z]+_\d+_\d+\b/i)?.[0] || memory.selectedProductReference?.sku || memory.lastEntity?.sku;
+    return { intent: 'ml_historical_clarification', agent: 'coordinator',
+      clarificationQuestion: `No tengo una predicción válida para ${target}${product ? ` para ${product}` : ''} en la fecha operativa actual. El forecast disponible corresponde a un replay histórico${anchor ? ` con fecha de referencia ${dateLabel(anchor)}` : ''}, no a una predicción vigente. Puedo mostrarte ese forecast histórico agregado de 7 días, pero no sería correcto presentarlo como una predicción actual.` };
+  }
+  return null;
+};
+const routeForecastAnalytics = (message, memory, now = new Date(), businessId) => {
   const text = message.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   if (/shell|ejecuta codigo|mongo query|ignora.*instruccion|api.?key|password|jwt/.test(text)) return null;
-  if (/forecast|prediccion|demanda|que pasara/.test(text) && /\b(hoy|actual|esta semana)\b/.test(text)) {
-    return { intent: 'ml_historical_clarification', agent: 'coordinator',
-      clarificationQuestion: 'El modelo utiliza un replay histórico, no un forecast del mercado actual. Puedo consultar el escenario y su fecha de corte, pero no predecir hoy ni la semana actual.' };
-  }
+  const temporal = routeForecastTemporalQuery(message, memory || {}, now, businessId);
+  if (temporal) return temporal;
   const previous = compactAnalyticsContext(memory.lastForecastAnalytics);
   if (/forecast|prediccion|demanda|repon|reposicion/.test(text) && /costo|cuanto cuesta|presupuesto|proveedor conviene/.test(text)) {
     return { intent: 'ml_analytics', agent: 'coordinator', clarificationQuestion: 'Esta consulta ML no calcula costos ni optimiza presupuestos. Puedo comparar demanda, stock y reposición sugerida del escenario histórico.' };
@@ -43,4 +105,4 @@ const routeForecastAnalytics = (message, memory) => {
   if (!mode) return null;
   return make({ mode, ...(department ? { department } : {}), ...(category ? { category } : {}) });
 };
-module.exports = { routeForecastAnalytics };
+module.exports = { routeForecastAnalytics, routeForecastTemporalQuery, parseRequestedDate };

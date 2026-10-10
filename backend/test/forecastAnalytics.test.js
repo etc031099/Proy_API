@@ -15,9 +15,16 @@ const rows = Array.from({ length: 12 }, (_, n) => ({ productId: id(n + 1), sku: 
   inventoryStatus: n === 0 ? 'REPONER' : 'OK', mlStatus: 'READY', safetyStock: 2, salesLast7Days: 1 }));
 function fixture({ products = rows, status = 'READY', memory = createConversationMemory(), serviceError } = {}) {
   const calls = [], events = [];
+  const Product = { findOne(match) {
+    const row = products.find(candidate => candidate.sku === match.sku && match.businessId === 'ML-CLOUD-DEMO-V2');
+    let query = { select() { return this; }, maxTimeMS() { return this; }, lean() { return this; },
+      exec: async () => row ? { _id: row.productId, businessId: match.businessId, sku: row.sku, name: row.name,
+        category: row.category, stock: row.stockAtAnchor, minStockLevel: 2, price: 10, currency: 'PEN', isActive: true } : null };
+    return query;
+  } };
   const runtime = createAgentOrchestrator({ memory, clock: () => new Date('2026-10-09T00:00:00Z'), onEvent: event => events.push(event),
     provider: { generateStructured() { throw Error('Unexpected Gemini'); }, generateWithTools() { throw Error('Unexpected Gemini'); } },
-    dependencies: { forecastService: { async getDemandForecast(input) {
+    dependencies: { models: { Product }, forecastService: { async getDemandForecast(input) {
       calls.push(input); if (serviceError) throw serviceError;
       return { status, anchorOperationalDate: '2026-05-17', model: { name: 'demand_forecast_v1', horizonDays: 7 },
         products: input.businessId === 'ML-CLOUD-DEMO-V2' ? structuredClone(products) : [] };
@@ -117,6 +124,67 @@ test('summary computes totals only from actual response and preserves anchor', a
 for (const query of ['forecast actual', '¿qué pasará hoy?', 'predicción de esta semana']) test(`historical clarification: ${query}`, async () => {
   const f = fixture(), result = await f.send(query); assert.equal(result.requiresClarification, true);
   assert.match(result.answer, /replay histórico/); assert.equal(f.calls.length, 0); assert.equal(result.usage.totalTokens, 0);
+});
+const assertTemporalLimit = result => {
+  assert.equal(result.requiresClarification, true);
+  assert.equal(result.usage.totalLlmCalls, 0);
+  assert.equal(result.usage.totalTokens, 0);
+  assert.equal(result.actions.length, 0);
+  assert.equal(result.evidence.length, 0);
+};
+test('current relative forecast dates never use the historical replay as current demand', async () => {
+  const f = fixture();
+  for (const query of [
+    '¿Qué demanda tendrá mañana M5-FOODS_3_511?',
+    '¿Cuánto venderé la próxima semana?',
+    '¿Cuál será la demanda el 15 de octubre de 2026?',
+    '¿Qué demanda tendrá hoy?'
+  ]) {
+    const result = await f.send(query);
+    assertTemporalLimit(result);
+    assert.match(result.answer, /no tengo una predicción válida|replay histórico/i, query);
+  }
+  assert.equal(f.calls.length, 0);
+});
+test('historical forecast queries continue to run without implying a current forecast', async () => {
+  const product = { ...rows[0], sku: 'M5-FOODS_3_511' };
+  const f = fixture({ products: [product] });
+  for (const query of [
+    '¿Cuál es la predicción de M5-FOODS_3_511?',
+    'Muéstrame el forecast histórico de M5-FOODS_3_511',
+    'Según el escenario del 17 de mayo de 2026, ¿qué demanda se estimaba para M5-FOODS_3_511?'
+  ]) {
+    const result = await f.send(query);
+    zero(result);
+    assert.ok(result.actions.some(action => action.skillId === 'get_demand_forecast'), query);
+    assert.match(result.answer, /horizonte histórico agregado de 7 días|escenario histórico/i, query);
+    assert.doesNotMatch(result.answer, /próximos 7 días/i, query);
+  }
+});
+test('historical replay date has no daily granularity, and future explicit dates stay unsupported', async () => {
+  const f = fixture();
+  const day = await f.send('¿Qué se predijo para el 18 de mayo de 2026?');
+  assertTemporalLimit(day);
+  assert.match(day.answer, /estimación agregada de 7 días, no una predicción diaria/i);
+  const future = await f.send('¿Cuál será la demanda el 15 de octubre de 2026?');
+  assertTemporalLimit(future);
+  assert.match(future.answer, /replay histórico/i);
+  assert.equal(f.calls.length, 0);
+});
+test('forecast temporal follow-up keeps the product context but does not query historical ML', async () => {
+  const product = { ...rows[0], sku: 'M5-FOODS_3_511' };
+  const f = fixture({ products: [product] });
+  const first = await f.send('¿Cuál es la predicción de M5-FOODS_3_511?');
+  zero(first);
+  assert.equal((await f.runtime.getContextSnapshot(req(), first.conversationId)).lastIntent, 'demand_forecast');
+  const next = await f.send('¿Y mañana?', first.conversationId);
+  assertTemporalLimit(next);
+  assert.match(next.answer, /M5-FOODS_3_511/);
+  assert.equal((await f.runtime.getContextSnapshot(req(), first.conversationId)).lastIntent, 'demand_forecast');
+  const following = await f.send('¿Y pasado mañana?', first.conversationId);
+  assertTemporalLimit(following);
+  assert.match(following.answer, /M5-FOODS_3_511/);
+  assert.equal(f.calls.length, 1);
 });
 test('follow-up department + persisted snapshot + paging through action wrapper', async () => {
   const f = fixture(); const first = await f.send('Muéstrame los 5 con mayor demanda');
