@@ -6,7 +6,7 @@ const AGENTS = deepFreeze([
     description: 'Interpreta la solicitud y delega al especialista adecuado.',
     responsibilities: ['Interpretar intención', 'Pedir aclaraciones', 'Delegar tareas'],
     allowedSkills: [], allowedActionSkills: [],
-    llmPolicy: { preferredMode: 'deterministic-first', providerEnabled: false },
+    llmPolicy: { preferredMode: 'deterministic-first', providerEnabled: true },
     limits: { ...TOKEN_BUDGETS.coordinator, maxSkillCalls: 0, maxLlmCalls: EXECUTION_LIMITS.maxLlmCalls }
   },
   {
@@ -17,7 +17,7 @@ const AGENTS = deepFreeze([
     allowedSkills: ['search_products', 'get_product_details', 'get_low_stock_products', 'get_inventory_summary',
       'get_recent_transactions', 'get_sales_summary', 'get_purchase_summary', 'get_supplier_details', 'get_product_sales_summary',
       'get_supplier_products'],
-    llmPolicy: { preferredMode: 'deterministic-first', providerEnabled: false },
+    llmPolicy: { preferredMode: 'deterministic-first', providerEnabled: true },
     limits: { ...TOKEN_BUDGETS.operations, maxSkillCalls: EXECUTION_LIMITS.maxSkillCalls, maxLlmCalls: EXECUTION_LIMITS.maxLlmCalls }
   },
   {
@@ -29,7 +29,7 @@ const AGENTS = deepFreeze([
       'get_sales_summary', 'get_purchase_summary', 'get_business_summary', 'get_top_selling_products',
       'get_product_sales_summary', 'get_demand_forecast', 'get_replenishment_candidates', 'analyze_demand_forecast',
       'get_replenishment_cost', 'plan_replenishment_budget', 'compare_supplier_costs'],
-    llmPolicy: { preferredMode: 'hybrid', providerEnabled: false },
+    llmPolicy: { preferredMode: 'hybrid', providerEnabled: true },
     limits: { ...TOKEN_BUDGETS.analyst, maxSkillCalls: EXECUTION_LIMITS.maxSkillCalls, maxLlmCalls: EXECUTION_LIMITS.maxLlmCalls }
   }
 ]);

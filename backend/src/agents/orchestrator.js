@@ -7,7 +7,7 @@ const { executeRequestedSkill } = require('./toolCalls');
 const { createConversationMemory } = require('./memory');
 const { routeDeterministically, clarify } = require('./intentRouting');
 const { buildSkillAnswer, llmObservation, safeText } = require('./responses');
-const { buildSynthesisInput } = require('./synthesis');
+const { buildSynthesisInput, buildNarrativeSynthesisInput, validateNarrativeSynthesis, renderNarrativeSynthesis } = require('./synthesis');
 const { normalizeSupplier, resolveSupplier } = require('./replenishmentPlanning');
 const { SUPPLIER_SELECTION_TTL_MS } = require('./memory');
 
@@ -114,6 +114,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
       let supplierResolutionExpiry;
       let supplierProductListingExpiry;
       let supplierPageResponse;
+      let synthesisStatus;
       const run = async (agentId, skillId, args = {}) => {
         const result = await execution.executeSkill({ agentId, skillId, args });
         results.push({ skillId, result });
@@ -168,12 +169,54 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             selector = { productId: product.data.id };
           }
           if (!plan.clarificationQuestion) switch (plan.intent) {
+            case 'forecast_risk_explanation': {
+              await run('analyst', 'analyze_demand_forecast', { mode: 'summary', limit: 5, offset: 0 });
+              await run('analyst', 'analyze_demand_forecast', { mode: 'exceeding_stock', limit: 3, offset: 0 });
+              await run('analyst', 'analyze_demand_forecast', { mode: 'not_ready', limit: 2, offset: 0 });
+              break;
+            }
+            case 'inventory_interpretation':
+              if (plan.includeForecast) {
+                await run('analyst', 'get_business_summary', { period: 'current' });
+                await run('operations', 'get_low_stock_products', { limit: 3 });
+                await run('analyst', 'analyze_demand_forecast', { mode: 'summary', limit: 5, offset: 0 });
+                await run('analyst', 'analyze_demand_forecast', { mode: 'exceeding_stock', limit: 2, offset: 0 });
+                break;
+              }
+            case 'executive_inventory_summary':
+              await run('analyst', 'get_business_summary', { period: 'current' });
+              await run('operations', 'get_low_stock_products', { limit: 5 });
+              break;
+            case 'evidence_synthesis':
+              if (state.lastIntent === 'forecast_risk_explanation') {
+                await run('analyst', 'analyze_demand_forecast', { mode: 'summary', limit: 5, offset: 0 });
+                await run('analyst', 'analyze_demand_forecast', { mode: 'exceeding_stock', limit: 3, offset: 0 });
+                await run('analyst', 'analyze_demand_forecast', { mode: 'not_ready', limit: 2, offset: 0 });
+              } else if (state.lastForecastAnalytics) {
+                await run('analyst', 'analyze_demand_forecast', { ...state.lastForecastAnalytics, offset: 0, limit: 5 });
+              } else if (state.lastIntent === 'replenishment_candidates') {
+                await run('analyst', 'get_replenishment_candidates', { limit: 5 });
+              } else if (['business_summary', 'inventory_interpretation', 'executive_inventory_summary'].includes(state.lastIntent)) {
+                await run('analyst', 'get_business_summary', { period: 'current' });
+                await run('operations', 'get_low_stock_products', { limit: 5 });
+              } else if (state.lastProductSelection?.sourceIntent === 'ml_analytics') {
+                await run('analyst', 'analyze_demand_forecast', { ...(state.lastForecastAnalytics || {}), offset: 0, limit: 5 });
+              } else {
+                plan.clarificationQuestion = 'No tengo una lista o plan reciente inequívoco para interpretar. Indica qué datos deseas revisar.';
+                plan = clarify(plan.clarificationQuestion);
+              }
+              break;
             case 'ml_analytics': {
               const result = await run('analyst', 'analyze_demand_forecast', plan.analyticsArgs);
               if (result.status === 'CLARIFICATION') plan.clarificationQuestion = result.metadata.clarificationQuestion;
               break;
             }
             case 'replenishment_commercial': {
+              const result = await run('analyst', plan.skillId, plan.args);
+              if (result.status === 'CLARIFICATION') plan.clarificationQuestion = result.metadata.clarificationQuestion;
+              break;
+            }
+            case 'replenishment_plan_explanation': {
               const result = await run('analyst', plan.skillId, plan.args);
               if (result.status === 'CLARIFICATION') plan.clarificationQuestion = result.metadata.clarificationQuestion;
               break;
@@ -194,7 +237,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             case 'business_summary': {
               const current = await run(plan.agent, 'get_business_summary', { period: 'current' });
               // Keep current activity visible; the existing latest-period skill is only additional context.
-              if (!plan.periodExplicit && current.data.completedTransactionsCount === 0) {
+              if (!plan.inventoryOnly && !plan.periodExplicit && current.data.completedTransactionsCount === 0) {
                 await run(plan.agent, 'get_business_summary', { period: 'latest' });
               }
               if (plan.multi) await run('operations', 'get_low_stock_products', { limit: 5 });
@@ -238,19 +281,38 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             recentEntities: search.result.data, lastSearchQuery: plan.lookupQuery, listLimit: 2 });
         } else {
           let sections = results.map((_, index) => index);
-          if (plan.synthesize && results.every(({ result }) => result.status === 'READY'
-            && (!Array.isArray(result.data) || result.data.every(row => !row.mlStatus || row.mlStatus === 'READY')))) {
-            const generated = await execution.generateStructured({ agentId: plan.agent,
-              ...buildSynthesisInput(plan.intent, message, results) });
-            sections = generated.output.sections;
-            if (Reflect.ownKeys(generated.output).some(key => key !== 'sections') || !Array.isArray(sections) || !sections.length || sections.length > results.length
-              || new Set(sections).size !== sections.length || sections.some(index => !Number.isInteger(index) || index < 0 || index >= results.length)) {
-              throw new AgentError('GEMINI_SCHEMA_VALIDATION_FAILED');
+          const synthesisEligible = results.length > 0 && results.every(({ result }) => ['READY', 'NO_DATA'].includes(result.status));
+          if (plan.narrativeSynthesis && synthesisEligible) {
+            const deterministicFacts = sections.map(index => buildSkillAnswer(results[index].skillId, results[index].result)).filter(Boolean);
+            answer = [`Estos son los datos principales que pude obtener:`, ...deterministicFacts].join('\n');
+            try {
+              const generated = await execution.generateStructured({ agentId: 'analyst',
+                ...buildNarrativeSynthesisInput(plan.intent, message, results) });
+              const validated = validateNarrativeSynthesis(generated.output, results);
+              answer = renderNarrativeSynthesis(plan.intent, results, validated);
+              synthesisStatus = 'SUCCEEDED';
+            } catch {
+              synthesisStatus = 'DEGRADED';
             }
-            if (plan.multi && sections.length !== results.length || plan.intent === 'explain_replenishment'
-              && !sections.some(index => results[index].skillId === 'get_demand_forecast')) throw new AgentError('GEMINI_SCHEMA_VALIDATION_FAILED');
+            sections = [];
+          } else if (plan.synthesize && synthesisEligible) {
+            try {
+              const generated = await execution.generateStructured({ agentId: plan.agent,
+                ...buildSynthesisInput(plan.intent, message, results) });
+              sections = generated.output.sections;
+              if (Reflect.ownKeys(generated.output).some(key => key !== 'sections') || !Array.isArray(sections) || !sections.length || sections.length > results.length
+                || new Set(sections).size !== sections.length || sections.some(index => !Number.isInteger(index) || index < 0 || index >= results.length)) {
+                throw new AgentError('GEMINI_SCHEMA_VALIDATION_FAILED');
+              }
+              if (plan.multi && sections.length !== results.length || plan.intent === 'explain_replenishment'
+                && !sections.some(index => results[index].skillId === 'get_demand_forecast')) throw new AgentError('GEMINI_SCHEMA_VALIDATION_FAILED');
+              synthesisStatus = 'SUCCEEDED';
+            } catch {
+              synthesisStatus = 'DEGRADED';
+              sections = results.map((_, index) => index);
+            }
           }
-          answer = sections.map(index => buildSkillAnswer(results[index].skillId, results[index].result)).join('\n\n');
+          if (sections.length) answer = sections.map(index => buildSkillAnswer(results[index].skillId, results[index].result)).join('\n\n');
           if (plan.supplierSelectedName) answer = `Seleccionaste ${plan.supplierSelectedName}.\n${answer}`;
           const productSkills = ['search_products', 'get_product_details', 'get_low_stock_products', 'get_top_selling_products',
             'get_product_sales_summary', 'get_demand_forecast', 'get_replenishment_candidates', 'analyze_demand_forecast'];
@@ -304,6 +366,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
       const suggested = results.find(({ result }) => result.status === 'CLARIFICATION' && result.metadata.suggestions?.length);
       const supplierResult = results.find(({ result }) => result.status === 'CLARIFICATION' && result.metadata.supplierResolution);
       return deepFreeze({ requestId: context.requestId, conversationId, answer, intent: plan.intent, agent: plan.agent,
+        ...(synthesisStatus ? { synthesisStatus } : {}),
         ...(suggested ? { suggestions: suggested.result.metadata.suggestions } : supplierPageResponse?.suggestions ? { suggestions: supplierPageResponse.suggestions } : {}),
         ...(suggested?.result.metadata.suggestionsPagination ? { suggestionsPagination: suggested.result.metadata.suggestionsPagination }
           : supplierPageResponse?.suggestionsPagination ? { suggestionsPagination: supplierPageResponse.suggestionsPagination } : {}),

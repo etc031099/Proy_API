@@ -65,7 +65,9 @@ const routeCommercial = (message, memory = {}) => {
       clarificationQuestion: 'Indica un presupuesto positivo en soles para preparar una propuesta.' };
     if (currency !== 'PEN') return { intent: 'replenishment_budget_required', agent: 'coordinator',
       clarificationQuestion: 'La planificación inicial solo admite presupuestos en PEN (S/). No convertiré monedas automáticamente.' };
-    return make('plan_replenishment_budget', { budget, currency: 'PEN', ...(department ? { department } : {}) });
+    return { ...make('plan_replenishment_budget', { budget, currency: 'PEN', ...(department ? { department } : {}) }),
+      ...( /explica|por que|prioritari|administrador/.test(text)
+        ? { narrativeSynthesis: true, intent: 'replenishment_plan_explanation' } : {}) };
   }
   if (/prioriza.*(compras|reponer)|que comprar primero/.test(text)) return {
     intent: 'replenishment_budget_required', agent: 'coordinator',
@@ -107,9 +109,30 @@ const routeDeterministically = (message, memory, now) => {
   if (supplierProducts) return supplierProducts;
   const commercialPlan = routeCommercial(message, memory);
   if (commercialPlan) return commercialPlan;
+  const text = normalize(message);
+  const hasForecastLanguage = /prediccion|forecast|demanda|ml/.test(text);
+  if (/riesgo|riesgos|preocupar|alerta/.test(text) && hasForecastLanguage && /stock|inventario|prediccion|forecast|demanda/.test(text)) {
+    return { intent: 'forecast_risk_explanation', agent: 'analyst', narrativeSynthesis: true };
+  }
+  if (/resumen ejecutivo/.test(text) && /inventario|stock/.test(text)) {
+    return { intent: 'executive_inventory_summary', agent: 'analyst', narrativeSynthesis: true, inventoryOnly: true };
+  }
+  if (/analiza|analizar|preocupar/.test(text) && /inventario|stock/.test(text)) {
+    return { intent: 'inventory_interpretation', agent: 'analyst', narrativeSynthesis: true,
+      inventoryOnly: true, includeForecast: hasForecastLanguage };
+  }
+  if (/conclusiones|decisiones|presentar.*administrador|explicame.*recomendaciones|explica.*recomendaciones|prioriz/.test(text)
+    && /datos|informacion|recomendaciones|productos|plan|estos|estas/.test(text)) {
+    const supportedSelection = memory.lastProductSelection
+      && ['ml_analytics', 'top_selling_products', 'low_stock', 'replenishment_candidates', 'demand_forecast'].includes(memory.lastProductSelection.sourceIntent);
+    const hasContext = Boolean(memory.lastForecastAnalytics || supportedSelection
+      || ['replenishment_candidates', 'business_summary', 'inventory_interpretation',
+        'executive_inventory_summary', 'forecast_risk_explanation'].includes(memory.lastIntent));
+    if (!hasContext) return clarify('¿A qué datos o recomendaciones te refieres? Comparte primero la consulta o lista que deseas analizar.');
+    return { intent: 'evidence_synthesis', agent: 'analyst', narrativeSynthesis: true, fromMemory: true };
+  }
   const forecastPlan = require('./forecastRouting').routeForecastAnalytics(message, memory);
   if (forecastPlan) return forecastPlan;
-  const text = normalize(message);
   const dates = message.match(/\d{4}-\d{2}-\d{2}/g);
   if (!dates && /ayer|semana|ano pasado|hoy/.test(text) && /venta|vendi/.test(text)) return clarify('Indica el periodo con dos fechas YYYY-MM-DD o usa este mes / mes pasado.');
   if (dates && (dates.length !== 2 || !dates.every(isDate) || dates[0] > dates[1])) return clarify('Indica un periodo válido con dos fechas YYYY-MM-DD.');
@@ -132,7 +155,7 @@ const routeDeterministically = (message, memory, now) => {
       period: explicitPeriod || (memory.lastPeriodExplicit === true ? memory.lastPeriod : undefined) || monthPeriod(now),
       periodExplicit: Boolean(explicitPeriod || memory.lastPeriodExplicit === true), limit: 1 };
     if (/explica|por que/.test(text) && /repon|reposicion/.test(text)) {
-      return { intent: 'explain_replenishment', agent: 'analyst', selector, synthesize: true, limit: 1 };
+      return { intent: 'explain_replenishment', agent: 'analyst', selector, limit: 1 };
     }
     if (/demanda|prediccion|forecast/.test(text)) return { intent: 'demand_forecast', agent: 'analyst', selector, limit: 1 };
     return { intent: 'product_details', agent: 'operations', selector, limit: 1 };
@@ -157,7 +180,7 @@ const routeDeterministically = (message, memory, now) => {
   else if (/mas vendidos|mayores ventas|se venden mas/.test(text)) plan = { intent: 'top_selling_products', agent: 'analyst' };
   else if (/vendimos|ventas del mes/.test(text)) plan = { intent: 'sales_summary', agent: 'operations' };
   else if (/vendio|cuanto.*vendido/.test(text)) plan = { intent: 'product_sales_summary', agent: 'operations', needsProduct: true };
-  else if (/explica|por que/.test(text) && /repon|reposicion/.test(text)) plan = { intent: 'explain_replenishment', agent: 'analyst', needsProduct: true, synthesize: true };
+  else if (/explica|por que/.test(text) && /repon|reposicion/.test(text)) plan = { intent: 'explain_replenishment', agent: 'analyst', needsProduct: true };
   else if (/repon|reposicion/.test(text)) plan = { intent: 'replenishment_candidates', agent: 'analyst', limit: /mayor|mas reposicion/.test(text) ? 1 : 5 };
   else if (/prediccion|demanda|forecast/.test(text)) plan = { intent: 'demand_forecast', agent: 'analyst', needsProduct: /producto|\bsu\b|ese|sku/.test(text) };
   else if (/resume|resumen|estado.*negocio/.test(text)) plan = { intent: 'business_summary', agent: 'analyst', multi: /vigilar|atencion/.test(text), synthesize: /vigilar|atencion/.test(text) };

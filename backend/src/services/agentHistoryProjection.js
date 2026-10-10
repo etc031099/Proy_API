@@ -15,7 +15,7 @@ const shape = {
     requiresConfirmation: true, fields: { name: true, sku: true, price: true, currency: true, stock: true, resultingStock: true,
       minStockLevel: true, category: true, costPrice: true, description: true, supplierCosts: true, total: true, paymentMethod: true, contact: true },
     items: [actionItem], result: { id: true, type: true, currency: true, total: true, sku: true, name: true, stock: true, needsSupplierSetup: true, items: [actionItem] } },
-  requestId: true, conversationId: true, answer: true, intent: true, agent: true,
+  requestId: true, conversationId: true, answer: true, intent: true, agent: true, synthesisStatus: true,
   requiresClarification: true, clarificationQuestion: true, latencyMs: true,
   participants: [{ ...agent, skillCalls: true, providerLatencyMs: true }],
   actions: [{ skillId: true, agentId: true, status: true, durationMs: true }],

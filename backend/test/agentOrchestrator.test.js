@@ -41,7 +41,8 @@ const fixture = ({ products = [product(1), product(2), product(3, 'B')], contact
       assert.ok(match.businessId); reads.push({ model: 'Product', match });
       let offset = 0, limit = Infinity;
       const selectedRows = () => products.filter(row => row.businessId === match.businessId
-        && (!match._id || match._id.$in.includes(row._id)) && (!match.sku || match.sku.$in.includes(row.sku))
+        && (!match._id || match._id.$in.includes(row._id))
+        && (!match.sku || (Array.isArray(match.sku.$in) ? match.sku.$in.includes(row.sku) : row.sku === match.sku))
         && (!match.supplierPrices || row.supplierPrices?.some(offer => String(offer.supplierId) === String(match.supplierPrices.$elemMatch.supplierId)
           && typeof offer.purchasePrice === 'number' && offer.purchasePrice > 0)));
       return { select() { return this; }, sort() { return this; }, skip(value) { offset = value; return this; },
@@ -186,16 +187,161 @@ test('ambiguous request uses one Coordinator generation and asks clarification',
   assert.equal(result.usage.totalSkillCalls, 0);
 });
 
-test('replenishment explanation uses verified forecast plus one bounded synthesis', async () => {
-  const f = fixture({ provider: { generateStructured: async () => generated({ sections: [1] }) } });
+test('simple replenishment explanation uses its deterministic template without Gemini', async () => {
+  const f = fixture();
   const result = await f.run('Explícame por qué debería reponer el producto SKU-001');
-  assert.equal(result.code, null); assert.equal(result.usage.totalLlmCalls, 1);
+  assert.equal(result.code, null); assert.equal(result.usage.totalLlmCalls, 0);
   assert.equal(result.usage.totalSkillCalls, 2);
   assert.match(result.answer, /8\.25 unidades/); assert.match(result.answer, /reponer 12 unidades/);
   assert.match(result.answer, /escenario histórico.*1 de julio de 2025/);
-  assert.equal(f.calls[0].input.agentId, 'analyst');
+  assert.equal(f.calls.length, 0);
   assert.equal(JSON.stringify(f.calls).includes(id(1)), false);
   assert.deepEqual(result.participants.map(row => row.agentId), ['coordinator', 'operations', 'analyst']);
+});
+
+test('forecast risk question runs three deterministic analytics over one ML batch, then one grounded Analyst synthesis', async () => {
+  let forecastCalls = 0;
+  const provider = { generateStructured: async input => {
+    const payload = JSON.parse(input.messages[0].text);
+    return generated({ observations: [{ evidenceRefs: payload.evidence.map(item => item.ref),
+      interpretation: 'La cobertura parece ajustada frente a parte de la demanda prevista.',
+      advisoryRecommendation: 'Conviene revisar primero los casos con mayor brecha.' }],
+    limitations: ['El análisis describe el replay histórico y no incluye cambios posteriores.'] });
+  } };
+  const f = fixture({ provider, forecastService: { getDemandForecast: async () => { forecastCalls++; return structuredClone(forecast); } } });
+  const result = await f.run('Explícame en lenguaje sencillo qué riesgos observas en las predicciones y el stock.');
+  assert.equal(result.code, null);
+  assert.equal(result.intent, 'forecast_risk_explanation');
+  assert.equal(result.synthesisStatus, 'SUCCEEDED');
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].type, 'structured');
+  assert.equal(f.calls[0].input.agentId, 'analyst');
+  assert.equal(forecastCalls, 1);
+  assert.equal(result.usage.totalLlmCalls, 1);
+  assert.equal(result.usage.totalSkillCalls, 3);
+  assert.equal(result.usage.totalTokens, 17);
+  assert.equal(result.usage.toolSelectionCycles, 0);
+  assert.equal(result.evidence.length, 3);
+  assert.match(result.answer, /Interpretación de Analyst/);
+  assert.match(result.answer, /fecha de referencia 2025-07-01/);
+  assert.match(result.answer, /8\.25/);
+  const payload = JSON.parse(f.calls[0].input.messages[0].text);
+  assert.ok(f.calls[0].input.messages[0].text.length <= 2000);
+  assert.ok(payload.question.length <= 600);
+  assert.ok(payload.evidence.reduce((sum, row) => sum + (Array.isArray(row.facts) ? row.facts.length : 0), 0) <= 5);
+  assert.doesNotMatch(JSON.stringify(payload), /email|businessId|userId|password|Authorization|[a-f\d]{24}/i);
+  assert.equal(result.participants.find(row => row.agentId === 'coordinator').llmCalls, 0);
+  assert.equal(result.participants.find(row => row.agentId === 'analyst').llmCalls, 1);
+});
+
+test('narrative synthesis failure preserves deterministic facts, evidence and unknown usage', async () => {
+  const failure = Object.assign(new Error('private SDK failure'), { code: 'GEMINI_PERMISSION_DENIED' });
+  const f = fixture({ provider: { generateStructured: async () => { throw failure; } } });
+  const result = await f.run('Explícame en lenguaje sencillo qué riesgos observas en las predicciones y el stock.');
+  assert.equal(result.code, null);
+  assert.equal(result.synthesisStatus, 'DEGRADED');
+  assert.match(result.answer, /datos principales que pude obtener/i);
+  assert.match(result.answer, /fecha de corte 1 de julio de 2025/);
+  assert.equal(result.evidence.length, 3);
+  assert.equal(result.usage.totalLlmCalls, 1);
+  assert.equal(result.usage.totalTokens, null);
+  assert.equal(result.usage.metricsComplete, false);
+});
+
+test('narrative synthesis rejects invented identifiers, numbers and evidence references', async t => {
+  for (const [name, output] of [
+    ['sku', refs => ({ observations: [{ evidenceRefs: refs, interpretation: 'El SKU-FAKE requiere atención prioritaria.', advisoryRecommendation: 'Revisa el caso con cuidado.' }], limitations: [] })],
+    ['number', refs => ({ observations: [{ evidenceRefs: refs, interpretation: 'Hay 999 unidades de brecha en este escenario.', advisoryRecommendation: 'Revisa el caso con cuidado.' }], limitations: [] })],
+    ['reference', () => ({ observations: [{ evidenceRefs: ['00000000-0000-4000-8000-000000000000'], interpretation: 'La cobertura parece ajustada.', advisoryRecommendation: 'Revisa el caso con cuidado.' }], limitations: [] })]
+  ]) await t.test(name, async () => {
+    const provider = { generateStructured: async input => {
+      const payload = JSON.parse(input.messages[0].text);
+      return generated(output(payload.evidence.map(item => item.ref)));
+    } };
+    const f = fixture({ provider });
+    const result = await f.run('Explícame en lenguaje sencillo qué riesgos observas en las predicciones y el stock.');
+    assert.equal(result.code, null);
+    assert.equal(result.synthesisStatus, 'DEGRADED');
+    assert.match(result.answer, /datos principales que pude obtener/i);
+    assert.equal(result.usage.totalLlmCalls, 1);
+    assert.equal(result.evidence.length, 3);
+  });
+});
+
+test('open inventory interpretation uses current business and stock skills without adding ML', async () => {
+  let forecastCalls = 0;
+  const provider = { generateStructured: async input => {
+    const payload = JSON.parse(input.messages[0].text);
+    return generated({ observations: [{ evidenceRefs: payload.evidence.map(item => item.ref),
+      interpretation: 'Una parte del catálogo merece una revisión operativa prioritaria.',
+      advisoryRecommendation: 'Revisa los productos que aparecen en el mínimo configurado.' }],
+    limitations: [] });
+  } };
+  const f = fixture({ provider, forecastService: { getDemandForecast: async () => { forecastCalls++; return structuredClone(forecast); } } });
+  const result = await f.run('Analiza la situación de mi inventario y dime qué debería preocuparme más.');
+  assert.equal(result.intent, 'inventory_interpretation');
+  assert.equal(result.synthesisStatus, 'SUCCEEDED');
+  assert.deepEqual(result.actions.map(action => action.skillId), ['get_business_summary', 'get_low_stock_products']);
+  assert.equal(result.usage.totalSkillCalls, 2);
+  assert.equal(result.usage.totalLlmCalls, 1);
+  assert.equal(forecastCalls, 0);
+});
+
+test('inventory interpretation combines current stock and historical forecast only when explicitly requested', async () => {
+  let forecastCalls = 0;
+  const provider = { generateStructured: async input => {
+    const payload = JSON.parse(input.messages[0].text);
+    return generated({ observations: [{ evidenceRefs: payload.evidence.map(item => item.ref),
+      interpretation: 'La situación actual y el replay muestran señales que conviene revisar por separado.',
+      advisoryRecommendation: 'Compara cada evidencia dentro de su propia fecha de referencia.' }],
+    limitations: ['El replay no representa una predicción actual.'] });
+  } };
+  const f = fixture({ provider, forecastService: { getDemandForecast: async () => { forecastCalls++; return structuredClone(forecast); } } });
+  const result = await f.run('Analiza mi inventario según las predicciones y dime qué debo vigilar.');
+  assert.equal(result.intent, 'inventory_interpretation');
+  assert.equal(result.synthesisStatus, 'SUCCEEDED');
+  assert.deepEqual(result.actions.map(action => action.skillId),
+    ['get_business_summary', 'get_low_stock_products', 'analyze_demand_forecast', 'analyze_demand_forecast']);
+  assert.equal(result.usage.totalSkillCalls, 4);
+  assert.equal(result.usage.totalLlmCalls, 1);
+  assert.equal(forecastCalls, 1);
+  assert.match(result.answer, /productos activos/);
+  assert.match(result.answer, /escenario histórico con fecha de corte 1 de julio de 2025/);
+});
+
+test('open reference without a previous list is clarified before any LLM call', async () => {
+  const f = fixture();
+  const result = await f.run('¿Qué conclusiones sacas de estos datos?');
+  assert.equal(result.requiresClarification, true);
+  assert.equal(result.usage.totalLlmCalls, 0);
+  assert.equal(result.usage.totalSkillCalls, 0);
+  assert.equal(f.calls.length, 0);
+});
+
+test('budget plan stays deterministic and one Analyst generation only explains its fixed plan', async () => {
+  const supplierId = id(77);
+  const supplier = { _id: supplierId, businessId: 'A', name: 'Proveedor demo', type: 'vendor', isActive: true };
+  const budgetProduct = { ...product(1), currency: 'PEN', supplierPrices: [{ supplierId, purchasePrice: 1.5 }],
+    preferredSupplierId: supplierId };
+  const provider = { generateStructured: async input => {
+    const payload = JSON.parse(input.messages[0].text);
+    return generated({ observations: [{ evidenceRefs: payload.evidence.map(item => item.ref),
+      interpretation: 'El orden refleja primero las necesidades que cubren el plan dentro del límite disponible.',
+      advisoryRecommendation: 'Verifica los precios configurados antes de decidir la compra.' }], limitations: [] });
+  } };
+  const f = fixture({ products: [budgetProduct], contacts: [supplier], provider });
+  const result = await f.run('Tengo S/1000 y este plan, explícame por qué estas compras son prioritarias.');
+  assert.equal(result.intent, 'replenishment_plan_explanation');
+  assert.equal(result.synthesisStatus, 'SUCCEEDED');
+  assert.equal(result.usage.totalSkillCalls, 1);
+  assert.equal(result.usage.totalLlmCalls, 1);
+  assert.equal(f.calls.length, 1);
+  const payload = JSON.parse(f.calls[0].input.messages[0].text);
+  const planned = payload.evidence[0].facts.items[0];
+  assert.equal(planned.plannedQty, 12);
+  assert.equal(planned.supplierName, 'Proveedor demo');
+  assert.match(result.answer, /12/);
+  assert.match(result.answer, /Interpretación de Analyst/);
 });
 
 test('multi-evidence business summary coordinates two specialists with one generation', async () => {
@@ -812,7 +958,7 @@ test('provider failures keep a safe internal category and correlation while pres
   }
 });
 
-test('orchestrator maps two exhausted 503 provider attempts to AGENT_PROVIDER_FAILED without double-counting calls', async () => {
+test('failed optional business summary synthesis preserves successful skill data and reports degraded synthesis', async () => {
   let calls = 0;
   const events = [];
   const f = fixture({ onEvent: event => events.push(event), provider: {
@@ -820,7 +966,7 @@ test('orchestrator maps two exhausted 503 provider attempts to AGENT_PROVIDER_FA
     async generateWithTools() { throw new Error('unused'); }
   } });
   const result = await f.run('Resume cómo está mi negocio y qué debería vigilar');
-  assert.equal(result.code, 'AGENT_PROVIDER_FAILED'); assert.equal(calls, 2);
+  assert.equal(result.code, null); assert.equal(result.synthesisStatus, 'DEGRADED'); assert.equal(calls, 2);
   assert.equal(result.usage.totalLlmCalls, 1); assert.equal(result.usage.totalTokens, null);
   const attempts = events.filter(event => event.type === 'provider_attempt');
   assert.equal(attempts.length, 2); assert.equal(attempts[0].retryScheduled, true);
@@ -845,16 +991,17 @@ test('ML_NOT_READY and individual non-READY remain honest with no fabricated for
   assert.match(result.answer, /suficiente historial/); assert.doesNotMatch(result.answer, /8\.25/);
 });
 
-test('invalid synthesis cannot replace facts with invented content', async () => {
+test('simple replenishment explanation remains a deterministic template', async () => {
   const f = fixture({ provider: { generateStructured: async () => generated({ sections: [99], answer: 'invented' }) } });
   const result = await f.run('Explícame por qué debería reponer el producto SKU-001');
-  assert.equal(result.code, 'AGENT_PROVIDER_FAILED'); assert.doesNotMatch(result.answer, /invented/);
+  assert.equal(result.code, null); assert.equal(result.usage.totalLlmCalls, 0);
+  assert.doesNotMatch(result.answer, /invented/);
 });
 
-test('explanation synthesis must include the forecast evidence', async () => {
+test('simple explanation does not call synthesis even when the provider would return invalid output', async () => {
   const f = fixture({ provider: { generateStructured: async () => generated({ sections: [0] }) } });
   const result = await f.run('Explícame por qué debería reponer el producto SKU-001');
-  assert.equal(result.code, 'AGENT_PROVIDER_FAILED');
+  assert.equal(result.code, null); assert.equal(result.usage.totalLlmCalls, 0); assert.equal(f.calls.length, 0);
 });
 
 test('authenticated input boundary rejects tenant overrides, IDs and invalid messages', async () => {

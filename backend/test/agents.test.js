@@ -22,7 +22,7 @@ test('registry contains exactly three distinct immutable agent definitions', () 
   for (const agent of AGENTS) {
     assert.equal(agent.version, '1.0.0');
     assert.ok(agent.displayName && agent.description && agent.responsibilities.length);
-    assert.equal(agent.llmPolicy.providerEnabled, false);
+    assert.equal(agent.llmPolicy.providerEnabled, true);
     assert.ok(Object.isFrozen(agent) && Object.isFrozen(agent.allowedSkills));
     assert.equal(Reflect.set(agent, 'version', 'tampered'), false);
   }
