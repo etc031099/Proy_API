@@ -8,6 +8,7 @@ export default defineConfig({
   },
   test: {
     include: [
+      'test/telegramPreferences.test.tsx',
       'test/mlForecast.api.test.ts',
       'test/mlForecast.component.test.tsx',
       'test/systemPagination.component.test.tsx',

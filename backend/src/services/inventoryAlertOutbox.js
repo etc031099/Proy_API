@@ -49,7 +49,8 @@ const send = async payload => {
   } catch (error) { return { category: error.name === 'AbortError' ? 'TIMEOUT' : 'NETWORK', retryable: true }; }
   finally { clearTimeout(timer); }
 };
-const createInventoryAlertDispatcher = ({ repo = repository, deliver = send, clock = () => new Date() } = {}) => ({
+const createInventoryAlertDispatcher = ({ repo = repository, deliver = send, clock = () => new Date(),
+  afterDelivered = repo === repository ? eventId => require('./inventoryAlertChannels').createInventoryAlertChannels().processPendingEvent(eventId) : async () => {} } = {}) => ({
   async run() {
     const summary = { claimed: 0, delivered: 0, retrying: 0, failed: 0 };
     for (let i = 0; i < 10; i++) {
@@ -61,6 +62,9 @@ const createInventoryAlertDispatcher = ({ repo = repository, deliver = send, clo
       if (result.delivered) {
         await repo.finish(row, token, { status: 'DELIVERED', deliveredAt: clock(), nextAttemptAt: null, lastErrorCategory: null });
         summary.delivered++;
+        // Only drain channel work already requested by Node-RED. Telegram failure
+        // cannot undo the durable receipt or fail the inventory/outbox operation.
+        try { await afterDelivered(row.eventId); } catch { /* Durable channel queue remains available to /channels/run. */ }
       } else {
         await repo.finish(row, token, { status: 'FAILED', lastErrorCategory: result.category,
           nextAttemptAt: result.retryable ? new Date(clock().getTime() + backoffMs(row.attempts)) : null });
@@ -70,12 +74,13 @@ const createInventoryAlertDispatcher = ({ repo = repository, deliver = send, clo
     return summary;
   }
 });
-// Stored receipt is the consumer inbox for ACT-04A; channel delivery is a separate later phase.
+// Reserve channel work durably before ACK, but never send until ACT-04A is DELIVERED.
 const receiveAlertEvent = async payload => {
   if (!payload || typeof payload.eventId !== 'string' || payload.eventId.length > 100) return null;
   const row = await Event.findOne({ eventId: payload.eventId }).lean().exec();
   if (!row || !isDeepStrictEqual(row.payload, payload)) return null;
   const result = await Event.updateOne({ eventId: row.eventId, receivedAt: { $exists: false } }, { $set: { receivedAt: new Date() } }).exec();
+  await require('./inventoryAlertChannels').createInventoryAlertChannels().prepare(row.eventId);
   return { success: true, eventId: row.eventId, duplicate: result.modifiedCount === 0 };
 };
 module.exports = { recordAlertEvent, eventIdentity, backoffMs, createInventoryAlertDispatcher, receiveAlertEvent, repository, send };

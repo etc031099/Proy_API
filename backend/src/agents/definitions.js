@@ -16,7 +16,7 @@ const AGENTS = deepFreeze([
     responsibilities: ['Productos e inventario', 'Proveedores', 'Transacciones', 'Ventas y compras factuales'],
     allowedSkills: ['search_products', 'get_product_details', 'get_low_stock_products', 'get_inventory_summary',
       'get_recent_transactions', 'get_sales_summary', 'get_purchase_summary', 'get_supplier_details', 'get_product_sales_summary',
-      'get_supplier_products', 'list_stock_alert_rules', 'list_inventory_alerts', 'list_inventory_alert_outbox_events'],
+      'get_supplier_products', 'list_stock_alert_rules', 'list_inventory_alerts', 'list_inventory_alert_outbox_events', 'list_inventory_alert_channel_deliveries'],
     llmPolicy: { preferredMode: 'deterministic-first', providerEnabled: true },
     limits: { ...TOKEN_BUDGETS.operations, maxSkillCalls: EXECUTION_LIMITS.maxSkillCalls, maxLlmCalls: EXECUTION_LIMITS.maxLlmCalls }
   },

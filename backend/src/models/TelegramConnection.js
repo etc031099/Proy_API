@@ -7,6 +7,8 @@ const telegramConnectionSchema = new mongoose.Schema({
   connectionCodeExpiresAt: { type: Date },
   enabled: { type: Boolean, default: true },
   lowStockAlertsEnabled: { type: Boolean, default: true },
+  stockRuleAlertsEnabled: { type: Boolean, default: false },
+  stockRuleResolvedAlertsEnabled: { type: Boolean, default: false },
   lastAlertAt: { type: Date }
 }, { timestamps: true });
 

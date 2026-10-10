@@ -31,3 +31,5 @@ require('./stockAlertRuleEvaluator.test');
 require('./inventoryAlertQueries.test');
 require('./inventoryAlertOutbox.test');
 require('./inventoryAlertOutboxQueries.test');
+require('./inventoryAlertChannels.test');
+require('./telegramPreferences.test');

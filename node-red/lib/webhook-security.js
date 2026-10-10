@@ -128,6 +128,19 @@ const validateWebhookRequest = ({ headers, payload }, expectedSecret) => {
 };
 
 const createWebhookSecurity = (expectedSecret) => ({
+  async processInventoryAlertChannels(eventId, baseUrl, fetchImpl = fetch) {
+    if (typeof eventId !== 'string' || !/^[a-f0-9]{24}:inventory\.alert\.(opened|resolved)$/.test(eventId)) return { success: false };
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 10000);
+    try {
+      const target = new URL(`${String(baseUrl).replace(/\/$/, '')}/internal/inventory-alert-dispatch/channels/process`);
+      if (target.protocol !== 'https:' && !(target.protocol === 'http:' && ['localhost', '127.0.0.1', 'backend'].includes(target.hostname))) return { success: false };
+      const response = await fetchImpl(target.href, { method: 'POST', redirect: 'error', signal: controller.signal,
+        headers: { 'Content-Type': 'application/json', 'X-Internal-Secret': expectedSecret }, body: JSON.stringify({ eventId }) });
+      const result = await response.json();
+      return { success: response.ok && result.success === true };
+    } catch { return { success: false }; }
+    finally { clearTimeout(timer); }
+  },
   async receiveInventoryAlert(message, baseUrl, fetchImpl = fetch) {
     const validated = validateWebhookRequest({ headers: message?.req?.headers || {}, payload: message.payload }, expectedSecret);
     const reply = (statusCode, payload) => ({ ...message, statusCode, headers: { 'Content-Type': 'application/json' }, payload });

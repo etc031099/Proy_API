@@ -115,8 +115,18 @@ Un workflow programado de GitHub Actions puede llamar este endpoint usando un
 repository secret; su frecuencia/horarios están sujetos a disponibilidad del
 scheduler. No se configuró ningún servicio externo en esta fase. Los registros
 pendientes sobreviven reinicios y pueden despacharse después. No usar context ni
-filesystem Node-RED para dedupe durable. ACT-04B deberá persistir por separado la
-entrega por canal; esta recepción no autoriza efectos Telegram automáticos.
+filesystem Node-RED para dedupe durable. ACT-04B persiste por separado la
+entrega por canal: el callback reserva PENDING, pero no envía antes del ACK y del
+estado DELIVERED de ACT-04A.
+
+Tras finalizar la respuesta HTTP, el nodo de autenticación llama al procesamiento
+backend `/internal/inventory-alert-dispatch/channels/process` con solo `eventId`
+y el secreto compartido. No utiliza BILLING_EMAIL/BILLING_PASSWORD ni resuelve
+tenant/chat. El backend controla preferencias opt-in y dedupe durable. Fallar el
+envío Telegram no cambia el ACK de recepción. Reintentos pendientes pueden
+procesarse desde `/api/internal/inventory-alert-dispatch/channels/run` usando el
+secreto dedicado del dispatcher; no existe scheduler nuevo. Ver los estados
+por canal con «¿Qué notificaciones Telegram están pendientes?» en el asistente.
 
 Pruebas Mongo locales: desde `backend/`, ejecutar
 `node test/integration/inventoryAlertOutbox.run.js`. Requiere `MONGODB_TEST_URI`

@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { apiClient } from '@/lib/api';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { TelegramRulePreferences } from '@/components/TelegramRulePreferences';
 
 export default function IntegrationsPage() {
   const { t } = useLanguage();
@@ -23,6 +24,7 @@ export default function IntegrationsPage() {
   const [telegramConnected, setTelegramConnected] = useState(false);
   const [telegramConfigured, setTelegramConfigured] = useState(false);
   const [telegramCode, setTelegramCode] = useState('');
+  const [rulePreferences, setRulePreferences] = useState({ open: false, resolved: false });
 
   const loadExchangeRate = async () => {
     try {
@@ -68,6 +70,7 @@ export default function IntegrationsPage() {
       const response = await apiClient.getTelegramStatus();
       setTelegramConfigured(Boolean(response.data?.configured));
       setTelegramConnected(Boolean(response.data?.connected));
+      setRulePreferences({ open: response.data?.stockRuleAlertsEnabled === true, resolved: response.data?.stockRuleResolvedAlertsEnabled === true });
     } catch (err: any) {
       setError(err.response?.data?.message || t('integrations.telegramError'));
     }
@@ -147,6 +150,7 @@ export default function IntegrationsPage() {
                 ) : telegramConnected ? (
                   <>
                     <p className="text-sm text-green-600">{t('integrations.telegramConnected')}</p>
+                    <TelegramRulePreferences initialOpen={rulePreferences.open} initialResolved={rulePreferences.resolved} />
                     <Button variant="outline" onClick={disconnectTelegram} disabled={loading}>
                       {t('integrations.telegramDisconnect')}
                     </Button>

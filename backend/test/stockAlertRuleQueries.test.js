@@ -95,7 +95,7 @@ test('general and SKU answers include safe evidence, count, evaluation-without-n
     const result = await f.orchestrator.handle(req('A'), { message });
     assert.equal(result.code, null); assert.match(result.answer, /stock <= 3 unidades/);
     assert.match(result.answer, /se evalúan al cambiar el stock/);
-    assert.match(result.answer, /Todavía no envían avisos automáticos/);
+    assert.match(result.answer, /avisos Telegram requieren conexión y preferencias habilitadas/);
     assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
     assert.equal(result.usage.totalSkillCalls, 1); assert.equal(result.evidence[0].recordCount, 1);
     assert.equal(result.evidence[0].skillId, 'list_stock_alert_rules');

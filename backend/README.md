@@ -840,6 +840,65 @@ No requiere llamadas Gemini para verificar persistencia. Pruebas locales:
 `node --test test/agentHistory.test.js test/agentMessages.test.js` desde backend;
 `npm test`; desde frontend `npm run test:ml-forecast`, `npx tsc --noEmit`, `npm run build`.
 
+## Telegram de reglas de stock (ACT-04B)
+
+Los eventos persistidos `inventory.alert.opened/resolved` se entregan a Node-RED
+mediante ACT-04A, sin volver a evaluar reglas. Tras emitir el ACK durable,
+Node-RED solicita `POST /api/internal/inventory-alert-dispatch/channels/process`
+con **solo eventId**, autenticado por `X-Internal-Secret` y
+`NODE_RED_WEBHOOK_SECRET`. Backend deriva negocio y destino exclusivamente del
+evento persistido y su `TelegramConnection`; no utiliza las credenciales fijas
+de `telegram.command`. No hay acceso Atlas desde Node-RED.
+
+`InventoryAlertChannelDelivery` conserva estado, intentos, fechas, lease y
+categorías sanitizadas; índice único `(eventId, channel, destinationKey)`.
+El destino es una huella interna, nunca expuesta al asistente. No guarda token.
+El callback de recepción reserva PENDING de forma durable antes del ACK, sin enviar.
+No se envía hasta que el outbox sea DELIVERED y exista recepción durable.
+Si la petición de canal llega antes de ese guardado, queda PENDING y el dispatcher
+drena la entrega ya solicitada después del guardado. Si llega después, la procesa
+directamente. Un fallo Telegram no revierte ni invalida el ACK de ACT-04A.
+
+En **Integraciones**, las preferencias independientes `stockRuleAlertsEnabled`
+y `stockRuleResolvedAlertsEnabled` permiten avisos de activación y recuperación.
+Ambas son **false** por defecto, incluso en conexiones existentes sin esos campos.
+`PATCH /api/telegram/preferences` requiere auth/acceso al negocio y acepta solo
+esos booleanos. `lowStockAlertsEnabled` conserva su semántica tradicional.
+SKIPPED es terminal: sin conexión, conexión deshabilitada, preferencia apagada,
+evento no autorizado o destino cambiado. Habilitar una preferencia no reenvía
+eventos omitidos para ese destino; se aplica a nuevos eventos.
+
+Timeout/network/429/5xx usan backoff 30 s / 2 min / 5 min / 15 min y máximo
+cinco intentos; token/config/chat inválido o forbidden son terminales. Lease:
+30 s; petición Telegram: máximo 8 s incluyendo body. No hay retry en bucle ni
+scheduler externo. Para procesar reintentos vencidos se dispone de
+`POST /api/internal/inventory-alert-dispatch/channels/run`, body `{}`, con el
+secreto dedicado `INVENTORY_ALERT_DISPATCH_SECRET` (no el del webhook).
+La cola se conserva tras reinicios. Si Node-RED o backend cae tras el ACK,
+la reserva durable permite recuperarla con `/channels/run`, sin repetir
+operaciones de stock. `/channels/process` también es idempotente por evento.
+No se envían automáticamente todos los eventos históricos del outbox.
+
+Garantía: **at-least-once + dedupe durable**, no exactly-once. Telegram no ofrece
+clave idempotente: si acepta un mensaje y el proceso cae antes de persistir el
+éxito, un reintento puede duplicarlo. También un fallo de red ambiguo puede haber
+sido aceptado remotamente. No se debe prometer entrega exactamente una vez.
+
+Lectura: `list_inventory_alert_channel_deliveries`, Operations, máximo 20,
+tenant autenticado, 0 LLM / 0 tokens. Ejemplos: «¿Se envió por Telegram la alerta
+de SKU-1?», «¿Qué notificaciones Telegram están pendientes?» y «¿Qué notificaciones
+Telegram fallaron?». Pendientes incluye fallos con reintento; fallidas son
+terminales. Sin chatId, payload, IDs, secretos ni lease en DTO/UI.
+Reglas configuradas, eventos generados, entrega a Node-RED y envío Telegram son
+consultas y estados separados.
+
+P3 UX: cruzar stock mínimo y una regla personalizada puede generar **dos avisos**;
+se distinguen por «Stock mínimo» tradicional y «Regla de stock personalizada».
+No se fusionan en esta fase. Pruebas locales: `npm test`,
+`npm run test:integration:alert-channels` con `MONGODB_TEST_URI` local terminada
+en `_test`; Node-RED `npm test`; frontend `npm run test:ml-forecast`.
+Los tests usan destinos/senders ficticios, nunca envían Telegram ni escriben cloud.
+
 ## 📞 Support
 
 For issues and questions:

@@ -5,6 +5,7 @@ const labels: Record<string, string> = {
   list_stock_alert_rules: 'Consultó reglas de alerta de stock configuradas',
   list_inventory_alerts: 'Consultó alertas de inventario generadas',
   list_inventory_alert_outbox_events: 'Consultó estado de entrega de alertas',
+  list_inventory_alert_channel_deliveries: 'Consultó notificaciones Telegram de reglas de stock',
   search_products: 'Buscó productos', get_product_details: 'Consultó un producto',
   get_low_stock_products: 'Consultó productos con stock bajo', get_recent_transactions: 'Consultó transacciones recientes',
   get_sales_summary: 'Consultó ventas completadas', get_top_selling_products: 'Consultó productos más vendidos',

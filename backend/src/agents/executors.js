@@ -222,6 +222,26 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
   };
 
   return Object.freeze({
+    async list_inventory_alert_channel_deliveries(invocation) {
+      const Delivery = getModels().InventoryAlertChannelDelivery || require('../models/InventoryAlertChannelDelivery');
+      const { businessId } = invocation.context;
+      const { sku, status } = invocation.args;
+      const match = { businessId, channel: 'telegram', ...(sku ? { sku } : {}) };
+      if (status === 'PENDING') match.$or = [{ status: 'PENDING' }, { status: 'FAILED', nextAttemptAt: { $ne: null } }];
+      else if (status === 'FAILED') Object.assign(match, { status, nextAttemptAt: null });
+      else if (status) match.status = status;
+      const limit = invocation.args.limit || 20;
+      const [rows, total] = await Promise.all([
+        Delivery.find(match).select('sku eventType status attempts createdAt deliveredAt nextAttemptAt skipReason lastErrorCategory')
+          .sort({ createdAt: -1, _id: -1 }).limit(limit).maxTimeMS(invocation.skill.timeoutMs).lean().exec(),
+        Delivery.countDocuments(match).maxTimeMS(invocation.skill.timeoutMs).exec()
+      ]);
+      const data = rows.map(row => ({ sku: row.sku, eventType: row.eventType, status: row.status, attempts: row.attempts,
+        createdAt: row.createdAt?.toISOString() ?? null, deliveredAt: row.deliveredAt?.toISOString() ?? null,
+        nextAttemptAt: row.nextAttemptAt?.toISOString() ?? null, skipReason: row.skipReason || null,
+        lastErrorCategory: row.lastErrorCategory || null }));
+      return listResult(data, total, { asOf: asOf(), evidenceLabel: 'Notificaciones Telegram de reglas de stock' });
+    },
     async list_stock_alert_rules(invocation) {
       const { Product } = getModels();
       const Rule = getModels().StockAlertRule || require('../models/StockAlertRule');

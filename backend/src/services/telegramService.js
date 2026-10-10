@@ -7,11 +7,12 @@ const CODE_TTL_MS = 10 * 60 * 1000;
 
 const getToken = () => process.env.TELEGRAM_BOT_TOKEN;
 const hashCode = (code) => crypto.createHash('sha256').update(code).digest('hex');
+const requestError = (category, retryable) => Object.assign(new Error('Telegram request failed'), { category, retryable });
 
 const telegramRequest = async (method, payload, timeoutMs = 8000) => {
   const token = getToken();
   if (!token) {
-    throw new Error('TELEGRAM_BOT_TOKEN is not configured');
+    throw requestError('CONFIGURATION', false);
   }
 
   const controller = new AbortController();
@@ -22,24 +23,27 @@ const telegramRequest = async (method, payload, timeoutMs = 8000) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-      signal: controller.signal
+      signal: controller.signal,
+      redirect: 'error'
     });
+    let data;
+    try { data = await response.json(); } catch (error) {
+      if (controller.signal.aborted) throw requestError('TIMEOUT', true);
+      throw requestError(response.status === 429 ? 'RATE_LIMIT' : response.status >= 500 ? 'UNAVAILABLE'
+        : response.status === 401 ? 'AUTH' : response.status === 403 ? 'FORBIDDEN' : response.status === 400 ? 'INVALID_CHAT' : 'INVALID_RESPONSE',
+      ![400, 401, 403].includes(response.status));
+    }
+    if (!response.ok || !data?.ok) {
+      const status = data?.error_code || response.status;
+      throw requestError(status === 429 ? 'RATE_LIMIT' : status >= 500 ? 'UNAVAILABLE'
+        : status === 401 ? 'AUTH' : status === 403 ? 'FORBIDDEN' : status === 400 ? 'INVALID_CHAT' : 'CONFIGURATION',
+      status === 429 || status >= 500);
+    }
+    return data.result;
   } catch (error) {
-    const reason = error?.name === 'AbortError' ? 'timed out' : 'network request failed';
-    throw new Error(`Telegram API ${reason}`);
-  } finally {
-    clearTimeout(timeoutId);
-  }
-  let data;
-  try {
-    data = await response.json();
-  } catch {
-    throw new Error(`Telegram API returned an invalid response (HTTP ${response.status})`);
-  }
-  if (!response.ok || !data.ok) {
-    throw new Error(`Telegram API request failed (HTTP ${response.status})`);
-  }
-  return data.result;
+    if (error.category) throw error;
+    throw requestError(error?.name === 'AbortError' ? 'TIMEOUT' : 'NETWORK', true);
+  } finally { clearTimeout(timeoutId); }
 };
 
 const createConnectionCode = async (businessId) => {
@@ -188,6 +192,7 @@ const startPolling = () => {
 };
 
 module.exports = {
+  sendMessage,
   createConnectionCode,
   getConnection,
   disconnect,

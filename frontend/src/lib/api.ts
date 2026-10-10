@@ -290,6 +290,11 @@ class ApiClient {
     return response.data;
   }
 
+  async updateTelegramRulePreferences(preferences: { stockRuleAlertsEnabled: boolean; stockRuleResolvedAlertsEnabled: boolean }): Promise<ApiResponse> {
+    const response = await this.instance.patch('/telegram/preferences', preferences);
+    return response.data;
+  }
+
   async createTelegramConnectionCode(): Promise<ApiResponse> {
     const response = await this.instance.post('/telegram/connect/code');
     return response.data;

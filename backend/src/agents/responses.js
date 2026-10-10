@@ -153,7 +153,7 @@ const buildSkillAnswer = (skillId, result) => {
   if (skillId === 'analyze_demand_forecast') return require('./forecastResponses').buildForecastAnalysisAnswer(result);
   const { data, metadata, status } = result;
   if (skillId === 'list_stock_alert_rules') {
-    const note = 'Estas reglas se evalúan al cambiar el stock y registran alertas internas cuando se cruza la condición. Todavía no envían avisos automáticos.';
+    const note = 'Estas reglas se evalúan al cambiar el stock y registran alertas internas cuando se cruza la condición. Los avisos Telegram requieren conexión y preferencias habilitadas en Integraciones.';
     if (!data.length) return `No tienes reglas de alerta de stock configuradas${metadata.sku ? ` para ${metadata.sku}` : ''}.\n${note}`;
     const count = metadata.totalMatches;
     return `Tienes ${count} ${count === 1 ? 'regla de alerta de stock configurada' : 'reglas de alerta de stock configuradas'}:\n`
@@ -179,6 +179,14 @@ const buildSkillAnswer = (skillId, result) => {
     const count = metadata.totalMatches;
     const heading = `Se ${count === 1 ? 'generó' : 'generaron'} ${count} ${count === 1 ? 'alerta' : 'alertas'} de inventario${metadata.truncated ? ` (mostrando ${metadata.returnedCount})` : ''}:`;
     return `${heading}\n${lines.join('\n')}`;
+  }
+  if (skillId === 'list_inventory_alert_channel_deliveries') {
+    const states = { PENDING: 'Pendiente', IN_FLIGHT: 'En proceso', DELIVERED: 'Enviada a Telegram', FAILED: 'Fallida', SKIPPED: 'Omitida' };
+    const reasons = { telegram_not_configured: 'Telegram no conectado', telegram_disabled: 'conexión deshabilitada',
+      preference_disabled: 'preferencia deshabilitada', unsupported_event: 'evento no admitido', destination_changed: 'destino cambiado' };
+    return ['Notificaciones Telegram de reglas de stock:', ...(data.length ? data.map(row =>
+      `• ${row.sku} · ${row.eventType === 'inventory.alert.opened' ? 'Activación' : 'Recuperación'} · ${states[row.status]}${row.nextAttemptAt && row.status === 'FAILED' ? ' (reintento pendiente)' : ''}. Intentos: ${row.attempts}.${row.skipReason ? ` Motivo: ${reasons[row.skipReason] || 'no disponible'}.` : ''}${row.lastErrorCategory ? ` Categoría: ${row.lastErrorCategory}.` : ''}${row.nextAttemptAt ? ` Próximo intento habilitado: ${dateTimeLabel(row.nextAttemptAt)}.` : ''}`)
+      : ['No encontré notificaciones que coincidan.']), 'La entrega a Node-RED y el envío a Telegram son estados independientes.', listFooter(metadata, data.length)].filter(Boolean).join('\n');
   }
   if (skillId === 'list_inventory_alert_outbox_events') {
     const selectedStatus = metadata.status;

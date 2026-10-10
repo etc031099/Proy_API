@@ -18,7 +18,7 @@ const READY_SKILL_IDS = Object.freeze([
   'get_sales_summary', 'get_top_selling_products', 'get_business_summary',
   'get_demand_forecast', 'get_replenishment_candidates', 'get_product_sales_summary', 'analyze_demand_forecast',
   'get_replenishment_cost', 'plan_replenishment_budget', 'compare_supplier_costs', 'get_supplier_products', 'list_stock_alert_rules',
-  'list_inventory_alerts', 'list_inventory_alert_outbox_events'
+  'list_inventory_alerts', 'list_inventory_alert_outbox_events', 'list_inventory_alert_channel_deliveries'
 ]);
 const entry = (skillId, description, allowedAgents, inputSchema, maxRecords, dataSensitivity, outputDescription) => ({
   id: skillId, version: '1.0.0', description, readOnly: true, allowedAgents, inputSchema,
@@ -31,6 +31,9 @@ const entry = (skillId, description, allowedAgents, inputSchema, maxRecords, dat
 });
 
 const SKILLS = deepFreeze([
+  entry('list_inventory_alert_channel_deliveries', 'Consultó notificaciones Telegram de reglas de stock.', ['operations'],
+    schema({ sku: text(100), status: { type: 'string', enum: ['PENDING', 'IN_FLIGHT', 'DELIVERED', 'SKIPPED', 'FAILED'] }, limit: limit(20) }),
+    20, 'OPERATIONAL', 'Bounded Telegram channel delivery states and safe diagnostic categories; no destinations, secrets or internal identifiers'),
   entry('list_stock_alert_rules', 'Consultó reglas de alerta de stock configuradas.', ['operations'],
     schema({ sku: text(100), limit: limit(20) }), 20, 'OPERATIONAL', 'Active configured rules with product SKU/name, operator and threshold; excludes alert events and internal IDs'),
   entry('list_inventory_alerts', 'Consultó alertas de inventario generadas.', ['operations'],

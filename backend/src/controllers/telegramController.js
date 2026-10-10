@@ -9,7 +9,9 @@ const getStatus = asyncHandler(async (req, res) => {
       configured: Boolean(process.env.TELEGRAM_BOT_TOKEN),
       connected: Boolean(connection?.chatId),
       enabled: connection?.enabled ?? false,
-      lowStockAlertsEnabled: connection?.lowStockAlertsEnabled ?? false
+      lowStockAlertsEnabled: connection?.lowStockAlertsEnabled ?? false,
+      stockRuleAlertsEnabled: connection?.stockRuleAlertsEnabled === true,
+      stockRuleResolvedAlertsEnabled: connection?.stockRuleResolvedAlertsEnabled === true
     }
   });
 });
@@ -27,4 +29,18 @@ const disconnectTelegram = asyncHandler(async (req, res) => {
   res.json({ success: true, message: 'Telegram notifications disconnected.' });
 });
 
-module.exports = { getStatus, generateConnectionCode, disconnectTelegram };
+const updatePreferences = asyncHandler(async (req, res) => {
+  const allowed = ['stockRuleAlertsEnabled', 'stockRuleResolvedAlertsEnabled'];
+  if (!req.body || Array.isArray(req.body) || !Object.keys(req.body).length
+    || Object.keys(req.body).some(key => !allowed.includes(key) || typeof req.body[key] !== 'boolean')) {
+    return res.status(400).json({ success: false, message: 'Invalid Telegram preferences.' });
+  }
+  const connection = await require('../models/TelegramConnection').findOneAndUpdate(
+    { businessId: req.businessId }, { $set: req.body }, { new: true, runValidators: true });
+  if (!connection) return res.status(409).json({ success: false, message: 'Connect Telegram first.' });
+  res.json({ success: true, data: {
+    stockRuleAlertsEnabled: connection.stockRuleAlertsEnabled === true,
+    stockRuleResolvedAlertsEnabled: connection.stockRuleResolvedAlertsEnabled === true
+  } });
+});
+module.exports = { getStatus, generateConnectionCode, disconnectTelegram, updatePreferences };

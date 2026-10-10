@@ -247,6 +247,16 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   if (tenantGuard) return tenantGuard;
   const alertText = normalize(message);
   const alertSku = canonicalProductSku(message) || message.match(/\bSKU-[\w.-]{1,100}\b/i)?.[0];
+  if (/\btelegram\b/.test(alertText) && /\b(?:alertas?|notificaciones?|entregas?)\b/.test(alertText)
+    && !/\b(?:crea|crear|activa|activar|desactiva|desactivar)\b/.test(alertText)) {
+    return { intent: 'inventory_alert_channel_deliveries', agent: 'operations', selector: {
+      ...(alertSku ? { sku: alertSku } : {}), limit: 20,
+      ...(/\bpendientes?\b/.test(alertText) ? { status: 'PENDING' }
+        : /\b(?:fallaron|fallidas?)\b/.test(alertText) ? { status: 'FAILED' }
+          : /\b(?:envio|enviadas?|entregadas?)\b/.test(alertText) ? { status: 'DELIVERED' }
+            : /\bomitidas?\b/.test(alertText) ? { status: 'SKIPPED' } : {})
+    } };
+  }
   const deliveryStatus = /\b(?:pendientes?|en proceso|procesando|completad[oa]s?|entregad[oa]s?|entrego|fallid[oa]s?|fallaron)\b/.test(alertText);
   const alertDelivery = /\b(?:estado|estatus)\s+de\s+(?:la\s+)?entrega\b/.test(alertText)
     || /\bentregas?\b/.test(alertText) && deliveryStatus
