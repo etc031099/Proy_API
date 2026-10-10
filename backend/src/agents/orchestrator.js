@@ -347,6 +347,100 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             case 'search_product': await run(plan.agent, 'search_products', { query: plan.query || state.lastSearchQuery, limit: plan.limit }); break;
             case 'product_details': await run(plan.agent, 'get_product_details', selector); break;
             case 'low_stock': await run(plan.agent, 'get_low_stock_products', { limit: plan.limit }); break;
+            case 'compound_product_list': {
+              let sourceRows = [], sourceLabel;
+              plan.compoundSelection = { sourceIntent: plan.sourceIntent === 'demand_top' ? 'ml_analytics' : plan.sourceIntent, items: [] };
+              if (plan.sourceIntent === 'low_stock') {
+                const pageSize = 20;
+                const low = await run('operations', 'get_low_stock_products', { limit: pageSize, offset: 0 });
+                if (low.status === 'NO_DATA') { answer = 'No hay productos en mínimo o por debajo del mínimo de stock actualmente.'; plan.compoundAnswer = answer; break; }
+                if (low.status !== 'READY' || low.metadata.totalMatches > 60) {
+                  plan.clarificationQuestion = 'La lista de bajo stock excede el límite seguro de comparación. Reduce el alcance de la consulta.'; break;
+                }
+                plan.lowStockCount = low.metadata.totalMatches;
+                sourceRows = [...low.data];
+                for (let offset = pageSize; offset < low.metadata.totalMatches; offset += pageSize) {
+                  const page = await run('operations', 'get_low_stock_products', { limit: pageSize, offset });
+                  sourceRows.push(...page.data);
+                }
+                if (sourceRows.length !== low.metadata.totalMatches) {
+                  plan.clarificationQuestion = 'No pude reunir de forma completa la lista de bajo stock para compararla. Vuelve a intentarlo.'; break;
+                }
+                plan.compoundSelection.items = sourceRows;
+                sourceLabel = `${plan.lowStockCount} productos en mínimo o por debajo (inventario operativo actual)`;
+                if (plan.comparisonType !== 'min_stock' && sourceRows.length) {
+                  const forecast = await run('analyst', 'get_demand_forecast', {});
+                  if (!['READY', 'NO_DATA'].includes(forecast.status)) {
+                    plan.clarificationQuestion = 'No pude obtener la recomendación histórica de reposición; sí puedo mostrar la lista de bajo stock actual.'; break;
+                  }
+                  if (forecast.status === 'NO_DATA') {
+                    answer = `Encontré ${plan.lowStockCount} productos en mínimo o por debajo en el inventario operativo actual, pero el replay histórico no contiene resultados para comparar recommendedQty.`;
+                    plan.compoundAnswer = answer;
+                    break;
+                  }
+                  const bySku = new Map((forecast.data || []).map(row => [row.sku, row]));
+                  sourceRows = sourceRows.map(row => ({ ...row, forecast: bySku.get(row.sku) }))
+                    .filter(row => row.forecast?.mlStatus === 'READY');
+                  plan.historicalAnchor = forecast.metadata.anchor;
+                  plan.forecastReadyCount = sourceRows.length;
+                  sourceLabel = `los ${plan.forecastReadyCount} de ${plan.lowStockCount} productos en mínimo o por debajo con forecast READY, comparados por recommendedQty del replay histórico`;
+                }
+              } else if (plan.sourceIntent === 'demand_top') {
+                const ranking = await run('analyst', 'analyze_demand_forecast', { mode: 'top', limit: plan.limit, offset: 0 });
+                if (!['READY', 'NO_DATA'].includes(ranking.status)) {
+                  plan.clarificationQuestion = ranking.metadata.clarificationQuestion || 'El forecast histórico no está disponible para esta comparación.'; break;
+                }
+                sourceRows = ranking.data || []; plan.historicalAnchor = ranking.metadata.anchor;
+                plan.compoundSelection.items = sourceRows.map(row => ({ ...row, stock: row.stockAtAnchor,
+                  predictedDemand: row.predictedDemand7d, recommendedQty: row.recommendedQty, status: row.inventoryStatus }));
+                sourceLabel = `los ${sourceRows.length} productos de mayor demanda del replay histórico`;
+              } else {
+                const candidates = await run('analyst', 'get_replenishment_candidates', { limit: plan.limit });
+                sourceRows = candidates.data || []; plan.historicalAnchor = candidates.metadata.anchor;
+                plan.compoundSelection.items = sourceRows;
+                sourceLabel = 'los productos recomendados para reposición del replay histórico';
+              }
+              if (!sourceRows.length) { answer = 'No encontré productos con los datos necesarios para realizar esa comparación.'; plan.compoundAnswer = answer; break; }
+              if (plan.comparisonType === 'max_replenishment_cost') {
+                const refs = sourceRows.map(row => row.sku).filter(Boolean);
+                if (!refs.length || refs.length > 5) { answer = 'No hay una lista acotada de productos para comparar costos de reposición.'; plan.compoundAnswer = answer; break; }
+                const costs = await run('analyst', 'compare_supplier_costs', { productRefs: refs.join('|') });
+                const priced = (costs.data || []).flatMap(row => {
+                  const offer = row.offers?.find(item => item.preferred) || [...(row.offers || [])]
+                    .sort((a, b) => a.unitCost - b.unitCost)[0];
+                  return offer && Number.isFinite(row.recommendedQty) && offer.currency === row.currency
+                    ? [{ sku: row.sku, name: row.productName, currency: row.currency,
+                      total: Math.round(row.recommendedQty * offer.unitCost * 100) / 100, supplier: offer.supplier }] : [];
+                });
+                const currencies = [...new Set(priced.map(row => row.currency))];
+                if (currencies.length > 1) { answer = 'Los productos de la lista tienen monedas distintas; no sumaré ni compararé sus costos entre monedas.'; plan.compoundAnswer = answer; break; }
+                if (!priced.length) { answer = 'No hay ofertas válidas suficientes en la lista para comparar el costo de reposición.'; plan.compoundAnswer = answer; break; }
+                const top = Math.max(...priced.map(row => row.total));
+                const winners = priced.filter(row => row.total === top);
+                answer = winners.length > 1 ? `Hay empate en el mayor costo de reposición de esa lista: ${winners.map(row => `${row.sku} (${row.supplier})`).join(', ')}, ${top.toFixed(2)} ${currencies[0]}.`
+                  : `${winners[0].sku} (${winners[0].name}) tiene el mayor costo de reposición dentro de esa lista: ${top.toFixed(2)} ${currencies[0]}, con ${winners[0].supplier}.`;
+                if (plan.historicalAnchor) answer += ` Las cantidades recomendadas proceden del replay histórico con ancla ${plan.historicalAnchor}.`;
+                plan.compoundAnswer = answer;
+                break;
+              }
+              const field = plan.comparisonType === 'min_stock' ? (plan.sourceIntent === 'demand_top' ? 'stockAtAnchor' : 'stock') : 'recommendedQty';
+              const valueFor = row => plan.sourceIntent === 'low_stock' && field === 'recommendedQty' ? row.forecast?.recommendedQty : row[field];
+              const comparable = sourceRows.filter(row => Number.isFinite(valueFor(row)));
+              if (!comparable.length) { answer = 'No hay datos suficientes dentro de esa lista para realizar la comparación.'; plan.compoundAnswer = answer; break; }
+              const chooseMax = field === 'recommendedQty';
+              const target = (chooseMax ? Math.max : Math.min)(...comparable.map(valueFor));
+              const winners = comparable.filter(row => valueFor(row) === target);
+              const labels = winners.map(row => `${row.sku || row.name}${row.name ? ` (${row.name})` : ''}`).join(', ');
+              const unit = field === 'stock' || field === 'stockAtAnchor' ? 'unidades disponibles' : 'unidades recomendadas';
+              answer = winners.length > 1 ? `Hay empate dentro de ${sourceLabel}: ${labels}, con ${target} ${unit}.`
+                : `Dentro de ${sourceLabel}, ${labels} ${field === 'stock' ? 'tiene menos stock' : field === 'stockAtAnchor' ? 'tiene menos stock al ancla' : 'requiere mayor reposición'}, con ${target} ${unit}.`;
+              if (field === 'recommendedQty' && plan.historicalAnchor) answer += ` Esta recommendedQty procede del replay histórico con ancla ${plan.historicalAnchor}; el bajo stock es operativo actual.`;
+              else if (plan.historicalAnchor) answer += ` Datos del replay histórico con ancla ${plan.historicalAnchor}.`;
+              plan.compoundAnswer = answer;
+              plan.selectedProduct = winners.length === 1 ? { id: winners[0].id || winners[0].productId,
+                productId: winners[0].productId || winners[0].id, sku: winners[0].sku, name: winners[0].name } : undefined;
+              break;
+            }
             case 'recent_transactions': await run(plan.agent, 'get_recent_transactions', { limit: plan.limit,
               ...(plan.periodRequested ? plan.period : {}), ...(plan.type ? { type: plan.type } : {}), ...(plan.status ? { status: plan.status } : {}) }); break;
             case 'sales_summary': await run(plan.agent, 'get_sales_summary', plan.period); break;
@@ -476,6 +570,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             sections = [];
           }
           if (sections.length) answer = sections.map(index => buildSkillAnswer(results[index].skillId, results[index].result)).join('\n\n');
+          if (plan.intent === 'compound_product_list') { answer = plan.compoundAnswer || answer; sections = []; }
           if (['unsupported_supplier_causality', 'forecast_confidence', 'unsupported_financial_impact'].includes(plan.intent)) {
             answer = unsupportedClaimAnswer(plan.intent); sections = [];
           }
@@ -541,6 +636,13 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             lastTransactionFilters: plan.intent === 'recent_transactions' ? {
               periodRequested: plan.periodRequested, type: plan.type, status: plan.status
             } : undefined });
+          if (plan.intent === 'compound_product_list') {
+            commit({ lastProductSelection: plan.compoundSelection?.items?.length ? { sourceIntent: plan.compoundSelection.sourceIntent,
+              items: plan.compoundSelection.items.slice(0, 5), createdAt: Date.now() } : null,
+              lastEntity: plan.selectedProduct || null,
+              selectedProductReference: plan.selectedProduct ? { id: plan.selectedProduct.id,
+                sku: plan.selectedProduct.sku, name: plan.selectedProduct.name } : null });
+          }
           if (supplierProductsData?.supplierId && supplierProductsResult.metadata.totalMatches > 5) {
             supplierProductListingExpiry = Date.now() + SUPPLIER_SELECTION_TTL_MS;
             commit({ supplierProductListing: { supplierId: supplierProductsData.supplierId,

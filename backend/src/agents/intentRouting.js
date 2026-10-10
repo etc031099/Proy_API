@@ -14,8 +14,16 @@ const tenantScopeViolation = message => {
   return { intent: 'tenant_access_denied', agent: 'coordinator' };
 };
 const normalizeBasicInventory = value => normalize(value)
+  .replace(/\bq\b/g, 'que')
+  .replace(/\bstan\b/g, 'estan')
   .replace(/\bq(?=\s+(?:productos?|stock)\b)/g, 'que')
-  .replace(/\bd(?=\s+stock\b)/g, 'de')
+  .replace(/\bd(?=\s+(?:stock|stok)\b)/g, 'de')
+  .replace(/\bd(?=\s+esos?\b)/g, 'de')
+  .replace(/\bvajos\b/g, 'bajos')
+  .replace(/\bstok\b/g, 'stock')
+  .replace(/\bnesesita\b/g, 'necesita')
+  .replace(/\bnesesitan\b/g, 'necesitan')
+  .replace(/\breposision\b/g, 'reposicion')
   .replace(/\bprodcutos\b/g, 'productos');
 const isLowStockQuery = text => /\b(?:stock\s+bajo|bajo\s+stock|poco\s+stock|stock\s+minimo)\b/.test(text)
   || /\bproductos?\b.*\b(?:baj[oa]s?\s+(?:de\s+)?stock|por\s+debajo\s+(?:del\s+)?minimo)\b/.test(text);
@@ -221,6 +229,8 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   }
   const productReference = productReferenceFollowup(message, memory);
   if (productReference) return productReference;
+  const compound = routeCompoundProductList(message);
+  if (compound) return compound;
   const listFollowup = productListFollowupType(message);
   // An explicit SKU always narrows a supplier comparison to that product,
   // rather than expanding it across the remembered list.
@@ -418,4 +428,33 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   return { ...plan, period, periodExplicit: Boolean(explicitPeriod), limit: plan.limit || 5 };
 };
 
-module.exports = { routeDeterministically, routeCommercial, routeSupplierProducts, monthPeriod, weekPeriod, clarify, budgetPlanFollowupType, tenantScopeViolation };
+// Intentionally bounded: list-producing phrases joined to one known comparison.
+const routeCompoundProductList = message => {
+  const normalized = normalizeBasicInventory(message).replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+  const parts = normalized.split(/\s+y\s+/);
+  if (parts.length !== 2) return null;
+  const [source, comparison] = parts;
+  const asksList = /\b(?:cual|que producto|quien)\b/.test(comparison)
+    && (/\b(?:de esos|de esas|de ellos|de ellas|esos|esas)\b/.test(comparison)
+      || /^cual\b/.test(comparison));
+  if (!asksList) return null;
+  let sourceIntent, limit = 5;
+  if (isLowStockQuery(source)) { sourceIntent = 'low_stock'; limit = 60; }
+  else if (/\b(?:demanda|prediccion|forecast)\b/.test(source)
+    && /\b(?:productos?|cinco|5|mayor|mas|top)\b/.test(source)) {
+    sourceIntent = 'demand_top';
+    const requested = source.match(/\b(\d{1,2})\b/);
+    limit = Math.min(10, Math.max(1, Number(requested?.[1] || 5)));
+  } else if (/\b(?:reponer|reposicion|REPONER)\b/.test(source)
+    && /\b(?:productos?|candidatos|recomendados?)\b/.test(source)) sourceIntent = 'replenishment_candidates';
+  if (!sourceIntent) return null;
+  let comparisonType;
+  if (/\b(?:menos|menor)\s+stock\b/.test(comparison)) comparisonType = 'min_stock';
+  else if (/\b(?:mas|mayor)\s+reposicion\b|\bnecesita mas reposicion\b|\brequiere mas reposicion\b/.test(comparison)) comparisonType = 'max_replenishment';
+  else if (/\b(?:mas caro|mas costoso)\s+de\s+reponer\b/.test(comparison)) comparisonType = 'max_replenishment_cost';
+  else return null;
+  return { intent: 'compound_product_list', agent: 'analyst', sourceIntent, comparisonType, limit };
+};
+
+module.exports = { routeDeterministically, routeCommercial, routeSupplierProducts, monthPeriod, weekPeriod, clarify,
+  budgetPlanFollowupType, tenantScopeViolation, routeCompoundProductList };

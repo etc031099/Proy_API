@@ -60,7 +60,8 @@ const fixture = ({ products = [product(1), product(2), product(3, 'B')], contact
       if (match.$expr) rows = rows.filter(row => row.stock <= row.minStockLevel);
       rows = rows.map(row => ({ ...row, shortage: row.minStockLevel - row.stock }));
       const facet = pipeline.find(stage => stage.$facet)?.$facet;
-      const result = facet ? [{ data: rows.slice(0, facet.data.find(stage => stage.$limit).$limit), count: [{ total: rows.length }] }]
+      const result = facet ? [{ data: rows.slice(facet.data.find(stage => stage.$skip)?.$skip || 0,
+        (facet.data.find(stage => stage.$skip)?.$skip || 0) + facet.data.find(stage => stage.$limit).$limit), count: [{ total: rows.length }] }]
         : [{ activeProducts: rows.length, lowStockProducts: rows.filter(row => row.stock <= row.minStockLevel).length }];
       return { option() { return this; }, exec: async () => result };
     }
@@ -281,6 +282,120 @@ test('inventory routing precedence preserves textual product search and priority
   assert.equal(cheapest.intent, 'cheapest_supplier');
   assert.equal(cheapest.skillId, 'compare_supplier_costs');
   assert.deepEqual(cheapest.args, { productRef: 'M5-FOODS_3_511' });
+});
+
+test('compound same-turn low-stock query compares replenishment only within newly fetched current low-stock set', async () => {
+  const outside = { ...product(4), sku: 'SKU-004', stock: 20, minStockLevel: 5 };
+  const forecastRows = [
+    { productId: id(1), sku: 'SKU-001', name: 'Producto 1', mlStatus: 'READY', predictedDemand7d: 12, stockAtAnchor: 2, recommendedQty: 11, inventoryStatus: 'REPONER' },
+    { productId: id(2), sku: 'SKU-002', name: 'Producto 2', mlStatus: 'READY', predictedDemand7d: 22, stockAtAnchor: 3, recommendedQty: 22, inventoryStatus: 'REPONER' },
+    { productId: id(4), sku: 'SKU-004', name: 'Fuera de bajo stock', mlStatus: 'READY', predictedDemand7d: 99, stockAtAnchor: 1, recommendedQty: 99, inventoryStatus: 'REPONER' }
+  ];
+  const f = fixture({ products: [product(1), product(2), outside, product(3, 'B')], forecastService: {
+    getDemandForecast: async ({ businessId }) => { assert.equal(businessId, 'A'); return { status: 'READY',
+      anchorOperationalDate: '2026-05-17', products: structuredClone(forecastRows) }; }
+  } });
+  for (const query of [
+    'q productos stan bajos d stock y cual d esos nesesita mas reposicion',
+    'q productos estan vajos d stok y cual necesita mas reposision'
+  ]) {
+    const result = await f.run(query);
+    assert.equal(result.code, null, query);
+    assert.equal(result.intent, 'compound_product_list', query);
+    assert.deepEqual(result.actions.map(action => action.skillId), ['get_low_stock_products', 'get_demand_forecast'], query);
+    assert.match(result.answer, /SKU-002/); assert.match(result.answer, /22 unidades/);
+    assert.match(result.answer, /inventario actual|operativo actual/i);
+    assert.match(result.answer, /replay hist[oó]rico.*2026-05-17/i);
+    assert.doesNotMatch(result.answer, /SKU-004/);
+    assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
+  }
+});
+
+test('compound low-stock list can compare minimum current stock in the same turn', async () => {
+  const f = fixture({ products: [{ ...product(1), stock: 4 }, { ...product(2), stock: 1 }, product(3, 'B')] });
+  const result = await f.run('Muéstrame los productos con bajo stock y cuál de ellos tiene menos stock.');
+  assert.equal(result.intent, 'compound_product_list');
+  assert.deepEqual(result.actions.map(action => action.skillId), ['get_low_stock_products']);
+  assert.match(result.answer, /SKU-002/); assert.match(result.answer, /1 unidades disponibles/);
+  assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
+});
+
+test('compound low-stock comparison pages the complete tenant set before ranking historical recommendedQty', async () => {
+  const products = Array.from({ length: 23 }, (_, index) => ({ ...product(index + 1), sku: `SKU-${String(index + 1).padStart(3, '0')}`,
+    stock: 0, minStockLevel: 10 }));
+  const forecastRows = products.map((row, index) => ({ productId: row.id, sku: row.sku, name: row.name,
+    mlStatus: 'READY', predictedDemand7d: index + 2, stockAtAnchor: 0, recommendedQty: index + 1,
+    inventoryStatus: 'REPONER' }));
+  const f = fixture({ products, forecastService: { getDemandForecast: async () => ({ status: 'READY',
+    anchorOperationalDate: '2026-05-17', products: forecastRows }) } });
+  const result = await f.run('q productos stan bajos d stock y cual d esos nesesita mas reposicion');
+  assert.equal(result.code, null);
+  assert.deepEqual(result.actions.map(action => action.skillId), ['get_low_stock_products', 'get_low_stock_products', 'get_demand_forecast']);
+  assert.match(result.answer, /23 productos en mínimo o por debajo/);
+  assert.match(result.answer, /SKU-023/); assert.match(result.answer, /23 unidades recomendadas/);
+  assert.doesNotMatch(result.answer, /SKU-022 era el/);
+  assert.equal(result.usage.totalSkillCalls, 3); assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
+});
+
+test('compound top-demand list reuses its single forecast result for least-stock comparison', async () => {
+  let forecastCalls = 0;
+  const rows = [
+    { ...forecast.products[0], productId: id(1), sku: 'SKU-001', name: 'Producto 1', predictedDemand7d: 20, stockAtAnchor: 5, recommendedQty: 15, inventoryStatus: 'REPONER' },
+    { ...forecast.products[0], productId: id(2), sku: 'SKU-002', name: 'Producto 2', predictedDemand7d: 18, stockAtAnchor: 2, recommendedQty: 16, inventoryStatus: 'REPONER' },
+    { ...forecast.products[0], productId: id(4), sku: 'SKU-004', name: 'Producto 4', predictedDemand7d: 16, stockAtAnchor: 3, recommendedQty: 13, inventoryStatus: 'REPONER' },
+    { ...forecast.products[0], productId: id(5), sku: 'SKU-005', name: 'Producto 5', predictedDemand7d: 14, stockAtAnchor: 4, recommendedQty: 10, inventoryStatus: 'REPONER' },
+    { ...forecast.products[0], productId: id(7), sku: 'SKU-007', name: 'Producto 7', predictedDemand7d: 12, stockAtAnchor: 6, recommendedQty: 6, inventoryStatus: 'REPONER' },
+    { ...forecast.products[0], productId: id(6), sku: 'SKU-006', name: 'Fuera del top', predictedDemand7d: 1, stockAtAnchor: 0, recommendedQty: 1, inventoryStatus: 'REPONER' }
+  ];
+  const f = fixture({ forecastService: { getDemandForecast: async () => { forecastCalls++; return { status: 'READY',
+    anchorOperationalDate: '2026-05-17', products: structuredClone(rows) }; } } });
+  const result = await f.run('Muéstrame los 5 productos con mayor demanda y cuál de esos tiene menos stock.');
+  assert.equal(result.code, null);
+  assert.deepEqual(result.actions.map(action => action.skillId), ['analyze_demand_forecast']);
+  assert.match(result.answer, /SKU-002/); assert.match(result.answer, /2 unidades/);
+  assert.match(result.answer, /2026-05-17/);
+  assert.equal(forecastCalls, 1); assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
+});
+
+test('compound replenishment list ranks highest total configured replenishment cost without mixing currencies', async () => {
+  const vendors = [
+    { _id: id(80), businessId: 'A', name: 'Proveedor A', type: 'vendor', isActive: true },
+    { _id: id(81), businessId: 'A', name: 'Proveedor B', type: 'vendor', isActive: true }
+  ];
+  const items = [
+    { ...product(1), sku: 'SKU-001', supplierPrices: [{ supplierId: id(80), purchasePrice: 5 }], preferredSupplierId: id(80) },
+    { ...product(2), sku: 'SKU-002', supplierPrices: [{ supplierId: id(81), purchasePrice: 8 }], preferredSupplierId: id(81) }
+  ];
+  const forecastRows = items.map((row, index) => ({ productId: row.id, sku: row.sku, name: row.name,
+    mlStatus: 'READY', predictedDemand7d: 12, stockAtAnchor: 1, recommendedQty: index ? 10 : 5,
+    inventoryStatus: 'REPONER' }));
+  const f = fixture({ products: [...items, product(3, 'B')], contacts: vendors, forecastService: {
+    getDemandForecast: async () => ({ status: 'READY', anchorOperationalDate: '2026-05-17', products: forecastRows })
+  } });
+  const result = await f.run('Muéstrame los productos a reponer y cuál es el más caro de reponer.');
+  assert.equal(result.code, null);
+  assert.deepEqual(result.actions.map(action => action.skillId), ['get_replenishment_candidates', 'compare_supplier_costs']);
+  assert.match(result.answer, /SKU-002/); assert.match(result.answer, /80\.00 PEN/); assert.match(result.answer, /Proveedor B/);
+  assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
+});
+
+test('same-turn explicit list overrides a prior different list and then persists for followups', async () => {
+  const f = fixture();
+  const first = await f.run('Muéstrame los 5 productos con mayor demanda.');
+  const compound = await f.run('muéstrame los productos bajos de stock y cuál de esos tiene menos stock', first.conversationId);
+  assert.equal(compound.intent, 'compound_product_list');
+  assert.deepEqual(compound.actions.map(action => action.skillId), ['get_low_stock_products']);
+  const snapshot = await f.orchestrator.getContextSnapshot(req(), first.conversationId);
+  assert.equal(snapshot.lastProductSelection.sourceIntent, 'low_stock');
+  assert.ok(snapshot.lastProductSelection.items.every(row => ['SKU-001', 'SKU-002'].includes(row.sku)));
+  assert.equal(compound.usage.totalLlmCalls, 0); assert.equal(compound.usage.totalTokens, 0);
+});
+
+test('compound list reference without an explicit source still clarifies at zero cost', async () => {
+  const f = fixture();
+  const result = await f.run('cual d esos nesesita mas reposicion');
+  assert.equal(result.requiresClarification, true);
+  assert.equal(result.usage.totalSkillCalls, 0); assert.equal(result.usage.totalLlmCalls, 0);
 });
 
 test('unsupported causal, confidence and financial-impact claims route deterministically before supplier/commercial fallbacks', () => {

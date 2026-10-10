@@ -40,9 +40,11 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
     // Bound server-side work as well as the request-level wall-clock deadline.
     return model.aggregate(pipeline).option({ maxTimeMS: invocation.skill.timeoutMs }).exec();
   };
-  const paged = async (model, stages, projection, sort, invocation) => {
+  const paged = async (model, stages, projection, sort, invocation, useOffset = false) => {
+    const offset = invocation.args.offset || 0;
     const rows = await aggregate(model, [...stages, { $facet: {
-      data: [{ $sort: sort }, { $limit: invocation.args.limit ?? invocation.skill.maxRecords }, { $project: projection }],
+      data: [{ $sort: sort }, ...(useOffset && offset ? [{ $skip: offset }] : []),
+        { $limit: invocation.args.limit ?? invocation.skill.maxRecords }, { $project: projection }],
       count: [{ $count: 'total' }]
     } }], invocation);
     return { rows: rows[0]?.data || [], total: rows[0]?.count[0]?.total || 0 };
@@ -323,8 +325,9 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
         { $match: { businessId: invocation.context.businessId, isActive: true,
           $expr: { $lte: ['$stock', { $ifNull: ['$minStockLevel', 0] }] } } },
         { $set: { shortage: { $subtract: [{ $ifNull: ['$minStockLevel', 0] }, '$stock'] } } }
-      ], { ...productFields, shortage: 1 }, { shortage: -1, _id: 1 }, invocation);
-      return listResult(result.rows.map(row => ({ ...productDto(row), shortage: row.shortage })), result.total, { asOf: asOf() });
+      ], { ...productFields, shortage: 1 }, { shortage: -1, _id: 1 }, invocation, true);
+      return listResult(result.rows.map(row => ({ ...productDto(row), shortage: row.shortage })), result.total,
+        { asOf: asOf(), offset: invocation.args.offset || 0, limit: invocation.args.limit ?? invocation.skill.maxRecords });
     },
     async get_recent_transactions(invocation) {
       const { args, context } = invocation;
