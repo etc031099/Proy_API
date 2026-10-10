@@ -94,6 +94,8 @@ const businessAnswer = (data, metadata) => {
   return lines.join('\n');
 };
 
+const productCountAnswer = data => `Tienes ${countLabel(data.activeProducts, 'producto activo', 'productos activos')}.`;
+
 /** Every displayed number is taken from a verified skill DTO; no ML recalculation. */
 const buildSkillAnswer = (skillId, result) => {
   if (skillId === 'analyze_demand_forecast') return require('./forecastResponses').buildForecastAnalysisAnswer(result);
@@ -211,4 +213,4 @@ const llmObservation = (skillId, result) => {
       inventoryBasis: result.metadata.inventoryBasis, asOf: result.metadata.asOf } : {}) };
 };
 
-module.exports = { buildSkillAnswer, llmObservation, safeText, replenishmentExplanation, budgetPlanExplanation };
+module.exports = { buildSkillAnswer, llmObservation, safeText, replenishmentExplanation, budgetPlanExplanation, productCountAnswer };

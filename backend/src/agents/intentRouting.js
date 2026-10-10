@@ -1,6 +1,17 @@
 const { isDate } = require('./contracts');
 
 const normalize = value => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const normalizeBasicInventory = value => normalize(value)
+  .replace(/\bq(?=\s+(?:productos?|stock)\b)/g, 'que')
+  .replace(/\bd(?=\s+stock\b)/g, 'de')
+  .replace(/\bprodcutos\b/g, 'productos');
+const isLowStockQuery = text => /\b(?:stock\s+bajo|bajo\s+stock|poco\s+stock|stock\s+minimo)\b/.test(text)
+  || /\bproductos?\b.*\b(?:baj[oa]s?\s+(?:de\s+)?stock|por\s+debajo\s+(?:del\s+)?minimo)\b/.test(text);
+const isProductCountQuery = text => {
+  if (/\b(?:busca|buscar|muestrame|lista|listar|categoria|sku|foods|hobbies|household)\b/.test(text)) return false;
+  return /\b(?:cuantos|cantidad|total)\b.*\bproductos?\b/.test(text)
+    || /\bproductos?\s+(?:activos?\s+)?(?:tengo|hay|registrados?)\b/.test(text);
+};
 const monthPeriod = (now, previous = false) => {
   const month = now.getUTCMonth() - (previous ? 1 : 0);
   return { startDate: new Date(Date.UTC(now.getUTCFullYear(), month, 1)).toISOString().slice(0, 10),
@@ -110,6 +121,11 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   const commercialPlan = routeCommercial(message, memory);
   if (commercialPlan) return commercialPlan;
   const text = normalize(message);
+  const inventoryText = normalizeBasicInventory(message);
+  // Specific inventory questions must win before the broad generic product fallback.
+  if (isLowStockQuery(inventoryText)) return { intent: 'low_stock', agent: 'operations', limit: 5 };
+  if (isProductCountQuery(inventoryText)) return { intent: 'business_summary', agent: 'analyst', inventoryOnly: true,
+    inventoryCountOnly: true, periodExplicit: true };
   const referencesBudgetPlan = /estas compras|esas compras|este plan|este presupuesto|productos que acabas de recomendar|explica.*este plan/.test(text);
   const savedBudgetPlan = memory.lastReplenishmentPlan?.semanticReference === 'last_replenishment_budget_plan'
     && memory.lastReplenishmentPlan.conversationId === conversationId
@@ -190,7 +206,7 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
       ...(memory.lastIntent === 'product_sales_summary' ? { selector: { productId: memory.lastEntity.id } } : {}), limit: memory.listLimit || 5 };
   }
   let plan;
-  if (/stock bajo|poco stock|bajo stock|stock minimo/.test(text)) plan = { intent: 'low_stock', agent: 'operations' };
+  if (isLowStockQuery(inventoryText)) plan = { intent: 'low_stock', agent: 'operations' };
   else if (/transacciones.*(ultim|recient)|(ultim|recient).*transacciones/.test(text)) plan = { intent: 'recent_transactions', agent: 'operations' };
   else if (/mas vendidos|mayores ventas|se venden mas/.test(text)) plan = { intent: 'top_selling_products', agent: 'analyst' };
   else if (/vendimos|ventas del mes/.test(text)) plan = { intent: 'sales_summary', agent: 'operations' };
@@ -199,7 +215,7 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   else if (/repon|reposicion/.test(text)) plan = { intent: 'replenishment_candidates', agent: 'analyst', limit: /mayor|mas reposicion/.test(text) ? 1 : 5 };
   else if (/prediccion|demanda|forecast/.test(text)) plan = { intent: 'demand_forecast', agent: 'analyst', needsProduct: /producto|\bsu\b|ese|sku/.test(text) };
   else if (/resume|resumen|estado.*negocio/.test(text)) plan = { intent: 'business_summary', agent: 'analyst', multi: /vigilar|atencion/.test(text), synthesize: /vigilar|atencion/.test(text) };
-  else if (/busca|buscar/.test(text) && /producto|sku/.test(text)) plan = { intent: 'search_product', agent: 'operations' };
+  else if (/\b(?:busca|buscar)\b/.test(text)) plan = { intent: 'search_product', agent: 'operations' };
   else if (/producto|sku/.test(text)) plan = { intent: 'product_details', agent: 'operations', needsProduct: true };
   else return null;
   const sku = message.match(/\bSKU\s+([\w.-]{1,100})/i)?.[1]
@@ -207,8 +223,10 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   const productId = message.match(/\b[a-f\d]{24}\b/i)?.[0];
   const query = message.replace(/^.*?(?:producto[s]?|sku)\s*/i, '').trim().replace(/[?!.]+$/, '').slice(0, 100);
   if (plan.intent === 'search_product') {
-    if (!query) return clarify('¿Qué nombre o SKU deseas buscar?');
-    plan.query = query;
+    const explicitSearch = message.match(/\b(?:busca|buscar)\s+(?:(?:el|los|la|las)\s+)?(?:productos?\s+|sku\s+)?(.+?)[?!.]*$/i)?.[1];
+    if (explicitSearch) plan.query = explicitSearch.trim();
+    else plan.query = query;
+    if (!plan.query) return clarify('¿Qué nombre o SKU deseas buscar?');
   }
   if (plan.intent === 'recent_transactions') {
     plan.periodRequested = Boolean(dates || /este mes|mes actual|mes pasado|mes anterior/.test(text));

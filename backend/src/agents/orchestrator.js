@@ -6,7 +6,7 @@ const { classifyAgentIntent } = require('./routing');
 const { executeRequestedSkill } = require('./toolCalls');
 const { createConversationMemory } = require('./memory');
 const { routeDeterministically, clarify } = require('./intentRouting');
-const { buildSkillAnswer, llmObservation, safeText, replenishmentExplanation, budgetPlanExplanation } = require('./responses');
+const { buildSkillAnswer, llmObservation, safeText, replenishmentExplanation, budgetPlanExplanation, productCountAnswer } = require('./responses');
 const { buildSynthesisInput, buildNarrativeSynthesisInput, validateNarrativeSynthesis, renderNarrativeSynthesis, renderNarrativeFallback } = require('./synthesis');
 const { normalizeSupplier, resolveSupplier } = require('./replenishmentPlanning');
 const { SUPPLIER_SELECTION_TTL_MS, contextBinding } = require('./memory');
@@ -351,6 +351,11 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             sections = [];
           }
           if (sections.length) answer = sections.map(index => buildSkillAnswer(results[index].skillId, results[index].result)).join('\n\n');
+          if (plan.inventoryCountOnly) {
+            const summary = results.find(({ skillId }) => skillId === 'get_business_summary')?.result;
+            if (summary?.status === 'READY') answer = productCountAnswer(summary.data);
+            sections = [];
+          }
           if (plan.supplierSelectedName) answer = `Seleccionaste ${plan.supplierSelectedName}.\n${answer}`;
           const productSkills = ['search_products', 'get_product_details', 'get_low_stock_products', 'get_top_selling_products',
             'get_product_sales_summary', 'get_demand_forecast', 'get_replenishment_candidates', 'analyze_demand_forecast'];

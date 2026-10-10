@@ -131,6 +131,49 @@ for (const [query, skillId, agent] of [
   assert.equal(result.participants.every(row => row.totalTokens === 0 && row.llmCalls === 0), true);
 });
 
+test('basic product-count phrases use the grounded inventory summary, not product search or Gemini', async () => {
+  for (const query of ['¿Cuántos productos tengo?', 'cuantos productos hay', 'cuántos productos activos tengo',
+    'total de productos', 'cantidad de productos', 'cuantos productos tengo registrados']) {
+    const f = fixture(); const result = await f.run(query);
+    assert.equal(result.code, null, query);
+    assert.equal(result.intent, 'business_summary', query);
+    assert.deepEqual(result.actions.map(action => action.skillId), ['get_business_summary'], query);
+    assert.equal(result.usage.totalLlmCalls, 0, query); assert.equal(result.usage.totalTokens, 0, query);
+    assert.equal(result.usage.totalSkillCalls, 1, query); assert.equal(f.calls.length, 0, query);
+    assert.match(result.answer, /^Tienes 2 productos activos\.$/, query);
+    assert.doesNotMatch(result.answer, /No encontré productos con ese nombre/i, query);
+  }
+});
+
+test('low-stock phrases and narrow common typos use the existing low-stock skill at zero LLM', async () => {
+  for (const query of ['¿Qué productos tienen poco stock?', 'productos bajos de stock', 'productos con stock bajo',
+    'qué productos están por debajo del mínimo', 'q productos estan bajos d stock', 'prodcutos con poco stock', 'stock bajo']) {
+    const f = fixture(); const result = await f.run(query);
+    assert.equal(result.code, null, query);
+    assert.equal(result.intent, 'low_stock', query);
+    assert.deepEqual(result.actions.map(action => action.skillId), ['get_low_stock_products'], query);
+    assert.equal(result.usage.totalLlmCalls, 0, query); assert.equal(result.usage.totalTokens, 0, query);
+    assert.equal(result.usage.totalSkillCalls, 1, query); assert.equal(f.calls.length, 0, query);
+  }
+});
+
+test('inventory routing precedence preserves textual product search and priority routes', () => {
+  const count = routeDeterministically('¿Cuántos productos tengo?', {}, clock());
+  assert.equal(count.inventoryCountOnly, true);
+  for (const query of ['q productos estan bajos d stock', 'prodcutos con poco stock']) {
+    assert.equal(routeDeterministically(query, {}, clock()).intent, 'low_stock');
+  }
+  assert.deepEqual(routeDeterministically('producto 511', {}, clock()), {
+    intent: 'search_product', agent: 'operations', query: '511', period: { startDate: '2025-01-01', endDate: '2025-01-31' }, limit: 5
+  });
+  assert.equal(routeDeterministically('busca arroz', {}, clock()).query, 'arroz');
+  assert.equal(routeDeterministically('buscar Alimentos', {}, clock()).query, 'Alimentos');
+  assert.equal(routeDeterministically('Muéstrame los 5 productos con mayor demanda prevista.', {}, clock()).intent, 'ml_analytics');
+  assert.equal(routeDeterministically('¿Qué productos debería reponer?', {}, clock()).intent, 'replenishment_candidates');
+  assert.equal(routeDeterministically('Tengo S/ 1000, ¿qué productos debería comprar primero?', {}, clock()).skillId, 'plan_replenishment_budget');
+  assert.equal(routeDeterministically('¿Qué productos vende el proveedor 055 foods?', {}, clock()).intent, 'supplier_products');
+});
+
 test('generic top-selling uses all completed history even after a current-month sales query', async () => {
   const f = fixture(); const conversationId = randomUUID();
   const sales = await f.run('¿Cuánto vendimos este mes?', conversationId);
