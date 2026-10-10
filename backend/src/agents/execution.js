@@ -105,6 +105,11 @@ const createAgentExecution = options => {
       } finally { active--; }
     },
     recordError(code) { failed = true; emit('error', { status: 'FAILED', code }); },
+    recordPlanFollowupDiagnostic(followupType, code) {
+      failed = true;
+      emit('error', { agentId: 'coordinator', agentRunId: randomUUID(), status: 'FAILED', code,
+        diagnosticType: 'plan_followup', followupType });
+    },
     async selectTools(input) {
       if (closed) throw new AgentError('AGENT_INVALID_REQUEST');
       try { budget.consume('toolSelectionCycles'); } catch (error) {

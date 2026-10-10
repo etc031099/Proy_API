@@ -3,6 +3,12 @@ const { EXECUTION_LIMITS, isPlainObject, isTraceId } = require('../agents/contra
 const { HISTORY_ERRORS } = require('./agentHistoryController');
 
 const logAgentDiagnostic = event => {
+  if (event.type === 'error' && event.diagnosticType === 'plan_followup') {
+    const fields = ['requestId', 'conversationId', 'agentRunId', 'followupType', 'code'];
+    const safeEvent = Object.fromEntries(fields.filter(key => event[key] !== undefined).map(key => [key, event[key]]));
+    console.error('[AgentPlanFollowupDiagnostic]', JSON.stringify(safeEvent));
+    return;
+  }
   if (event.type === 'synthesis_finished') {
     const fields = ['requestId', 'conversationId', 'agentId', 'status', 'synthesisDiagnostic', 'durationMs'];
     const safeEvent = Object.fromEntries(fields.filter(key => event[key] !== undefined).map(key => [key, event[key]]));

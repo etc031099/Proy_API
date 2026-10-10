@@ -19,6 +19,7 @@ const INTERNAL_CAUSES = Object.freeze(['ML_SERVICE_UNAVAILABLE', 'AGENT_SKILL_TI
   'GEMINI_PERMISSION_DENIED', 'GEMINI_MODEL_NOT_FOUND', 'GEMINI_RATE_LIMITED', 'GEMINI_TIMEOUT',
   'GEMINI_NETWORK_ERROR', 'GEMINI_UNAVAILABLE', 'GEMINI_INVALID_RESPONSE', 'GEMINI_EMPTY_RESPONSE',
   'GEMINI_INVALID_JSON', 'GEMINI_SCHEMA_VALIDATION_FAILED', 'GEMINI_OUTPUT_TRUNCATED', 'GEMINI_BUDGET_EXCEEDED']);
+const PLAN_FOLLOWUP_TYPES = Object.freeze(['remaining', 'pending_units', 'pending_items', 'spent', 'budget', 'planned_units', 'supplier_for_product']);
 const PROVIDER_CODES = Object.freeze(['UNAUTHENTICATED', 'PERMISSION_DENIED', 'NOT_FOUND', 'RESOURCE_EXHAUSTED',
   'INTERNAL', 'UNAVAILABLE', 'DEADLINE_EXCEEDED']);
 const invalid = () => { throw new AgentError('AGENT_INVALID_REQUEST'); };
@@ -129,6 +130,14 @@ const createTraceEvent = (type, metadata) => {
     if (!Object.hasOwn(ERROR_MESSAGES, metadata.code)) invalid();
     event.code = metadata.code;
   }
+  if (metadata.diagnosticType !== undefined) {
+    if (metadata.diagnosticType !== 'plan_followup') invalid();
+    event.diagnosticType = metadata.diagnosticType;
+  }
+  if (metadata.followupType !== undefined) {
+    if (!PLAN_FOLLOWUP_TYPES.includes(metadata.followupType)) invalid();
+    event.followupType = metadata.followupType;
+  }
   if (/^(agent_|llm_|skill_|provider_attempt)/.test(type) && (!event.agentId || !event.agentRunId)) invalid();
   if (type.startsWith('skill_') && (!event.skillId || !event.skillCallId)) invalid();
   return Object.freeze(event);
@@ -214,4 +223,4 @@ const createEvidence = options => {
   });
 };
 
-module.exports = { EVENT_TYPES, INTERNAL_CAUSES, createTraceEvent, createRequestUsage, createEvidence };
+module.exports = { EVENT_TYPES, INTERNAL_CAUSES, PLAN_FOLLOWUP_TYPES, createTraceEvent, createRequestUsage, createEvidence };

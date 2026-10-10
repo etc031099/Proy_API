@@ -5,8 +5,9 @@ const { createAgentExecution } = require('./execution');
 const { classifyAgentIntent } = require('./routing');
 const { executeRequestedSkill } = require('./toolCalls');
 const { createConversationMemory } = require('./memory');
-const { routeDeterministically, clarify } = require('./intentRouting');
-const { buildSkillAnswer, buildCheapestSupplierAnswer, llmObservation, safeText, replenishmentExplanation, budgetPlanExplanation, productCountAnswer } = require('./responses');
+const { routeDeterministically, clarify, budgetPlanFollowupType } = require('./intentRouting');
+const { buildSkillAnswer, buildCheapestSupplierAnswer, llmObservation, safeText, replenishmentExplanation,
+  budgetPlanExplanation, budgetPlanFollowupAnswer, productCountAnswer } = require('./responses');
 const { buildSynthesisInput, buildNarrativeSynthesisInput, validateNarrativeSynthesis, renderNarrativeSynthesis, renderNarrativeFallback } = require('./synthesis');
 const { normalizeSupplier, resolveSupplier } = require('./replenishmentPlanning');
 const { SUPPLIER_SELECTION_TTL_MS, contextBinding } = require('./memory');
@@ -133,7 +134,15 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
                 : selectedSupplier?.noRefinementMatch ? clarify('No encontré ese texto entre las opciones actuales. Prueba otra parte del nombre del proveedor.')
           : selectedSupplier?.plan || (productPage && { intent: 'supplier_products', agent: 'operations', skillId: 'get_supplier_products',
             args: { supplierRef: state.supplierProductListing.supplierId, limit: 5, offset: productPage.offset } })
-                || routeDeterministically(message, state, clock(), conversationId, contextBinding(context)));
+                || (() => {
+                  try { return routeDeterministically(message, state, clock(), conversationId, contextBinding(context)); }
+                  catch (error) {
+                    const followupType = budgetPlanFollowupType(message);
+                    if (!followupType) throw error;
+                    execution.recordPlanFollowupDiagnostic(followupType, 'PLAN_CONTEXT_INVALID');
+                    throw new AgentError('AGENT_INTERNAL_ERROR');
+                  }
+                })());
         plan = deterministicPlan || plan;
         if (!deterministicPlan) {
           const routing = await classifyAgentIntent(execution, message);
@@ -228,7 +237,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
                   && state.lastReplenishmentPlan.contextBinding === contextBinding(context) ? state.lastReplenishmentPlan : null;
                 if (!saved) { plan = clarify('No tengo un plan de compras previo en esta conversación. Si quieres, indícame tu presupuesto y puedo preparar uno.'); break; }
                 const data = { budget: saved.budget, currency: saved.currency, spent: saved.spent, remaining: saved.remaining,
-                  plannedUnits: saved.items.reduce((sum, item) => sum + item.plannedQty, 0), items: saved.items };
+                  plannedUnits: saved.plannedUnits, unplannedUnits: saved.pendingUnits, items: saved.items };
                 results.push({ skillId: 'plan_replenishment_budget', result: { status: 'READY', data,
                   metadata: { scenarioId: saved.scenarioId, anchor: saved.anchor, pricingAsOf: saved.pricingAsOf },
                   evidence: { evidenceId: saved.evidence.evidenceId, label: saved.evidence.label, asOf: saved.evidence.asOf } } });
@@ -236,6 +245,17 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
                 const result = await run('analyst', plan.skillId, plan.args);
                 if (result.status === 'CLARIFICATION') plan.clarificationQuestion = result.metadata.clarificationQuestion;
               }
+              break;
+            }
+            case 'replenishment_plan_followup': {
+              const saved = state.lastReplenishmentPlan?.conversationId === conversationId
+                && state.lastReplenishmentPlan.contextBinding === contextBinding(context) ? state.lastReplenishmentPlan : null;
+              if (!saved) { plan = clarify('No tengo un plan de compras previo en esta conversación. Si quieres, puedo preparar uno con tu presupuesto.'); break; }
+              results.push({ skillId: 'plan_replenishment_budget', result: { status: 'READY',
+                data: { budget: saved.budget, currency: saved.currency, spent: saved.spent, remaining: saved.remaining,
+                  plannedUnits: saved.plannedUnits, unplannedUnits: saved.pendingUnits, items: saved.items },
+                metadata: { scenarioId: saved.scenarioId, anchor: saved.anchor, pricingAsOf: saved.pricingAsOf },
+                evidence: saved.evidence } });
               break;
             }
             case 'supplier_products': {
@@ -355,6 +375,17 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             answer = budgetPlanExplanation(planResult);
             sections = [];
           }
+          if (plan.intent === 'replenishment_plan_followup') {
+            const saved = state.lastReplenishmentPlan;
+            try {
+              if (!saved || !Array.isArray(saved.items)) throw new Error('invalid snapshot');
+              answer = budgetPlanFollowupAnswer(saved, plan.followupType, plan.productRef);
+            } catch {
+              execution.recordPlanFollowupDiagnostic(plan.followupType, 'PLAN_FOLLOWUP_FORMAT_ERROR');
+              throw new AgentError('AGENT_INTERNAL_ERROR');
+            }
+            sections = [];
+          }
           if (sections.length) answer = sections.map(index => buildSkillAnswer(results[index].skillId, results[index].result)).join('\n\n');
           if (plan.inventoryCountOnly) {
             const summary = results.find(({ skillId }) => skillId === 'get_business_summary')?.result;
@@ -383,7 +414,9 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
               ? (() => {
                 const saved = results.find(({ skillId }) => skillId === 'plan_replenishment_budget')?.result;
                 return saved?.status === 'READY' ? { lastReplenishmentPlan: { semanticReference: 'last_replenishment_budget_plan',
-                  ...saved.data, expiresAt: Date.now() + require('./memory').BUDGET_PLAN_TTL_MS,
+                  ...saved.data, plannedUnits: saved.data.plannedUnits, pendingUnits: saved.data.unplannedUnits,
+                  itemsComplete: saved.data.pagination?.total === saved.data.items?.length,
+                  expiresAt: Date.now() + require('./memory').BUDGET_PLAN_TTL_MS,
                   evidence: { evidenceId: saved.evidence.evidenceId, label: saved.evidence.label, asOf: saved.evidence.asOf } } } : {};
               })() : {}),
             ...(supplierProductsData?.supplierId && supplierProductsData?.supplierName

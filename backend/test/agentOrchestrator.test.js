@@ -552,6 +552,119 @@ test('budget plan follow-up reuses exact saved purchases without rerunning plann
   assert.equal(followup.evidence[0].evidenceId, original.evidence[0].evidenceId);
 });
 
+test('budget plan balance, pending items and totals follow-ups use one saved plan at zero cost', async () => {
+  const supplierId = id(77);
+  const supplier = { _id: supplierId, businessId: 'A', name: 'Proveedor demo', type: 'vendor', isActive: true };
+  const products = [
+    { ...product(1), stock: 0, minStockLevel: 1, currency: 'PEN', supplierPrices: [{ supplierId, purchasePrice: 13.85 }] },
+    { ...product(2), stock: 1, minStockLevel: 2, currency: 'PEN', supplierPrices: [{ supplierId, purchasePrice: 13.72 }] }
+  ];
+  const forecastService = { getDemandForecast: async () => ({ status: 'READY', anchorOperationalDate: '2026-05-17', products: [
+    { productId: id(1), sku: 'SKU-001', name: 'Producto 1', mlStatus: 'READY', predictedDemand7d: 100,
+      stockAtAnchor: 0, salesLast7Days: 10, safetyStock: 5, recommendedQty: 35, inventoryStatus: 'REPONER' },
+    { productId: id(2), sku: 'SKU-002', name: 'Producto 2', mlStatus: 'READY', predictedDemand7d: 1001,
+      stockAtAnchor: 1000, salesLast7Days: 10, safetyStock: 5, recommendedQty: 508, inventoryStatus: 'REPONER' }
+  ] }) };
+  const f = fixture({ products, contacts: [supplier], forecastService });
+  const conversationId = randomUUID();
+  const initial = await f.run('Tengo S/ 500, ¿qué productos debería comprar primero?', conversationId);
+  assert.equal(initial.usage.totalLlmCalls, 0);
+  assert.equal(initial.usage.totalSkillCalls, 1);
+  assert.match(initial.answer, /S\/ 498\.47/);
+  assert.match(initial.answer, /S\/ 1\.53/);
+  assert.match(initial.answer, /36 unidades planificadas/);
+  assert.match(initial.answer, /507 quedan pendientes/);
+
+  const saved = await f.orchestrator.getContextSnapshot(req(), conversationId);
+  assert.equal(saved.lastReplenishmentPlan.plannedUnits, 36);
+  assert.equal(saved.lastReplenishmentPlan.pendingUnits, 507);
+  assert.equal(saved.lastReplenishmentPlan.itemsComplete, true);
+  assert.deepEqual(saved.lastReplenishmentPlan.items.map(row => [row.sku, row.plannedQty, row.pendingQty]), [
+    ['SKU-001', 35, 0], ['SKU-002', 1, 507]
+  ]);
+  assert.equal(saved.lastReplenishmentPlan.items[1].supplierName, 'Proveedor demo');
+  assert.equal(saved.lastReplenishmentPlan.items[1].unitCost, 13.72);
+  assert.equal(saved.lastReplenishmentPlan.items[1].plannedCost, 13.72);
+  assert.equal(saved.lastReplenishmentPlan.scenarioId, null);
+  assert.equal(saved.lastReplenishmentPlan.anchor, '2026-05-17');
+  assert.equal(saved.lastReplenishmentPlan.pricingAsOf, '2025-01-20T12:00:00.000Z');
+
+  const why = await f.run('¿Por qué esas compras?', conversationId);
+  assert.equal(why.usage.totalLlmCalls, 0); assert.equal(why.usage.totalSkillCalls, 0);
+  const checks = [
+    ['¿Cuánto dinero sobra?', /Quedan S\/ 1\.53 sin asignar/],
+    ['¿Cuánto sobró?', /Quedan S\/ 1\.53 sin asignar/],
+    ['¿Cuáles quedaron pendientes?', /507 unidades recomendadas pendientes.*SKU-002: 507 unidades pendientes/],
+    ['¿Cuántas unidades quedaron pendientes?', /507 unidades recomendadas pendientes/],
+    ['¿Cuánto gasté?', /El plan propuso asignar S\/ 498\.47/],
+    ['¿Cuál fue el presupuesto?', /presupuesto de la propuesta fue S\/ 500\.00/],
+    ['¿Cuántas unidades se planificaron?', /36 unidades de compra/],
+    ['¿Qué proveedor se usaría para SKU-002?', /SKU-002.*Proveedor demo.*S\/ 13\.72 por unidad/]
+  ];
+  for (const [message, expected] of checks) {
+    const result = await f.run(message, conversationId);
+    assert.equal(result.code, null, message);
+    assert.equal(result.intent, 'replenishment_plan_followup', message);
+    assert.equal(result.usage.totalLlmCalls, 0, message);
+    assert.equal(result.usage.totalSkillCalls, 0, message);
+    assert.equal(result.usage.totalTokens, 0, message);
+    assert.deepEqual(result.actions, [], message);
+    assert.match(result.answer, expected, message);
+  }
+  assert.equal(f.calls.length, 0);
+});
+
+test('budget follow-ups without a plan clarify without LLM or skills and remain isolated', async () => {
+  const f = fixture();
+  const conversationId = randomUUID();
+  for (const message of ['¿Cuánto dinero sobra?', '¿Cuáles quedaron pendientes?']) {
+    const result = await f.run(message, conversationId);
+    assert.equal(result.requiresClarification, true, message);
+    assert.match(result.answer, /no tengo un plan de compras previo en esta conversación/i, message);
+    assert.equal(result.usage.totalLlmCalls, 0, message);
+    assert.equal(result.usage.totalSkillCalls, 0, message);
+    assert.equal(result.usage.totalTokens, 0, message);
+  }
+  for (const otherRequest of [req('A', 901), req('B', 900)]) {
+    for (const message of ['¿Cuánto dinero sobra?', '¿Cuáles quedaron pendientes?']) {
+      const result = await f.run(message, conversationId, otherRequest);
+      assert.equal(result.requiresClarification, true, `${otherRequest.businessId} ${message}`);
+      assert.equal(result.usage.totalLlmCalls, 0);
+      assert.equal(result.usage.totalSkillCalls, 0);
+    }
+  }
+  assert.equal(f.calls.length, 0);
+});
+
+test('malformed budget follow-up snapshot emits a correlated safe diagnostic and sanitized response', async () => {
+  const conversationId = randomUUID(), context = createAgentRequestContext(req(), { conversationId });
+  const { contextBinding } = require('../src/agents/memory');
+  const events = [];
+  const memory = { async withConversation(_context, operation) {
+    return operation({ lastReplenishmentPlan: { semanticReference: 'last_replenishment_budget_plan', conversationId,
+      contextBinding: contextBinding(context), expiresAt: Date.now() + 60000, items: 'malformed' } }, () => {});
+  } };
+  const f = fixture({ memory, onEvent: event => events.push(event) });
+  const result = await f.run('¿Cuánto dinero sobra?', conversationId);
+  const diagnostic = events.find(event => event.diagnosticType === 'plan_followup');
+  assert.equal(result.code, 'AGENT_INTERNAL_ERROR');
+  assert.equal(result.answer, 'No pude obtener la información solicitada. Vuelve a intentarlo.');
+  assert.equal(result.usage.totalLlmCalls, 0);
+  assert.equal(result.usage.totalSkillCalls, 0);
+  assert.equal(diagnostic.requestId, result.requestId);
+  assert.equal(diagnostic.conversationId, conversationId);
+  assert.equal(diagnostic.followupType, 'remaining');
+  assert.equal(diagnostic.code, 'PLAN_FOLLOWUP_FORMAT_ERROR');
+  assert.doesNotMatch(JSON.stringify(diagnostic), /malformed|businessId|userId|stack|token/i);
+  let logLine = '';
+  const originalError = console.error;
+  try { console.error = (...values) => { logLine = values.join(' '); }; logAgentEvent(diagnostic); }
+  finally { console.error = originalError; }
+  assert.match(logLine, /^\[AgentPlanFollowupDiagnostic\]/);
+  assert.match(logLine, new RegExp(result.requestId));
+  assert.doesNotMatch(logLine, /malformed|businessId|userId|stack|token/i);
+});
+
 test('saved budget plan is isolated by conversation, user and tenant; new conversation clarifies at zero cost', async () => {
   const supplierId = id(77);
   const supplier = { _id: supplierId, businessId: 'A', name: 'Proveedor demo', type: 'vendor', isActive: true };

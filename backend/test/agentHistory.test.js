@@ -206,13 +206,19 @@ test('compact history snapshot preserves a bounded budget plan for follow-up but
   const conversationId = randomUUID();
   const state = snapshot({ lastReplenishmentPlan: { semanticReference: 'last_replenishment_budget_plan', budget: 100,
     conversationId, contextBinding: contextBinding({ userId: req().user._id, businessId: req().businessId, conversationId }),
-    currency: 'PEN', spent: 80, remaining: 20, scenarioId: 'demo-v2', anchor: '2026-05-17', pricingAsOf: '2026-10-09',
+    currency: 'PEN', spent: 80, remaining: 20, plannedUnits: 2, pendingUnits: 2, itemsComplete: true,
+    scenarioId: 'demo-v2', anchor: '2026-05-17', pricingAsOf: '2026-10-09',
     expiresAt: now + 60000, evidence: { evidenceId: randomUUID(), label: 'Plan de reposición', asOf: '2026-10-09' },
-    items: [{ sku: 'SKU-001', productName: 'Producto 1', supplierName: 'Proveedor demo', plannedQty: 2,
-      recommendedQty: 4, unitCost: 10, plannedCost: 20, predictedDemand7d: 8, stockAtAnchor: 1, shortage: 7,
+    items: [{ sku: 'SKU-001', productName: 'Producto 1', supplierName: 'Proveedor demo',
+      recommendedQty: 4, plannedQty: 2, unplannedQty: 2, pendingQty: 2, unitCost: 10, plannedCost: 20,
+      predictedDemand7d: 8, stockAtAnchor: 1, shortage: 7,
       inventoryStatus: 'REPONER', productId: 'private-id', email: 'private@example.com' }],
     apiKey: 'secret', businessId: 'tenant-private' } });
   assert.equal(state.lastReplenishmentPlan.items[0].plannedQty, 2);
+  assert.equal(state.lastReplenishmentPlan.items[0].pendingQty, 2);
+  assert.equal(state.lastReplenishmentPlan.plannedUnits, 2);
+  assert.equal(state.lastReplenishmentPlan.pendingUnits, 2);
+  assert.equal(state.lastReplenishmentPlan.itemsComplete, true);
   assert.equal(state.lastReplenishmentPlan.conversationId, conversationId);
   assert.equal(state.lastReplenishmentPlan.pricingAsOf, '2026-10-09');
   assert.equal(state.lastReplenishmentPlan.items[0].productId, undefined);

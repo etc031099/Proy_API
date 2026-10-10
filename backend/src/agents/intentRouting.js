@@ -20,6 +20,17 @@ const monthPeriod = (now, previous = false) => {
 const clarify = question => ({ intent: 'ambiguous_query', agent: 'coordinator', clarificationQuestion: question });
 const canonicalProductSku = message => message.match(/\bM5-[A-Z]+_\d+_\d+\b/i)?.[0]
   || message.match(/\bSKU\s+([\w.-]{1,100})\b/i)?.[1];
+const budgetPlanFollowupType = message => {
+  const text = normalize(message);
+  if (/\b(?:cuanto dinero (?:sobra|sobro|me sobra)|cuanto (?:sobro|queda|me queda)|saldo restante|cuanto presupuesto queda)\b/.test(text)) return 'remaining';
+  if (/\b(?:cuanto|cuantas) unidades? (?:quedaron|quedo) pendientes?\b|\bcuanto quedo pendiente\b/.test(text)) return 'pending_units';
+  if (/\b(?:cuales quedaron pendientes|que quedo pendiente|que productos faltaron|cuales no se pudieron cubrir|que no alcanzo a comprar)\b/.test(text)) return 'pending_items';
+  if (/\b(?:cuanto gaste|cuanto se gasto|cuanto se asigno)\b/.test(text)) return 'spent';
+  if (/\b(?:cual fue el presupuesto|cuanto fue el presupuesto|que presupuesto teniamos)\b/.test(text)) return 'budget';
+  if (/\b(?:cuantas unidades se planificaron|cuantas unidades planificadas|unidades planificadas)\b/.test(text)) return 'planned_units';
+  if (/\bque proveedor se usaria para\b/.test(text)) return 'supplier_for_product';
+  return null;
+};
 const routeProductSupplierLookup = message => {
   const sku = canonicalProductSku(message);
   if (!sku) return null;
@@ -133,6 +144,18 @@ const ordinalReference = text => {
 
 /** High-confidence routing only. Unrecognized language is delegated, never guessed. */
 const routeDeterministically = (message, memory, now, conversationId, scopeBinding) => {
+  const followupType = budgetPlanFollowupType(message);
+  if (followupType) {
+    const candidate = memory.lastReplenishmentPlan;
+    const saved = candidate?.semanticReference === 'last_replenishment_budget_plan'
+      && candidate.conversationId === conversationId && candidate.contextBinding === scopeBinding
+      && Number.isSafeInteger(candidate.expiresAt) && candidate.expiresAt > now.getTime() ? candidate : null;
+    if (!saved) return clarify('No tengo un plan de compras previo en esta conversación. Si quieres, puedo preparar uno con tu presupuesto.');
+    const productRef = followupType === 'supplier_for_product'
+      ? canonicalProductSku(message) || message.match(/\bpara\s+(?:el\s+)?(.+?)[?.!]*$/i)?.[1]?.trim() : undefined;
+    return { intent: 'replenishment_plan_followup', agent: 'coordinator', followupType,
+      ...(productRef ? { productRef } : {}) };
+  }
   const commercialPlan = routeCommercial(message, memory);
   if (commercialPlan) return commercialPlan;
   const productSupplierLookup = routeProductSupplierLookup(message);
@@ -281,4 +304,4 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   return { ...plan, period, periodExplicit: Boolean(explicitPeriod), limit: plan.limit || 5 };
 };
 
-module.exports = { routeDeterministically, routeCommercial, routeSupplierProducts, monthPeriod, clarify };
+module.exports = { routeDeterministically, routeCommercial, routeSupplierProducts, monthPeriod, clarify, budgetPlanFollowupType };

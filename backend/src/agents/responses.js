@@ -54,6 +54,33 @@ const budgetPlanExplanation = result => {
     result.metadata?.anchor ? `El forecast corresponde al escenario histórico con ancla ${dateLabel(result.metadata.anchor)}.` : '', pricing]
     .filter(Boolean).join('\n');
 };
+const budgetPlanFollowupAnswer = (plan, followupType, productRef) => {
+  const amount = value => `S/ ${money(value)}`;
+  switch (followupType) {
+    case 'remaining': return `Quedan ${amount(plan.remaining)} sin asignar.`;
+    case 'spent': return `El plan propuso asignar ${amount(plan.spent)} de ${amount(plan.budget)}; esta propuesta no registra una compra.`;
+    case 'budget': return `El presupuesto de la propuesta fue ${amount(plan.budget)}.`;
+    case 'planned_units': return `Se planificaron ${countLabel(plan.plannedUnits, 'unidad', 'unidades')} de compra.`;
+    case 'pending_units': return plan.pendingUnits === null
+      ? 'El snapshot de esta propuesta no conserva un total verificable de unidades pendientes.'
+      : `Quedaron ${countLabel(plan.pendingUnits, 'unidad', 'unidades')} recomendadas pendientes de cubrir.`;
+    case 'pending_items': {
+      const pendingItems = plan.items.filter(item => item.pendingQty !== null && item.pendingQty > 0);
+      const total = plan.pendingUnits === null ? ''
+        : `Quedaron ${countLabel(plan.pendingUnits, 'unidad', 'unidades')} recomendadas pendientes de cubrir. `;
+      const details = pendingItems.map(item => `${item.sku}: ${countLabel(item.pendingQty, 'unidad', 'unidades')} pendientes`).join('; ');
+      if (!details) return `${total}El detalle guardado no permite enumerar productos que no entraron en la propuesta sin recalcularla.`.trim();
+      return `${total}Entre los productos que la propuesta cubrió parcialmente: ${details}.`;
+    }
+    case 'supplier_for_product': {
+      const key = String(productRef || '').trim().toLocaleLowerCase();
+      const item = plan.items.find(row => row.sku.toLocaleLowerCase() === key || row.productName.toLocaleLowerCase() === key);
+      return item ? `Para ${item.sku} (${item.productName}), la propuesta usaría ${item.supplierName}; costo configurado de ${amount(item.unitCost)} por unidad.`
+        : `No encuentro «${String(productRef || 'ese producto').slice(0, 100)}» entre los productos seleccionados en esta propuesta. Indícame su SKU.`;
+    }
+    default: return 'No puedo resolver ese dato desde el plan guardado.';
+  }
+};
 const replenishmentExplanation = result => {
   if (result.status === 'ML_NOT_READY') return buildSkillAnswer('get_demand_forecast', result);
   const row = result.data?.[0];
@@ -223,4 +250,5 @@ const llmObservation = (skillId, result) => {
       inventoryBasis: result.metadata.inventoryBasis, asOf: result.metadata.asOf } : {}) };
 };
 
-module.exports = { buildSkillAnswer, buildCheapestSupplierAnswer, llmObservation, safeText, replenishmentExplanation, budgetPlanExplanation, productCountAnswer };
+module.exports = { buildSkillAnswer, buildCheapestSupplierAnswer, llmObservation, safeText, replenishmentExplanation,
+  budgetPlanExplanation, budgetPlanFollowupAnswer, productCountAnswer };

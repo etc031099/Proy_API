@@ -36,12 +36,17 @@ const compactBudgetPlan = (value, now = Date.now()) => {
       || !['recommendedQty', 'unitCost', 'plannedCost', 'predictedDemand7d', 'stockAtAnchor', 'shortage'].every(key => finiteNonNegative(row[key]) !== null)) return null;
     return { sku: label(row.sku, 100), productName: label(row.productName, 100), supplierName: label(row.supplierName, 100),
       plannedQty: row.plannedQty, recommendedQty: row.recommendedQty, unitCost: row.unitCost, plannedCost: row.plannedCost,
+      pendingQty: finiteNonNegative(row.pendingQty ?? row.unplannedQty),
       predictedDemand7d: row.predictedDemand7d, stockAtAnchor: row.stockAtAnchor, shortage: row.shortage,
       inventoryStatus: ['OK', 'VIGILAR', 'REPONER'].includes(row.inventoryStatus) ? row.inventoryStatus : null };
   });
   if (items.some(row => !row)) return null;
+  const plannedUnits = finiteNonNegative(value.plannedUnits) ?? items.reduce((total, item) => total + item.plannedQty, 0);
+  const pendingUnits = finiteNonNegative(value.pendingUnits ?? value.unplannedUnits)
+    ?? (items.every(item => item.pendingQty !== null) ? items.reduce((total, item) => total + item.pendingQty, 0) : null);
   return deepFreeze({ semanticReference: 'last_replenishment_budget_plan', budget: value.budget, currency: 'PEN',
-    spent: value.spent, remaining: value.remaining, items,
+    spent: value.spent, remaining: value.remaining, plannedUnits, pendingUnits,
+    itemsComplete: value.itemsComplete === true, items,
     conversationId: value.conversationId, contextBinding: value.contextBinding,
     scenarioId: typeof value.scenarioId === 'string' ? label(value.scenarioId, 80) : null,
     anchor: date(value.anchor), pricingAsOf: date(value.pricingAsOf), expiresAt: value.expiresAt,
