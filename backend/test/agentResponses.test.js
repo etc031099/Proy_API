@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildSkillAnswer, llmObservation } = require('../src/agents/responses');
+const { buildSkillAnswer, llmObservation, budgetPlanExplanation } = require('../src/agents/responses');
 
 const period = { startDate: '2026-10-01', endDate: '2026-10-31' };
 const product = { sku: 'SKU-001', name: 'Producto 1', stock: 8, minStockLevel: 18 };
@@ -35,7 +35,7 @@ test('sales wording keeps native currencies separate and never claims profit', (
       { amount: 63, currency: 'PEN' }, { amount: 7, currency: 'USD' }
     ] }, metadata: { period } });
   assert.match(answer, /2 ventas completadas.*7 unidades/);
-  assert.match(answer, /63 PEN; 7 USD/);
+  assert.match(answer, /63\.00 PEN; 7\.00 USD/);
   assert.doesNotMatch(answer, /70|utilidad|ganancia|profit/i);
 });
 
@@ -46,7 +46,7 @@ test('product sales with no records and product details with zero stock stay cle
   const details = buildSkillAnswer('get_product_details', { status: 'READY',
     data: { ...product, stock: 0, price: 9, currency: 'PEN', isActive: true }, metadata: {} });
   assert.match(details, /0 unidades disponibles/);
-  assert.match(details, /precio es 9 PEN/);
+  assert.match(details, /precio es 9\.00 PEN/);
   assert.match(details, /está activo/);
 });
 
@@ -83,6 +83,7 @@ test('supplier cost and comparison responses humanize selection rules and hide i
   metadata: { anchor: '2026-05-17', pricingAsOf: '2026-10-09T00:00:00.000Z', interpretation: 'historical_replay' } });
   assert.match(cost, /Tomé «55 foods» como Proveedor 055 Foods/);
   assert.match(cost, /Se utilizó el proveedor que indicaste/);
+  assert.match(cost, /15\.67 PEN = 31\.34 PEN/);
   assert.doesNotMatch(cost, /USER_SPECIFIED|USER_SPECIFIED_UNAVAILABLE|PREFERRED_SUPPLIER|LOWEST_VALID_PRICE/);
   const comparison = buildSkillAnswer('compare_supplier_costs', { status: 'READY', data: [
     { sku: 'SKU-001', productName: 'Producto', supplier: 'Proveedor 055 Foods', unitCost: 15.67, currency: 'PEN', preferred: true, selected: true },
@@ -92,6 +93,16 @@ test('supplier cost and comparison responses humanize selection rules and hide i
   assert.match(comparison, /Proveedor 055 Foods: 15\.67 PEN por unidad/);
   assert.match(comparison, /porque es el proveedor preferido configurado/);
   assert.doesNotMatch(comparison, /PREFERRED_SUPPLIER|USER_SPECIFIED/);
+});
+
+test('budget plan explanation formats currency to two decimals and handles singular quantity', () => {
+  const answer = budgetPlanExplanation({ data: { budget: 2, spent: 1.5, remaining: 0.5, items: [{ sku: 'SKU-001',
+    productName: 'Producto 1', plannedQty: 1, recommendedQty: 1, supplierName: 'Proveedor', unitCost: 1.5,
+    plannedCost: 1.5, inventoryStatus: 'REPONER' }] }, metadata: { anchor: '2026-05-17', pricingAsOf: '2026-10-10T01:23:31.244Z' } });
+  assert.match(answer, /S\/ 1\.50/);
+  assert.match(answer, /1 unidad planificada/);
+  assert.match(answer, /10 de octubre de 2026/);
+  assert.doesNotMatch(answer, /1 unidades/);
 });
 
 test('individual forecast separates demand, security stock and recommendation, including zero and non-READY', () => {
@@ -112,7 +123,7 @@ test('recent transactions show readable dates and Spanish status labels', () => 
   const answer = buildSkillAnswer('get_recent_transactions', list([
     { type: 'sale', status: 'completed', date: '2025-07-01T23:00:00Z', total: 21, currency: 'PEN', itemCount: 2 }
   ]));
-  assert.match(answer, /1 de julio de 2025.*venta completada por 21 PEN/);
+  assert.match(answer, /1 de julio de 2025.*venta completada por 21\.00 PEN/);
   assert.match(answer, /2 líneas de productos/);
   assert.doesNotMatch(answer, /completed|2025-07-01/);
 });
@@ -127,7 +138,7 @@ test('business summary distinguishes current inventory, no current activity and 
   const answer = buildSkillAnswer('get_business_summary', historical);
   assert.match(answer, /datos de ventas y compras completadas disponibles son históricos/);
   assert.match(answer, /último periodo con actividad completada registrada es julio de 2025/);
-  assert.match(answer, /1 venta completada por 80 PEN/);
+  assert.match(answer, /1 venta completada por 80\.00 PEN/);
   assert.doesNotMatch(answer, /60 productos|este mes/);
   const empty = buildSkillAnswer('get_business_summary', business({}, { periodMode: 'latest' }));
   assert.match(empty, /No encontré ventas ni compras completadas en el historial/);

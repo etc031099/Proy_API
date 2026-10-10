@@ -121,7 +121,7 @@ const createTraceEvent = (type, metadata) => {
   }
   if (metadata.synthesisDiagnostic !== undefined) {
     if (!['NONE', 'PROVIDER_FAILED', 'PARSE_OR_SCHEMA_FAILED', 'INVALID_OUTPUT', 'INVALID_EVIDENCE_REF',
-      'UNGROUNDED_SKU', 'UNGROUNDED_NUMBER', 'INVALID_TEXT'].includes(metadata.synthesisDiagnostic)) invalid();
+      'UNGROUNDED_SKU', 'UNGROUNDED_NUMBER', 'INVALID_TEXT', 'GENERIC_INTERPRETATION'].includes(metadata.synthesisDiagnostic)) invalid();
     event.synthesisDiagnostic = metadata.synthesisDiagnostic;
   }
   if (type === 'synthesis_finished' && (!event.agentId || !event.status || !event.synthesisDiagnostic)) invalid();

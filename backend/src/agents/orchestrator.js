@@ -6,10 +6,10 @@ const { classifyAgentIntent } = require('./routing');
 const { executeRequestedSkill } = require('./toolCalls');
 const { createConversationMemory } = require('./memory');
 const { routeDeterministically, clarify } = require('./intentRouting');
-const { buildSkillAnswer, llmObservation, safeText, replenishmentExplanation } = require('./responses');
+const { buildSkillAnswer, llmObservation, safeText, replenishmentExplanation, budgetPlanExplanation } = require('./responses');
 const { buildSynthesisInput, buildNarrativeSynthesisInput, validateNarrativeSynthesis, renderNarrativeSynthesis, renderNarrativeFallback } = require('./synthesis');
 const { normalizeSupplier, resolveSupplier } = require('./replenishmentPlanning');
-const { SUPPLIER_SELECTION_TTL_MS } = require('./memory');
+const { SUPPLIER_SELECTION_TTL_MS, contextBinding } = require('./memory');
 
 const supplierSelection = (message, state, now) => {
   const pending = state.supplierResolution;
@@ -133,7 +133,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
                 : selectedSupplier?.noRefinementMatch ? clarify('No encontré ese texto entre las opciones actuales. Prueba otra parte del nombre del proveedor.')
           : selectedSupplier?.plan || (productPage && { intent: 'supplier_products', agent: 'operations', skillId: 'get_supplier_products',
             args: { supplierRef: state.supplierProductListing.supplierId, limit: 5, offset: productPage.offset } })
-            || routeDeterministically(message, state, clock()));
+                || routeDeterministically(message, state, clock(), conversationId, contextBinding(context)));
         plan = deterministicPlan || plan;
         if (!deterministicPlan) {
           const routing = await classifyAgentIntent(execution, message);
@@ -219,7 +219,9 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             }
             case 'replenishment_plan_explanation': {
               if (plan.useMemoryPlan) {
-                const saved = state.lastReplenishmentPlan;
+                const saved = state.lastReplenishmentPlan?.conversationId === conversationId
+                  && state.lastReplenishmentPlan.contextBinding === contextBinding(context) ? state.lastReplenishmentPlan : null;
+                if (!saved) { plan = clarify('No tengo un plan de compras previo en esta conversación. Si quieres, indícame tu presupuesto y puedo preparar uno.'); break; }
                 const data = { budget: saved.budget, currency: saved.currency, spent: saved.spent, remaining: saved.remaining,
                   plannedUnits: saved.items.reduce((sum, item) => sum + item.plannedQty, 0), items: saved.items };
                 results.push({ skillId: 'plan_replenishment_budget', result: { status: 'READY', data,
@@ -298,7 +300,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             try {
               const generated = await execution.generateStructured({ agentId: 'analyst',
                 ...buildNarrativeSynthesisInput(plan.intent, message, results) });
-              const validated = validateNarrativeSynthesis(generated.output, results);
+              const validated = validateNarrativeSynthesis(generated.output, results, plan.intent);
               answer = renderNarrativeSynthesis(plan.intent, results, validated);
               synthesisStatus = 'SUCCESS';
               synthesisDiagnostic = 'NONE';
@@ -306,7 +308,8 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             } catch (error) {
               const reason = error?.code;
               const validationDiagnostics = { SYNTHESIS_INVALID_OUTPUT: 'INVALID_OUTPUT', SYNTHESIS_INVALID_EVIDENCE_REF: 'INVALID_EVIDENCE_REF',
-                SYNTHESIS_UNGROUNDED_SKU: 'UNGROUNDED_SKU', SYNTHESIS_UNGROUNDED_NUMBER: 'UNGROUNDED_NUMBER' };
+                SYNTHESIS_UNGROUNDED_SKU: 'UNGROUNDED_SKU', SYNTHESIS_UNGROUNDED_NUMBER: 'UNGROUNDED_NUMBER',
+                SYNTHESIS_GENERIC_INTERPRETATION: 'GENERIC_INTERPRETATION' };
               const parseFailures = ['GEMINI_INVALID_JSON', 'GEMINI_EMPTY_RESPONSE', 'GEMINI_INVALID_RESPONSE', 'GEMINI_SCHEMA_VALIDATION_FAILED'];
               synthesisStatus = validationDiagnostics[reason] ? 'DEGRADED_VALIDATION' : parseFailures.includes(reason)
                 ? 'DEGRADED_PARSE' : 'DEGRADED_PROVIDER';
@@ -340,6 +343,11 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
           if (plan.intent === 'explain_replenishment') {
             const forecastResult = [...results].reverse().find(({ skillId }) => skillId === 'get_demand_forecast')?.result;
             answer = forecastResult ? replenishmentExplanation(forecastResult) : sections.map(index => buildSkillAnswer(results[index].skillId, results[index].result)).join('\n\n');
+            sections = [];
+          }
+          if (plan.intent === 'replenishment_plan_explanation') {
+            const planResult = results.find(({ skillId }) => skillId === 'plan_replenishment_budget')?.result;
+            answer = budgetPlanExplanation(planResult);
             sections = [];
           }
           if (sections.length) answer = sections.map(index => buildSkillAnswer(results[index].skillId, results[index].result)).join('\n\n');

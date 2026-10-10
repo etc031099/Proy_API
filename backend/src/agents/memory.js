@@ -1,7 +1,10 @@
-const { AgentError, assertAgentRequestContext, deepFreeze, isObjectId, isDate } = require('./contracts');
+const { createHash } = require('node:crypto');
+const { AgentError, assertAgentRequestContext, deepFreeze, isObjectId, isDate, isTimestamp, isTraceId } = require('./contracts');
 
 const TTL_MS = 30 * 60 * 1000;
 const BUDGET_PLAN_TTL_MS = 30 * 60 * 1000;
+const contextBinding = context => createHash('sha256')
+  .update(JSON.stringify([context.userId, context.businessId, context.conversationId])).digest('hex');
 const label = (value, max) => typeof value === 'string' ? value.replace(/[\r\n\t]/g, ' ')
   .replace(/\bBearer\s+\S+|AIza[\w-]{20,}|[\w.+-]+@[a-z\d.-]+\.[a-z]{2,}/gi, '[omitido]').slice(0, max) : null;
 const compactEntity = value => value && isObjectId(value.id || value.productId) ? {
@@ -18,11 +21,13 @@ const compactProductSelection = (value, now) => {
 const finiteNonNegative = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 const compactBudgetPlan = (value, now = Date.now()) => {
   if (!value || value.semanticReference !== 'last_replenishment_budget_plan'
+    || !isTraceId(value.conversationId)
+    || !/^[a-f\d]{64}$/i.test(value.contextBinding || '')
     || !Number.isSafeInteger(value.expiresAt) || value.expiresAt <= now || value.expiresAt > now + BUDGET_PLAN_TTL_MS
     || value.currency !== 'PEN' || !Array.isArray(value.items) || value.items.length < 1 || value.items.length > 10
     || !value.evidence || !/^[a-f\d]{8}-[a-f\d]{4}-4[a-f\d]{3}-[89ab][a-f\d]{3}-[a-f\d]{12}$/i.test(value.evidence.evidenceId || '')
     || !['budget', 'spent', 'remaining'].every(key => finiteNonNegative(value[key]) !== null)) return null;
-  const date = candidate => isDate(candidate) ? candidate : null;
+  const date = candidate => isDate(candidate) || isTimestamp(candidate) ? candidate : null;
   const items = value.items.map(row => {
     if (!row || typeof row.sku !== 'string' || !row.sku.trim() || row.sku.length > 100
       || typeof row.productName !== 'string' || !row.productName.trim() || row.productName.length > 100
@@ -37,6 +42,7 @@ const compactBudgetPlan = (value, now = Date.now()) => {
   if (items.some(row => !row)) return null;
   return deepFreeze({ semanticReference: 'last_replenishment_budget_plan', budget: value.budget, currency: 'PEN',
     spent: value.spent, remaining: value.remaining, items,
+    conversationId: value.conversationId, contextBinding: value.contextBinding,
     scenarioId: typeof value.scenarioId === 'string' ? label(value.scenarioId, 80) : null,
     anchor: date(value.anchor), pricingAsOf: date(value.pricingAsOf), expiresAt: value.expiresAt,
     evidence: { evidenceId: value.evidence.evidenceId, label: label(value.evidence.label, 160),
@@ -118,7 +124,9 @@ const createConversationMemory = ({ now = Date.now, ttlMs = TTL_MS, maxEntries =
           const period = patch.lastPeriod;
           pending = deepFreeze({
             lastReplenishmentPlan: Object.hasOwn(patch, 'lastReplenishmentPlan')
-              ? compactBudgetPlan(patch.lastReplenishmentPlan, now()) : state.lastReplenishmentPlan || null,
+              ? compactBudgetPlan({ ...patch.lastReplenishmentPlan,
+                conversationId: patch.lastReplenishmentPlan?.conversationId || context.conversationId,
+                contextBinding: patch.lastReplenishmentPlan?.contextBinding || contextBinding(context) }, now()) : state.lastReplenishmentPlan || null,
             lastForecastAnalytics: Object.hasOwn(patch, 'lastForecastAnalytics')
               ? require('./forecastAnalytics').compactAnalyticsContext(patch.lastForecastAnalytics) : state.lastForecastAnalytics || null,
             lastIntent: label(patch.lastIntent ?? state.lastIntent, 40),
@@ -161,4 +169,4 @@ const createConversationMemory = ({ now = Date.now, ttlMs = TTL_MS, maxEntries =
 };
 
 module.exports = { createConversationMemory, compactEntity, compactSupplier, compactProductSelection, compactSupplierResolution,
-  compactSupplierProductListing, compactBudgetPlan, SUPPLIER_SELECTION_TTL_MS, BUDGET_PLAN_TTL_MS, TTL_MS };
+  compactSupplierProductListing, compactBudgetPlan, contextBinding, SUPPLIER_SELECTION_TTL_MS, BUDGET_PLAN_TTL_MS, TTL_MS };

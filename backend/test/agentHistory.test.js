@@ -5,7 +5,7 @@ const express = require('express');
 const { createAgentConversationService } = require('../src/services/agentConversationService');
 const { publicResponse, snapshot, titleFor } = require('../src/services/agentHistoryProjection');
 const { createAgentOrchestrator } = require('../src/agents/orchestrator');
-const { createConversationMemory } = require('../src/agents/memory');
+const { createConversationMemory, contextBinding } = require('../src/agents/memory');
 const { routeDeterministically } = require('../src/agents/intentRouting');
 const createRoutes = require('../src/routes/agent');
 const Conversation = require('../src/models/AgentConversation');
@@ -203,7 +203,9 @@ test('supplier-to-products selection and page context survive a closed history s
 
 test('compact history snapshot preserves a bounded budget plan for follow-up but drops private/internal fields', () => {
   const now = Date.now();
+  const conversationId = randomUUID();
   const state = snapshot({ lastReplenishmentPlan: { semanticReference: 'last_replenishment_budget_plan', budget: 100,
+    conversationId, contextBinding: contextBinding({ userId: req().user._id, businessId: req().businessId, conversationId }),
     currency: 'PEN', spent: 80, remaining: 20, scenarioId: 'demo-v2', anchor: '2026-05-17', pricingAsOf: '2026-10-09',
     expiresAt: now + 60000, evidence: { evidenceId: randomUUID(), label: 'Plan de reposición', asOf: '2026-10-09' },
     items: [{ sku: 'SKU-001', productName: 'Producto 1', supplierName: 'Proveedor demo', plannedQty: 2,
@@ -211,6 +213,8 @@ test('compact history snapshot preserves a bounded budget plan for follow-up but
       inventoryStatus: 'REPONER', productId: 'private-id', email: 'private@example.com' }],
     apiKey: 'secret', businessId: 'tenant-private' } });
   assert.equal(state.lastReplenishmentPlan.items[0].plannedQty, 2);
+  assert.equal(state.lastReplenishmentPlan.conversationId, conversationId);
+  assert.equal(state.lastReplenishmentPlan.pricingAsOf, '2026-10-09');
   assert.equal(state.lastReplenishmentPlan.items[0].productId, undefined);
   assert.equal(state.lastReplenishmentPlan.items[0].email, undefined);
   assert.equal(state.lastReplenishmentPlan.apiKey, undefined);

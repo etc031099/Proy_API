@@ -204,8 +204,8 @@ test('forecast risk question runs three deterministic analytics over one ML batc
   const provider = { generateStructured: async input => {
     const payload = JSON.parse(input.messages[0].text);
     return generated({ observations: [{ evidenceRefs: payload.evidence.map(item => item.ref),
-      interpretation: 'La cobertura parece ajustada: el replay contiene 1 producto y 8.25 unidades de demanda prevista.',
-      advisoryRecommendation: 'Conviene revisar primero los casos con mayor brecha.' }],
+      interpretation: 'El producto está en REPONER: la demanda prevista 8.25 supera el stock 2, señal de riesgo de faltante en este escenario.',
+      advisoryRecommendation: 'La brecha observada permite priorizar este producto dentro del replay.' }],
     limitations: ['El análisis describe el replay histórico y no incluye cambios posteriores.'] });
   } };
   const f = fixture({ provider, forecastService: { getDemandForecast: async () => { forecastCalls++; return structuredClone(forecast); } } });
@@ -226,6 +226,8 @@ test('forecast risk question runs three deterministic analytics over one ML batc
   assert.match(result.answer, /Interpretación de Analyst/);
   assert.match(result.answer, /fecha de referencia 2025-07-01/);
   assert.match(result.answer, /8\.25/);
+  assert.match(result.answer, /riesgo de faltante/i);
+  assert.match(result.answer, /REPONER/i);
   const payload = JSON.parse(f.calls[0].input.messages[0].text);
   assert.ok(f.calls[0].input.messages[0].text.length <= 2000);
   assert.ok(payload.question.length <= 600);
@@ -235,6 +237,26 @@ test('forecast risk question runs three deterministic analytics over one ML batc
   assert.equal(result.participants.find(row => row.agentId === 'analyst').llmCalls, 1);
 });
 
+test('generic risk interpretation is rejected and replaced with concrete evidence-based findings', async () => {
+  const provider = { generateStructured: async input => {
+    const payload = JSON.parse(input.messages[0].text);
+    return generated({ observations: [{ evidenceRefs: payload.evidence.map(item => item.ref),
+      interpretation: 'Los datos muestran aspectos que conviene revisar.',
+      advisoryRecommendation: 'Usa estos hallazgos como apoyo para una revisión humana.' }], limitations: [] });
+  } };
+  const f = fixture({ provider });
+  const result = await f.run('Analiza los riesgos actuales según la predicción.');
+  assert.equal(result.intent, 'forecast_risk_explanation');
+  assert.equal(result.synthesisStatus, 'DEGRADED_VALIDATION');
+  assert.equal(result.synthesisDiagnostic, 'GENERIC_INTERPRETATION');
+  assert.match(result.answer, /1 de 1 producto está en estado REPONER/i);
+  assert.match(result.answer, /demanda prevista \(8\.25\) supera el stock \(2\)/i);
+  assert.match(result.answer, /El producto está READY/i);
+  assert.equal((result.answer.match(/2025-07-01/g) || []).length, 1);
+  assert.equal(result.usage.totalLlmCalls, 1);
+  assert.equal(result.usage.totalSkillCalls, 3);
+});
+
 test('narrative synthesis failure preserves deterministic facts, evidence and unknown usage', async () => {
   const failure = Object.assign(new Error('private SDK failure'), { code: 'GEMINI_PERMISSION_DENIED' });
   const f = fixture({ provider: { generateStructured: async () => { throw failure; } } });
@@ -242,7 +264,8 @@ test('narrative synthesis failure preserves deterministic facts, evidence and un
   assert.equal(result.code, null);
   assert.equal(result.synthesisStatus, 'DEGRADED_PROVIDER');
   assert.equal(result.synthesisDiagnostic, 'PROVIDER_FAILED');
-  assert.match(result.answer, /Datos verificados \(forecast_risk_explanation\)/i);
+  assert.match(result.answer, /en estado REPONER/i);
+  assert.match(result.answer, /demanda prevista \(8\.25\) supera el stock \(2\)/i);
   assert.match(result.answer, /demanda prevista 8\.25/);
   assert.match(result.answer, /fecha de referencia 2025-07-01/);
   assert.equal((result.answer.match(/2025-07-01/g) || []).length, 1);
@@ -267,7 +290,7 @@ test('narrative synthesis rejects invented identifiers, numbers and evidence ref
     assert.equal(result.code, null);
     assert.equal(result.synthesisStatus, 'DEGRADED_VALIDATION');
     assert.ok(result.synthesisDiagnostic);
-    assert.match(result.answer, /Datos verificados \(forecast_risk_explanation\)/i);
+    assert.match(result.answer, /en estado REPONER/i);
     assert.doesNotMatch(result.answer, /SKU-FAKE|999 unidades/);
     assert.equal(result.synthesisDiagnostic, name === 'sku' ? 'UNGROUNDED_SKU'
       : name === 'number' ? 'UNGROUNDED_NUMBER' : 'INVALID_EVIDENCE_REF');
@@ -341,68 +364,85 @@ test('open reference without a previous list is clarified before any LLM call', 
   assert.equal(f.calls.length, 0);
 });
 
-test('budget plan stays deterministic and one Analyst generation only explains its fixed plan', async () => {
+test('budget plan explanation is deterministic and preserves money precision and priority rules', async () => {
   const supplierId = id(77);
   const supplier = { _id: supplierId, businessId: 'A', name: 'Proveedor demo', type: 'vendor', isActive: true };
   const budgetProduct = { ...product(1), currency: 'PEN', supplierPrices: [{ supplierId, purchasePrice: 1.5 }],
     preferredSupplierId: supplierId };
-  const provider = { generateStructured: async input => {
-    const payload = JSON.parse(input.messages[0].text);
-    return generated({ observations: [{ evidenceRefs: payload.evidence.map(item => item.ref),
-      interpretation: 'El orden refleja primero las necesidades que cubren el plan dentro del límite disponible.',
-      advisoryRecommendation: 'Verifica los precios configurados antes de decidir la compra.' }], limitations: [] });
-  } };
-  const f = fixture({ products: [budgetProduct], contacts: [supplier], provider });
+  const f = fixture({ products: [budgetProduct], contacts: [supplier] });
   const result = await f.run('Tengo S/1000 y este plan, explícame por qué estas compras son prioritarias.');
   assert.equal(result.intent, 'replenishment_plan_explanation');
-  assert.equal(result.synthesisStatus, 'SUCCESS');
+  assert.equal(result.synthesisStatus, undefined);
   assert.equal(result.usage.totalSkillCalls, 1);
-  assert.equal(result.usage.totalLlmCalls, 1);
-  assert.equal(f.calls.length, 1);
-  const payload = JSON.parse(f.calls[0].input.messages[0].text);
-  const planned = payload.evidence[0].facts.items[0];
-  assert.equal(planned.plannedQty, 12);
-  assert.equal(planned.supplierName, 'Proveedor demo');
+  assert.equal(result.usage.totalLlmCalls, 0);
+  assert.equal(f.calls.length, 0);
   assert.match(result.answer, /12/);
-  assert.match(result.answer, /Interpretación de Analyst/);
+  assert.match(result.answer, /prioriza primero REPONER/i);
+  assert.match(result.answer, /S\/ 1\.50/);
+  assert.match(result.answer, /1 de julio de 2025/);
 });
 
-test('budget plan follow-up reuses exact saved purchases without rerunning planning or Coordinator', async () => {
+test('budget plan follow-up reuses exact saved purchases without rerunning planning or LLM', async () => {
   const supplierId = id(77);
   const supplier = { _id: supplierId, businessId: 'A', name: 'Proveedor demo', type: 'vendor', isActive: true };
   const budgetProduct = { ...product(1), currency: 'PEN', supplierPrices: [{ supplierId, purchasePrice: 1.5 }],
     preferredSupplierId: supplierId };
-  const provider = { generateStructured: async input => {
-    const payload = JSON.parse(input.messages[0].text);
-    return generated({ observations: [{ evidenceRefs: payload.evidence.map(item => item.ref),
-      interpretation: 'El orden y las cantidades corresponden al plan guardado, dentro del presupuesto disponible.',
-      advisoryRecommendation: 'Verifica el precio configurado antes de decidir.' }], limitations: [] });
-  } };
-  const f = fixture({ products: [budgetProduct], contacts: [supplier], provider });
+  const f = fixture({ products: [budgetProduct], contacts: [supplier] });
   const conversationId = randomUUID();
   const original = await f.run('Tengo S/ 1000, ¿qué productos debería comprar primero?', conversationId);
   assert.equal(original.usage.totalLlmCalls, 0);
   assert.equal(original.usage.totalSkillCalls, 1);
   const savedPlan = await f.orchestrator.getContextSnapshot(req(), conversationId);
   assert.ok(savedPlan.lastReplenishmentPlan);
+  assert.equal(savedPlan.lastReplenishmentPlan.conversationId, conversationId);
+  assert.equal(savedPlan.lastReplenishmentPlan.pricingAsOf, '2025-01-20T12:00:00.000Z');
   const followup = await f.run('Explícame por qué estas compras son prioritarias.', conversationId);
   assert.equal(followup.intent, 'replenishment_plan_explanation');
-  assert.equal(followup.synthesisStatus, 'SUCCESS');
-  assert.equal(followup.usage.totalLlmCalls, 1);
+  assert.equal(followup.synthesisStatus, undefined);
+  assert.equal(followup.usage.totalLlmCalls, 0);
   assert.equal(followup.usage.totalSkillCalls, 0);
-  assert.equal(f.calls.length, 1);
-  assert.deepEqual(followup.participants.map(row => [row.agentId, row.llmCalls, row.skillCalls]), [
-    ['coordinator', 0, 0], ['analyst', 1, 0]
-  ]);
-  const payload = JSON.parse(f.calls[0].input.messages[0].text);
-  const item = payload.evidence[0].facts.items[0];
+  assert.equal(f.calls.length, 0);
+  assert.deepEqual(followup.participants.map(row => [row.agentId, row.llmCalls, row.skillCalls]), [['coordinator', 0, 0]]);
+  const item = savedPlan.lastReplenishmentPlan.items[0];
   assert.equal(item.sku, savedPlan.lastReplenishmentPlan.items[0].sku);
   assert.equal(item.plannedQty, savedPlan.lastReplenishmentPlan.items[0].plannedQty);
   assert.equal(item.supplierName, 'Proveedor demo');
   assert.equal(item.unitCost, 1.5);
   assert.match(followup.answer, /SKU-001/);
   assert.match(followup.answer, /12 unidades/);
+  assert.match(followup.answer, /20 de enero de 2025/);
+  assert.match(followup.answer, /S\/ 1\.50/);
   assert.equal(followup.evidence[0].evidenceId, original.evidence[0].evidenceId);
+});
+
+test('saved budget plan is isolated by conversation, user and tenant; new conversation clarifies at zero cost', async () => {
+  const supplierId = id(77);
+  const supplier = { _id: supplierId, businessId: 'A', name: 'Proveedor demo', type: 'vendor', isActive: true };
+  const budgetProduct = { ...product(1), currency: 'PEN', supplierPrices: [{ supplierId, purchasePrice: 1.5 }], preferredSupplierId: supplierId };
+  const f = fixture({ products: [budgetProduct], contacts: [supplier] });
+  const conversationA = randomUUID(), conversationB = randomUUID();
+  await f.run('Tengo S/ 1000, ¿qué productos debería comprar primero?', conversationA);
+  const snapshotA = await f.orchestrator.getContextSnapshot(req(), conversationA);
+  await f.orchestrator.restoreContext(req(), conversationB, snapshotA);
+  const newConversation = await f.run('Explícame por qué estas compras son prioritarias.', conversationB);
+  assert.equal(newConversation.requiresClarification, true);
+  assert.match(newConversation.answer, /no tengo un plan de compras previo en esta conversación/i);
+  assert.equal(newConversation.usage.totalLlmCalls, 0);
+  assert.equal(newConversation.usage.totalSkillCalls, 0);
+  assert.equal(f.calls.length, 0);
+  for (const otherRequest of [req('A', 901), req('B', 900)]) {
+    await f.orchestrator.restoreContext(otherRequest, conversationA, snapshotA);
+    const isolated = await f.run('Explícame por qué estas compras son prioritarias.', conversationA, otherRequest);
+    assert.equal(isolated.requiresClarification, true);
+    assert.equal(isolated.usage.totalLlmCalls, 0);
+    assert.equal(isolated.usage.totalSkillCalls, 0);
+  }
+  await f.run('Tengo S/ 500, ¿qué productos debería comprar primero?', conversationB);
+  const ownFollowup = await f.run('Explícame por qué estas compras son prioritarias.', conversationB);
+  assert.equal(ownFollowup.requiresClarification, false);
+  assert.match(ownFollowup.answer, /S\/ 500\.00/);
+  assert.equal(ownFollowup.usage.totalLlmCalls, 0);
+  assert.equal(ownFollowup.usage.totalSkillCalls, 0);
 });
 
 test('“estos productos” without an unambiguous previous plan asks a natural clarification with zero LLM', async () => {
@@ -465,7 +505,7 @@ test('generic business summary separates empty current activity from tenant-scop
   assert.match(result.answer, /No se registran ventas o compras completadas durante octubre de 2026/);
   assert.match(result.answer, /datos de ventas y compras completadas disponibles son históricos/);
   assert.match(result.answer, /último periodo con actividad completada registrada es julio de 2025/);
-  assert.match(result.answer, /80 PEN/); assert.doesNotMatch(result.answer, /999|777|2027/);
+  assert.match(result.answer, /80\.00 PEN/); assert.doesNotMatch(result.answer, /999|777|2027/);
   assert.deepEqual(result.evidence.map(row => row.period), [
     { startDate: '2026-10-01', endDate: '2026-10-31' }, { startDate: '2025-07-01', endDate: '2025-07-31' }
   ]);
@@ -866,7 +906,7 @@ test('bounded ReAct performs search then details with exactly three LLM calls an
   assert.equal(result.usage.totalSkillCalls, 2); assert.equal(result.usage.totalTokens, 51);
   assert.equal(result.usage.toolSelectionCycles, 2);
   assert.equal(result.usage.totalProviderLatencyMs, 6);
-  assert.match(result.answer, /precio es 9 PEN/);
+  assert.match(result.answer, /precio es 9\.00 PEN/);
 });
 
 for (const [name, args] of [['get_demand_forecast', {}], ['get_inventory_summary', {}], ['get_low_stock_products', { businessId: 'B' }], ['executeShell', {}]]) {

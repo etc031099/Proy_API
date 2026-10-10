@@ -67,7 +67,7 @@ const routeCommercial = (message, memory = {}) => {
       clarificationQuestion: 'La planificación inicial solo admite presupuestos en PEN (S/). No convertiré monedas automáticamente.' };
     return { ...make('plan_replenishment_budget', { budget, currency: 'PEN', ...(department ? { department } : {}) }),
       ...( /explica|por que|prioritari|administrador/.test(text)
-        ? { narrativeSynthesis: true, intent: 'replenishment_plan_explanation' } : {}) };
+        ? { intent: 'replenishment_plan_explanation' } : {}) };
   }
   if (/prioriza.*(compras|reponer)|que comprar primero/.test(text)) return {
     intent: 'replenishment_budget_required', agent: 'coordinator',
@@ -104,7 +104,7 @@ const ordinalReference = text => {
 };
 
 /** High-confidence routing only. Unrecognized language is delegated, never guessed. */
-const routeDeterministically = (message, memory, now) => {
+const routeDeterministically = (message, memory, now, conversationId, scopeBinding) => {
   const supplierProducts = routeSupplierProducts(message, memory);
   if (supplierProducts) return supplierProducts;
   const commercialPlan = routeCommercial(message, memory);
@@ -112,13 +112,15 @@ const routeDeterministically = (message, memory, now) => {
   const text = normalize(message);
   const referencesBudgetPlan = /estas compras|esas compras|este plan|este presupuesto|productos que acabas de recomendar|explica.*este plan/.test(text);
   const savedBudgetPlan = memory.lastReplenishmentPlan?.semanticReference === 'last_replenishment_budget_plan'
+    && memory.lastReplenishmentPlan.conversationId === conversationId
+    && memory.lastReplenishmentPlan.contextBinding === scopeBinding
     && Number.isSafeInteger(memory.lastReplenishmentPlan.expiresAt) && memory.lastReplenishmentPlan.expiresAt > now.getTime()
     ? memory.lastReplenishmentPlan : null;
   if (referencesBudgetPlan) {
     if (savedBudgetPlan) {
-      return { intent: 'replenishment_plan_explanation', agent: 'analyst', narrativeSynthesis: true, useMemoryPlan: true };
+      return { intent: 'replenishment_plan_explanation', agent: 'analyst', useMemoryPlan: true };
     }
-    return clarify('No tengo una propuesta de compra reciente como referencia. ¿Qué plan o lista deseas que explique?');
+    return clarify('No tengo un plan de compras previo en esta conversación. Si quieres, indícame tu presupuesto y puedo preparar uno.');
   }
   if (/estos productos|estas recomendaciones/.test(text) && !memory.lastProductSelection && !savedBudgetPlan) {
     return clarify('No tengo una referencia clara de cuáles son “estos productos”. ¿Te refieres al último plan o lista que vimos, o a otros productos?');
