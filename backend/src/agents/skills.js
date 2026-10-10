@@ -18,7 +18,7 @@ const READY_SKILL_IDS = Object.freeze([
   'get_sales_summary', 'get_top_selling_products', 'get_business_summary',
   'get_demand_forecast', 'get_replenishment_candidates', 'get_product_sales_summary', 'analyze_demand_forecast',
   'get_replenishment_cost', 'plan_replenishment_budget', 'compare_supplier_costs', 'get_supplier_products', 'list_stock_alert_rules',
-  'list_inventory_alerts'
+  'list_inventory_alerts', 'list_inventory_alert_outbox_events'
 ]);
 const entry = (skillId, description, allowedAgents, inputSchema, maxRecords, dataSensitivity, outputDescription) => ({
   id: skillId, version: '1.0.0', description, readOnly: true, allowedAgents, inputSchema,
@@ -37,6 +37,9 @@ const SKILLS = deepFreeze([
     schema({ sku: text(100), status: { type: 'string', enum: ['OPEN', 'RESOLVED'] },
       source: { type: 'string', enum: ['stock_alert_rule'] }, limit: limit(20) }),
     20, 'OPERATIONAL', 'Recent inventory alert events with tenant-scoped product labels and stored stock-rule evidence; excludes internal IDs'),
+  entry('list_inventory_alert_outbox_events', 'Consultó estado de entrega de alertas.', ['operations'],
+    schema({ sku: text(100), status: { type: 'string', enum: ['PENDING', 'IN_FLIGHT', 'DELIVERED', 'FAILED'] }, limit: limit(20) }),
+    20, 'OPERATIONAL', 'Recent alert delivery events with product SKU, human-readable transition, real delivery status, attempts, timestamps and sanitized error category; excludes payload and internal identifiers'),
   entry('analyze_demand_forecast', 'Analiza el batch histórico: demanda, stock, readiness, comparación y resumen.', ['analyst'],
     schema({ mode: { type: 'string', enum: ['top', 'exceeding_stock', 'not_ready', 'compare', 'summary'] },
       limit: limit(20), offset: { type: 'integer', minimum: 0, maximum: 60 }, department: text(50),

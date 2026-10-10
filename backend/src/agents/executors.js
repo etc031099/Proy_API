@@ -283,6 +283,46 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
       });
       return listResult(data, totalMatches, metadata);
     },
+    async list_inventory_alert_outbox_events(invocation) {
+      const { Product } = getModels();
+      const Outbox = getModels().InventoryAlertOutboxEvent || require('../models/InventoryAlertOutboxEvent');
+      const { businessId } = invocation.context;
+      const { sku, status } = invocation.args;
+      const metadata = { asOf: asOf(), evidenceLabel: 'Eventos de distribución de alertas',
+        ...(sku ? { sku } : {}), ...(status ? { status } : {}) };
+      const match = { businessId };
+      if (status === 'PENDING') {
+        // FAILED events with a nextAttemptAt are genuinely scheduled for retry.
+        match.$or = [{ status: 'PENDING' }, { status: 'FAILED', nextAttemptAt: { $ne: null } }];
+      } else if (status) match.status = status;
+      if (sku) {
+        const product = await Product.findOne({ businessId, sku }).select('_id')
+          .maxTimeMS(invocation.skill.timeoutMs).lean().exec();
+        if (!product) return listResult([], 0, metadata);
+        match.productId = product._id;
+      }
+      const limit = invocation.args.limit ?? invocation.skill.maxRecords;
+      const [events, totalMatches] = await Promise.all([
+        Outbox.find(match).select('productId eventType status attempts createdAt deliveredAt lastErrorCategory')
+          .sort({ createdAt: -1, _id: -1 }).limit(limit).maxTimeMS(invocation.skill.timeoutMs).lean().exec(),
+        Outbox.countDocuments(match).maxTimeMS(invocation.skill.timeoutMs).exec()
+      ]);
+      const productIds = [...new Set(events.filter(row => row.productId).map(row => String(row.productId)))].map(objectId);
+      const products = productIds.length ? await Product.find({ businessId, _id: { $in: productIds } })
+        .select('_id sku').maxTimeMS(invocation.skill.timeoutMs).lean().exec() : [];
+      const productById = new Map(products.map(row => [String(row._id), row]));
+      const errorCategories = new Set(['NETWORK', 'TIMEOUT', 'RATE_LIMIT', 'UNAVAILABLE', 'AUTH', 'PAYLOAD', 'DISABLED', 'INVALID_ACK']);
+      const data = events.map(event => ({
+        sku: event.productId ? productById.get(String(event.productId))?.sku ?? null : null,
+        eventType: ['inventory.alert.opened', 'inventory.alert.resolved'].includes(event.eventType) ? event.eventType : null,
+        status: ['PENDING', 'IN_FLIGHT', 'DELIVERED', 'FAILED'].includes(event.status) ? event.status : null,
+        attempts: Number.isSafeInteger(event.attempts) && event.attempts >= 0 ? event.attempts : null,
+        ...(event.createdAt instanceof Date ? { createdAt: event.createdAt.toISOString() } : {}),
+        ...(event.deliveredAt instanceof Date ? { deliveredAt: event.deliveredAt.toISOString() } : {}),
+        ...(errorCategories.has(event.lastErrorCategory) ? { lastErrorCategory: event.lastErrorCategory } : {})
+      }));
+      return listResult(data, totalMatches, metadata);
+    },
     async get_supplier_products(invocation) {
       const { Contact, Product } = getModels();
       const { businessId } = invocation.context;

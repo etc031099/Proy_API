@@ -153,9 +153,9 @@ const fixture = (options = {}) => {
   assertNoMutation() { assert.equal(mutations, 0); assert.deepEqual(rows, before); } };
 };
 
-test('AG-R3, AG-R5 and replenishment budgeting skills are ready; three remain pending', () => {
+test('AG-R3, AG-R5, replenishment budgeting and alert delivery query skills are ready; three remain pending', () => {
   assert.deepEqual(SKILLS.filter(skill => skill.executorStatus === 'READY').map(skill => skill.id), [
-    'list_stock_alert_rules', 'list_inventory_alerts',
+    'list_stock_alert_rules', 'list_inventory_alerts', 'list_inventory_alert_outbox_events',
     'analyze_demand_forecast',
     'search_products', 'get_product_details', 'get_low_stock_products', 'get_recent_transactions',
     'get_sales_summary', 'get_business_summary', 'get_supplier_products', 'get_top_selling_products', 'get_product_sales_summary', 'get_demand_forecast', 'get_replenishment_candidates',

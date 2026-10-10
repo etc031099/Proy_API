@@ -49,6 +49,19 @@ it('shows generated inventory alert evidence separately from configured rules', 
   expect(screen.getByText('1 registros')).toBeTruthy();
   expect(screen.getAllByText(/0 tokens IA/).length).toBeGreaterThan(0);
 });
+it('shows outbox delivery activity separately from generated alert events', async () => {
+  send.mockResolvedValue({ success: true, data: { ...response,
+    answer: 'Se encontró 1 evento de entrega de alertas:\n• M5-FOODS_3_511 — Alerta abierta — Entregada.',
+    intent: 'inventory_alert_deliveries',
+    actions: [{ skillId: 'list_inventory_alert_outbox_events', agentId: 'operations', status: 'SUCCEEDED', durationMs: 20 }],
+    evidence: [{ evidenceId: 'outbox-event-1', sourceType: 'skill', skillId: 'list_inventory_alert_outbox_events',
+      label: 'Eventos de distribución de alertas', recordCount: 1 }] } });
+  render(<AssistantPage />); submit('¿Cuál es el estado de entrega de mis alertas de inventario?');
+  await screen.findByText(/Alerta abierta — Entregada/);
+  expect(screen.getByText(/Consultó estado de entrega de alertas/)).toBeTruthy();
+  expect(screen.getByText('Eventos de distribución de alertas')).toBeTruthy();
+  expect(screen.getByText('1 registros')).toBeTruthy();
+});
 it('navigates five visible candidates with real totals and starts refinement in the same conversation', async () => {
   const page = (offset: number): AgentResponse => ({ ...response, answer: `Opciones ${offset}`, suggestionsExpiresAt: Date.now() + 120000,
     suggestionsPagination: { query: 'food', offset, limit: 5, totalMatches: 28, hasMore: offset < 25, hasPrevious: offset > 0 },

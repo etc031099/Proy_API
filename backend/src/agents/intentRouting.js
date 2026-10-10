@@ -247,6 +247,17 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   if (tenantGuard) return tenantGuard;
   const alertText = normalize(message);
   const alertSku = canonicalProductSku(message) || message.match(/\bSKU-[\w.-]{1,100}\b/i)?.[0];
+  const deliveryStatus = /\b(?:pendientes?|en proceso|procesando|completad[oa]s?|entregad[oa]s?|fallid[oa]s?|fallaron)\b/.test(alertText);
+  const alertDelivery = /\b(?:estado|estatus)\s+de\s+(?:la\s+)?entrega\b/.test(alertText)
+    || /\bentregas?\b/.test(alertText) && deliveryStatus;
+  if (alertDelivery) return { intent: 'inventory_alert_deliveries', agent: 'operations', selector: {
+    ...(alertSku ? { sku: alertSku } : {}),
+    ...( /\b(?:completad[oa]s?|entregad[oa]s?)\b/.test(alertText) ? { status: 'DELIVERED' }
+      : /\b(?:fallid[oa]s?|fallaron)\b/.test(alertText) ? { status: 'FAILED' }
+        : /\b(?:en proceso|procesando)\b/.test(alertText) ? { status: 'IN_FLIGHT' }
+          : deliveryStatus ? { status: 'PENDING' } : {}),
+    limit: 20
+  } };
   const configuredAlerts = /\balertas?\b/.test(alertText)
     && /\b(configuradas?|configurados?|tengo|stock)\b/.test(alertText)
     && !/\b(crea|crear|elimina|borra|modifica|deshabilita|generadas?|generaron|produjeron)\b/.test(alertText);

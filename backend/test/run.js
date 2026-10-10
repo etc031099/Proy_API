@@ -30,3 +30,4 @@ require('./stockAlertRuleQueries.test');
 require('./stockAlertRuleEvaluator.test');
 require('./inventoryAlertQueries.test');
 require('./inventoryAlertOutbox.test');
+require('./inventoryAlertOutboxQueries.test');

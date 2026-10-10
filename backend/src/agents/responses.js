@@ -180,6 +180,32 @@ const buildSkillAnswer = (skillId, result) => {
     const heading = `Se ${count === 1 ? 'generó' : 'generaron'} ${count} ${count === 1 ? 'alerta' : 'alertas'} de inventario${metadata.truncated ? ` (mostrando ${metadata.returnedCount})` : ''}:`;
     return `${heading}\n${lines.join('\n')}`;
   }
+  if (skillId === 'list_inventory_alert_outbox_events') {
+    const selectedStatus = metadata.status;
+    if (!data.length) {
+      const statusLabel = { PENDING: ' pendientes de entrega o reintento', IN_FLIGHT: ' en proceso',
+        DELIVERED: ' entregadas', FAILED: ' fallidas' }[selectedStatus] || '';
+      return `No hay eventos de entrega de alertas${statusLabel}${metadata.sku ? ` para ${metadata.sku}` : ''}.`;
+    }
+    const eventLabels = { 'inventory.alert.opened': 'Alerta abierta', 'inventory.alert.resolved': 'Alerta resuelta' };
+    const stateLabels = { PENDING: 'Pendiente', IN_FLIGHT: 'En proceso', DELIVERED: 'Entregada', FAILED: 'Fallida' };
+    const lines = data.map(row => {
+      const eventType = eventLabels[row.eventType] || 'Evento de alerta';
+      const state = stateLabels[row.status] || 'Estado no disponible';
+      const attempts = row.attempts === null ? 'Intentos: no disponibles.'
+        : `Intentos: ${row.attempts}.`;
+      const created = row.createdAt ? ` Fecha: ${dateTimeLabel(row.createdAt)}.` : '';
+      const delivered = row.deliveredAt ? ` Entregada: ${dateTimeLabel(row.deliveredAt)}.` : '';
+      const error = row.status === 'FAILED' && row.lastErrorCategory
+        ? ` Categoría del último error: ${row.lastErrorCategory}.` : '';
+      const retry = selectedStatus === 'PENDING' && row.status === 'FAILED'
+        ? ' Reintento pendiente.' : '';
+      return `• ${row.sku || 'Producto no disponible'} — ${eventType} — ${state}. ${attempts}${created}${delivered}${error}${retry}`;
+    });
+    const count = metadata.totalMatches;
+    const heading = `Se encontraron ${count} ${count === 1 ? 'evento' : 'eventos'} de entrega de alertas${metadata.truncated ? ` (mostrando ${metadata.returnedCount})` : ''}:`;
+    return `${heading}\n${lines.join('\n')}`;
+  }
   if (status === 'ML_NOT_READY') return 'Este negocio aún no cuenta con historial o configuración suficiente para generar predicciones.';
   if (skillId === 'get_replenishment_cost') {
     if (Array.isArray(data)) return metadata.clarificationQuestion || 'Indica el SKU exacto del producto.';
