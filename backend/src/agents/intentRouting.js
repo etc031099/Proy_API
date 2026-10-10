@@ -351,6 +351,12 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   if (productSupplierLookup) return productSupplierLookup;
   const supplierProducts = routeSupplierProducts(message, memory);
   if (supplierProducts) return supplierProducts;
+  const explicitProductSku = canonicalProductSku(message);
+  const asksBasicProductDetail = /\b(?:stock|precio|minimo|activo|estado)\b/.test(text)
+    && /\b(?:cuanto|cuanta|cual|dime|muestrame|esta|tiene)\b/.test(text)
+    && !/\b(?:reponer|reposicion|proveedor|oferta|compra|costo)\b/.test(text);
+  if (explicitProductSku && asksBasicProductDetail) return { intent: 'product_details', agent: 'operations',
+    selector: { sku: explicitProductSku }, limit: 1 };
   const inventoryText = normalizeBasicInventory(message);
   // Specific inventory questions must win before the broad generic product fallback.
   if (isLowStockQuery(inventoryText)) return { intent: 'low_stock', agent: 'operations', limit: 5 };

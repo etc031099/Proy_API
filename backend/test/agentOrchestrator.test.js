@@ -316,7 +316,7 @@ test('compound low-stock list can compare minimum current stock in the same turn
   const result = await f.run('Muéstrame los productos con bajo stock y cuál de ellos tiene menos stock.');
   assert.equal(result.intent, 'compound_product_list');
   assert.deepEqual(result.actions.map(action => action.skillId), ['get_low_stock_products']);
-  assert.match(result.answer, /SKU-002/); assert.match(result.answer, /1 unidades disponibles/);
+  assert.match(result.answer, /SKU-002/); assert.match(result.answer, /1 unidad disponible/);
   assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
 });
 
@@ -494,7 +494,62 @@ test('short relative sales periods are deterministic UTC calendar ranges and dis
   assert.deepEqual(causal.period, { startDate: '2025-01-21', endDate: '2025-01-21' });
   assert.deepEqual(causal.comparisonPeriod, { startDate: '2025-01-20', endDate: '2025-01-20' });
   const forecastQuestion = routeDeterministically('¿Cuál es la predicción de ayer?', {}, now(), undefined, undefined, 'ML-CLOUD-DEMO-V2');
-  assert.notEqual(forecastQuestion?.intent, 'sales_summary');
+  assert.equal(forecastQuestion?.intent, 'ml_daily_granularity_clarification');
+  assert.match(forecastQuestion.clarificationQuestion, /¿De qué producto.*predicción de ayer/i);
+  assert.equal(routeDeterministically('¿Cuánto vendí ayer?', {}, now()).intent, 'sales_summary');
+  const yesterdayWithProduct = routeDeterministically('¿Cuál es la predicción de ayer?', {
+    selectedProductReference: { type: 'product', sku: 'M5-FOODS_3_511' }
+  }, now(), undefined, undefined, 'ML-CLOUD-DEMO-V2');
+  assert.equal(yesterdayWithProduct.intent, 'ml_daily_granularity_clarification');
+  assert.match(yesterdayWithProduct.clarificationQuestion, /M5-FOODS_3_511.*21 de enero de 2025/);
+  assert.doesNotMatch(yesterdayWithProduct.clarificationQuestion, /ventas/i);
+});
+
+test('basic product detail questions use get_product_details deterministically without Gemini', async () => {
+  const f = fixture({ products: [{ ...product(1), sku: 'M5-FOODS_3_511' }] });
+  for (const query of [
+    '¿Cuánto stock tiene M5-FOODS_3_511?',
+    '¿Cuál es el precio de M5-FOODS_3_511?',
+    '¿Cuál es el stock mínimo de M5-FOODS_3_511?',
+    '¿El producto M5-FOODS_3_511 está activo?'
+  ]) {
+    const plan = routeDeterministically(query, {}, clock());
+    assert.equal(plan.intent, 'product_details', query);
+    assert.equal(plan.selector.sku, 'M5-FOODS_3_511', query);
+  }
+  const result = await f.run('¿Cuánto stock tiene M5-FOODS_3_511?');
+  assert.equal(result.code, null);
+  assert.deepEqual(result.actions.map(action => action.skillId), ['get_product_details']);
+  assert.equal(result.usage.totalLlmCalls, 0);
+  assert.equal(result.usage.totalTokens, 0);
+  assert.match(result.answer, /2 unidades disponibles/);
+  assert.match(result.answer, /precio es 9[.,]00 PEN/);
+  assert.match(result.answer, /mínimo configurado de 5 unidades/);
+  assert.match(result.answer, /producto está activo/);
+});
+
+test('prediction of yesterday clarifies without product search and reuses unambiguous product context', async () => {
+  const f = fixture();
+  const conversationId = randomUUID();
+  const noContext = await f.run('¿Cuál es la predicción de ayer?', conversationId);
+  assert.equal(noContext.requiresClarification, true);
+  assert.match(noContext.clarificationQuestion, /¿De qué producto.*predicción de ayer/i);
+  assert.equal(noContext.usage.totalSkillCalls, 0);
+  assert.equal(noContext.usage.totalLlmCalls, 0);
+  assert.equal(f.reads.some(read => read.model === 'Product'), false);
+
+  const withContext = fixture();
+  await withContext.orchestrator.restoreContext(req(), conversationId, {
+    selectedProductReference: { id: id(1), type: 'product', sku: 'M5-FOODS_3_511' },
+    lastEntity: { sku: 'M5-FOODS_3_511', name: 'Producto recordado' }, lastIntent: 'demand_forecast'
+  });
+  const contextual = await withContext.run('¿Cuál es la predicción de ayer?', conversationId);
+  assert.equal(contextual.requiresClarification, true);
+  assert.match(contextual.clarificationQuestion, /M5-FOODS_3_511.*19 de enero de 2025/);
+  assert.equal(contextual.usage.totalSkillCalls, 0);
+  assert.equal(contextual.usage.totalLlmCalls, 0);
+  assert.equal(withContext.reads.some(read => read.model === 'Product'), false);
+  assert.equal(withContext.calls.length, 0);
 });
 
 test('unsupported confidence and monetary-loss questions return useful limitations at zero LLM and do not alter cost/forecast routes', async () => {

@@ -22,6 +22,28 @@ test('low-stock wording explains the verified shortage and handles stock equal t
   assert.doesNotMatch(answer, /déficit|Mostrando|necesita 0/);
 });
 
+test('stock quantities use singular only for one unit in product details and low-stock rows', () => {
+  for (const [stock, expected] of [[0, '0 unidades disponibles'], [1, '1 unidad disponible'], [2, '2 unidades disponibles']]) {
+    const details = buildSkillAnswer('get_product_details', { status: 'READY',
+      data: { ...product, stock, minStockLevel: 1, price: 9, currency: 'PEN', isActive: true }, metadata: {} });
+    assert.match(details, new RegExp(expected));
+    const lowStock = buildSkillAnswer('get_low_stock_products', list([{ ...product, stock, minStockLevel: 2, shortage: 2 - stock }]));
+    assert.match(lowStock, new RegExp(expected));
+    assert.doesNotMatch(`${details}\n${lowStock}`, /1 unidades|1 unidad disponibles/);
+  }
+});
+
+test('sales period labels distinguish one day, a multi-day range, and a calendar month', () => {
+  const answerFor = selectedPeriod => buildSkillAnswer('get_sales_summary', { status: 'READY',
+    data: { completedSalesCount: 1, totalUnitsSold: 1, amountsByCurrency: [] },
+    metadata: { period: selectedPeriod } });
+  const oneDay = answerFor({ startDate: '2026-10-09', endDate: '2026-10-09' });
+  assert.match(oneDay, /durante el 9 de octubre de 2026/i);
+  assert.match(oneDay, /1 unidad vendida/);
+  assert.match(answerFor({ startDate: '2026-10-08', endDate: '2026-10-09' }), /del 8 de octubre de 2026 al 9 de octubre de 2026/i);
+  assert.match(answerFor(period), /durante octubre de 2026/i);
+});
+
 test('empty sales are a normal answer for the requested calendar month', () => {
   const answer = buildSkillAnswer('get_sales_summary', { status: 'NO_DATA',
     data: { completedSalesCount: 0, totalUnitsSold: 0, amountsByCurrency: [] }, metadata: { period } });

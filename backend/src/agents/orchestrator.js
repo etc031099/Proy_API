@@ -443,9 +443,11 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
               const target = (chooseMax ? Math.max : Math.min)(...comparable.map(valueFor));
               const winners = comparable.filter(row => valueFor(row) === target);
               const labels = winners.map(row => `${row.sku || row.name}${row.name ? ` (${row.name})` : ''}`).join(', ');
-              const unit = field === 'stock' || field === 'stockAtAnchor' ? 'unidades disponibles' : 'unidades recomendadas';
-              answer = winners.length > 1 ? `Hay empate dentro de ${sourceLabel}: ${labels}, con ${target} ${unit}.`
-                : `Dentro de ${sourceLabel}, ${labels} ${field === 'stock' ? 'tiene menos stock' : field === 'stockAtAnchor' ? 'tiene menos stock al ancla' : 'requiere mayor reposición'}, con ${target} ${unit}.`;
+              const unit = field === 'stock' || field === 'stockAtAnchor'
+                ? (target === 1 ? '1 unidad disponible' : `${target} unidades disponibles`)
+                : (target === 1 ? '1 unidad recomendada' : `${target} unidades recomendadas`);
+              answer = winners.length > 1 ? `Hay empate dentro de ${sourceLabel}: ${labels}, con ${unit}.`
+                : `Dentro de ${sourceLabel}, ${labels} ${field === 'stock' ? 'tiene menos stock' : field === 'stockAtAnchor' ? 'tiene menos stock al ancla' : 'requiere mayor reposición'}, con ${unit}.`;
               if (field === 'recommendedQty' && plan.historicalAnchor) answer += ` Esta recommendedQty procede del replay histórico con ancla ${plan.historicalAnchor}; el bajo stock es operativo actual.`;
               else if (plan.historicalAnchor) answer += ` Datos del replay histórico con ancla ${plan.historicalAnchor}.`;
               plan.compoundAnswer = answer;

@@ -4,6 +4,9 @@ const money = value => typeof value === 'number' && Number.isFinite(value)
   ? new Intl.NumberFormat('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value) : 'no disponible';
 const name = row => `${row.sku || row.name || 'Producto'}${row.sku && row.name ? ` (${row.name})` : ''}`;
 const countLabel = (count, singular, plural) => `${format(count)} ${count === 1 ? singular : plural}`;
+const units = value => countLabel(value, 'unidad', 'unidades');
+const availableUnits = value => countLabel(value, 'unidad disponible', 'unidades disponibles');
+const quantityWithoutRepeatedUnit = value => value === 1 ? '1 unidad' : format(value);
 const dateLabel = value => {
   const date = new Date(`${String(value).slice(0, 10)}T00:00:00Z`);
   return Number.isFinite(date.getTime())
@@ -43,6 +46,7 @@ const periodLabel = metadata => {
   if (start.getUTCDate() === 1 && endDate === lastDay) {
     return new Intl.DateTimeFormat('es-PE', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(start);
   }
+  if (startDate === endDate) return `el ${dateLabel(startDate)}`;
   return `el periodo del ${dateLabel(startDate)} al ${dateLabel(endDate)}`;
 };
 const amounts = rows => (rows || []).map(row => `${money(row.amount)} ${row.currency}`).join('; ');
@@ -266,11 +270,11 @@ const buildSkillAnswer = (skillId, result) => {
   }
   if (skillId === 'get_sales_summary') return !data.completedSalesCount
     ? `No se registraron ventas completadas durante ${periodLabel(metadata)}.`
-    : `Durante ${periodLabel(metadata)} registraste ${countLabel(data.completedSalesCount, 'venta completada', 'ventas completadas')}, con ${format(data.totalUnitsSold)} unidades vendidas. El importe de ventas es ${amounts(data.amountsByCurrency)}.`;
+    : `Durante ${periodLabel(metadata)} registraste ${countLabel(data.completedSalesCount, 'venta completada', 'ventas completadas')}, con ${countLabel(data.totalUnitsSold, 'unidad vendida', 'unidades vendidas')}. El importe de ventas es ${amounts(data.amountsByCurrency)}.`;
   if (skillId === 'get_product_sales_summary') return status === 'NO_DATA'
     ? `${name(data.product)} no registra ventas completadas durante ${periodLabel(metadata)}.`
     : `${name(data.product)} vendió ${format(data.totalUnitsSold)} unidades durante ${periodLabel(metadata)}. El importe correspondiente a ese producto es ${amounts(data.amountsByCurrency)}.`;
-  if (skillId === 'get_product_details') return `${name(data)} tiene ${format(data.stock)} unidades disponibles y un mínimo configurado de ${format(data.minStockLevel)}. Su precio es ${money(data.price)} ${data.currency}. El producto está ${data.isActive ? 'activo' : 'inactivo'}.`;
+  if (skillId === 'get_product_details') return `${name(data)} tiene ${availableUnits(data.stock)} y un mínimo configurado de ${units(data.minStockLevel)}. Su precio es ${money(data.price)} ${data.currency}. El producto está ${data.isActive ? 'activo' : 'inactivo'}.`;
   if (skillId === 'get_business_summary') return businessAnswer(data, metadata);
   const rankingPeriod = metadata.period ? periodLabel(metadata) : 'todo el historial disponible';
   if (!Array.isArray(data) || !data.length) return ({
@@ -286,22 +290,22 @@ const buildSkillAnswer = (skillId, result) => {
     get_top_selling_products: `Estos son los productos con más unidades vendidas en ${rankingPeriod}:`,
     get_recent_transactions: 'Estas son las transacciones más recientes que coinciden con tu consulta:',
     get_demand_forecast: 'Esta es la demanda estimada para el horizonte histórico agregado de 7 días del escenario consultado:',
-    get_replenishment_candidates: `Te recomiendo priorizar ${displayed.length} ${displayed.length === 1 ? 'producto' : 'productos'} para reposición.\nLa mayor cantidad sugerida corresponde a ${name(displayed[0])}: ${format(displayed[0].recommendedQty)} unidades.`,
+    get_replenishment_candidates: `Te recomiendo priorizar ${countLabel(displayed.length, 'producto', 'productos')} para reposición.\nLa mayor cantidad sugerida corresponde a ${name(displayed[0])}: ${units(displayed[0].recommendedQty)}.`,
     search_products: `Encontré ${countLabel(metadata.totalMatches ?? data.length, 'producto', 'productos')} que ${metadata.totalMatches === 1 ? 'coincide' : 'coinciden'} con tu búsqueda:`
   };
   const header = headers[skillId] || 'Estos son los productos consultados:';
   const lines = displayed.map(row => {
-    if (skillId === 'get_low_stock_products') return `• ${name(row)} tiene ${format(row.stock)} unidades disponibles${row.shortage > 0
-      ? ` y necesita ${format(row.shortage)} más para alcanzar su mínimo de ${format(row.minStockLevel)}`
+    if (skillId === 'get_low_stock_products') return `• ${name(row)} tiene ${availableUnits(row.stock)}${row.shortage > 0
+      ? ` y necesita ${quantityWithoutRepeatedUnit(row.shortage)} más para alcanzar su mínimo de ${format(row.minStockLevel)}`
       : ` y está justo en su mínimo de ${format(row.minStockLevel)}`}.`;
-    if (skillId === 'get_top_selling_products') return `• ${name(row)} — ${format(row.unitsSold)} unidades vendidas.`;
+    if (skillId === 'get_top_selling_products') return `• ${name(row)} — ${countLabel(row.unitsSold, 'unidad vendida', 'unidades vendidas')}.`;
     if (skillId === 'get_recent_transactions') return `• ${dateLabel(row.date)}: ${row.type === 'sale' ? 'venta' : 'compra'} ${{ completed: 'completada', pending: 'pendiente', cancelled: 'cancelada' }[row.status] || 'con estado no disponible'} por ${money(row.total)} ${row.currency}, con ${row.itemCount} líneas de productos.`;
     if (skillId === 'get_demand_forecast' || skillId === 'get_replenishment_candidates') {
       if (row.mlStatus !== 'READY') return `• ${name(row)} ${readinessLabel(row.mlStatus)}; no hay predicción disponible.`;
-      if (skillId === 'get_replenishment_candidates') return `• ${name(row)} — reponer ${format(row.recommendedQty)} unidades; demanda estimada de ${format(row.predictedDemand7d)} unidades y stock disponible de ${format(row.stockAtAnchor)} en la fecha de referencia.`;
-      return `• ${name(row)}: el modelo estimó ${format(row.predictedDemand7d)} unidades en el horizonte histórico agregado de 7 días. En la fecha de referencia había ${format(row.stockAtAnchor)} unidades disponibles y se habían vendido ${format(row.salesLast7Days)} en los 7 días anteriores. Considerando ${format(row.safetyStock)} unidades de stock de seguridad, ${row.recommendedQty > 0 ? `se recomienda reponer ${format(row.recommendedQty)} unidades` : 'no se recomienda reposición para ese escenario'}.`;
+      if (skillId === 'get_replenishment_candidates') return `• ${name(row)} — reponer ${units(row.recommendedQty)}; demanda estimada de ${units(row.predictedDemand7d)} y stock disponible de ${units(row.stockAtAnchor)} en la fecha de referencia.`;
+      return `• ${name(row)}: el modelo estimó ${units(row.predictedDemand7d)} en el horizonte histórico agregado de 7 días. En la fecha de referencia había ${units(row.stockAtAnchor)} disponibles y ${row.salesLast7Days === 1 ? 'se había vendido 1 unidad' : `se habían vendido ${format(row.salesLast7Days)}`} en los 7 días anteriores. Considerando ${units(row.safetyStock)} de stock de seguridad, ${row.recommendedQty > 0 ? `se recomienda reponer ${units(row.recommendedQty)}` : 'no se recomienda reposición para ese escenario'}.`;
     }
-    return `• ${name(row)} tiene ${format(row.stock)} unidades disponibles y un mínimo configurado de ${format(row.minStockLevel)}.`;
+    return `• ${name(row)} tiene ${availableUnits(row.stock)} y un mínimo configurado de ${units(row.minStockLevel)}.`;
   });
   const forecastSkill = ['get_demand_forecast', 'get_replenishment_candidates'].includes(skillId);
   return [header, ...lines, forecastSkill ? historicalNote(displayed, metadata) : '', listFooter(metadata, displayed.length)].filter(Boolean).join('\n');

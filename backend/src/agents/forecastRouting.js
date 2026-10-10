@@ -27,6 +27,7 @@ const routeForecastTemporalQuery = (message, memory, now, businessId) => {
   const text = normalize(message);
   const forecastQuestion = /\b(?:forecast|prediccion|predij\w*|demanda|que pasara)\b/.test(text);
   const futureSalesQuestion = /\b(?:vendere|venderas|vendera|venderemos|venderan)\b/.test(text);
+  const requestedPastDay = /\b(ayer|anteayer)\b/.exec(text)?.[1];
   const tomorrow = /mañana|man\u0303ana|manana/i.test(message);
   const dayAfterTomorrow = /pasado\s+(?:mañana|man\u0303ana|manana)/i.test(message);
   const relativeFuture = tomorrow || dayAfterTomorrow
@@ -34,6 +35,15 @@ const routeForecastTemporalQuery = (message, memory, now, businessId) => {
   const forecastFollowup = relativeFuture
     && ['demand_forecast', 'ml_analytics', 'forecast_risk_explanation'].includes(memory.lastIntent);
   const requestedDate = parseRequestedDate(text);
+  if (forecastQuestion && requestedPastDay) {
+    const requestedPastDate = addDays(now.toISOString().slice(0, 10), requestedPastDay === 'anteayer' ? -2 : -1);
+    const product = message.match(/\bM5-[A-Z]+_\d+_\d+\b/i)?.[0]
+      || memory.selectedProductReference?.sku || memory.lastEntity?.sku;
+    if (!product) return { intent: 'ml_daily_granularity_clarification', agent: 'coordinator',
+      clarificationQuestion: `¿De qué producto deseas consultar la predicción de ${requestedPastDay} (${dateLabel(requestedPastDate)})?` };
+    return { intent: 'ml_daily_granularity_clarification', agent: 'coordinator',
+      clarificationQuestion: `No puedo consultar una predicción diaria de ${product} para ${requestedPastDay} (${dateLabel(requestedPastDate)}). El modelo disponible ofrece un forecast histórico agregado de 7 días, no un valor diario para esa fecha.` };
+  }
   if (!forecastQuestion && !futureSalesQuestion && !(relativeFuture && ['demand_forecast', 'ml_analytics', 'forecast_risk_explanation'].includes(memory.lastIntent))) return null;
 
   const scenario = Object.values(scenarios).find(row => row.businessId === businessId);
