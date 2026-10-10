@@ -899,6 +899,41 @@ No se fusionan en esta fase. Pruebas locales: `npm test`,
 en `_test`; Node-RED `npm test`; frontend `npm run test:ml-forecast`.
 Los tests usan destinos/senders ficticios, nunca envían Telegram ni escriben cloud.
 
+## Recuperación de conexión Telegram
+
+En Integraciones, un usuario autenticado sin chat conectado puede solicitar
+`POST /api/telegram/recovery/code` con body `{}`. El destino se obtiene únicamente
+de su sesión y se verifica contra su usuario activo; no hay modelo Business
+independiente en esta arquitectura. No se aceptan chatId, businessId ni userId
+en el body. El código `TRF-` aleatorio de 64 bits vence a los 10 minutos; solo
+se persiste su SHA-256. Una nueva solicitud invalida la anterior.
+
+El usuario autoriza la transferencia enviando `/transfer CODIGO` en su chat
+privado a @InventBil_bot. Solo el polling server-side autenticado a Telegram
+procesa esa confirmación; no existe endpoint público para enviar updates ni
+confirmar mediante chatId. Se comprueba que el remitente humano corresponde al
+chat privado. Si el destino tiene otro chat, debe desconectarlo primero.
+
+Una transacción Mongo libera el chat/código del origen, asigna el chat al
+destino habilitándolo y consume el challenge. Los documentos de conexión y sus
+preferencias permanecen por negocio; no se mueve historial ni datos comerciales.
+Sin chat, el origen no es operativo aunque conserve enabled. Los índices únicos
+y conflictos de escritura protegen concurrencia; un fallo revierte toda la
+transferencia. Reutilizar el código no vuelve a mover el chat.
+
+Límites: tres generaciones por negocio en 10 minutos, más el limiter HTTP por
+usuario/negocio; cinco intentos de confirmación por chat en 10 minutos y 100
+globales/minuto. Los límites de confirmación son in-process y se reinician con
+el backend; el código fuerte, vencimiento y consumo son persistentes. Auditoría:
+`telegram.connection.transferred`, solo negocios internos, actor y fecha; sin
+chatId, código claro, email ni secretos. Registros usados se conservan para
+auditoría/replay; el vencimiento se valida explícitamente, no por borrado TTL.
+
+Validación local: `npm test` y `npm run test:integration:telegram-recovery`.
+La integración exige Mongo local replica set y genera una base `_test` aislada
+que elimina al terminar; prueba rollback, índice único, concurrencia e historial
+inmutable con fixtures sintéticos. No envía Telegram real ni escribe Atlas.
+
 ## 📞 Support
 
 For issues and questions:

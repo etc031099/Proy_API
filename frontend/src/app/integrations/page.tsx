@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { Layout } from '@/components/Layout';
 import { Button } from '@/components/ui/button';
@@ -11,6 +11,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { apiClient } from '@/lib/api';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { TelegramRulePreferences } from '@/components/TelegramRulePreferences';
+import { TelegramConnectionRecovery, RecoveredTelegramStatus } from '@/components/TelegramConnectionRecovery';
 
 export default function IntegrationsPage() {
   const { t } = useLanguage();
@@ -25,6 +26,10 @@ export default function IntegrationsPage() {
   const [telegramConfigured, setTelegramConfigured] = useState(false);
   const [telegramCode, setTelegramCode] = useState('');
   const [rulePreferences, setRulePreferences] = useState({ open: false, resolved: false });
+  const recovered = useCallback((status: RecoveredTelegramStatus) => {
+    setTelegramConnected(true); setTelegramCode('');
+    setRulePreferences({ open: status.stockRuleAlertsEnabled === true, resolved: status.stockRuleResolvedAlertsEnabled === true });
+  }, []);
 
   const loadExchangeRate = async () => {
     try {
@@ -166,6 +171,7 @@ export default function IntegrationsPage() {
                         <p className="mt-1 text-xs text-muted-foreground">{t('integrations.telegramCodeExpires')}</p>
                       </div>
                     )}
+                    <TelegramConnectionRecovery onConnected={recovered} />
                   </>
                 )}
               </CardContent>

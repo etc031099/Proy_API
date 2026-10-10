@@ -33,3 +33,4 @@ require('./inventoryAlertOutbox.test');
 require('./inventoryAlertOutboxQueries.test');
 require('./inventoryAlertChannels.test');
 require('./telegramPreferences.test');
+require('./telegramRecovery.test');

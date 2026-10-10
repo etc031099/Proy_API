@@ -300,6 +300,11 @@ class ApiClient {
     return response.data;
   }
 
+  async createTelegramRecoveryCode(): Promise<ApiResponse<{ code: string; expiresAt: string }>> {
+    const response = await this.instance.post('/telegram/recovery/code', {});
+    return response.data;
+  }
+
   async disconnectTelegram(): Promise<ApiResponse> {
     const response = await this.instance.delete('/telegram/connection');
     return response.data;

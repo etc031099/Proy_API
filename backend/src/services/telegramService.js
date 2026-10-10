@@ -114,16 +114,39 @@ const notifyLowStock = async (businessId, product, previousStock) => {
   await connection.save();
 };
 
-const processUpdate = async (update) => {
+const createTelegramUpdateProcessor = ({ send = sendMessage, emit = emitEvent, connections = TelegramConnection,
+  recovery = require('./telegramRecovery').telegramRecovery } = {}) => async (update) => {
   const message = update.message;
   const text = message?.text?.trim();
   const chatId = message?.chat?.id;
   if (!text || !chatId) return;
 
+  if (/^\/transfer(?:\s|$|@)/i.test(text)) {
+    // No public update endpoint: this processor is called only by authenticated getUpdates.
+    // Private chat identity must be the sending human, never a forwarded/group destination.
+    if (message.chat.type !== 'private' || !Number.isSafeInteger(chatId) || chatId <= 0
+      || message.from?.id !== chatId || message.from?.is_bot !== false) return;
+    const match = /^\/transfer\s+(TRF-[A-F0-9]{16})$/i.exec(text);
+    const result = await recovery.confirm(match ? match[1].toUpperCase() : '', String(chatId));
+    const replies = {
+      CONNECTED: 'Telegram conectado correctamente. Las preferencias corresponden al negocio de destino.',
+      ALREADY_CONNECTED: 'Telegram ya está conectado a este negocio.',
+      USED: 'Esta transferencia ya fue utilizada.',
+      EXPIRED: 'El código venció. Solicita uno nuevo desde Integraciones.',
+      INVALID: 'Código de transferencia inválido o vencido.',
+      DESTINATION_CONNECTED: 'Desconecta primero el Telegram actual del negocio de destino.',
+      RATE_LIMITED: 'Demasiados intentos. Espera 10 minutos antes de volver a intentarlo.',
+      CONFLICT: 'Otra transferencia está en curso. Vuelve a intentarlo.',
+      UNAVAILABLE: 'No se pudo completar la transferencia. Vuelve a intentarlo.'
+    };
+    await send(chatId, replies[result.status] || replies.UNAVAILABLE);
+    return;
+  }
+
   const code = text.replace(/^\/start\s*/i, '').trim().toUpperCase();
   if (!/^BILLING-\d{6}$/.test(code)) {
     if (/^\/start$/i.test(text)) {
-      await sendMessage(
+      await send(
         chatId,
         [
           '👋 Bienvenido al bot de tu sistema de Inventario y Facturación.',
@@ -139,7 +162,7 @@ const processUpdate = async (update) => {
 
     // Forward any other message (comandos escritos o textos de los botones) to Node-RED.
     // Node-RED only REPLIES (sendMessage), so it never conflicts with this poller.
-    emitEvent('telegram.command', {
+    emit('telegram.command', {
       chatId: String(chatId),
       text,
       username: message?.from?.username || null,
@@ -148,21 +171,27 @@ const processUpdate = async (update) => {
     return;
   }
 
-  const connection = await TelegramConnection.findOne({
+  const connection = await connections.findOne({
     connectionCodeHash: hashCode(code),
     connectionCodeExpiresAt: { $gt: new Date() }
   });
   if (!connection) {
-    await sendMessage(chatId, 'This connection code is invalid or expired.');
+    await send(chatId, 'This connection code is invalid or expired.');
     return;
   }
 
   connection.chatId = String(chatId);
   connection.connectionCodeHash = undefined;
   connection.connectionCodeExpiresAt = undefined;
-  await connection.save();
-  await sendMessage(chatId, 'Telegram notifications connected successfully.');
+  try { await connection.save(); }
+  catch (error) {
+    if (error.code !== 11000) throw error;
+    await send(chatId, 'Este Telegram ya está vinculado. Usa Recuperar conexión desde Integraciones.');
+    return;
+  }
+  await send(chatId, 'Telegram notifications connected successfully.');
 };
+const processUpdate = createTelegramUpdateProcessor();
 
 let polling = false;
 let offset = 0;
@@ -180,7 +209,7 @@ const pollUpdates = async () => {
       await processUpdate(update);
     }
   } catch (error) {
-    console.error('[Telegram] polling error:', error.message);
+    console.error('[Telegram] polling error:', error.category || 'UNAVAILABLE');
   } finally {
     polling = false;
     if (getToken()) setTimeout(pollUpdates, 1000);
@@ -197,5 +226,6 @@ module.exports = {
   getConnection,
   disconnect,
   notifyLowStock,
+  createTelegramUpdateProcessor,
   startPolling
 };
