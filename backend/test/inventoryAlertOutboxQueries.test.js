@@ -90,6 +90,8 @@ test('delivery observability routes separately from configured rules and generat
   const cases = [
     ['¿Cuál es el estado de entrega de mis alertas de inventario?', { limit: 20 }],
     [`¿Cuál es el estado de entrega de las alertas de ${sku}?`, { sku, limit: 20 }],
+    ['¿Qué alertas están pendientes de entrega?', { status: 'PENDING', limit: 20 }],
+    [`¿Se entregó la alerta de ${sku}?`, { sku, status: 'DELIVERED', limit: 20 }],
     ['¿Qué entregas están pendientes?', { status: 'PENDING', limit: 20 }],
     ['¿Qué entregas fueron completadas?', { status: 'DELIVERED', limit: 20 }],
     ['¿Qué entregas fallaron?', { status: 'FAILED', limit: 20 }],
@@ -103,6 +105,28 @@ test('delivery observability routes separately from configured rules and generat
   }
   assert.equal(routeDeterministically('¿Qué alertas de stock tengo configuradas?', {}, at(10)).intent, 'stock_alert_rules');
   assert.equal(routeDeterministically('¿Qué alertas de inventario se han generado?', {}, at(10)).intent, 'inventory_alert_events');
+});
+
+test('natural-language alert delivery status phrases remain deterministic outbox queries', async () => {
+  const cases = [
+    ['¿Cuál es el estado de entrega de mis alertas de inventario?', undefined],
+    ['¿Qué alertas están pendientes de entrega?', 'PENDING'],
+    [`¿Se entregó la alerta de ${sku}?`, 'DELIVERED']
+  ];
+  for (const [message, expectedStatus] of cases) {
+    const f = fixture();
+    const result = await f.orchestrator.handle(f.req, { message });
+    assert.equal(result.intent, 'inventory_alert_deliveries', message);
+    assert.equal(result.actions[0].skillId, 'list_inventory_alert_outbox_events', message);
+    assert.equal(result.usage.totalLlmCalls, 0, message);
+    assert.equal(result.usage.totalTokens, 0, message);
+    assert.equal(result.usage.totalSkillCalls, 1, message);
+    if (expectedStatus === 'PENDING') {
+      assert.ok(f.calls.outboxFilters.some(filter => filter.$or?.some(branch => branch.status === 'PENDING')), message);
+    } else if (expectedStatus) {
+      assert.ok(f.calls.outboxFilters.some(filter => filter.status === expectedStatus), message);
+    }
+  }
 });
 
 test('general outbox listing is recent-first, bounded, tenant-scoped, privacy-safe and deterministic', async () => {

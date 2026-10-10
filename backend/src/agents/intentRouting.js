@@ -247,12 +247,15 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   if (tenantGuard) return tenantGuard;
   const alertText = normalize(message);
   const alertSku = canonicalProductSku(message) || message.match(/\bSKU-[\w.-]{1,100}\b/i)?.[0];
-  const deliveryStatus = /\b(?:pendientes?|en proceso|procesando|completad[oa]s?|entregad[oa]s?|fallid[oa]s?|fallaron)\b/.test(alertText);
+  const deliveryStatus = /\b(?:pendientes?|en proceso|procesando|completad[oa]s?|entregad[oa]s?|entrego|fallid[oa]s?|fallaron)\b/.test(alertText);
   const alertDelivery = /\b(?:estado|estatus)\s+de\s+(?:la\s+)?entrega\b/.test(alertText)
-    || /\bentregas?\b/.test(alertText) && deliveryStatus;
+    || /\bentregas?\b/.test(alertText) && deliveryStatus
+    || /\balertas?\b/.test(alertText) && /\b(?:pendientes?|en proceso|procesando|completad[oa]s?|entregad[oa]s?|entrego|fallid[oa]s?|fallaron)\b/.test(alertText)
+      && /\b(?:de|para)\s+entrega\b/.test(alertText)
+    || /\b(?:se\s+)?entrego\b/.test(alertText) && /\balertas?\b/.test(alertText);
   if (alertDelivery) return { intent: 'inventory_alert_deliveries', agent: 'operations', selector: {
     ...(alertSku ? { sku: alertSku } : {}),
-    ...( /\b(?:completad[oa]s?|entregad[oa]s?)\b/.test(alertText) ? { status: 'DELIVERED' }
+    ...( /\b(?:completad[oa]s?|entregad[oa]s?|entrego)\b/.test(alertText) ? { status: 'DELIVERED' }
       : /\b(?:fallid[oa]s?|fallaron)\b/.test(alertText) ? { status: 'FAILED' }
         : /\b(?:en proceso|procesando)\b/.test(alertText) ? { status: 'IN_FLIGHT' }
           : deliveryStatus ? { status: 'PENDING' } : {}),
