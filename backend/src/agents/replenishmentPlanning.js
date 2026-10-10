@@ -2,6 +2,7 @@ const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300
 const normalizeSupplier = value => normalize(value).replace(/\b(?:proveedor|supplier|sintetico)\b/g, ' ')
   .replace(/\b(?:el|la|de|del)\b/g, ' ').replace(/\b0*(\d+)\b/g, (_, digits) => String(Number(digits)))
   .replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
+const MAX_SUPPLIER_CANDIDATES = 100;
 const editDistance = (left, right) => {
   let row = Array.from({ length: right.length + 1 }, (_, index) => index);
   for (let i = 1; i <= left.length; i++) {
@@ -12,7 +13,7 @@ const editDistance = (left, right) => {
   }
   return row[right.length];
 };
-const resolveSupplier = (reference, offers, suppliers = []) => {
+const resolveSupplier = (reference, offers, suppliers = [], candidateLimit = 20) => {
   const query = normalizeSupplier(reference);
   if (!query) return { status: 'NOT_FOUND', candidates: [] };
   const byId = offers.filter(offer => String(offer.supplierId) === String(reference));
@@ -27,11 +28,12 @@ const resolveSupplier = (reference, offers, suppliers = []) => {
     const similarity = 1 - editDistance(query, name) / Math.max(query.length, name.length, 1);
     const score = query === name ? 1 : name.includes(query) ? 0.94 : Math.max(coverage * 0.85, similarity);
     return { row, name, score };
-  }).filter(row => row && row.score >= 0.72).sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+  }).filter(row => row && row.score >= 0.72).sort((a, b) => b.score - a.score || a.name.localeCompare(b.name)
+    || String(a.row.supplierId ?? a.row._id ?? '').localeCompare(String(b.row.supplierId ?? b.row._id ?? '')));
   const rankedOffers = rank(offers);
   const exact = rankedOffers.filter(item => item.score === 1);
   if (exact.length === 1) return { status: 'MATCH', offer: exact[0].row, confidence: 'NORMALIZED' };
-  if (exact.length > 1) return { status: 'AMBIGUOUS', candidates: exact.slice(0, 20).map(item => item.row), totalMatches: exact.length };
+  if (exact.length > 1) return { status: 'AMBIGUOUS', candidates: exact.slice(0, candidateLimit).map(item => item.row), totalMatches: exact.length };
   if (rankedOffers.length === 1 && rankedOffers[0].score >= 0.85) {
     return { status: 'MATCH', offer: rankedOffers[0].row, confidence: rankedOffers[0].score === 1 ? 'NORMALIZED' : 'FUZZY_CLEAR' };
   }
@@ -40,12 +42,12 @@ const resolveSupplier = (reference, offers, suppliers = []) => {
     if (first.score >= 0.85 && first.score - second.score >= 0.08) {
       return { status: 'MATCH', offer: first.row, confidence: 'FUZZY_CLEAR' };
     }
-    return { status: 'AMBIGUOUS', candidates: rankedOffers.slice(0, 20).map(item => item.row), totalMatches: rankedOffers.length };
+    return { status: 'AMBIGUOUS', candidates: rankedOffers.slice(0, candidateLimit).map(item => item.row), totalMatches: rankedOffers.length };
   }
   const known = rank(suppliers);
   if (known.length === 1 && known[0].score >= 0.85) return { status: 'NO_OFFER', supplier: known[0].row };
   if (known.length > 1 && known[0].score >= 0.85 && known[0].score - known[1].score < 0.08) {
-    return { status: 'AMBIGUOUS_SUPPLIER', candidates: known.slice(0, 20).map(item => item.row), totalMatches: known.length };
+    return { status: 'AMBIGUOUS_SUPPLIER', candidates: known.slice(0, candidateLimit).map(item => item.row), totalMatches: known.length };
   }
   return { status: 'NOT_FOUND', candidates: offers.slice(0, 5) };
 };
@@ -127,4 +129,4 @@ const buildBudgetPlan = ({ rows, budget, limit, offset }) => {
       truncated: offset + limit < items.length } };
 };
 
-module.exports = { toCents, fromCents, selectOffer, sortPriority, buildBudgetPlan, normalizeSupplier, resolveSupplier };
+module.exports = { toCents, fromCents, selectOffer, sortPriority, buildBudgetPlan, normalizeSupplier, resolveSupplier, MAX_SUPPLIER_CANDIDATES };

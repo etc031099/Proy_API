@@ -62,7 +62,9 @@ test('HTTP transports safe candidate choices and accepts single digit selection'
   const suggestionsPagination = { query: 'food', offset: 5, limit: 5, totalMatches: 28, hasMore: true, hasPrevious: true };
   const post = await setup(t, { orchestrator: { async handle(req, input) {
     assert.equal(input.message, '1');
-    return publicResponse({ ...response, suggestions, suggestionsEntityType: 'supplier', suggestionsPagination, suggestionsExpiresAt: Date.now() + 10000 });
+    return publicResponse({ ...response, suggestions, suggestionsEntityType: 'supplier',
+      contextProvenance: { sourceType: 'candidate_snapshot', entityType: 'supplier', query: 'food', page: 2, pageSize: 5, totalMatches: 28 },
+      suggestionsPagination, suggestionsExpiresAt: Date.now() + 10000 });
   } } });
   const res = await post({ message: '1', conversationId });
   assert.equal(res.status, 200);
@@ -71,6 +73,7 @@ test('HTTP transports safe candidate choices and accepts single digit selection'
   assert.ok(body.data.suggestionsExpiresAt > Date.now());
   assert.deepEqual(body.data.suggestionsPagination, suggestionsPagination);
   assert.equal(body.data.suggestionsEntityType, 'supplier');
+  assert.deepEqual(body.data.contextProvenance, { sourceType: 'candidate_snapshot', entityType: 'supplier', query: 'food', page: 2, pageSize: 5, totalMatches: 28 });
   assert.equal(body.data.usage.totalLlmCalls, 0);
 });
 for (const [code, status] of [['AGENT_PROVIDER_FAILED', 503], ['AGENT_SKILL_FAILED', 503], ['AGENT_BUDGET_EXCEEDED', 429], ['AGENT_INTERNAL_ERROR', 500]]) {

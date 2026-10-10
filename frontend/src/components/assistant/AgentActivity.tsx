@@ -72,6 +72,11 @@ export function AgentActivity({ response }: { response?: AgentResponse }) {
       {!response.actions.length && <li className="text-muted-foreground">Sin skills ejecutadas.</li>}
     </ul></section>
     <section><h3 className="font-medium">Fuentes de datos utilizadas</h3><ul className="mt-2 space-y-3 text-sm">
+      {response.contextProvenance?.sourceType === 'candidate_snapshot' && <li className="border-l-2 pl-3">
+        <p>Contexto de candidatos · {response.contextProvenance.entityType === 'supplier' ? 'proveedores' : 'productos'}</p>
+        <p>Consulta «{response.contextProvenance.query}» · página {response.contextProvenance.page} · {response.contextProvenance.totalMatches} coincidencias</p>
+        <p className="text-xs text-muted-foreground">Continuación desde la conversación; no se ejecutó una consulta nueva.</p>
+      </li>}
       {response.evidence.map(e => <li key={e.evidenceId} className="border-l-2 pl-3">
         <p>{e.label}</p>
         {e.period && <p>Periodo: {e.period.startDate} – {e.period.endDate}</p>}
@@ -79,7 +84,7 @@ export function AgentActivity({ response }: { response?: AgentResponse }) {
         {e.recordCount !== undefined && <p>{e.recordCount} registros</p>}
         {['get_demand_forecast', 'get_replenishment_candidates'].includes(e.skillId) && <p className="text-xs text-muted-foreground">Replay histórico: predicción ML y recomendación de reposición son resultados distintos.</p>}
       </li>)}
-      {!response.evidence.length && <li className="text-muted-foreground">Sin evidencia de datos para esta respuesta.</li>}
+      {!response.evidence.length && !response.contextProvenance && <li className="text-muted-foreground">Sin evidencia de datos para esta respuesta.</li>}
     </ul></section>
   </aside>;
 }

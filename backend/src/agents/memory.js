@@ -83,12 +83,13 @@ const compactSupplierResolution = (value, now = Date.now()) => {
     || (value.candidateType !== undefined && value.candidateType !== 'supplier')
     || !value.args || (value.skillId !== 'get_supplier_products' && (typeof value.args.productRef !== 'string' || value.args.productRef.length > 100))
     || !Number.isSafeInteger(value.expiresAt) || value.expiresAt <= now || value.expiresAt > now + SUPPLIER_SELECTION_TTL_MS
-    || !Array.isArray(value.candidates) || value.candidates.length < 1 || value.candidates.length > 20
+    || !Array.isArray(value.candidates) || value.candidates.length < 1 || value.candidates.length > 100
     || !Number.isSafeInteger(value.offset || 0) || (value.offset || 0) < 0 || (value.offset || 0) % 5 !== 0) return null;
   const candidates = value.candidates.filter(row => /^[a-f\d]{24}$/i.test(row?.id || '') && typeof row.name === 'string' && row.name.trim())
     .map(row => ({ id: row.id, name: label(row.name, 100), ...(typeof row.detail === 'string' ? { detail: label(row.detail, 80) } : {}) }));
   if (!candidates.length) return null;
-  return deepFreeze({ candidateType: 'supplier', pageSize: 5, totalMatches: Number.isSafeInteger(value.totalMatches) ? value.totalMatches : candidates.length,
+  return deepFreeze({ candidateType: 'supplier', pageSize: 5, totalMatches: candidates.length,
+    ...(value.truncatedMatches === true ? { truncatedMatches: true } : {}),
     originalIntent: value.originalIntent || value.skillId, skillId: value.skillId, args: { ...(value.skillId === 'get_replenishment_cost' && value.args.mode === 'single' ? { mode: 'single' } : {}),
     ...(typeof value.args.productRef === 'string' ? { productRef: value.args.productRef } : {}),
     ...(Number.isSafeInteger(value.args.limit) ? { limit: Math.max(1, Math.min(5, value.args.limit)) } : {}),

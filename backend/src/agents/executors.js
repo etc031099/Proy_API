@@ -225,12 +225,14 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
       const supplierFilter = { businessId, type: 'vendor', isActive: true };
       const directory = await Contact.find(supplierFilter).select('_id businessId name type isActive')
         .limit(500).maxTimeMS(invocation.skill.timeoutMs).lean().exec();
-      const vendors = directory.map(row => ({ supplierId: String(row._id), supplierName: row.name, name: row.name }));
-      const { resolveSupplier } = require('./replenishmentPlanning');
-      const resolved = resolveSupplier(invocation.args.supplierRef, vendors, vendors);
+      const vendors = [...new Map(directory.map(row => [String(row._id),
+        { supplierId: String(row._id), supplierName: row.name, name: row.name }])).values()];
+      const { resolveSupplier, MAX_SUPPLIER_CANDIDATES } = require('./replenishmentPlanning');
+      const resolved = resolveSupplier(invocation.args.supplierRef, vendors, vendors, MAX_SUPPLIER_CANDIDATES);
       if (resolved.status !== 'MATCH') {
         const candidates = (resolved.status === 'AMBIGUOUS' || resolved.status === 'AMBIGUOUS_SUPPLIER'
-          ? resolved.candidates : []).slice(0, 20).map(row => ({ id: row.supplierId, name: row.supplierName || row.name }));
+          ? resolved.candidates : []).slice(0, MAX_SUPPLIER_CANDIDATES)
+          .map(row => ({ id: row.supplierId, name: row.supplierName || row.name }));
         const suggestions = candidates.slice(0, 5).map(row => ({ label: row.name, message: row.name }));
         const clarificationQuestion = candidates.length
           ? `Encontré varios proveedores que podrían coincidir con «${invocation.args.supplierRef}». Elige uno y te mostraré sus productos:`
@@ -239,7 +241,8 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
           totalMatches: candidates.length, suggestions, clarificationQuestion,
           ...(candidates.length > 5 ? { suggestionsPagination: { query: invocation.args.supplierRef, offset: 0, limit: 5,
             totalMatches: candidates.length, hasMore: true, hasPrevious: false } } : {}),
-          ...(candidates.length ? { supplierResolution: { candidateType: 'supplier', pageSize: 5, totalMatches: resolved.totalMatches || candidates.length,
+          ...(candidates.length ? { supplierResolution: { candidateType: 'supplier', pageSize: 5, totalMatches: candidates.length,
+            ...(resolved.totalMatches > candidates.length ? { truncatedMatches: true } : {}),
             originalIntent: invocation.skill.id, skillId: invocation.skill.id,
             args: Object.fromEntries(Object.entries(invocation.args).filter(([key]) => key !== 'supplierRef')),
             query: invocation.args.supplierRef, offset: 0, candidates } } : {}) } };

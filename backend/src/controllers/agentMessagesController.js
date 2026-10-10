@@ -82,7 +82,8 @@ const createAgentMessagesHandler = ({ enabled, orchestrator, history } = {}) => 
     if (result.code && !['AGENT_CLARIFICATION_REQUIRED', 'AGENT_UNSUPPORTED_QUERY'].includes(result.code)) return fail(result.code);
     // Explicit public envelope: never serialize provider responses or internal prompts.
     const fields = ['requestId', 'conversationId', 'answer', 'intent', 'agent', 'synthesisStatus', 'synthesisDiagnostic', 'participants', 'actions', 'evidence',
-      'usage', 'requiresClarification', 'clarificationQuestion', 'latencyMs', 'pendingAction', 'suggestions', 'suggestionsEntityType', 'suggestionsExpiresAt', 'suggestionsPagination'];
+      'usage', 'requiresClarification', 'clarificationQuestion', 'latencyMs', 'pendingAction', 'suggestions', 'suggestionsEntityType', 'suggestionsExpiresAt',
+      'suggestionsPagination', 'contextProvenance'];
     return res.json({ success: true, data: Object.fromEntries(fields.filter(key => result[key] !== undefined).map(key => [key, result[key]])) });
   } catch (error) {
     return fail(error.code);

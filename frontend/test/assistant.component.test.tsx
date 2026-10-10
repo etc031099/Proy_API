@@ -80,6 +80,7 @@ it('guided candidates show real costs and send only the selection in the same co
 });
 it('supplier candidate pagination labels ordinal selection as supplier and renders choices as separate rows', async () => {
   send.mockResolvedValueOnce({ success: true, data: { ...response, intent: 'supplier_products', suggestionsEntityType: 'supplier',
+    contextProvenance: { sourceType: 'candidate_snapshot', entityType: 'supplier', query: 'food', page: 2, pageSize: 5, totalMatches: 25 },
     suggestionsPagination: { query: 'food', offset: 0, limit: 5, totalMatches: 20, hasMore: true, hasPrevious: false },
     suggestionsExpiresAt: Date.now() + 120000, suggestions: [
       { label: '1. Proveedor sintético 001 FOODS', message: 'Proveedor sintético 001 FOODS' },
@@ -87,6 +88,8 @@ it('supplier candidate pagination labels ordinal selection as supplier and rende
   render(<AssistantPage />); submit('proveedor food');
   const first = await screen.findByRole('button', { name: '1. Proveedor sintético 001 FOODS' });
   expect(screen.getByText('“1” o “el primero” seleccionan el primer proveedor de esta página.')).toBeTruthy();
+  expect(screen.getByText(/Continuación desde la conversación; no se ejecutó una consulta nueva/)).toBeTruthy();
+  expect(screen.queryByText('Sin evidencia de datos para esta respuesta.')).toBeNull();
   expect(first.parentElement?.className).toContain('flex-col');
 });
 it('single digit candidate choices can be typed and do not confirm actions', async () => {

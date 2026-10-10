@@ -525,6 +525,10 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
       const latencyMs = performance.now() - startedAt;
       const suggested = results.find(({ result }) => result.status === 'CLARIFICATION' && result.metadata.suggestions?.length);
       const supplierResult = results.find(({ result }) => result.status === 'CLARIFICATION' && result.metadata.supplierResolution);
+      const candidateSnapshot = supplierPageResponse && (supplierResult?.result.metadata.supplierResolution || state.supplierResolution);
+      const contextProvenance = candidateSnapshot ? { sourceType: 'candidate_snapshot', entityType: 'supplier',
+        query: candidateSnapshot.query || 'proveedores', page: Math.floor((supplierPageResponse.suggestionsPagination?.offset || 0) / 5) + 1,
+        pageSize: 5, totalMatches: candidateSnapshot.totalMatches ?? candidateSnapshot.candidates.length } : undefined;
       return deepFreeze({ requestId: context.requestId, conversationId, answer, intent: plan.intent, agent: plan.agent,
         ...(synthesisStatus ? { synthesisStatus } : {}),
         ...(synthesisDiagnostic ? { synthesisDiagnostic } : {}),
@@ -534,6 +538,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
         ...(suggested?.result.metadata.suggestionsPagination ? { suggestionsPagination: suggested.result.metadata.suggestionsPagination }
           : supplierPageResponse?.suggestionsPagination ? { suggestionsPagination: supplierPageResponse.suggestionsPagination } : {}),
         ...(supplierResolutionExpiry && (suggested || supplierPageResponse) ? { suggestionsExpiresAt: supplierResolutionExpiry } : {}),
+        ...(contextProvenance ? { contextProvenance } : {}),
         participants, actions, evidence: results.map(({ result }) => ({ ...result.evidence, recordCount: result.metadata.returnedCount })),
         usage: { ...usage, toolSelectionCycles: execution.getBudget().toolSelectionCycles, totalLatencyMs: latencyMs }, requiresClarification: Boolean(question), clarificationQuestion: question,
         code, latencyMs });

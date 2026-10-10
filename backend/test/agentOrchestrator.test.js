@@ -929,33 +929,41 @@ test('supplier candidates paginate five at a time and selection on the next page
   assert.equal(selected.usage.totalLlmCalls, 0); assert.equal(selected.usage.totalTokens, 0);
 });
 
-test('supplier product candidates paginate all four pages and select from the visible page deterministically', async () => {
-  const contacts = Array.from({ length: 20 }, (_, index) => ({ _id: id(700 + index), businessId: 'A', type: 'vendor',
+test('supplier product candidate total and order stay stable across five snapshot pages', async () => {
+  const contacts = Array.from({ length: 25 }, (_, index) => ({ _id: id(700 + index), businessId: 'A', type: 'vendor',
     isActive: true, name: `Proveedor sintético ${String(index + 1).padStart(3, '0')} FOODS` }));
   const f = fixture({ contacts }); const conversationId = randomUUID();
   let page = await f.run('proveedor food', conversationId);
   assert.equal(page.intent, 'supplier_products'); assert.equal(page.suggestionsEntityType, 'supplier');
-  assert.equal(page.suggestionsPagination.totalMatches, 20); assert.equal(page.suggestionsPagination.offset, 0);
-  assert.match(page.answer, /1–5 de 20/); assert.equal(page.suggestions.length, 5);
+  assert.equal(page.suggestionsPagination.totalMatches, 25); assert.equal(page.suggestionsPagination.offset, 0);
+  assert.match(page.answer, /1–5 de 25/); assert.equal(page.suggestions.length, 5);
+  assert.deepEqual(page.contextProvenance, { sourceType: 'candidate_snapshot', entityType: 'supplier', query: 'food', page: 1, pageSize: 5, totalMatches: 25 });
+  const seen = page.suggestions.map(row => row.message); let pageTwoFirstName;
   const saved = await f.orchestrator.getContextSnapshot(req(), conversationId);
   assert.equal(saved.supplierResolution.candidateType, 'supplier'); assert.equal(saved.supplierResolution.pageSize, 5);
-  assert.equal(saved.supplierResolution.query, 'food'); assert.equal(saved.supplierResolution.totalMatches, 20);
-  for (const [offset, range] of [[5, /6–10 de 20/], [10, /11–15 de 20/], [15, /16–20 de 20/]]) {
+  assert.equal(saved.supplierResolution.query, 'food'); assert.equal(saved.supplierResolution.totalMatches, 25);
+  assert.equal(saved.supplierResolution.candidates.length, 25);
+  for (const [offset, range] of [[5, /6–10 de 25/], [10, /11–15 de 25/], [15, /16–20 de 25/], [20, /21–25 de 25/]]) {
     page = await f.run('Ver más', conversationId);
     assert.equal(page.suggestionsPagination.offset, offset); assert.match(page.answer, range);
     assert.equal(page.suggestions.length, 5); assert.equal(page.usage.totalLlmCalls, 0); assert.equal(page.usage.totalTokens, 0);
+    assert.equal(page.suggestionsPagination.totalMatches, 25); assert.equal(page.contextProvenance.page, offset / 5 + 1);
+    seen.push(...page.suggestions.map(row => row.message));
+    if (offset === 5) pageTwoFirstName = page.suggestions[0].message;
   }
+  assert.equal(new Set(seen).size, 25);
   const last = await f.run('Ver más', conversationId);
-  assert.match(last.answer, /última página/i); assert.equal(last.suggestionsPagination.offset, 15);
+  assert.match(last.answer, /última página/i); assert.equal(last.suggestionsPagination.offset, 20);
   assert.equal(last.usage.totalLlmCalls, 0); assert.equal(last.usage.totalTokens, 0);
   const previous = await f.run('Anterior', conversationId);
-  assert.equal(previous.suggestionsPagination.offset, 10);
+  assert.equal(previous.suggestionsPagination.offset, 15); assert.equal(previous.suggestionsPagination.totalMatches, 25);
+  await f.run('Anterior', conversationId);
   const pageTwo = await f.run('Anterior', conversationId);
   assert.equal(pageTwo.suggestionsPagination.offset, 5);
-  const selectedName = pageTwo.suggestions[0].message;
+  assert.equal(pageTwo.suggestions[0].message, pageTwoFirstName);
   const selected = await f.run('1', conversationId);
   assert.equal(selected.actions.some(action => action.skillId === 'get_supplier_products'), true);
-  assert.ok(selected.answer.includes(selectedName));
+  assert.ok(selected.answer.includes(pageTwoFirstName));
   assert.equal(selected.usage.totalLlmCalls, 0); assert.equal(selected.usage.totalTokens, 0);
 });
 

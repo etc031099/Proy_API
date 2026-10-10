@@ -10,6 +10,7 @@ const actionItem = { sku: true, name: true, quantity: true, stock: true, resulti
 const shape = {
   suggestions: [{ label: true, message: true, detail: true }],
   suggestionsEntityType: true,
+  contextProvenance: { sourceType: true, entityType: true, query: true, page: true, pageSize: true, totalMatches: true },
   suggestionsExpiresAt: true,
   suggestionsPagination: { query: true, offset: true, limit: true, totalMatches: true, hasMore: true, hasPrevious: true },
   pendingAction: { pendingActionId: true, action: true, summary: true, status: true, expiresAt: true,
