@@ -45,11 +45,12 @@ export function PendingActionCard({ action, conversationId }: { action: PendingA
     {expired && current.status === 'PENDING' && <p>Esta acción expiró.</p>}
     {current.status === 'EXPIRED' && <p>Esta acción expiró.</p>}
     {current.result && <div role="status"><p>Operación registrada correctamente.</p>
-      {current.result.sku && <p>{current.result.sku} · Stock: {current.result.stock}</p>}
+      {current.result.ruleConfigured ? <p>{current.result.alreadyExists ? 'Regla activa existente' : 'Regla configurada'}: {current.result.sku} · Stock {current.result.operator} {current.result.threshold} unidades. Todavía no envía avisos automáticos.</p>
+        : current.result.sku && <p>{current.result.sku} · Stock: {current.result.stock}</p>}
       {current.result.needsSupplierSetup && <p>Todavía no tiene proveedor con precio de compra. Configúralo desde Productos antes de registrar compras.</p>}
       {current.result.items?.map((item, index) => <p key={index}>{item.quantity} unidades de {item.sku} · Stock resultante: {item.stock}</p>)}
       {current.result.total !== undefined && <p>Total: {current.result.total} {current.result.currency}</p>}
-      <p className="break-all">Identificador: {current.result.id}</p>
+      {!current.result.ruleConfigured && <p className="break-all">Identificador: {current.result.id}</p>}
     </div>}
     {current.status === 'PENDING' && !expired && current.requiresConfirmation && <div className="flex flex-wrap gap-2">
       <Button disabled={busy} onClick={() => void decide('confirm')}>Confirmar</Button>

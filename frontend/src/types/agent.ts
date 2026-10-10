@@ -80,6 +80,7 @@ export interface PendingActionPreview {
   fields: Record<string, string | number>;
   items?: { sku: string; name: string; quantity: number; stock: number; resultingStock: number; price: number; total: number }[];
   result?: { id: string; type?: 'sale' | 'purchase'; currency?: string; total?: number; sku?: string; name?: string; stock?: number; needsSupplierSetup?: boolean;
+    ruleConfigured?: boolean; operator?: '<' | '<='; threshold?: number; alreadyExists?: boolean;
     items?: { sku: string; name: string; quantity: number; stock: number }[] };
 }
 export interface AgentMessageRequest { message: string; conversationId?: string }

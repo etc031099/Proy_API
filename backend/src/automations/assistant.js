@@ -6,7 +6,8 @@ const { redact } = require('../services/agentHistoryProjection');
 const { compactDraft, updateDraft, resolveDraft, applyResolution, TTL_MS } = require('./operationDraft');
 const { resolveReference, configuredSuppliers } = require('./entityResolution');
 const { Product } = require('../models');
-const resultAnswer = pending => pending.status !== 'EXECUTED' ? 'Acción cancelada.' : pending.result?.type
+const resultAnswer = pending => pending.status !== 'EXECUTED' ? 'Acción cancelada.' : pending.result?.ruleConfigured
+  ? `${pending.result.alreadyExists ? 'Ya existe una regla activa' : 'Regla configurada'} para ${pending.result.sku}: stock ${pending.result.operator} ${pending.result.threshold} unidades. Solo queda configurada; todavía no envía avisos automáticos.` : pending.result?.type
   ? `${pending.result.type === 'sale' ? 'Venta' : 'Compra'} registrada correctamente. ${pending.result.items.map(item => `${item.quantity} unidades de ${item.sku}; stock resultante: ${item.stock}`).join('. ')}. Total: ${pending.result.total} ${pending.result.currency}. Operación: ${pending.result.id}.`
   : `Producto registrado correctamente. SKU: ${pending.result?.sku || '—'}. Stock: ${pending.result?.stock ?? '—'}.${pending.result?.needsSupplierSetup ? ' Todavía no tiene proveedor con precio de compra; configúralo desde Productos antes de registrar compras.' : ''}`;
 // Bounded draft slots never authorize writes. Restored candidate IDs are looked up
@@ -20,6 +21,8 @@ const withActionAssistant = (runtime, service, options = {}) => {
     const draftKey = keyFor(req, input.conversationId);
     let previous = drafts.get(draftKey);
     const explicit = actionIntent(input.message);
+    if (explicit === 'create_stock_alert_rule' && require('../agents/intentRouting').tenantScopeViolation(input.message))
+      return runtime.handle(req, input); // Preserve the deterministic F9 denial before resolving any product.
     const contextual = (previous?.selection?.slot === 'product' && /^busca(?:r)?\b/.test(normalized)) || /que me falta|que datos|que proveedores|^(?:mejor|cambia|en vez|no es|opcion|el |la |si\b|no\b|cancel|confirm|hazlo|crear proveedor|elegir proveedor|continuar sin)/.test(normalized)
       || /^(?:\d+|sku\b|proveedor\b|precio de compra\b|categoria\b)/.test(normalized);
     if (previous && !explicit && !contextual && /^(?:muestrame|busca|dime|cuanto|que|resume|explica|lista|cuales)\b|[¿?]/.test(normalized)) previous = undefined;
@@ -73,7 +76,13 @@ const withActionAssistant = (runtime, service, options = {}) => {
         }
       }
       let extracted = parseAction(input.message, skillId);
-      const unclear = !previous && !extracted.direct && (skillId === 'create_product' ? !Object.keys(extracted.product || {}).length
+      if (skillId === 'create_stock_alert_rule' && !previous && !extracted.items?.length && input.conversationId) {
+        const state = await runtime.getContextSnapshot?.(req, input.conversationId);
+        const selected = require('../agents/memory').compactSelectedProductReference(state?.selectedProductReference, now);
+        const entity = selected || (state?.lastProductSelection?.items?.length > 1 || state?.recentEntities?.length > 1 ? null : state?.lastEntity);
+        if (entity?.id && (!entity.type || entity.type === 'product')) extracted.items = [{ ref: entity.sku || entity.id }];
+      }
+      const unclear = skillId !== 'create_stock_alert_rule' && !previous && !extracted.direct && (skillId === 'create_product' ? !Object.keys(extracted.product || {}).length
         : !extracted.items?.length || (!extracted.items[0].quantity && /\b(?:tres|dos|cinco)\s+botellas/.test(normalized)));
       if (unclear) {
         execution = createAgentExecution({ context: context.agentContext, ...(options.onEvent ? { onEvent: options.onEvent } : {}), ...(options.provider ? { provider: options.provider } : {}) });
@@ -97,7 +106,7 @@ const withActionAssistant = (runtime, service, options = {}) => {
       else {
         pendingAction = await service.prepare({ agentId: 'operations', skillId, args: resolved.args, context, externalRequestId: req.agentActionRequestId || randomUUID() });
         draft.pendingActionId = pendingAction.pendingActionId;
-        answer = `${pendingAction.summary} Revisa la tarjeta antes de confirmar. La preparación no modifica el inventario.`;
+        answer = `${pendingAction.summary} ${skillId === 'create_stock_alert_rule' ? 'La regla todavía no se ha creado. ' : ''}Revisa la tarjeta antes de confirmar. La preparación no modifica el inventario.`;
       }
       draft.updatedAt = now(); draft.expiresAt = now() + TTL_MS;
       if (suggestions.length) suggestionsExpiresAt = draft.expiresAt;

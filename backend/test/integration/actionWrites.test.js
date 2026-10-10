@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const { randomUUID } = require('node:crypto');
 const { Product, Transaction, Contact, InventoryMovement, CreditPayment } = require('../../src/models');
 const PendingAction = require('../../src/models/PendingAction');
+const StockAlertRule = require('../../src/models/StockAlertRule');
 const ActionAudit = require('../../src/models/ActionAudit');
 const Outbox = require('../../src/models/ActionDomainEvent');
 const Conversation = require('../../src/models/AgentConversation');
@@ -36,7 +37,7 @@ test.before(async () => {
   await mongoose.connect(uri, { serverSelectionTimeoutMS: 10000 });
   const hello = await mongoose.connection.db.admin().command({ hello: 1 });
   assert.equal(hello.isWritablePrimary, true); assert.ok(hello.setName);
-  await Promise.all([Product, Contact, Transaction, InventoryMovement, CreditPayment, PendingAction, ActionAudit, Outbox, Conversation].map(model => model.init()));
+  await Promise.all([Product, Contact, Transaction, InventoryMovement, CreditPayment, PendingAction, ActionAudit, Outbox, Conversation, StockAlertRule].map(model => model.init()));
   global.fetch = async () => ({ ok: true, json: async () => ({ rates: { USD: 1, PEN: 3.7, EUR: 0.92 } }) });
   [vendor, customer] = await Contact.create([{ businessId, name: 'Proveedor sintético', type: 'vendor', phone: '000000000' },
     { businessId, name: 'Cliente sintético', type: 'customer', phone: '000000001', creditLimit: 100 }]);
@@ -46,7 +47,7 @@ test.after(async () => {
   global.fetch = originalFetch;
   if (mongoose.connection.readyState === 1 && mongoose.connection.name.endsWith('_test')) {
     const filter = { businessId: { $in: [businessId, foreignBusiness] } };
-    await Promise.all([Product, Contact, Transaction, CreditPayment, PendingAction, ActionAudit, Outbox, Conversation].map(model => model.deleteMany(filter)));
+    await Promise.all([Product, Contact, Transaction, CreditPayment, PendingAction, ActionAudit, Outbox, Conversation, StockAlertRule].map(model => model.deleteMany(filter)));
     await InventoryMovement.collection.deleteMany(filter); // Fixture-only cleanup; production remains append-only.
   }
   await mongoose.disconnect();
@@ -60,6 +61,46 @@ test('guided fuzzy lookup covers the actual tenant and hides foreign products/ve
   assert.ok(fuzzy.candidates.every(row => row.businessId === undefined));
   const supplier = await resolveReference(Contact, context(), 'proveedor sintetico', 'vendor'); assert.equal(String(supplier.value._id), String(vendor._id));
   assert.equal((await resolveReference(Contact, createActionContext(req(foreignBusiness)), String(vendor._id), 'vendor')).confidence, 'NOT_FOUND');
+});
+
+test('stock rule real Mongo preview, confirm and cross-conversation semantic dedupe', async () => {
+  const p = await newProduct(), args = { productId: String(p._id), operator: '<=', threshold: 3 };
+  const before = await counts(), pending = await prepare('create_stock_alert_rule', args);
+  assert.equal(await StockAlertRule.countDocuments({ businessId, productId: p._id }), 0);
+  assert.deepEqual(await counts(), before);
+  const first = await service.confirmPendingAction(context(), pending.pendingActionId);
+  assert.equal(first.status, 'EXECUTED');
+  assert.deepEqual((await service.confirmPendingAction(context(), pending.pendingActionId)).result, first.result);
+  const otherId = randomUUID(); await Conversation.create({ businessId, userId, conversationId: otherId, title: 'Regla sintética', lastMessageAt: new Date() });
+  const otherContext = createActionContext(req(), { conversationId: otherId });
+  const other = await service.prepare({ skillId: 'create_stock_alert_rule', args, context: otherContext, externalRequestId: randomUUID() });
+  const duplicate = await service.confirmPendingAction(otherContext, other.pendingActionId);
+  assert.equal(duplicate.result.alreadyExists, true); assert.equal(duplicate.result.id, first.result.id);
+  const distinct = await prepare('create_stock_alert_rule', { ...args, operator: '<' });
+  await service.confirmPendingAction(context(), distinct.pendingActionId);
+  assert.equal(await StockAlertRule.countDocuments({ businessId, productId: p._id }), 2);
+  assert.equal((await Product.findById(p._id)).stock, p.stock);
+});
+test('stock rules concurrent different pending actions cannot duplicate equivalent active rules', async () => {
+  const p = await newProduct(), args = { productId: String(p._id), operator: '<=', threshold: 8 };
+  const pending = await Promise.all([1, 2].map(() => prepare('create_stock_alert_rule', args)));
+  const results = await Promise.allSettled(pending.map(row => service.confirmPendingAction(context(), row.pendingActionId)));
+  assert.ok(results.some(result => result.status === 'fulfilled'));
+  for (const result of results) if (result.status === 'rejected') assert.equal(result.reason.code, 'ACTION_CONFLICT');
+  assert.equal(await StockAlertRule.countDocuments({ businessId, productId: p._id, enabled: true }), 1);
+  for (const row of pending) await service.confirmPendingAction(context(), row.pendingActionId);
+  assert.equal(await StockAlertRule.countDocuments({ businessId, productId: p._id }), 1);
+});
+test('stock rules cancelled/expired pending and foreign product cannot create rules', async () => {
+  const p = await newProduct(), args = { productId: String(p._id), operator: '<', threshold: 2 };
+  const cancelled = await prepare('create_stock_alert_rule', args); await service.cancelPendingAction(context(), cancelled.pendingActionId);
+  await assert.rejects(service.confirmPendingAction(context(), cancelled.pendingActionId), { code: 'ACTION_CANCELLED' });
+  const expired = await prepare('create_stock_alert_rule', args);
+  await PendingAction.updateOne({ businessId, pendingActionId: expired.pendingActionId }, { $set: { expiresAt: new Date(0) } });
+  await assert.rejects(service.confirmPendingAction(context(), expired.pendingActionId), { code: 'ACTION_EXPIRED' });
+  const foreign = await newProduct({ businessId: foreignBusiness });
+  await assert.rejects(prepare('create_stock_alert_rule', { ...args, productId: String(foreign._id) }), { code: 'ACTION_VALIDATION_FAILED' });
+  assert.equal(await StockAlertRule.countDocuments({ businessId, productId: p._id }), 0);
 });
 test('guided purchase retrieves real supplier costs and preview remains read-only', async () => {
   const p = await newProduct({ name: 'Arroz Superior Guiado', sku: 'GUIDED-ARROZ' });

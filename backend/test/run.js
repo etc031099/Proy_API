@@ -25,3 +25,4 @@ require('./agentHistory.test');
 require('./automations.test');
 require('./actionInput.test');
 require('./guidedActions.test');
+require('./stockAlertRules.test');

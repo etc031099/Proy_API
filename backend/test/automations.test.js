@@ -51,21 +51,55 @@ function fixture({ auditFailure = false, executorFailure = false } = {}) {
   const repository = createActionRepository({ pendingModel: model, conversationModel: { exists: () => ({ maxTimeMS: async () => true }) }, startSession,
     audit: async (row, context, status, now, session, errorCode) => { if (auditFailure && status === 'EXECUTED') throw new Error('private database payload');
       session.audits.push(safeAudit(row, context, status, now, errorCode)); } });
-  const executors = Object.fromEntries(['create_product', 'create_inventory_alert'].map(id => [id, {
+  const executors = Object.fromEntries(['create_product', 'create_inventory_alert', 'create_stock_alert_rule'].map(id => [id, {
     preview: async args => ({ summary: 'Preparar acción', fields: { sku: args.sku || 'alert' } }),
     async execute(args, context, session) { assert.ok(Object.isFrozen(args)); assert.equal(context.businessId, 'A');
-      if (executorFailure) throw new Error('password=private'); session.writes++; return { id: 'cccccccccccccccccccccccc' }; }
+      if (executorFailure) throw executorFailure instanceof Error ? executorFailure : new Error('password=private'); session.writes++; return { id: 'cccccccccccccccccccccccc' }; }
   }]));
   const service = createActionService({ repository, executors, clock: () => time });
   return { service, repository, sessions, filters, rows: () => rows, audits: () => audits, writes: () => writes,
     expire: () => { time = new Date(time.getTime() + 600001); } };
 }
 const prepare = (f, context = ctx(), args = product, key = randomUUID()) => f.service.prepare({ agentId: 'operations', skillId: 'create_product', args, context, externalRequestId: key });
-test('action registry is separate, closed and exposes four real operations executors', () => {
-  assert.equal(ACTION_SKILLS.length, 14); assert.equal(new Set(ACTION_SKILLS.map(x => x.id)).size, 14);
-  assert.deepEqual(ACTION_SKILLS.filter(x => x.status === 'READY').map(x => x.id), ['create_product', 'create_sale', 'create_purchase', 'create_inventory_alert']);
+const ruleArgs = { productId: 'bbbbbbbbbbbbbbbbbbbbbbbb', operator: '<=', threshold: 3 };
+const prepareRule = f => f.service.prepare({ skillId: 'create_stock_alert_rule', args: ruleArgs, context: ctx(), externalRequestId: randomUUID() });
+test('stock rule preview/confirm/repeated confirm use frozen args and atomic audit', async () => {
+  const f = fixture(), pending = await prepareRule(f);
+  assert.equal(pending.requiresConfirmation, true); assert.equal(f.writes(), 0);
+  const first = await f.service.confirmPendingAction(ctx(), pending.pendingActionId);
+  assert.equal(first.status, 'EXECUTED'); assert.equal(f.writes(), 1);
+  assert.deepEqual((await f.service.confirmPendingAction(ctx(), pending.pendingActionId)).result, first.result);
+  assert.equal(f.writes(), 1); assert.equal(f.audits()[0].status, 'EXECUTED');
+});
+test('stock rule cancel/expiry/tamper/foreign contexts never execute', async () => {
+  for (const mode of ['cancel', 'expire', 'tamper', 'tenant', 'user', 'conversation', 'channel']) {
+    const f = fixture(), pending = await prepareRule(f);
+    if (mode === 'cancel') await f.service.cancelPendingAction(ctx(), pending.pendingActionId);
+    if (mode === 'expire') f.expire();
+    if (mode === 'tamper') f.rows()[0].validatedArgs.threshold = 4;
+    const target = mode === 'tenant' ? ctx('B') : mode === 'user' ? ctx('A', 'cccccccccccccccccccccccc')
+      : mode === 'conversation' ? ctx('A', undefined, 'assistant', randomUUID())
+        : mode === 'channel' ? ctx('A', undefined, 'telegram') : ctx();
+    await assert.rejects(f.service.confirmPendingAction(target, pending.pendingActionId)); assert.equal(f.writes(), 0);
+  }
+});
+test('stock rule simultaneous same pending confirms commit once; repeat is safe', async () => {
+  const f = fixture(), pending = await prepareRule(f);
+  await Promise.allSettled([1, 2].map(() => f.service.confirmPendingAction(ctx(), pending.pendingActionId)));
+  assert.equal(f.writes(), 1);
+  await f.service.confirmPendingAction(ctx(), pending.pendingActionId); assert.equal(f.writes(), 1);
+});
+test('semantic rule index race rolls back and remains pending for manual confirmation, not FAILED', async () => {
+  const error = Object.assign(new Error('duplicate active rule'), { code: 11000, keyPattern: { businessId: 1, productId: 1, operator: 1, threshold: 1 } });
+  const f = fixture({ executorFailure: error }), pending = await prepareRule(f);
+  await assert.rejects(f.service.confirmPendingAction(ctx(), pending.pendingActionId), { code: 'ACTION_CONFLICT' });
+  assert.equal(f.rows()[0].status, 'PENDING'); assert.equal(f.writes(), 0); assert.equal(f.audits().length, 0);
+});
+test('action registry is separate, closed and exposes five real operations executors', () => {
+  assert.equal(ACTION_SKILLS.length, 15); assert.equal(new Set(ACTION_SKILLS.map(x => x.id)).size, 15);
+  assert.deepEqual(ACTION_SKILLS.filter(x => x.status === 'READY').map(x => x.id), ['create_product', 'create_sale', 'create_purchase', 'create_inventory_alert', 'create_stock_alert_rule']);
   assert.ok(ACTION_SKILLS.every(x => x.auditRequired && x.idempotent && x.riskLevel !== 'RESTRICTED'));
-  assert.equal(getActionDeclarations('operations').length, 4);
+  assert.equal(getActionDeclarations('operations').length, 5);
   for (const id of ['analyst', 'coordinator']) assert.deepEqual(getActionDeclarations(id), []);
 });
 for (const field of ['businessId', 'userId', 'role', 'model', 'apiKey', 'query', 'url', '$where']) test(`action schema rejects ${field}`, () => {

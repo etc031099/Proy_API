@@ -8,7 +8,8 @@ const TTL_MS = 20 * 60 * 1000;
 // description/costPrice are OPTIONAL and do not trigger extra questions.
 const candidateSchema = schema({ _id: objectId, name: string(100), sku: string(100), currency: string(3), stock: integer(1000000), isActive: { type: 'boolean' },
   costs: { type: 'array', maxItems: 20, items: schema({ sku: string(100), currency: string(3), purchasePrice: number() }) } }, ['_id', 'name']);
-const draftSchema = schema({ action: { ...string(30), enum: ['create_product', 'create_sale', 'create_purchase'] },
+const draftSchema = schema({ action: { ...string(30), enum: ['create_product', 'create_sale', 'create_purchase', 'create_stock_alert_rule'] },
+  operator: { ...string(2), enum: ['<', '<='] }, threshold: integer(1000000),
   product: schema(getActionSkill('create_product').inputSchema.properties, []),
   items: { type: 'array', maxItems: 20, items: schema({ ref: string(100), quantity: { ...integer(1000000), minimum: 1 } }, ['ref']) },
   currency: { ...string(3), enum: ['PEN', 'USD', 'EUR'] }, paymentMethod: { ...string(20), enum: ['cash', 'credit', 'card', 'bank_transfer', 'wallet', 'other'] },
@@ -86,7 +87,16 @@ function updateDraft(previous, extracted, message) {
       delete draft.selection;
     }
   }
-  if (draft.action === 'create_product') {
+  if (draft.action === 'create_stock_alert_rule') {
+    if (extracted.items?.length) draft.items = extracted.items;
+    if (extracted.operator !== undefined) {
+      draft.operator = extracted.operator;
+      if (Number.isSafeInteger(extracted.threshold) && extracted.threshold >= 0 && extracted.threshold <= 1000000) draft.threshold = extracted.threshold;
+      else delete draft.threshold;
+    }
+    if (previous?.missingFields?.includes('product') && !extracted.items?.length && !extracted.operator)
+      draft.items = [{ ref: message.trim().replace(/^SKU\s+/i, '') }];
+  } else if (draft.action === 'create_product') {
     if (draft.enrichment === 'price' && draft.product?.currency && !/moneda/.test(text)) delete extracted.product.currency;
     draft.product = { ...(draft.product || {}), ...(extracted.product || {}) };
     if (extracted.supplierRef) { draft.supplierRef = extracted.supplierRef; draft.enrichment = 'supplier'; delete draft.product.supplierPrices; }

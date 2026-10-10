@@ -16,6 +16,7 @@ const extractionSchema = schema({
 }, ['action']);
 const actionIntent = message => {
   const value = normalize(message.trim());
+  if (/^(?:(?:crea(?:r)?|configura|registra|quiero)(?: una)? alerta\b|avisame\b)/.test(value)) return 'create_stock_alert_rule';
   if (/^(?:crea(?:r)?|agrega|anade|registra)(?: un)? producto\b/.test(value) || /^(?:agrega|anade)\s+/.test(value)) return 'create_product';
   if (/^(?:vende|vender|registra(?:r)?(?: una)? venta)\b/.test(value)) return 'create_sale';
   if (/^(?:compre|comprar|compra|registra(?:r)?(?: una)? compra)\b/.test(value)) return 'create_purchase';
@@ -24,6 +25,7 @@ const actionIntent = message => {
 const commandLength = message => (/^(?:crea(?:r)?|agrega|añade|registra)(?: un)? producto\b|^registra(?:r)?(?: una)? (?:venta|compra)\b/iu.exec(message.trim()) || [''])[0].length;
 const money = text => /(?:USD|d[oó]lares|\$)/i.test(text) ? 'USD' : /(?:EUR|euros|€)/i.test(text) ? 'EUR' : /(?:PEN|S\/|soles)/i.test(text) ? 'PEN' : undefined;
 function parseAction(message, action) {
+  if (action === 'create_stock_alert_rule') return parseStockRule(message);
   message = message.replace(/\b(uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|veinte|treinta|cincuenta|cien)\b(?=\s+(?:unidades?\b|de\b))/gi,
     word => String(quantityWords[word.toLowerCase()]));
   const tail = message.trim().slice(commandLength(message));
@@ -66,6 +68,17 @@ function parseAction(message, action) {
 }
 async function resolveAction(extracted, context, resolver = resolveReference, supplierLookup = configuredSuppliers) {
   if (extracted.direct) return { args: extracted.direct };
+  if (extracted.action === 'create_stock_alert_rule') {
+    if (!extracted.items?.[0]?.ref) return { missingFields: ['product'], clarification: '¿Para qué producto? Indica su SKU o nombre.' };
+    if (!['<', '<='].includes(extracted.operator) || !Number.isSafeInteger(extracted.threshold)
+      || extracted.threshold < 0 || extracted.threshold > 1000000)
+      return { missingFields: ['condition'], clarification: 'Indica una condición: stock menor que un entero, o menor o igual a un entero entre 0 y 1000000.' };
+    const result = await resolver(Product, context, extracted.items[0].ref);
+    if (!result.value) return { ...result, selection: { slot: 'product', index: 0, candidates: result.candidates || [], ...(result.pagination || {}) } };
+    if (result.value.isActive === false) return { clarification: 'Ese producto está inactivo. Elige otro producto.' };
+    extracted.items[0].ref = String(result.value._id);
+    return { args: { productId: String(result.value._id), operator: extracted.operator, threshold: extracted.threshold } };
+  }
   if (extracted.action === 'create_product') {
     const args = extracted.product || {};
     const missing = require('./skills').getActionSkill(extracted.action).inputSchema.required.filter(key => args[key] === undefined);
@@ -110,5 +123,20 @@ async function resolveAction(extracted, context, resolver = resolveReference, su
     args[extracted.action === 'create_purchase' ? 'vendorId' : 'customerId'] = String(result.value._id);
   }
   return { args };
+}
+function parseStockRule(message) {
+  const text = normalize(numericWords(message)).trim().replace(/[.!?]+$/, '');
+  // Arrival at N is explicitly normalized to <= N (and shown in the preview).
+  const numeric = '(-?\\d+(?:[.,]\\d+)?)';
+  const inclusive = new RegExp(`(?:menor o igual a|<=|llegue a)\\s*${numeric}|${numeric}\\s*(?:unidades?\\s+)?o menos`).exec(text);
+  const strict = new RegExp(`(?:menor que|menos de|baja de|<)\\s*${numeric}`).exec(text);
+  const condition = inclusive || strict;
+  const threshold = condition ? Number((condition[1] || condition[2]).replace(',', '.')) : undefined;
+  const sku = /\bSKU\s*[:=]?\s*([\w-]+)/i.exec(message) || /\b([A-Za-z][\w]*[-_][\w-]+)\b/.exec(message);
+  const named = /(?:alerta(?: de (?:stock|inventario))? para|avisame (?:si|cuando))\s+(.+?)(?=\s+(?:cuando|si|tenga|baja|stock|llegue)\b|$)/.exec(text);
+  const namedRef = named?.[1]?.trim();
+  const ref = sku?.[1] || (namedRef && !/^(?:stock|el stock|tenga|llegue|baja|sea|menor)\b/.test(namedRef) ? namedRef : undefined);
+  return { action: 'create_stock_alert_rule', ...(ref && !/^(?:este|ese|el|este producto|ese producto|el producto)$/.test(ref) ? { items: [{ ref }] } : {}),
+    ...(condition ? { operator: inclusive ? '<=' : '<', threshold } : {}) };
 }
 module.exports = { actionIntent, parseAction, resolveAction, resolveReference, numericWords, extractionSchema, validateExtraction: value => validateArgs(extractionSchema, value) };

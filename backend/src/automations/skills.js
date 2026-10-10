@@ -31,6 +31,8 @@ const ACTION_SKILLS = deepFreeze([
   entry('create_inventory_alert', 'Registra una alerta interna sin notificaciones externas.', schema({
     type: { ...string(30), enum: ['LOW_STOCK', 'REPLENISHMENT_REQUIRED', 'TRANSACTION_ANOMALY'] }, productId: objectId,
     label: string(160) }, ['type', 'label']), true, 'READY'),
+  entry('create_stock_alert_rule', 'Configura una condición de stock tras confirmación; no envía notificaciones.',
+    schema({ productId: objectId, operator: { ...string(2), enum: ['<', '<='] }, threshold: integer(1000000) }), false, 'READY'),
   entry('send_notification', 'Envía una notificación a un destino previamente configurado.', schema({ label: string(160) }), true)
 ]);
 const getActionSkill = id => { const skill = ACTION_SKILLS.find(row => row.id === id); if (!skill) fail('ACTION_NOT_ALLOWED'); return skill; };

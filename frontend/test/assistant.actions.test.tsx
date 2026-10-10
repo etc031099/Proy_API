@@ -7,6 +7,16 @@ vi.mock('@/lib/api', () => ({ apiClient: { decideAgentAction: vi.fn() } }));
 const pending: PendingActionPreview = { pendingActionId: '11111111-1111-4111-8111-111111111111', action: 'create_product',
   summary: 'Crear producto demo', fields: { stock: 5, sku: 'SKU-001', price: 10 }, expiresAt: '2099-01-01T00:00:00Z',
   requiresConfirmation: true, status: 'PENDING' };
+it('stock rule card displays configured condition without fake stock, Mongo ID or notification promise', () => {
+  render(<PendingActionCard action={{ ...pending, action: 'create_stock_alert_rule', summary: 'Configurar regla de stock',
+    fields: { sku: 'SKU-001', name: 'Demo', description: 'Stock <= 3 unidades' }, status: 'EXECUTED',
+    result: { id: 'bbbbbbbbbbbbbbbbbbbbbbbb', sku: 'SKU-001', operator: '<=', threshold: 3, ruleConfigured: true, alreadyExists: true } }} conversationId="conversation" />);
+  expect(screen.getByText(/Regla activa existente: SKU-001/)).toBeTruthy();
+  expect(screen.getByText(/Todavía no envía avisos automáticos/)).toBeTruthy();
+  expect(screen.queryByText(/Stock: undefined/)).toBeNull(); expect(screen.queryByText(/bbbbbbbbbbbbbbbbbbbbbbbb/)).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Confirmar' })).toBeNull();
+  expect(apiClient.decideAgentAction).not.toHaveBeenCalled();
+});
 it('preview is visible and confirmation sends only bound action ID and conversation once', async () => {
   let finish!: (value: { success: boolean; data: PendingActionPreview }) => void;
   vi.mocked(apiClient.decideAgentAction).mockReturnValue(new Promise(resolve => { finish = resolve; }));

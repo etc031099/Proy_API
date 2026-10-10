@@ -53,7 +53,8 @@ const createActionRepository = ({ pendingModel = PendingAction, conversationMode
       });
     } catch (error) {
       // Never retry a write automatically; uncertain commits require a status lookup/repeated confirm.
-      if ([112, 251].includes(error.code) || error.hasErrorLabel?.('UnknownTransactionCommitResult')
+      if ([112, 251].includes(error.code) || (error.code === 11000 && error.keyPattern?.threshold && error.keyPattern?.operator)
+        || error.hasErrorLabel?.('UnknownTransactionCommitResult')
         || error.hasErrorLabel?.('TransientTransactionError')) fail('ACTION_CONFLICT');
       if (error instanceof ActionError && ['ACTION_NOT_ALLOWED', 'ACTION_CANCELLED', 'ACTION_EXPIRED', 'ACTION_CONFLICT', 'ACTION_ALREADY_EXECUTED'].includes(error.code)) throw error;
       const code = error instanceof ActionError ? error.code : error.code === 11000 ? 'ACTION_CONFLICT' : 'ACTION_EXECUTION_FAILED';
