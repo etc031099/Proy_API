@@ -3,6 +3,12 @@ const { EXECUTION_LIMITS, isPlainObject, isTraceId } = require('../agents/contra
 const { HISTORY_ERRORS } = require('./agentHistoryController');
 
 const logAgentDiagnostic = event => {
+  if (event.type === 'synthesis_finished') {
+    const fields = ['requestId', 'conversationId', 'agentId', 'status', 'synthesisDiagnostic', 'durationMs'];
+    const safeEvent = Object.fromEntries(fields.filter(key => event[key] !== undefined).map(key => [key, event[key]]));
+    console.info('[AgentSynthesisDiagnostic]', JSON.stringify(safeEvent));
+    return;
+  }
   if (event.type !== 'error' || !event.internalCause || !event.skillId) return;
   const fields = ['requestId', 'conversationId', 'agentRunId', 'skillCallId', 'agentId', 'skillId', 'code',
     'internalCause', 'skillDurationMs', 'mlCallDurationMs', 'timeoutMs'];
@@ -69,7 +75,7 @@ const createAgentMessagesHandler = ({ enabled, orchestrator, history } = {}) => 
     const result = history ? await history.send(req, input, key) : await runtime.handle(req, input);
     if (result.code && !['AGENT_CLARIFICATION_REQUIRED', 'AGENT_UNSUPPORTED_QUERY'].includes(result.code)) return fail(result.code);
     // Explicit public envelope: never serialize provider responses or internal prompts.
-    const fields = ['requestId', 'conversationId', 'answer', 'intent', 'agent', 'synthesisStatus', 'participants', 'actions', 'evidence',
+    const fields = ['requestId', 'conversationId', 'answer', 'intent', 'agent', 'synthesisStatus', 'synthesisDiagnostic', 'participants', 'actions', 'evidence',
       'usage', 'requiresClarification', 'clarificationQuestion', 'latencyMs', 'pendingAction', 'suggestions', 'suggestionsExpiresAt', 'suggestionsPagination'];
     return res.json({ success: true, data: Object.fromEntries(fields.filter(key => result[key] !== undefined).map(key => [key, result[key]])) });
   } catch (error) {

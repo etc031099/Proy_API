@@ -28,6 +28,13 @@ const historicalNote = (rows, metadata) => {
 const historicalPriceNote = metadata => metadata.anchor
   ? `Propuesta basada en el forecast histórico con fecha de corte ${dateLabel(metadata.anchor)} y en los precios configurados consultados actualmente; no es una predicción actual ni una cotización confirmada.`
   : 'Los precios corresponden a la configuración consultada actualmente y no constituyen una cotización confirmada.';
+const replenishmentExplanation = result => {
+  if (result.status === 'ML_NOT_READY') return buildSkillAnswer('get_demand_forecast', result);
+  const row = result.data?.[0];
+  if (!row) return buildSkillAnswer('get_demand_forecast', result);
+  if (row.mlStatus !== 'READY') return `${name(row)} ${readinessLabel(row.mlStatus)}; no se puede justificar una cantidad numérica de reposición.`;
+  return `${name(row)}: el modelo estima ${format(row.predictedDemand7d)} unidades para los próximos 7 días. En la fecha de referencia había ${format(row.stockAtAnchor)} unidades; el stock de seguridad es ${format(row.safetyStock)} y se recomienda reponer ${format(row.recommendedQty)} unidades. La recomendación combina demanda prevista, stock disponible y stock de seguridad. ${historicalNote([row], result.metadata)}`;
+};
 const readinessLabel = status => ({
   INSUFFICIENT_HISTORY: 'todavía no tiene suficiente historial para generar una predicción',
   MISSING_LINEAGE: 'todavía no tiene la configuración de origen necesaria',
@@ -150,7 +157,7 @@ const buildSkillAnswer = (skillId, result) => {
     if (skillId === 'get_demand_forecast' || skillId === 'get_replenishment_candidates') {
       if (row.mlStatus !== 'READY') return `• ${name(row)} ${readinessLabel(row.mlStatus)}; no hay predicción disponible.`;
       if (skillId === 'get_replenishment_candidates') return `• ${name(row)} — reponer ${format(row.recommendedQty)} unidades; demanda estimada de ${format(row.predictedDemand7d)} unidades y stock disponible de ${format(row.stockAtAnchor)} en la fecha de referencia.`;
-      return `• ${name(row)}: el modelo estima ${format(row.predictedDemand7d)} unidades para 7 días. En la fecha de referencia había ${format(row.stockAtAnchor)} unidades disponibles y se habían vendido ${format(row.salesLast7Days)} en los 7 días anteriores. Considerando ${format(row.safetyStock)} unidades de stock de seguridad, ${row.recommendedQty > 0 ? `la recomendación es reponer ${format(row.recommendedQty)} unidades` : 'actualmente no se recomienda reposición para ese escenario'}.`;
+      return `• ${name(row)}: el modelo estima ${format(row.predictedDemand7d)} unidades para 7 días. En la fecha de referencia había ${format(row.stockAtAnchor)} unidades disponibles y se habían vendido ${format(row.salesLast7Days)} en los 7 días anteriores. Considerando ${format(row.safetyStock)} unidades de stock de seguridad, ${row.recommendedQty > 0 ? `se recomienda reponer ${format(row.recommendedQty)} unidades` : 'actualmente no se recomienda reposición para ese escenario'}.`;
     }
     return `• ${name(row)} tiene ${format(row.stock)} unidades disponibles y un mínimo configurado de ${format(row.minStockLevel)}.`;
   });
@@ -178,4 +185,4 @@ const llmObservation = (skillId, result) => {
       inventoryBasis: result.metadata.inventoryBasis, asOf: result.metadata.asOf } : {}) };
 };
 
-module.exports = { buildSkillAnswer, llmObservation, safeText };
+module.exports = { buildSkillAnswer, llmObservation, safeText, replenishmentExplanation };

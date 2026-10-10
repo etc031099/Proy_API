@@ -8,7 +8,7 @@ const { getSkillDefinition } = require('./skills');
 
 const EVENT_TYPES = Object.freeze([
   'request_started', 'agent_started', 'llm_started', 'llm_finished',
-  'provider_attempt', 'skill_called', 'skill_finished', 'agent_finished', 'request_finished', 'error'
+  'provider_attempt', 'skill_called', 'skill_finished', 'agent_finished', 'request_finished', 'error', 'synthesis_finished'
 ]);
 const TOKEN_FIELDS = ['inputTokens', 'outputTokens', 'thoughtTokens', 'cachedInputTokens', 'toolUseTokens', 'totalTokens'];
 const safeCount = value => Number.isSafeInteger(value) && value >= 0;
@@ -116,9 +116,15 @@ const createTraceEvent = (type, metadata) => {
     event.usageAvailable = metadata.usageAvailable;
   }
   if (metadata.status !== undefined) {
-    if (!['STARTED', 'SUCCEEDED', 'FAILED'].includes(metadata.status)) invalid();
+    if (!['STARTED', 'SUCCEEDED', 'FAILED', 'ACCEPTED', 'REJECTED'].includes(metadata.status)) invalid();
     event.status = metadata.status;
   }
+  if (metadata.synthesisDiagnostic !== undefined) {
+    if (!['NONE', 'PROVIDER_FAILED', 'PARSE_OR_SCHEMA_FAILED', 'INVALID_OUTPUT', 'INVALID_EVIDENCE_REF',
+      'UNGROUNDED_SKU', 'UNGROUNDED_NUMBER', 'INVALID_TEXT'].includes(metadata.synthesisDiagnostic)) invalid();
+    event.synthesisDiagnostic = metadata.synthesisDiagnostic;
+  }
+  if (type === 'synthesis_finished' && (!event.agentId || !event.status || !event.synthesisDiagnostic)) invalid();
   if (metadata.code !== undefined) {
     if (!Object.hasOwn(ERROR_MESSAGES, metadata.code)) invalid();
     event.code = metadata.code;

@@ -110,6 +110,19 @@ const routeDeterministically = (message, memory, now) => {
   const commercialPlan = routeCommercial(message, memory);
   if (commercialPlan) return commercialPlan;
   const text = normalize(message);
+  const referencesBudgetPlan = /estas compras|esas compras|este plan|este presupuesto|productos que acabas de recomendar|explica.*este plan/.test(text);
+  const savedBudgetPlan = memory.lastReplenishmentPlan?.semanticReference === 'last_replenishment_budget_plan'
+    && Number.isSafeInteger(memory.lastReplenishmentPlan.expiresAt) && memory.lastReplenishmentPlan.expiresAt > now.getTime()
+    ? memory.lastReplenishmentPlan : null;
+  if (referencesBudgetPlan) {
+    if (savedBudgetPlan) {
+      return { intent: 'replenishment_plan_explanation', agent: 'analyst', narrativeSynthesis: true, useMemoryPlan: true };
+    }
+    return clarify('No tengo una propuesta de compra reciente como referencia. ¿Qué plan o lista deseas que explique?');
+  }
+  if (/estos productos|estas recomendaciones/.test(text) && !memory.lastProductSelection && !savedBudgetPlan) {
+    return clarify('No tengo una referencia clara de cuáles son “estos productos”. ¿Te refieres al último plan o lista que vimos, o a otros productos?');
+  }
   const hasForecastLanguage = /prediccion|forecast|demanda|ml/.test(text);
   if (/riesgo|riesgos|preocupar|alerta/.test(text) && hasForecastLanguage && /stock|inventario|prediccion|forecast|demanda/.test(text)) {
     return { intent: 'forecast_risk_explanation', agent: 'analyst', narrativeSynthesis: true };
@@ -128,7 +141,7 @@ const routeDeterministically = (message, memory, now) => {
     const hasContext = Boolean(memory.lastForecastAnalytics || supportedSelection
       || ['replenishment_candidates', 'business_summary', 'inventory_interpretation',
         'executive_inventory_summary', 'forecast_risk_explanation'].includes(memory.lastIntent));
-    if (!hasContext) return clarify('¿A qué datos o recomendaciones te refieres? Comparte primero la consulta o lista que deseas analizar.');
+    if (!hasContext) return clarify('No tengo una referencia clara de cuáles son “estos productos”. ¿Te refieres al último plan o lista que vimos, o a otros productos?');
     return { intent: 'evidence_synthesis', agent: 'analyst', narrativeSynthesis: true, fromMemory: true };
   }
   const forecastPlan = require('./forecastRouting').routeForecastAnalytics(message, memory);

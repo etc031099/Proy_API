@@ -1,6 +1,7 @@
 const { AgentError, assertAgentRequestContext, deepFreeze, isObjectId, isDate } = require('./contracts');
 
 const TTL_MS = 30 * 60 * 1000;
+const BUDGET_PLAN_TTL_MS = 30 * 60 * 1000;
 const label = (value, max) => typeof value === 'string' ? value.replace(/[\r\n\t]/g, ' ')
   .replace(/\bBearer\s+\S+|AIza[\w-]{20,}|[\w.+-]+@[a-z\d.-]+\.[a-z]{2,}/gi, '[omitido]').slice(0, max) : null;
 const compactEntity = value => value && isObjectId(value.id || value.productId) ? {
@@ -13,6 +14,33 @@ const compactProductSelection = (value, now) => {
   if (!value || !LIST_INTENTS.has(value.sourceIntent) || !Array.isArray(value.items)) return null;
   return deepFreeze({ sourceIntent: value.sourceIntent,
     items: value.items.map(compactEntity).filter(Boolean).slice(0, 5), createdAt: now() });
+};
+const finiteNonNegative = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+const compactBudgetPlan = (value, now = Date.now()) => {
+  if (!value || value.semanticReference !== 'last_replenishment_budget_plan'
+    || !Number.isSafeInteger(value.expiresAt) || value.expiresAt <= now || value.expiresAt > now + BUDGET_PLAN_TTL_MS
+    || value.currency !== 'PEN' || !Array.isArray(value.items) || value.items.length < 1 || value.items.length > 10
+    || !value.evidence || !/^[a-f\d]{8}-[a-f\d]{4}-4[a-f\d]{3}-[89ab][a-f\d]{3}-[a-f\d]{12}$/i.test(value.evidence.evidenceId || '')
+    || !['budget', 'spent', 'remaining'].every(key => finiteNonNegative(value[key]) !== null)) return null;
+  const date = candidate => isDate(candidate) ? candidate : null;
+  const items = value.items.map(row => {
+    if (!row || typeof row.sku !== 'string' || !row.sku.trim() || row.sku.length > 100
+      || typeof row.productName !== 'string' || !row.productName.trim() || row.productName.length > 100
+      || typeof row.supplierName !== 'string' || !row.supplierName.trim() || row.supplierName.length > 100
+      || !Number.isSafeInteger(row.plannedQty) || row.plannedQty < 1
+      || !['recommendedQty', 'unitCost', 'plannedCost', 'predictedDemand7d', 'stockAtAnchor', 'shortage'].every(key => finiteNonNegative(row[key]) !== null)) return null;
+    return { sku: label(row.sku, 100), productName: label(row.productName, 100), supplierName: label(row.supplierName, 100),
+      plannedQty: row.plannedQty, recommendedQty: row.recommendedQty, unitCost: row.unitCost, plannedCost: row.plannedCost,
+      predictedDemand7d: row.predictedDemand7d, stockAtAnchor: row.stockAtAnchor, shortage: row.shortage,
+      inventoryStatus: ['OK', 'VIGILAR', 'REPONER'].includes(row.inventoryStatus) ? row.inventoryStatus : null };
+  });
+  if (items.some(row => !row)) return null;
+  return deepFreeze({ semanticReference: 'last_replenishment_budget_plan', budget: value.budget, currency: 'PEN',
+    spent: value.spent, remaining: value.remaining, items,
+    scenarioId: typeof value.scenarioId === 'string' ? label(value.scenarioId, 80) : null,
+    anchor: date(value.anchor), pricingAsOf: date(value.pricingAsOf), expiresAt: value.expiresAt,
+    evidence: { evidenceId: value.evidence.evidenceId, label: label(value.evidence.label, 160),
+      ...(date(value.evidence.asOf) ? { asOf: date(value.evidence.asOf) } : {}) } });
 };
 const SUPPLIER_SELECTION_TTL_MS = 20 * 60 * 1000;
 const compactSupplierResolution = (value, now = Date.now()) => {
@@ -89,6 +117,8 @@ const createConversationMemory = ({ now = Date.now, ttlMs = TTL_MS, maxEntries =
             ? compactSupplierProductListing(patch.supplierProductListing, now) : state.supplierProductListing || null;
           const period = patch.lastPeriod;
           pending = deepFreeze({
+            lastReplenishmentPlan: Object.hasOwn(patch, 'lastReplenishmentPlan')
+              ? compactBudgetPlan(patch.lastReplenishmentPlan, now()) : state.lastReplenishmentPlan || null,
             lastForecastAnalytics: Object.hasOwn(patch, 'lastForecastAnalytics')
               ? require('./forecastAnalytics').compactAnalyticsContext(patch.lastForecastAnalytics) : state.lastForecastAnalytics || null,
             lastIntent: label(patch.lastIntent ?? state.lastIntent, 40),
@@ -131,4 +161,4 @@ const createConversationMemory = ({ now = Date.now, ttlMs = TTL_MS, maxEntries =
 };
 
 module.exports = { createConversationMemory, compactEntity, compactSupplier, compactProductSelection, compactSupplierResolution,
-  compactSupplierProductListing, SUPPLIER_SELECTION_TTL_MS, TTL_MS };
+  compactSupplierProductListing, compactBudgetPlan, SUPPLIER_SELECTION_TTL_MS, BUDGET_PLAN_TTL_MS, TTL_MS };

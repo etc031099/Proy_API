@@ -177,6 +177,12 @@ const createAgentExecution = options => {
     getUsage: usage,
     getBudget: () => budget.snapshot(),
     getEvents: () => Object.freeze([...events]),
+    recordSynthesis({ agentId = 'analyst', status, synthesisDiagnostic, durationMs }) {
+      if (closed || !['ACCEPTED', 'REJECTED'].includes(status)) throw new AgentError('AGENT_INVALID_REQUEST');
+      require('./definitions').getAgentDefinition(agentId);
+      participants.add(agentId);
+      emit('synthesis_finished', { agentId, status, synthesisDiagnostic, durationMs });
+    },
     finish() {
       if (active) throw new AgentError('AGENT_INVALID_REQUEST');
       if (!closed) {

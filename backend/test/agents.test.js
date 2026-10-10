@@ -318,9 +318,22 @@ test('trace allowlist omits secrets, raw arguments, tenant identities and reason
   assert.deepEqual(Object.keys(event).sort(), ['requestId', 'status', 'timestamp', 'type']);
   assert.equal(JSON.stringify(event).includes('secret'), false);
   assert.ok(Object.isFrozen(event));
-  assert.equal(EVENT_TYPES.length, 10);
+  assert.equal(EVENT_TYPES.length, 11);
   assert.throws(() => createTraceEvent('arbitrary', { requestId: randomUUID() }), expectCode('AGENT_INVALID_REQUEST'));
   assert.throws(() => createTraceEvent('skill_called', { requestId: randomUUID() }), expectCode('AGENT_INVALID_REQUEST'));
+});
+
+test('synthesis lifecycle trace keeps correlation and safe diagnostic only', () => {
+  const event = createTraceEvent('synthesis_finished', { requestId: randomUUID(), conversationId: randomUUID(),
+    agentRunId: randomUUID(), agentId: 'analyst', status: 'REJECTED', synthesisDiagnostic: 'UNGROUNDED_NUMBER',
+    durationMs: 12.5, prompt: 'private', apiKey: 'secret', chainOfThought: 'private reasoning' });
+  assert.equal(event.agentId, 'analyst');
+  assert.equal(event.status, 'REJECTED');
+  assert.equal(event.synthesisDiagnostic, 'UNGROUNDED_NUMBER');
+  assert.equal(event.durationMs, 12.5);
+  assert.equal(JSON.stringify(event).includes('private'), false);
+  assert.equal(JSON.stringify(event).includes('secret'), false);
+  assert.equal(Object.hasOwn(event, 'prompt'), false);
 });
 
 test('failed telemetry sinks do not break the controlled domain result', async () => {

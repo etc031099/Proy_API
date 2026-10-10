@@ -55,6 +55,8 @@ const toCents = value => {
   return Number.isSafeInteger(cents) && cents > 0 ? cents : null;
 };
 const fromCents = value => Number((value / 100).toFixed(2));
+const formatMetric = value => Number.isFinite(value) ? new Intl.NumberFormat('es-PE', { maximumFractionDigits: 2 }).format(value) : '—';
+const formatCoverage = value => Number.isFinite(value) ? new Intl.NumberFormat('es-PE', { style: 'percent', maximumFractionDigits: 1 }).format(value) : 'sin demanda prevista';
 
 const selectOffer = (product, contacts, supplierRef) => {
   const byId = new Map(contacts.map(row => [String(row._id), row]));
@@ -106,7 +108,7 @@ const buildBudgetPlan = ({ rows, budget, limit, offset }) => {
       recommendedQty: row.recommendedQty, plannedQty, unplannedQty: row.recommendedQty - plannedQty,
       plannedCost: fromCents(plannedCostCents), predictedDemand7d: row.predictedDemand7d,
       stockAtAnchor: row.stockAtAnchor, shortage: row.shortage, inventoryStatus: row.inventoryStatus,
-      reason: `${row.inventoryStatus}; cobertura ${row.coverage === null ? 'sin demanda prevista' : row.coverage.toFixed(3)}; déficit ${row.shortage}` }];
+      reason: `${row.inventoryStatus}; cobertura ${formatCoverage(row.coverage)}; déficit ${formatMetric(row.shortage)}` }];
   });
   const spentCents = budgetCents - remaining;
   const eligible = rows.filter(row => row.mlStatus === 'READY' && Number.isSafeInteger(row.recommendedQty) && row.recommendedQty > 0);

@@ -201,6 +201,24 @@ test('supplier-to-products selection and page context survive a closed history s
   assert.equal(expired.supplierProductListing, null);
 });
 
+test('compact history snapshot preserves a bounded budget plan for follow-up but drops private/internal fields', () => {
+  const now = Date.now();
+  const state = snapshot({ lastReplenishmentPlan: { semanticReference: 'last_replenishment_budget_plan', budget: 100,
+    currency: 'PEN', spent: 80, remaining: 20, scenarioId: 'demo-v2', anchor: '2026-05-17', pricingAsOf: '2026-10-09',
+    expiresAt: now + 60000, evidence: { evidenceId: randomUUID(), label: 'Plan de reposición', asOf: '2026-10-09' },
+    items: [{ sku: 'SKU-001', productName: 'Producto 1', supplierName: 'Proveedor demo', plannedQty: 2,
+      recommendedQty: 4, unitCost: 10, plannedCost: 20, predictedDemand7d: 8, stockAtAnchor: 1, shortage: 7,
+      inventoryStatus: 'REPONER', productId: 'private-id', email: 'private@example.com' }],
+    apiKey: 'secret', businessId: 'tenant-private' } });
+  assert.equal(state.lastReplenishmentPlan.items[0].plannedQty, 2);
+  assert.equal(state.lastReplenishmentPlan.items[0].productId, undefined);
+  assert.equal(state.lastReplenishmentPlan.items[0].email, undefined);
+  assert.equal(state.lastReplenishmentPlan.apiKey, undefined);
+  assert.equal(JSON.stringify(state).includes('tenant-private'), false);
+  const expired = snapshot({ lastReplenishmentPlan: { ...state.lastReplenishmentPlan, expiresAt: now - 1 } });
+  assert.equal(expired.lastReplenishmentPlan, null);
+});
+
 test('real compact memory hydrates on restart/TTL with ordinal references and zero provider calls, scoped by auth', async () => {
   let now = 0;
   const runtime = createAgentOrchestrator({ memory: createConversationMemory({ now: () => now, ttlMs: 10 }),

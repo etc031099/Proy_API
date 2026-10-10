@@ -1,4 +1,4 @@
-const { compactEntity, compactSupplier, compactProductSelection, compactSupplierResolution, compactSupplierProductListing } = require('../agents/memory');
+const { compactEntity, compactSupplier, compactProductSelection, compactSupplierResolution, compactSupplierProductListing, compactBudgetPlan } = require('../agents/memory');
 const { isDate } = require('../agents/contracts');
 const redact = value => String(value).replace(/\bBearer\s+\S+|AIza[\w-]{20,}|\beyJ[\w-]+\.[\w-]+\.[\w-]+|(?:password|api[_-]?key|jwt|secret|token)\s*[:=]\s*\S+/gi, '[secreto omitido]');
 const text = (value, max = 100) => typeof value === 'string' ? redact(value).slice(0, max) : null;
@@ -15,7 +15,7 @@ const shape = {
     requiresConfirmation: true, fields: { name: true, sku: true, price: true, currency: true, stock: true, resultingStock: true,
       minStockLevel: true, category: true, costPrice: true, description: true, supplierCosts: true, total: true, paymentMethod: true, contact: true },
     items: [actionItem], result: { id: true, type: true, currency: true, total: true, sku: true, name: true, stock: true, needsSupplierSetup: true, items: [actionItem] } },
-  requestId: true, conversationId: true, answer: true, intent: true, agent: true, synthesisStatus: true,
+  requestId: true, conversationId: true, answer: true, intent: true, agent: true, synthesisStatus: true, synthesisDiagnostic: true,
   requiresClarification: true, clarificationQuestion: true, latencyMs: true,
   participants: [{ ...agent, skillCalls: true, providerLatencyMs: true }],
   actions: [{ skillId: true, agentId: true, status: true, durationMs: true }],
@@ -37,6 +37,7 @@ const project = (value, schema) => {
 };
 const publicResponse = result => project(result, shape);
 const snapshot = state => ({
+  lastReplenishmentPlan: compactBudgetPlan(state.lastReplenishmentPlan, Date.now()),
   lastForecastAnalytics: require('../agents/forecastAnalytics').compactAnalyticsContext(state.lastForecastAnalytics),
   operationDraft: require('../automations/operationDraft').compactDraft(state.operationDraft),
   lastIntent: text(state.lastIntent, 40), lastAgent: ['operations', 'analyst'].includes(state.lastAgent) ? state.lastAgent : null,

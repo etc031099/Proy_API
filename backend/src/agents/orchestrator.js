@@ -6,8 +6,8 @@ const { classifyAgentIntent } = require('./routing');
 const { executeRequestedSkill } = require('./toolCalls');
 const { createConversationMemory } = require('./memory');
 const { routeDeterministically, clarify } = require('./intentRouting');
-const { buildSkillAnswer, llmObservation, safeText } = require('./responses');
-const { buildSynthesisInput, buildNarrativeSynthesisInput, validateNarrativeSynthesis, renderNarrativeSynthesis } = require('./synthesis');
+const { buildSkillAnswer, llmObservation, safeText, replenishmentExplanation } = require('./responses');
+const { buildSynthesisInput, buildNarrativeSynthesisInput, validateNarrativeSynthesis, renderNarrativeSynthesis, renderNarrativeFallback } = require('./synthesis');
 const { normalizeSupplier, resolveSupplier } = require('./replenishmentPlanning');
 const { SUPPLIER_SELECTION_TTL_MS } = require('./memory');
 
@@ -115,6 +115,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
       let supplierProductListingExpiry;
       let supplierPageResponse;
       let synthesisStatus;
+      let synthesisDiagnostic;
       const run = async (agentId, skillId, args = {}) => {
         const result = await execution.executeSkill({ agentId, skillId, args });
         results.push({ skillId, result });
@@ -217,8 +218,17 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
               break;
             }
             case 'replenishment_plan_explanation': {
-              const result = await run('analyst', plan.skillId, plan.args);
-              if (result.status === 'CLARIFICATION') plan.clarificationQuestion = result.metadata.clarificationQuestion;
+              if (plan.useMemoryPlan) {
+                const saved = state.lastReplenishmentPlan;
+                const data = { budget: saved.budget, currency: saved.currency, spent: saved.spent, remaining: saved.remaining,
+                  plannedUnits: saved.items.reduce((sum, item) => sum + item.plannedQty, 0), items: saved.items };
+                results.push({ skillId: 'plan_replenishment_budget', result: { status: 'READY', data,
+                  metadata: { scenarioId: saved.scenarioId, anchor: saved.anchor, pricingAsOf: saved.pricingAsOf },
+                  evidence: { evidenceId: saved.evidence.evidenceId, label: saved.evidence.label, asOf: saved.evidence.asOf } } });
+              } else {
+                const result = await run('analyst', plan.skillId, plan.args);
+                if (result.status === 'CLARIFICATION') plan.clarificationQuestion = result.metadata.clarificationQuestion;
+              }
               break;
             }
             case 'supplier_products': {
@@ -283,19 +293,29 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
           let sections = results.map((_, index) => index);
           const synthesisEligible = results.length > 0 && results.every(({ result }) => ['READY', 'NO_DATA'].includes(result.status));
           if (plan.narrativeSynthesis && synthesisEligible) {
-            const deterministicFacts = sections.map(index => buildSkillAnswer(results[index].skillId, results[index].result)).filter(Boolean);
-            answer = [`Estos son los datos principales que pude obtener:`, ...deterministicFacts].join('\n');
+            answer = renderNarrativeFallback(plan.intent, results);
+            const synthesisStarted = performance.now();
             try {
               const generated = await execution.generateStructured({ agentId: 'analyst',
                 ...buildNarrativeSynthesisInput(plan.intent, message, results) });
               const validated = validateNarrativeSynthesis(generated.output, results);
               answer = renderNarrativeSynthesis(plan.intent, results, validated);
-              synthesisStatus = 'SUCCEEDED';
-            } catch {
-              synthesisStatus = 'DEGRADED';
+              synthesisStatus = 'SUCCESS';
+              synthesisDiagnostic = 'NONE';
+              execution.recordSynthesis({ status: 'ACCEPTED', synthesisDiagnostic, durationMs: performance.now() - synthesisStarted });
+            } catch (error) {
+              const reason = error?.code;
+              const validationDiagnostics = { SYNTHESIS_INVALID_OUTPUT: 'INVALID_OUTPUT', SYNTHESIS_INVALID_EVIDENCE_REF: 'INVALID_EVIDENCE_REF',
+                SYNTHESIS_UNGROUNDED_SKU: 'UNGROUNDED_SKU', SYNTHESIS_UNGROUNDED_NUMBER: 'UNGROUNDED_NUMBER' };
+              const parseFailures = ['GEMINI_INVALID_JSON', 'GEMINI_EMPTY_RESPONSE', 'GEMINI_INVALID_RESPONSE', 'GEMINI_SCHEMA_VALIDATION_FAILED'];
+              synthesisStatus = validationDiagnostics[reason] ? 'DEGRADED_VALIDATION' : parseFailures.includes(reason)
+                ? 'DEGRADED_PARSE' : 'DEGRADED_PROVIDER';
+              synthesisDiagnostic = validationDiagnostics[reason] || (parseFailures.includes(reason) ? 'PARSE_OR_SCHEMA_FAILED' : 'PROVIDER_FAILED');
+              execution.recordSynthesis({ status: 'REJECTED', synthesisDiagnostic, durationMs: performance.now() - synthesisStarted });
             }
             sections = [];
           } else if (plan.synthesize && synthesisEligible) {
+            const synthesisStarted = performance.now();
             try {
               const generated = await execution.generateStructured({ agentId: plan.agent,
                 ...buildSynthesisInput(plan.intent, message, results) });
@@ -306,11 +326,21 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
               }
               if (plan.multi && sections.length !== results.length || plan.intent === 'explain_replenishment'
                 && !sections.some(index => results[index].skillId === 'get_demand_forecast')) throw new AgentError('GEMINI_SCHEMA_VALIDATION_FAILED');
-              synthesisStatus = 'SUCCEEDED';
-            } catch {
-              synthesisStatus = 'DEGRADED';
+              synthesisStatus = 'SUCCESS';
+              synthesisDiagnostic = 'NONE';
+              execution.recordSynthesis({ status: 'ACCEPTED', synthesisDiagnostic, durationMs: performance.now() - synthesisStarted });
+            } catch (error) {
+              const parseFailures = ['GEMINI_INVALID_JSON', 'GEMINI_EMPTY_RESPONSE', 'GEMINI_INVALID_RESPONSE', 'GEMINI_SCHEMA_VALIDATION_FAILED'];
+              synthesisStatus = error?.code && parseFailures.includes(error.code) ? 'DEGRADED_PARSE' : 'DEGRADED_PROVIDER';
+              synthesisDiagnostic = error?.code && parseFailures.includes(error.code) ? 'PARSE_OR_SCHEMA_FAILED' : 'PROVIDER_FAILED';
+              execution.recordSynthesis({ status: 'REJECTED', synthesisDiagnostic, durationMs: performance.now() - synthesisStarted });
               sections = results.map((_, index) => index);
             }
+          }
+          if (plan.intent === 'explain_replenishment') {
+            const forecastResult = [...results].reverse().find(({ skillId }) => skillId === 'get_demand_forecast')?.result;
+            answer = forecastResult ? replenishmentExplanation(forecastResult) : sections.map(index => buildSkillAnswer(results[index].skillId, results[index].result)).join('\n\n');
+            sections = [];
           }
           if (sections.length) answer = sections.map(index => buildSkillAnswer(results[index].skillId, results[index].result)).join('\n\n');
           if (plan.supplierSelectedName) answer = `Seleccionaste ${plan.supplierSelectedName}.\n${answer}`;
@@ -326,6 +356,13 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
           const supplierProductsResult = [...results].reverse().find(({ skillId }) => skillId === 'get_supplier_products')?.result;
           const supplierProductsData = supplierProductsResult?.data;
           commit({ lastIntent: plan.intent, lastAgent: plan.agent, recentEntities: entities,
+            ...(['replenishment_commercial', 'replenishment_plan_explanation'].includes(plan.intent) && plan.skillId === 'plan_replenishment_budget'
+              ? (() => {
+                const saved = results.find(({ skillId }) => skillId === 'plan_replenishment_budget')?.result;
+                return saved?.status === 'READY' ? { lastReplenishmentPlan: { semanticReference: 'last_replenishment_budget_plan',
+                  ...saved.data, expiresAt: Date.now() + require('./memory').BUDGET_PLAN_TTL_MS,
+                  evidence: { evidenceId: saved.evidence.evidenceId, label: saved.evidence.label, asOf: saved.evidence.asOf } } } : {};
+              })() : {}),
             ...(supplierProductsData?.supplierId && supplierProductsData?.supplierName
               ? { lastSupplier: { id: supplierProductsData.supplierId, name: supplierProductsData.supplierName } } : {}),
             supplierResolution: null,
@@ -367,6 +404,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
       const supplierResult = results.find(({ result }) => result.status === 'CLARIFICATION' && result.metadata.supplierResolution);
       return deepFreeze({ requestId: context.requestId, conversationId, answer, intent: plan.intent, agent: plan.agent,
         ...(synthesisStatus ? { synthesisStatus } : {}),
+        ...(synthesisDiagnostic ? { synthesisDiagnostic } : {}),
         ...(suggested ? { suggestions: suggested.result.metadata.suggestions } : supplierPageResponse?.suggestions ? { suggestions: supplierPageResponse.suggestions } : {}),
         ...(suggested?.result.metadata.suggestionsPagination ? { suggestionsPagination: suggested.result.metadata.suggestionsPagination }
           : supplierPageResponse?.suggestionsPagination ? { suggestionsPagination: supplierPageResponse.suggestionsPagination } : {}),

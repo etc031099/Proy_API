@@ -55,6 +55,16 @@ test('greedy priority, exact-cent partial quantities, continuation, stable tie a
   assert.equal(full.items.some(row => row.plannedQty < row.recommendedQty), true);
 });
 
+test('budget plan formats coverage as a percentage and deficit to at most two decimals without changing calculations', () => {
+  const row = product(9, { cost: 1, recommendedQty: 2, demand: 8.1, stockAtAnchor: 3 });
+  row.selected = selectOffer(row, vendors).selected;
+  const plan = buildBudgetPlan({ rows: [row], budget: 2, limit: 5, offset: 0 });
+  assert.equal(plan.items[0].shortage, 5.1);
+  assert.match(plan.items[0].reason, /37%/);
+  assert.match(plan.items[0].reason, /5\.1/);
+  assert.doesNotMatch(plan.items[0].reason, /0\.370|5\.099/);
+});
+
 const makeExecution = ({ businessId = 'V2', forecastRows, products, contacts, reads } = {}) => {
   const context = createAgentRequestContext({ businessId, user: { _id: oid(900), businessId, role: 'user', isActive: true } });
   const find = (rows, query) => ({ select() { return this; }, maxTimeMS() { return this; }, limit() { return this; }, lean() { return this; },
