@@ -919,9 +919,43 @@ test('supplier candidates paginate five at a time and selection on the next page
   const next = await f.run('Ver más', conversationId);
   assert.equal(next.suggestions.length, 1); assert.equal(next.suggestionsPagination.offset, 5);
   assert.equal(next.usage.totalSkillCalls, 0); assert.equal(next.usage.totalTokens, 0);
+  const candidateContext = { supplierResolution: { skillId: 'get_replenishment_cost', args: { productRef: productRow.sku },
+    expiresAt: Date.now() + 10000, offset: 5, candidates: contacts.map(row => ({ id: String(row._id), name: row.name })) } };
+  assert.equal(supplierSelection('2', candidateContext, Date.now()), null);
+  assert.equal(supplierSelection(contacts[5].name, candidateContext, Date.now()).plan.args.supplierRef, String(contacts[5]._id));
   const selected = await f.run('1', conversationId);
   assert.equal(selected.requiresClarification, false); assert.equal(selected.actions[0].skillId, 'get_replenishment_cost');
   assert.match(selected.answer, /M5-FOODS_3_511/); assert.match(selected.answer, /Proveedor sintético 055 FOODS F/);
+  assert.equal(selected.usage.totalLlmCalls, 0); assert.equal(selected.usage.totalTokens, 0);
+});
+
+test('supplier product candidates paginate all four pages and select from the visible page deterministically', async () => {
+  const contacts = Array.from({ length: 20 }, (_, index) => ({ _id: id(700 + index), businessId: 'A', type: 'vendor',
+    isActive: true, name: `Proveedor sintético ${String(index + 1).padStart(3, '0')} FOODS` }));
+  const f = fixture({ contacts }); const conversationId = randomUUID();
+  let page = await f.run('proveedor food', conversationId);
+  assert.equal(page.intent, 'supplier_products'); assert.equal(page.suggestionsEntityType, 'supplier');
+  assert.equal(page.suggestionsPagination.totalMatches, 20); assert.equal(page.suggestionsPagination.offset, 0);
+  assert.match(page.answer, /1–5 de 20/); assert.equal(page.suggestions.length, 5);
+  const saved = await f.orchestrator.getContextSnapshot(req(), conversationId);
+  assert.equal(saved.supplierResolution.candidateType, 'supplier'); assert.equal(saved.supplierResolution.pageSize, 5);
+  assert.equal(saved.supplierResolution.query, 'food'); assert.equal(saved.supplierResolution.totalMatches, 20);
+  for (const [offset, range] of [[5, /6–10 de 20/], [10, /11–15 de 20/], [15, /16–20 de 20/]]) {
+    page = await f.run('Ver más', conversationId);
+    assert.equal(page.suggestionsPagination.offset, offset); assert.match(page.answer, range);
+    assert.equal(page.suggestions.length, 5); assert.equal(page.usage.totalLlmCalls, 0); assert.equal(page.usage.totalTokens, 0);
+  }
+  const last = await f.run('Ver más', conversationId);
+  assert.match(last.answer, /última página/i); assert.equal(last.suggestionsPagination.offset, 15);
+  assert.equal(last.usage.totalLlmCalls, 0); assert.equal(last.usage.totalTokens, 0);
+  const previous = await f.run('Anterior', conversationId);
+  assert.equal(previous.suggestionsPagination.offset, 10);
+  const pageTwo = await f.run('Anterior', conversationId);
+  assert.equal(pageTwo.suggestionsPagination.offset, 5);
+  const selectedName = pageTwo.suggestions[0].message;
+  const selected = await f.run('1', conversationId);
+  assert.equal(selected.actions.some(action => action.skillId === 'get_supplier_products'), true);
+  assert.ok(selected.answer.includes(selectedName));
   assert.equal(selected.usage.totalLlmCalls, 0); assert.equal(selected.usage.totalTokens, 0);
 });
 

@@ -9,6 +9,7 @@ const period = { startDate: true, endDate: true };
 const actionItem = { sku: true, name: true, quantity: true, stock: true, resultingStock: true, price: true, total: true };
 const shape = {
   suggestions: [{ label: true, message: true, detail: true }],
+  suggestionsEntityType: true,
   suggestionsExpiresAt: true,
   suggestionsPagination: { query: true, offset: true, limit: true, totalMatches: true, hasMore: true, hasPrevious: true },
   pendingAction: { pendingActionId: true, action: true, summary: true, status: true, expiresAt: true,

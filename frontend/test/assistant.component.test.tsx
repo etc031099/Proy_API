@@ -78,6 +78,17 @@ it('guided candidates show real costs and send only the selection in the same co
   expect(send).toHaveBeenCalledTimes(2); expect(send.mock.calls[1][0]).toEqual({ message: 'Opción 1', conversationId: response.conversationId });
   expect(first.hasAttribute('disabled')).toBe(true);
 });
+it('supplier candidate pagination labels ordinal selection as supplier and renders choices as separate rows', async () => {
+  send.mockResolvedValueOnce({ success: true, data: { ...response, intent: 'supplier_products', suggestionsEntityType: 'supplier',
+    suggestionsPagination: { query: 'food', offset: 0, limit: 5, totalMatches: 20, hasMore: true, hasPrevious: false },
+    suggestionsExpiresAt: Date.now() + 120000, suggestions: [
+      { label: '1. Proveedor sintético 001 FOODS', message: 'Proveedor sintético 001 FOODS' },
+      { label: '2. Proveedor sintético 010 FOODS', message: 'Proveedor sintético 010 FOODS' }] } });
+  render(<AssistantPage />); submit('proveedor food');
+  const first = await screen.findByRole('button', { name: '1. Proveedor sintético 001 FOODS' });
+  expect(screen.getByText('“1” o “el primero” seleccionan el primer proveedor de esta página.')).toBeTruthy();
+  expect(first.parentElement?.className).toContain('flex-col');
+});
 it('single digit candidate choices can be typed and do not confirm actions', async () => {
   send.mockResolvedValue({ success: true, data: response }); render(<AssistantPage />); submit('1');
   await screen.findByText(response.answer); expect(send.mock.calls[0][0].message).toBe('1');

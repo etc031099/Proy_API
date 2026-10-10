@@ -30,13 +30,13 @@ const withActionAssistant = (runtime, service, options = {}) => {
     // their existing selection flow; do not prepare/cancel a write for analytics.
     if (!previous && candidateCommand && input.conversationId) {
       const state = await runtime.getContextSnapshot?.(req, input.conversationId);
-      if (state?.lastForecastAnalytics) return runtime.handle(req, input);
+      if (state?.lastForecastAnalytics || state?.supplierResolution || state?.supplierProductListing) return runtime.handle(req, input);
     }
     if (!skillId && !decision && !candidateCommand) return runtime.handle(req, input);
     const started = performance.now(), conversationId = input.conversationId || randomUUID();
     const context = createActionContext(req, { conversationId }), key = keyFor(req, conversationId);
-    let pendingAction, answer, clarification = false, execution, suggestions = [], suggestionsExpiresAt, suggestionsPagination;
-    if (!previous && candidateCommand) return response('No hay una búsqueda de productos vigente. Inicia nuevamente la operación.', undefined, true);
+    let pendingAction, answer, clarification = false, execution, suggestions = [], suggestionsExpiresAt, suggestionsPagination, suggestionsEntityType;
+    if (!previous && candidateCommand) return response('No hay una lista de opciones vigente. Inicia nuevamente la búsqueda.', undefined, true);
     if (previous?.items && /que proveedores/.test(normalized)) {
       const products = [];
       for (const item of previous.items) {
@@ -90,6 +90,9 @@ const withActionAssistant = (runtime, service, options = {}) => {
       const resolved = applyResolution(draft, await resolveDraft(draft, context, options), now());
       suggestions = resolved.suggestions || [];
       suggestionsPagination = resolved.suggestionsPagination;
+      const candidateSlot = draft.selection?.slot;
+      suggestionsEntityType = ['supplier', 'productSupplier'].includes(candidateSlot) ? 'supplier'
+        : candidateSlot === 'customer' ? 'customer' : 'product';
       if (resolved.clarification) { answer = resolved.clarification; clarification = true; }
       else {
         pendingAction = await service.prepare({ agentId: 'operations', skillId, args: resolved.args, context, externalRequestId: req.agentActionRequestId || randomUUID() });
@@ -112,6 +115,7 @@ const withActionAssistant = (runtime, service, options = {}) => {
           totalLatencyMs: latencyMs, toolSelectionCycles: 0, agents: [participant], ...(realUsage || {}) },
         requiresClarification: needsClarification, clarificationQuestion: needsClarification ? text : null, latencyMs,
         ...(pending ? { pendingAction: pending } : {}), ...(suggestions.length ? { suggestions, suggestionsExpiresAt } : {}),
+        ...(suggestions.length ? { suggestionsEntityType } : {}),
         ...(suggestionsPagination ? { suggestionsPagination } : {}) };
     }
   }

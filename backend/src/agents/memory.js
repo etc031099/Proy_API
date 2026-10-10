@@ -80,6 +80,7 @@ const compactBudgetPlan = (value, now = Date.now()) => {
 const SUPPLIER_SELECTION_TTL_MS = 20 * 60 * 1000;
 const compactSupplierResolution = (value, now = Date.now()) => {
   if (!value || !['get_replenishment_cost', 'compare_supplier_costs', 'get_supplier_products'].includes(value.skillId)
+    || (value.candidateType !== undefined && value.candidateType !== 'supplier')
     || !value.args || (value.skillId !== 'get_supplier_products' && (typeof value.args.productRef !== 'string' || value.args.productRef.length > 100))
     || !Number.isSafeInteger(value.expiresAt) || value.expiresAt <= now || value.expiresAt > now + SUPPLIER_SELECTION_TTL_MS
     || !Array.isArray(value.candidates) || value.candidates.length < 1 || value.candidates.length > 20
@@ -87,7 +88,8 @@ const compactSupplierResolution = (value, now = Date.now()) => {
   const candidates = value.candidates.filter(row => /^[a-f\d]{24}$/i.test(row?.id || '') && typeof row.name === 'string' && row.name.trim())
     .map(row => ({ id: row.id, name: label(row.name, 100), ...(typeof row.detail === 'string' ? { detail: label(row.detail, 80) } : {}) }));
   if (!candidates.length) return null;
-  return deepFreeze({ skillId: value.skillId, args: { ...(value.skillId === 'get_replenishment_cost' && value.args.mode === 'single' ? { mode: 'single' } : {}),
+  return deepFreeze({ candidateType: 'supplier', pageSize: 5, totalMatches: Number.isSafeInteger(value.totalMatches) ? value.totalMatches : candidates.length,
+    originalIntent: value.originalIntent || value.skillId, skillId: value.skillId, args: { ...(value.skillId === 'get_replenishment_cost' && value.args.mode === 'single' ? { mode: 'single' } : {}),
     ...(typeof value.args.productRef === 'string' ? { productRef: value.args.productRef } : {}),
     ...(Number.isSafeInteger(value.args.limit) ? { limit: Math.max(1, Math.min(5, value.args.limit)) } : {}),
     ...(Number.isSafeInteger(value.args.offset) ? { offset: Math.max(0, Math.min(10000, value.args.offset)) } : {}) }, candidates, offset: value.offset || 0,

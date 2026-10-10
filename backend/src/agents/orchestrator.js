@@ -19,10 +19,13 @@ const supplierSelection = (message, state, now) => {
   const text = message.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim().replace(/[?.!¿¡]/g, '');
   const command = text.replace(/\s+/g, ' ');
   if (pending.expiresAt <= now && (/^(?:ver mas|siguiente|anterior|refinar busqueda)$/.test(command) || pending.refining)) return { expired: true };
-  if (/^(?:ver mas|siguiente)$/.test(command) && (pending.offset || 0) + 5 < pending.candidates.length) {
-    return { pageOffset: (pending.offset || 0) + 5 };
+  if (/^(?:ver mas|siguiente)$/.test(command)) {
+    return (pending.offset || 0) + 5 < pending.candidates.length
+      ? { pageOffset: (pending.offset || 0) + 5 }
+      : { noMore: true };
   }
-  if (/^anterior$/.test(command) && (pending.offset || 0) >= 5) return { pageOffset: pending.offset - 5 };
+  if (/^anterior$/.test(command)) return (pending.offset || 0) >= 5
+    ? { pageOffset: pending.offset - 5 } : { noPrevious: true };
   if (/^refinar busqueda$/.test(command)) return { refine: true };
   if (pending.refining) {
     const refinedQuery = normalizeSupplier(message);
@@ -33,22 +36,29 @@ const supplierSelection = (message, state, now) => {
       return { plan: { intent: supplierProducts ? 'supplier_products' : 'replenishment_commercial', agent: supplierProducts ? 'operations' : 'analyst', skillId: pending.skillId,
         args: { ...pending.args, supplierRef: candidate.id }, supplierSelectedName: candidate.name } };
     }
-    if (candidates.length > 1) return { filteredCandidates: candidates, query: message.trim() };
+    if (candidates.length > 1) return { filteredCandidates: candidates, query: message.trim(), totalMatches: candidates.length };
     return { noRefinementMatch: true };
   }
   const number = /^(?:opcion\s+)?([1-5])$/.exec(text);
   const ordinal = /^(?:(?:el|la)\s+)?(primer[oa]?|segund[oa]|tercer[oa]?|cuart[oa]|quint[oa])$/.exec(text);
   const ordinals = { primero: 0, primera: 0, primer: 0, segundo: 1, segunda: 1, tercero: 2, tercera: 2,
     tercer: 2, cuarto: 3, cuarta: 3, quinto: 4, quinta: 4 };
-  let index = number ? (pending.offset || 0) + Number(number[1]) - 1
-    : ordinal ? (pending.offset || 0) + ordinals[ordinal[1]] : -1;
+  const pageOffset = pending.offset || 0;
+  const visibleCandidates = pending.candidates.slice(pageOffset, pageOffset + 5);
+  let index = number ? pageOffset + Number(number[1]) - 1
+    : ordinal ? pageOffset + ordinals[ordinal[1]] : -1;
+  if (index >= pageOffset + visibleCandidates.length) index = -1;
   if (index < 0) {
     const key = normalizeSupplier(message);
-    index = pending.candidates.findIndex(candidate => normalizeSupplier(candidate.name) === key);
+    index = visibleCandidates.findIndex(candidate => normalizeSupplier(candidate.name) === key);
+    if (index >= 0) index += pageOffset;
     if (index < 0) {
-      const match = resolveSupplier(message, pending.candidates.map(candidate => ({ supplierId: candidate.id,
+      const match = resolveSupplier(message, visibleCandidates.map(candidate => ({ supplierId: candidate.id,
         supplierName: candidate.name })), []);
-      if (match.status === 'MATCH') index = pending.candidates.findIndex(candidate => candidate.id === match.offer.supplierId);
+      if (match.status === 'MATCH') {
+        const visibleIndex = visibleCandidates.findIndex(candidate => candidate.id === match.offer.supplierId);
+        if (visibleIndex >= 0) index = visibleIndex + pageOffset;
+      }
     }
   }
   if (index < 0 || !pending.candidates[index]) return null;
@@ -69,12 +79,13 @@ const supplierProductPage = (message, state, now) => {
   return null;
 };
 const supplierPageView = (resolution, offset) => ({
-  answer: `Opciones de proveedor ${offset + 1}–${Math.min(offset + 5, resolution.candidates.length)} de ${resolution.candidates.length}: elige una opción o refina la búsqueda.`,
+  suggestionsEntityType: resolution.candidateType || 'supplier',
+  answer: `Opciones de proveedor ${offset + 1}–${Math.min(offset + 5, resolution.totalMatches ?? resolution.candidates.length)} de ${resolution.totalMatches ?? resolution.candidates.length}: elige una opción o refina la búsqueda.`,
   suggestions: resolution.candidates.slice(offset, offset + 5).map((candidate, index) => ({
     label: `${index + 1}. ${candidate.name}`, message: candidate.name, ...(candidate.detail ? { detail: candidate.detail } : {})
   })),
-  ...(resolution.candidates.length > 5 ? { suggestionsPagination: { query: resolution.query || 'proveedores', offset,
-    limit: 5, totalMatches: resolution.candidates.length, hasMore: offset + 5 < resolution.candidates.length, hasPrevious: offset > 0 } } : {})
+  ...((resolution.totalMatches ?? resolution.candidates.length) > 5 ? { suggestionsPagination: { query: resolution.query || 'proveedores', offset,
+    limit: 5, totalMatches: resolution.totalMatches ?? resolution.candidates.length, hasMore: offset + 5 < resolution.candidates.length, hasPrevious: offset > 0 } } : {})
 });
 
 const defaultMemory = createConversationMemory();
@@ -128,6 +139,8 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
         const productPage = supplierProductPage(message, state, Date.now());
         const deterministicPlan = await execution.runAgent('coordinator', () => selectedSupplier?.expired
           ? clarify('Estas opciones de proveedor ya expiraron. Repite la consulta indicando el producto y el proveedor.')
+          : selectedSupplier?.noMore ? clarify('Ya estás en la última página de proveedores.')
+          : selectedSupplier?.noPrevious ? clarify('Ya estás en la primera página de proveedores.')
           : productPage?.expired ? clarify('Esta lista de productos ya expiró. Vuelve a consultar los productos del proveedor.')
           : selectedSupplier?.pageOffset !== undefined ? clarify('Elige un proveedor de la página mostrada.')
             : selectedSupplier?.refine ? clarify('Escribe una parte más específica del nombre del proveedor.')
@@ -328,8 +341,16 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
           const supplierResult = results.find(({ result }) => result.status === 'CLARIFICATION' && result.metadata.supplierResolution);
           if (supplierResult) {
             supplierResolutionExpiry = Date.now() + SUPPLIER_SELECTION_TTL_MS;
-            commit({ supplierResolution: { ...supplierResult.result.metadata.supplierResolution, expiresAt: supplierResolutionExpiry } });
+            const resolution = { ...supplierResult.result.metadata.supplierResolution, expiresAt: supplierResolutionExpiry };
+            commit({ supplierResolution: resolution });
+            supplierPageResponse = supplierPageView(resolution, 0);
+            answer = `${supplierResult.result.metadata.clarificationQuestion}\n${supplierPageResponse.answer}`;
           } else if (selectedSupplier?.expired) commit({ supplierResolution: null });
+          else if (selectedSupplier?.noMore || selectedSupplier?.noPrevious) {
+            const resolution = state.supplierResolution;
+            supplierResolutionExpiry = resolution.expiresAt;
+            supplierPageResponse = supplierPageView(resolution, resolution.offset);
+          }
           else if (productPage?.expired) commit({ supplierProductListing: null });
           else if (selectedSupplier?.pageOffset !== undefined) {
             const resolution = { ...state.supplierResolution, offset: selectedSupplier.pageOffset };
@@ -340,7 +361,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             commit({ supplierResolution: { ...state.supplierResolution, refining: true } });
           } else if (selectedSupplier?.filteredCandidates) {
             const resolution = { ...state.supplierResolution, candidates: selectedSupplier.filteredCandidates,
-              query: selectedSupplier.query, offset: 0, refining: false };
+              query: selectedSupplier.query, totalMatches: selectedSupplier.totalMatches, offset: 0, refining: false };
             supplierResolutionExpiry = resolution.expiresAt;
             commit({ supplierResolution: resolution }); supplierPageResponse = supplierPageView(resolution, 0); answer = supplierPageResponse.answer;
           } else if (selectedSupplier?.noRefinementMatch) {
@@ -507,7 +528,9 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
       return deepFreeze({ requestId: context.requestId, conversationId, answer, intent: plan.intent, agent: plan.agent,
         ...(synthesisStatus ? { synthesisStatus } : {}),
         ...(synthesisDiagnostic ? { synthesisDiagnostic } : {}),
-        ...(suggested ? { suggestions: suggested.result.metadata.suggestions } : supplierPageResponse?.suggestions ? { suggestions: supplierPageResponse.suggestions } : {}),
+        ...(suggested ? { suggestions: suggested.result.metadata.suggestions,
+          ...(supplierResult ? { suggestionsEntityType: supplierResult.result.metadata.supplierResolution?.candidateType || 'supplier' } : {}) }
+          : supplierPageResponse?.suggestions ? { suggestions: supplierPageResponse.suggestions, suggestionsEntityType: 'supplier' } : {}),
         ...(suggested?.result.metadata.suggestionsPagination ? { suggestionsPagination: suggested.result.metadata.suggestionsPagination }
           : supplierPageResponse?.suggestionsPagination ? { suggestionsPagination: supplierPageResponse.suggestionsPagination } : {}),
         ...(supplierResolutionExpiry && (suggested || supplierPageResponse) ? { suggestionsExpiresAt: supplierResolutionExpiry } : {}),

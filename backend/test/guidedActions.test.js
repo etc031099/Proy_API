@@ -50,6 +50,22 @@ test('28 matches are counted exactly with stable five-item pages, no duplicates 
   assert.equal(new Set(seen).size, 28);
   assert.throws(() => rankEntities(rows, 'food', -5)); assert.throws(() => rankEntities(rows, 'food', 3));
 });
+test('supplier candidate commands are delegated to the supplier context, never the product-draft fallback', async () => {
+  const conversationId = randomUUID(), otherConversation = randomUUID(); let delegated = 0;
+  const runtime = { handle: async (_req, input) => { delegated++; return { answer: input.message, intent: 'supplier_products' }; },
+    getContextSnapshot: async (_req, id) => id === conversationId ? { supplierResolution: { candidateType: 'supplier', offset: 0 } } : {} };
+  const adapter = withActionAssistant(runtime, {}, {});
+  const result = await adapter.handle(request(), { message: 'Ver más', conversationId });
+  assert.equal(delegated, 1); assert.equal(result.intent, 'supplier_products'); assert.equal(result.answer, 'Ver más');
+  const isolated = await adapter.handle(request(), { message: 'Ver más', conversationId: otherConversation });
+  assert.equal(delegated, 1); assert.match(isolated.answer, /lista de opciones vigente/i); assert.equal(isolated.usage.totalTokens, 0);
+});
+test('candidate navigation without a conversation-local list asks a neutral zero-cost clarification', async () => {
+  const f = fixture(); const result = await f.send('Ver más');
+  assert.match(result.answer, /lista de opciones vigente/i);
+  assert.doesNotMatch(result.answer, /búsqueda de productos/i);
+  assert.equal(result.usage.totalTokens, 0);
+});
 for (const choice of ['1', 'el primero', 'el segundo', 'PAGE-5']) test(`page 2 selection ${choice} retains two units and consumes zero tokens`, async () => {
   const f = fixture({ products: pagedProducts() });
   const first = publicResponse(await f.send('vende 2 food'));
@@ -88,12 +104,12 @@ test('page metadata restores on restart, stays tenant/user scoped and expires wi
   const next = await restart.handle(request(), { message: 'Anterior', conversationId: f.conversationId });
   assert.equal(next.suggestionsPagination.offset, 0);
   const foreign = await restart.handle(request('OTHER'), { message: 'Ver más', conversationId: f.conversationId });
-  assert.match(foreign.answer, /No hay una búsqueda/); assert.equal(foreign.usage.totalLlmCalls, 0);
+  assert.match(foreign.answer, /No hay una lista de opciones/); assert.equal(foreign.usage.totalLlmCalls, 0);
   const otherUser = await restart.handle(request('SYNTHETIC', 'eeeeeeeeeeeeeeeeeeeeeeee'), { message: '1', conversationId: f.conversationId });
   assert.equal(otherUser.answer, 'Lectura');
   now += TTL_MS + 1;
   const expired = await restart.handle(request(), { message: 'Ver más', conversationId: f.conversationId });
-  assert.match(expired.answer, /No hay una búsqueda/); assert.equal(expired.usage.totalLlmCalls, 0);
+  assert.match(expired.answer, /No hay una lista de opciones/); assert.equal(expired.usage.totalLlmCalls, 0);
   assert.equal(f.prepared.length, 0);
 });
 
@@ -183,7 +199,8 @@ test('resolved multi-item slots survive an ambiguous later product', async () =>
 });
 test('purchase omitted supplier prompts with actual costs then requires selection', async () => {
   const f = fixture({ configured: [{ ...vendor, costs: [{ sku: p1.sku, currency: 'PEN', purchasePrice: 2.8 }] }] });
-  const result = await f.send('Compré 2 COC500'); assert.match(result.suggestions[0].detail, /2.8 PEN/); assert.equal(f.prepared.length, 0);
+  const result = await f.send('Compré 2 COC500'); assert.match(result.suggestions[0].detail, /2.8 PEN/);
+  assert.equal(result.suggestionsEntityType, 'supplier'); assert.equal(f.prepared.length, 0);
   await f.send('sí'); assert.equal(f.prepared[0].vendorId, vendor._id);
 });
 test('multiple configured suppliers require a choice', async () => {
@@ -255,7 +272,8 @@ test('currency omitted remains required for new products, S/ is explicitly PEN',
 });
 test('customer ambiguity requires selection and credit omission requires a real customer', async () => {
   const f = fixture({ suppliers: [{ ...vendor, name: 'Juan Pérez' }, { ...vendor, _id: 'eeeeeeeeeeeeeeeeeeeeeeee', name: 'Juan Martínez' }] });
-  const first = await f.send('Vende 2 COC500 a Juan'); assert.equal(first.suggestions.length, 2); assert.equal(f.prepared.length, 0);
+  const first = await f.send('Vende 2 COC500 a Juan'); assert.equal(first.suggestions.length, 2);
+  assert.equal(first.suggestionsEntityType, 'customer'); assert.equal(f.prepared.length, 0);
   await f.send('1'); assert.equal(f.prepared[0].customerId, vendor._id);
 });
 test('credit accepts a registered customer supplied in the next turn', async () => {

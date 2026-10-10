@@ -239,7 +239,8 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
           totalMatches: candidates.length, suggestions, clarificationQuestion,
           ...(candidates.length > 5 ? { suggestionsPagination: { query: invocation.args.supplierRef, offset: 0, limit: 5,
             totalMatches: candidates.length, hasMore: true, hasPrevious: false } } : {}),
-          ...(candidates.length ? { supplierResolution: { skillId: invocation.skill.id,
+          ...(candidates.length ? { supplierResolution: { candidateType: 'supplier', pageSize: 5, totalMatches: resolved.totalMatches || candidates.length,
+            originalIntent: invocation.skill.id, skillId: invocation.skill.id,
             args: Object.fromEntries(Object.entries(invocation.args).filter(([key]) => key !== 'supplierRef')),
             query: invocation.args.supplierRef, offset: 0, candidates } } : {}) } };
       }
