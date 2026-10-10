@@ -110,14 +110,21 @@ como máximo. Auth/payload rechazado queda FAILED sin reintento automático.
 Recuperación: invocar `POST /api/internal/inventory-alert-dispatch/run` con `{}` y
 `X-Internal-Secret` configurado como `INVENTORY_ALERT_DISPATCH_SECRET` del backend
 (32+ caracteres, distinto del secreto del webhook). Procesa hasta 10 eventos.
-No hay scheduler configurado ni garantía de entrega mientras nadie lo invoque.
-Un workflow programado de GitHub Actions puede llamar este endpoint usando un
-repository secret; su frecuencia/horarios están sujetos a disponibilidad del
-scheduler. No se configuró ningún servicio externo en esta fase. Los registros
-pendientes sobreviven reinicios y pueden despacharse después. No usar context ni
-filesystem Node-RED para dedupe durable. ACT-04B persiste por separado la
-entrega por canal: el callback reserva PENDING, pero no envía antes del ACK y del
-estado DELIVERED de ACT-04A.
+GitHub Actions invoca el endpoint cada cinco minutos y permite una ejecución
+manual mediante `workflow_dispatch`. Las ejecuciones se serializan. GitHub puede
+retrasar o perder eventos programados durante picos de carga; la outbox durable
+conserva los pendientes para una ejecución posterior. No se garantiza precisión
+exacta al minuto. Para la operación normal ya no se necesita PowerShell; puede
+usarse solo para diagnóstico o emergencia.
+
+Configura manualmente en GitHub, en Settings → Secrets and variables → Actions →
+New repository secret, el nombre `INVENTORY_ALERT_DISPATCH_SECRET` con el mismo
+valor configurado en Render `Proy_API`. No guardes ni imprimas ese valor en el
+repositorio o en logs. El workflow solo informa el código HTTP y descarta el body.
+Los registros pendientes sobreviven reinicios y pueden despacharse después. No
+usar context ni filesystem Node-RED para dedupe durable. ACT-04B persiste por
+separado la entrega por canal: el callback reserva PENDING, pero no envía antes
+del ACK y del estado DELIVERED de ACT-04A.
 
 Tras finalizar la respuesta HTTP, el nodo de autenticación llama al procesamiento
 backend `/internal/inventory-alert-dispatch/channels/process` con solo `eventId`
