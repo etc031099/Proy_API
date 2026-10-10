@@ -245,14 +245,57 @@ const buildSkillAnswer = (skillId, result) => {
   return [header, ...lines, forecastSkill ? historicalNote(displayed, metadata) : '', listFooter(metadata, displayed.length)].filter(Boolean).join('\n');
 };
 
+const lowestUnitOffer = offers => [...offers].sort((a, b) => a.unitCost - b.unitCost
+  || Number(b.preferred === true) - Number(a.preferred === true)
+  || String(a.supplier).localeCompare(String(b.supplier)))[0];
+
 const buildCheapestSupplierAnswer = result => {
   const offers = Array.isArray(result?.data) ? result.data.filter(row => Number.isFinite(row.unitCost) && row.unitCost >= 0) : [];
   if (!offers.length) return 'No encontré ofertas activas y válidas en PEN para ese producto.';
-  const cheapest = [...offers].sort((a, b) => a.unitCost - b.unitCost
-    || Number(b.preferred === true) - Number(a.preferred === true)
-    || String(a.supplier).localeCompare(String(b.supplier)))[0];
+  const cheapest = lowestUnitOffer(offers);
   const row = offers[0];
   return `La oferta válida de menor costo para ${row.sku} (${row.productName}) es ${cheapest.supplier}: ${money(cheapest.unitCost)} ${cheapest.currency} por unidad.${cheapest.preferred ? ' También es el proveedor preferido configurado.' : ''} Precio configurado consultado: ${result.metadata.pricingAsOf ? dateTimeLabel(result.metadata.pricingAsOf) : 'fecha no disponible'}; no es una cotización confirmada.`;
+};
+
+const buildProductListSupplierComparisonAnswer = (result, comparisonType) => {
+  if (result?.status === 'ML_NOT_READY') return 'No pude completar la comparación porque el forecast histórico del escenario no está listo. No inferí precios ni cantidades de reposición.';
+  const rows = Array.isArray(result?.data) ? result.data : [];
+  const canCompareTotal = comparisonType === 'replenishment_total_cost';
+  const candidates = rows.flatMap(row => {
+    const offers = Array.isArray(row.offers) ? row.offers.filter(offer => Number.isFinite(offer.unitCost)
+      && offer.unitCost >= 0 && typeof offer.currency === 'string' && offer.currency) : [];
+    if (canCompareTotal && (!Number.isSafeInteger(row.recommendedQty) || row.recommendedQty < 1)) return [];
+    if (!offers.length) return [];
+    const cheapest = lowestUnitOffer(offers);
+    return [{ ...row, cheapest, comparisonCents: canCompareTotal
+      ? Math.round(cheapest.unitCost * 100) * row.recommendedQty : Math.round(cheapest.unitCost * 100) }];
+  });
+  const noOffer = rows.filter(row => !Array.isArray(row.offers) || !row.offers.some(offer => Number.isFinite(offer.unitCost) && offer.unitCost >= 0));
+  const lead = canCompareTotal ? 'costo total de reposición sugerida' : 'precio unitario de compra';
+  if (!candidates.length) return canCompareTotal
+    ? `No encontré productos de esa lista con una reposición sugerida y una oferta válida para comparar.`
+    : `Ningún producto de esa lista tiene una oferta válida para comparar.`;
+  const currencyGroups = new Map();
+  for (const row of candidates) {
+    if (!currencyGroups.has(row.cheapest.currency)) currencyGroups.set(row.cheapest.currency, []);
+    currencyGroups.get(row.cheapest.currency).push(row);
+  }
+  const formatMoney = (cents, currency) => `${currency === 'PEN' ? 'S/ ' : ''}${money(cents / 100)} ${currency}`;
+  const winnerText = (currency, group) => {
+    const minimum = Math.min(...group.map(row => row.comparisonCents));
+    const winners = group.filter(row => row.comparisonCents === minimum);
+    return winners.map(row => canCompareTotal
+      ? `• ${row.sku} (${row.productName}): ${formatMoney(row.comparisonCents, currency)} por ${row.recommendedQty} unidades con ${row.cheapest.supplier} (${formatMoney(Math.round(row.cheapest.unitCost * 100), currency)} por unidad).`
+      : `• ${row.sku} (${row.productName}): ${row.cheapest.supplier}, ${formatMoney(row.comparisonCents, currency)} por unidad${row.cheapest.preferred ? ' (también es el proveedor preferido configurado)' : ''}.`);
+  };
+  const lines = [...currencyGroups].sort(([a], [b]) => a.localeCompare(b)).flatMap(([currency, group]) => winnerText(currency, group));
+  const currencyNote = currencyGroups.size > 1
+    ? 'Las monedas son distintas; no establezco un único ganador ni convierto importes entre ellas.' : '';
+  const noOfferNote = noOffer.length
+    ? `Sin oferta válida: ${noOffer.map(row => row.sku).join(', ')}.` : '';
+  return [`De los productos de la lista, comparé el ${lead}:`, ...lines, currencyNote, noOfferNote,
+    `Precios configurados consultados: ${result?.metadata?.pricingAsOf ? dateTimeLabel(result.metadata.pricingAsOf) : 'fecha no disponible'}; no son cotizaciones confirmadas.`]
+    .filter(Boolean).join('\n');
 };
 
 // Bound and redact the facts sent for LLM selection. IDs and raw documents are omitted.
@@ -275,5 +318,5 @@ const llmObservation = (skillId, result) => {
       inventoryBasis: result.metadata.inventoryBasis, asOf: result.metadata.asOf } : {}) };
 };
 
-module.exports = { buildSkillAnswer, buildCheapestSupplierAnswer, llmObservation, safeText, replenishmentExplanation,
+module.exports = { buildSkillAnswer, buildCheapestSupplierAnswer, buildProductListSupplierComparisonAnswer, llmObservation, safeText, replenishmentExplanation,
   budgetPlanExplanation, budgetPlanFollowupAnswer, productCountAnswer, unsupportedClaimAnswer, salesCausalityAnswer };

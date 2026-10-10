@@ -455,6 +455,109 @@ test('product-to-supplier routes use offers for the SKU and explicitly cheapest 
   assert.doesNotMatch(cheapest.answer, /Proveedor Preferido es el proveedor más barato/);
 });
 
+test('product-list cheapest supplier follow-up compares valid unit offers across the saved list in one deterministic skill', async () => {
+  const skuRows = ['M5-FOODS_3_511', 'M5-FOODS_3_491', 'M5-HOUSEHOLD_1_004', 'M5-FOODS_3_661', 'M5-HOUSEHOLD_1_389'];
+  const firstPreferred = id(80), firstCheapest = id(81), otherSupplier = id(82);
+  const products = skuRows.map((sku, index) => ({ ...product(index + 1), sku, name: `Producto ${index + 1}`,
+    currency: 'PEN', supplierPrices: index === 0
+      ? [{ supplierId: firstPreferred, purchasePrice: 9 }, { supplierId: firstCheapest, purchasePrice: 2 }]
+      : [{ supplierId: otherSupplier, purchasePrice: index + 3 }],
+    ...(index === 0 ? { preferredSupplierId: firstPreferred } : {}) }));
+  const contacts = [
+    { _id: firstPreferred, businessId: 'A', name: 'Proveedor Preferido', type: 'vendor', isActive: true },
+    { _id: firstCheapest, businessId: 'A', name: 'Proveedor Más Económico', type: 'vendor', isActive: true },
+    { _id: otherSupplier, businessId: 'A', name: 'Proveedor Regular', type: 'vendor', isActive: true }
+  ];
+  const forecastService = { getDemandForecast: async () => ({ status: 'READY', anchorOperationalDate: '2026-05-17', products: skuRows.map((sku, index) => ({
+    productId: id(index + 1), sku, name: `Producto ${index + 1}`, mlStatus: 'READY', predictedDemand7d: 70 - index,
+    stockAtAnchor: 4 + index, salesLast7Days: 1, safetyStock: 1, recommendedQty: index === 2 ? 0 : 20 + index,
+    inventoryStatus: index === 2 ? 'OK' : 'REPONER'
+  })) }) };
+  const f = fixture({ products, contacts, forecastService });
+  const conversationId = randomUUID();
+  const initial = await f.run('Muéstrame los 5 productos con mayor demanda.', conversationId);
+  assert.equal(initial.code, null); assert.equal(initial.usage.totalLlmCalls, 0);
+  assert.equal(initial.usage.totalSkillCalls, 1);
+  const compared = await f.run('¿Cuál de esos tiene el proveedor más barato?', conversationId);
+  assert.equal(compared.code, null); assert.equal(compared.intent, 'product_list_followup');
+  assert.equal(compared.usage.totalLlmCalls, 0); assert.equal(compared.usage.totalTokens, 0);
+  assert.equal(compared.usage.totalSkillCalls, 1);
+  assert.deepEqual(compared.actions.map(action => action.skillId), ['compare_supplier_costs']);
+  assert.match(compared.answer, /precio unitario de compra/i);
+  assert.match(compared.answer, /M5-FOODS_3_511.*Proveedor Más Económico.*S\/\s*2[.,]00 PEN por unidad/);
+  assert.doesNotMatch(compared.answer, /Proveedor Preferido.*S\/\s*2,00/);
+  assert.ok(compared.evidence.some(row => /Ofertas configuradas para 5 productos/.test(row.label)));
+  assert.equal(compared.participants.find(row => row.agentId === 'analyst')?.skillCalls, 1);
+  const query = f.reads.find(row => row.model === 'Product' && row.match?.sku?.$in);
+  assert.ok(query); assert.deepEqual(query.match.sku.$in, skuRows); assert.equal(query.match.businessId, 'A');
+  assert.equal(f.calls.length, 0);
+});
+
+test('product-list follow-up distinguishes unit-price comparison from total replenishment cost', async () => {
+  const skus = ['M5-FOODS_3_511', 'M5-FOODS_3_491'];
+  const supplier = id(83);
+  const products = skus.map((sku, index) => ({ ...product(index + 1), sku, currency: 'PEN',
+    supplierPrices: [{ supplierId: supplier, purchasePrice: index ? 4 : 3 }] }));
+  const contacts = [{ _id: supplier, businessId: 'A', name: 'Proveedor Base', type: 'vendor', isActive: true }];
+  const forecastService = { getDemandForecast: async () => ({ status: 'READY', anchorOperationalDate: '2026-05-17', products: skus.map((sku, index) => ({
+    productId: id(index + 1), sku, name: `Producto ${index + 1}`, mlStatus: 'READY', predictedDemand7d: 20,
+    stockAtAnchor: 1, salesLast7Days: 1, safetyStock: 2, recommendedQty: index ? 2 : 20, inventoryStatus: 'REPONER'
+  })) }) };
+  const f = fixture({ products, contacts, forecastService }); const conversationId = randomUUID();
+  await f.run('Muéstrame los productos con mayor demanda.', conversationId);
+  const result = await f.run('¿Cuál de esos es más barato de reponer?', conversationId);
+  assert.equal(result.code, null); assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
+  assert.equal(result.usage.totalSkillCalls, 1); assert.deepEqual(result.actions.map(action => action.skillId), ['compare_supplier_costs']);
+  assert.match(result.answer, /costo total de reposición sugerida/i);
+  assert.match(result.answer, /M5-FOODS_3_491.*S\/\s*8[.,]00 PEN por 2 unidades.*Proveedor Base/);
+  assert.doesNotMatch(result.answer, /M5-FOODS_3_511.*ganador/i);
+});
+
+test('list supplier comparison clarifies without context, stays conversation scoped, and explicit SKU wins', async () => {
+  const skuRows = ['M5-FOODS_3_511', 'M5-FOODS_3_491'];
+  const supplier = id(84);
+  const products = skuRows.map((sku, index) => ({ ...product(index + 1), sku, currency: 'PEN',
+    supplierPrices: [{ supplierId: supplier, purchasePrice: 2 + index }] }));
+  const contacts = [{ _id: supplier, businessId: 'A', name: 'Proveedor Lista', type: 'vendor', isActive: true }];
+  const forecastService = { getDemandForecast: async () => ({ status: 'READY', anchorOperationalDate: '2026-05-17', products: skuRows.map((sku, index) => ({
+    productId: id(index + 1), sku, name: `Producto ${index + 1}`, mlStatus: 'READY', predictedDemand7d: 20 - index,
+    stockAtAnchor: 1, salesLast7Days: 1, safetyStock: 2, recommendedQty: 3, inventoryStatus: 'REPONER'
+  })) }) };
+  const f = fixture({ products, contacts, forecastService }); const conversationA = randomUUID();
+  const noContext = await f.run('¿Cuál de esos tiene el proveedor más barato?', randomUUID());
+  assert.equal(noContext.requiresClarification, true); assert.equal(noContext.usage.totalSkillCalls, 0);
+  assert.equal(noContext.usage.totalLlmCalls, 0); assert.equal(noContext.usage.totalTokens, 0);
+  await f.run('Muéstrame los productos con mayor demanda.', conversationA);
+  const conversationB = await f.run('¿Cuál de esos tiene el proveedor más barato?', randomUUID());
+  assert.equal(conversationB.requiresClarification, true); assert.equal(conversationB.usage.totalSkillCalls, 0);
+  assert.equal(conversationB.usage.totalLlmCalls, 0); assert.equal(conversationB.usage.totalTokens, 0);
+  const explicit = await f.run('De esos, ¿qué proveedor es más barato para M5-FOODS_3_511?', conversationA);
+  assert.equal(explicit.code, null); assert.equal(explicit.intent, 'cheapest_supplier');
+  assert.equal(explicit.usage.totalLlmCalls, 0); assert.equal(explicit.usage.totalTokens, 0);
+  assert.deepEqual(explicit.actions.map(action => action.skillId), ['compare_supplier_costs']);
+  assert.match(explicit.answer, /M5-FOODS_3_511/); assert.doesNotMatch(explicit.answer, /M5-FOODS_3_491/);
+});
+
+test('product-list supplier comparison omits products without valid offers and never merges currencies', async () => {
+  const skuRows = ['M5-FOODS_3_511', 'M5-FOODS_3_491', 'M5-HOUSEHOLD_1_004'];
+  const supplier = id(85);
+  const products = skuRows.map((sku, index) => ({ ...product(index + 1), sku,
+    currency: index === 1 ? 'USD' : 'PEN',
+    supplierPrices: index === 2 ? [] : [{ supplierId: supplier, purchasePrice: index ? 1 : 4 }] }));
+  const contacts = [{ _id: supplier, businessId: 'A', name: 'Proveedor PEN', type: 'vendor', isActive: true }];
+  const forecastService = { getDemandForecast: async () => ({ status: 'READY', anchorOperationalDate: '2026-05-17', products: skuRows.map((sku, index) => ({
+    productId: id(index + 1), sku, name: `Producto ${index + 1}`, mlStatus: 'READY', predictedDemand7d: 20 - index,
+    stockAtAnchor: 1, salesLast7Days: 1, safetyStock: 2, recommendedQty: 3, inventoryStatus: 'REPONER'
+  })) }) };
+  const f = fixture({ products, contacts, forecastService }); const conversationId = randomUUID();
+  await f.run('Muéstrame los productos con mayor demanda.', conversationId);
+  const result = await f.run('¿Cuál de esos tiene el proveedor más barato?', conversationId);
+  assert.equal(result.code, null); assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
+  assert.match(result.answer, /monedas son distintas|Sin oferta válida/);
+  assert.match(result.answer, /M5-FOODS_3_491/); assert.match(result.answer, /M5-FOODS_3_511/);
+  assert.doesNotMatch(result.answer, /M5-FOODS_3_491.*S\/\s*1,00 PEN.*M5-FOODS_3_511.*S\/\s*4,00 PEN/);
+});
+
 test('generic top-selling uses all completed history even after a current-month sales query', async () => {
   const f = fixture(); const conversationId = randomUUID();
   const sales = await f.run('¿Cuánto vendimos este mes?', conversationId);

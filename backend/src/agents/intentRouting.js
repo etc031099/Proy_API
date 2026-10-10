@@ -222,7 +222,10 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   const productReference = productReferenceFollowup(message, memory);
   if (productReference) return productReference;
   const listFollowup = productListFollowupType(message);
-  if (listFollowup) {
+  // An explicit SKU always narrows a supplier comparison to that product,
+  // rather than expanding it across the remembered list.
+  if (listFollowup && !(['cheapest_supplier_for_list', 'cheapest_replenishment_for_list'].includes(listFollowup)
+    && canonicalProductSku(message))) {
     const resolved = resolveProductListFollowup(listFollowup, {
       ...memory.lastProductSelection, selectedProductReference: memory.selectedProductReference
     });

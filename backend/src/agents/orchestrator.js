@@ -7,7 +7,7 @@ const { executeRequestedSkill } = require('./toolCalls');
 const { createConversationMemory } = require('./memory');
 const { routeDeterministically, clarify, budgetPlanFollowupType, tenantScopeViolation } = require('./intentRouting');
 const { buildSkillAnswer, buildCheapestSupplierAnswer, llmObservation, safeText, replenishmentExplanation,
-  budgetPlanExplanation, budgetPlanFollowupAnswer, productCountAnswer, unsupportedClaimAnswer, salesCausalityAnswer } = require('./responses');
+  buildProductListSupplierComparisonAnswer, budgetPlanExplanation, budgetPlanFollowupAnswer, productCountAnswer, unsupportedClaimAnswer, salesCausalityAnswer } = require('./responses');
 const { buildSynthesisInput, buildNarrativeSynthesisInput, validateNarrativeSynthesis, renderNarrativeSynthesis, renderNarrativeFallback } = require('./synthesis');
 const { normalizeSupplier, resolveSupplier } = require('./replenishmentPlanning');
 const { SUPPLIER_SELECTION_TTL_MS, contextBinding } = require('./memory');
@@ -289,6 +289,18 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             case 'product_list_followup': {
               if (!plan.needsLookup) { answer = plan.deterministicAnswer; break; }
               const selection = state.lastProductSelection;
+              if (['supplier_unit_price', 'replenishment_total_cost'].includes(plan.needsLookup)) {
+                const productRefs = (selection?.items || []).map(item => item.sku);
+                if (!productRefs.length || productRefs.length > 5 || productRefs.some(sku => typeof sku !== 'string' || !sku.trim())) {
+                  plan.clarificationQuestion = 'No puedo identificar con seguridad todos los productos de esa lista. Muéstramela nuevamente para comparar.';
+                  break;
+                }
+                const comparison = await run('analyst', 'compare_supplier_costs', { productRefs: productRefs.join('|') });
+                plan.deterministicAnswer = buildProductListSupplierComparisonAnswer(comparison,
+                  plan.needsLookup === 'supplier_unit_price' ? 'unit_price' : 'replenishment_total_cost');
+                answer = plan.deterministicAnswer;
+                break;
+              }
               const ids = (selection?.items || []).map(item => item.id).filter(Boolean);
               if (!ids.length) { plan.clarificationQuestion = 'No tengo los productos de esa lista disponibles para completar la consulta. Muéstrame la lista nuevamente.'; break; }
               const fetched = plan.needsLookup === 'stock'

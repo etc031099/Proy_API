@@ -8,6 +8,9 @@ const productListFollowupType = message => {
   if (/\b(?:cual|que producto)\b/.test(text) && /\b(?:mas|mayor) stock\b/.test(text)) return 'max_stock';
   if (/\b(?:cual|que producto)\b/.test(text) && /\b(?:mayor|mas) demanda\b/.test(text)) return 'max_demand';
   if (/\b(?:cual|que producto)\b/.test(text) && /\b(?:mas|mayor) reposicion\b/.test(text)) return 'max_replenishment';
+  if (refersToList && /\bproveedor\b/.test(text) && /\b(?:barato|barata|menor costo|mas economico)\b/.test(text)) return 'cheapest_supplier_for_list';
+  if (refersToList && /\b(?:cuesta|costaria|costo|coste|mas barato|mas economico)\b/.test(text)
+    && /\b(?:menos|menor|barato|barata)\b/.test(text) && /\b(?:reponer|reposicion)\b/.test(text)) return 'cheapest_replenishment_for_list';
   if (refersToList && /\bcuantos\b/.test(text) && /\breponer\b/.test(text)) return 'count_replenish';
   if (refersToList && /\bcuales\b/.test(text) && /\breponer\b/.test(text)) return 'filter_replenish';
   return null;
@@ -24,6 +27,8 @@ const resolveProductListFollowup = (type, selection) => {
     return { clarificationQuestion: 'No tengo una lista de productos previa en esta conversación. Muéstrame una lista y podré compararlos.' };
   }
   const rows = selection.items;
+  if (type === 'cheapest_supplier_for_list') return { needsLookup: 'supplier_unit_price' };
+  if (type === 'cheapest_replenishment_for_list') return { needsLookup: 'replenishment_total_cost' };
   if (type === 'explain_selected') {
     const selected = selection.selectedProductReference;
     if (!selected) return { clarificationQuestion: 'Aún no hay un producto seleccionado de esa lista. Dime cuál quieres revisar.' };

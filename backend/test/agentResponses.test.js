@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildSkillAnswer, llmObservation, budgetPlanExplanation } = require('../src/agents/responses');
+const { buildSkillAnswer, buildProductListSupplierComparisonAnswer, llmObservation, budgetPlanExplanation } = require('../src/agents/responses');
 
 const period = { startDate: '2026-10-01', endDate: '2026-10-31' };
 const product = { sku: 'SKU-001', name: 'Producto 1', stock: 8, minStockLevel: 18 };
@@ -93,6 +93,32 @@ test('supplier cost and comparison responses humanize selection rules and hide i
   assert.match(comparison, /Proveedor 055 Foods: 15\.67 PEN por unidad/);
   assert.match(comparison, /porque es el proveedor preferido configurado/);
   assert.doesNotMatch(comparison, /PREFERRED_SUPPLIER|USER_SPECIFIED/);
+});
+
+test('list supplier comparison keeps unit prices distinct from replenishment totals and groups currencies', () => {
+  const result = { data: [
+    { sku: 'SKU-PEN', productName: 'Producto PEN', recommendedQty: 4, currency: 'PEN', offers: [
+      { supplier: 'Proveedor A', unitCost: 3, currency: 'PEN', preferred: false },
+      { supplier: 'Proveedor B', unitCost: 3, currency: 'PEN', preferred: true }
+    ] },
+    { sku: 'SKU-USD', productName: 'Producto USD', recommendedQty: 2, currency: 'USD', offers: [
+      { supplier: 'Proveedor C', unitCost: 1, currency: 'USD', preferred: false }
+    ] },
+    { sku: 'SKU-SIN', productName: 'Sin oferta', recommendedQty: 1, currency: 'PEN', offers: [] }
+  ], metadata: { pricingAsOf: '2026-10-09T12:00:00.000Z' } };
+  const unit = buildProductListSupplierComparisonAnswer(result, 'unit_price');
+  assert.match(unit, /monedas son distintas/);
+  assert.match(unit, /SKU-PEN.*Proveedor B.*3\.00 PEN por unidad/);
+  assert.match(unit, /SKU-USD.*Proveedor C.*1\.00 USD por unidad/);
+  assert.match(unit, /Sin oferta válida: SKU-SIN/);
+  assert.match(unit, /no establezco un único ganador/);
+  const total = buildProductListSupplierComparisonAnswer(result, 'replenishment_total_cost');
+  assert.match(total, /costo total de reposición sugerida/);
+  assert.match(total, /SKU-PEN.*12\.00 PEN por 4 unidades/);
+  assert.match(total, /SKU-USD.*2\.00 USD por 2 unidades/);
+  assert.match(total, /monedas son distintas/);
+  assert.match(buildProductListSupplierComparisonAnswer({ status: 'ML_NOT_READY', data: [] }, 'unit_price'),
+    /forecast histórico.*no está listo/i);
 });
 
 test('budget plan explanation formats currency to two decimals and handles singular quantity', () => {

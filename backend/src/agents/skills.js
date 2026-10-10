@@ -74,8 +74,8 @@ const SKILLS = deepFreeze([
       department: text(50), limit: limit(20), offset: { type: 'integer', minimum: 0, maximum: 60 } }, ['budget', 'currency']),
     20, 'FINANCIAL', 'Deterministic greedy budget proposal, historical forecast anchor and current configured prices'),
   entry('compare_supplier_costs', 'Compara ofertas configuradas para un producto.', ['analyst'],
-    schema({ productRef: text(100), supplierRef: text(100) }, ['productRef']),
-    10, 'FINANCIAL', 'Tenant-scoped active vendor offers and deterministic selected supplier')
+    schema({ productRef: text(100), productRefs: text(504), supplierRef: text(100) }, [], ['productRef', 'productRefs']),
+    10, 'FINANCIAL', 'Tenant-scoped active vendor offers and deterministic selected supplier; bounded product-list comparison')
 ]);
 
 const getSkillDefinition = skillId => {

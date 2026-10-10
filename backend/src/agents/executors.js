@@ -156,11 +156,12 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
     return { status: 'READY', rows, suppliers, supplierDirectory, metadata: batch.metadata };
   };
 
-  const commercialProducts = async (invocation, productRef, department) => {
+  const commercialProducts = async (invocation, productRef, department, productRefs) => {
     const loaded = await loadCommercialRows(invocation);
     if (loaded.status === 'ML_NOT_READY') return loaded;
     let rows = loaded.rows;
     if (department) rows = rows.filter(row => String(row.department || '').toLowerCase() === department.toLowerCase());
+    if (productRefs) rows = rows.filter(row => productRefs.includes(row.sku));
     if (productRef) {
       const ranked = require('../automations/entityResolution').rankEntities(rows.map(row => ({ ...row,
         _id: row.productId || row.sku })), productRef);
@@ -507,6 +508,26 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
         evidenceLabel: `Plan de presupuesto · ${scenarioId || 'escenario histórico'} · ${loaded.metadata.anchor} · PEN · ${pricingAsOf}` } };
     },
     async compare_supplier_costs(invocation) {
+      if (invocation.args.productRefs !== undefined) {
+        const productRefs = invocation.args.productRefs.split('|');
+        if (invocation.args.supplierRef !== undefined || productRefs.length < 1 || productRefs.length > 5
+          || productRefs.some(ref => !/^[\w.-]{1,100}$/.test(ref))
+          || new Set(productRefs).size !== productRefs.length) throw new AgentError('AGENT_INVALID_SKILL_ARGS');
+        const loaded = await commercialProducts(invocation, undefined, undefined, productRefs);
+        if (loaded.status === 'ML_NOT_READY') return { status: loaded.status, data: [], metadata: { ...loaded.metadata, returnedCount: 0 } };
+        const { selectOffer } = require('./replenishmentPlanning');
+        const data = loaded.rows.map(row => {
+          const selected = selectOffer(row, loaded.suppliers);
+          return { sku: row.sku, productName: row.name, currency: row.currency || null,
+            recommendedQty: row.mlStatus === 'READY' ? row.recommendedQty : null,
+            offers: selected.offers.map(offer => ({ supplier: offer.supplierName,
+              unitCost: offer.unitCost, currency: row.currency, preferred: offer.preferred })) };
+        });
+        const pricingAsOf = asOf();
+        return { status: data.length ? 'READY' : 'NO_DATA', data, metadata: { ...loaded.metadata,
+          returnedCount: data.length, totalMatches: productRefs.length, pricingAsOf,
+          evidenceLabel: `Ofertas configuradas para ${data.length} productos de la lista · ${loaded.metadata.anchor || 'ancla no disponible'} · ${pricingAsOf}` } };
+      }
       const loaded = await commercialProducts(invocation, invocation.args.productRef);
       if (loaded.status === 'ML_NOT_READY' || loaded.status === 'CLARIFICATION') return {
         status: loaded.status, data: loaded.suggestions || [], metadata: { ...loaded.metadata, returnedCount: loaded.metadata.returnedCount }
