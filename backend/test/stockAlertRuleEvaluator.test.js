@@ -17,16 +17,24 @@ const fixture = (operators = [['<=', 3]]) => {
     assert.equal(options.session, session); assert.equal(options.upsert, true);
     writes.push(filter); return { exec: async () => {
       const key = `${filter.businessId}:${filter.ruleId}:${filter.inventoryMovementId}`;
-      if (!events.has(key)) events.set(key, structuredClone(update.$setOnInsert));
+      if (!events.has(key)) { events.set(key, { _id: key, ...structuredClone(update.$setOnInsert) }); return { upsertedId: key }; }
+      return {};
     } };
+  }, find(filter) {
+    return { session() { return this; }, lean() { return this; }, maxTimeMS() { return this; },
+      exec: async () => [...events.values()].filter(row => Object.entries(filter).every(([k, v]) => row[k] === v)) };
   }, updateMany(filter, update, options) {
     assert.equal(options.session, session); writes.push(filter);
     return { exec: async () => {
       for (const row of events.values()) if (Object.entries(filter).every(([k, v]) => row[k] === v)) Object.assign(row, update.$set);
     } };
   } };
-  const evaluate = createStockAlertRuleEvaluator({ rules, alerts });
-  return { events, reads, writes, run: (before, after, movement = 'movement-1') => evaluate({
+  const outbox = new Map();
+  const evaluate = createStockAlertRuleEvaluator({ rules, alerts, recordEvent: async row => {
+    assert.equal(row.session, session); outbox.set(`${row.alert._id}:${row.eventType}`, structuredClone({
+      eventType: row.eventType, previousStock: row.previousStock, newStock: row.newStock, alert: row.alert }));
+  } });
+  return { events, reads, writes, outbox, run: (before, after, movement = 'movement-1') => evaluate({
     businessId: 'A', productId: 'product-1', previousStock: before, newStock: after,
     inventoryMovementId: movement, session
   }) };
@@ -39,6 +47,9 @@ test('<= crossing, continued low stock, recovery and new crossing form distinct 
   await f.run(2, 5, 'movement-3'); assert.equal([...f.events.values()][0].status, 'RESOLVED');
   await f.run(5, 3, 'movement-4'); assert.equal(f.events.size, 2);
   assert.equal([...f.events.values()][1].status, 'OPEN');
+  assert.equal(f.outbox.size, 3);
+  const recovery = [...f.outbox.values()].find(row => row.eventType === 'inventory.alert.resolved');
+  assert.equal(recovery.previousStock, 2); assert.equal(recovery.newStock, 5);
   assert.ok(f.reads.every(filter => filter.businessId === 'A' && filter.productId === 'product-1' && filter.enabled));
 });
 test('< crossing includes equal-to-threshold as the previous state, but not as the new state', async () => {

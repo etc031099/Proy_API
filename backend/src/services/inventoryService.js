@@ -53,7 +53,8 @@ const applyStockChange = async ({
   // This switch is internal only; controllers do not accept it from request bodies.
   if (evaluateAlerts && source === 'api') await evaluateStockAlertRules({
     businessId: product.businessId, productId: product._id,
-    previousStock: stockBefore, newStock: stockAfter, inventoryMovementId: movement._id, session
+    previousStock: stockBefore, newStock: stockAfter, inventoryMovementId: movement._id,
+    product: { sku: product.sku, name: product.name }, session
   });
   return movement;
 };

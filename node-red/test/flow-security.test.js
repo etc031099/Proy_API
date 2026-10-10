@@ -28,6 +28,17 @@ test('webhook auth node is fail-closed and isolates rejected requests', () => {
   assert.equal(byId.get('res_hook_reject').type, 'http response');
   assert.equal(byId.get('res_hook_reject').statusCode, '');
 });
+test('inventory events wait for durable receipt and never enter dashboard or Telegram branches', async () => {
+  const fn = new Function('msg', 'global', 'env', 'node', byId.get('fn_hook').func);
+  const sent = []; let done = 0;
+  const reply = { statusCode: 200, payload: { success: true, eventId: 'synthetic-event' } };
+  const security = { routeMessage() { throw Error('Must not route inventory to legacy effects'); },
+    async receiveInventoryAlert() { return reply; } };
+  assert.equal(fn({ payload: { eventType: 'inventory.alert.opened' } }, { get: () => security },
+    { get: () => 'https://backend.example/api' }, { send: value => sent.push(value), done: () => done++ }), undefined);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(sent, [[null, reply]]); assert.equal(done, 1);
+});
 
 test('no Function node requests dynamic external modules', () => {
   const functionNodes = flows.filter((node) => node.type === 'function');

@@ -3,6 +3,8 @@ const crypto = require('node:crypto');
 const ALLOWED_EVENTS = new Set([
   'transaction.created',
   'product.low_stock',
+  'inventory.alert.opened',
+  'inventory.alert.resolved',
   'telegram.command'
 ]);
 
@@ -77,11 +79,30 @@ const validateWebhookRequest = ({ headers, payload }, expectedSecret) => {
     return rejection(400, 'INVALID_WEBHOOK_PAYLOAD', 'Webhook payload must contain an object data field');
   }
 
-  if (typeof payload.event !== 'string' || !ALLOWED_EVENTS.has(payload.event)) {
+  const event = payload.eventType || payload.event;
+  if (typeof event !== 'string' || !ALLOWED_EVENTS.has(event)) {
     return rejection(400, 'UNSUPPORTED_WEBHOOK_EVENT', 'Webhook event is not supported');
   }
 
   const data = { ...payload.data };
+  if (event.startsWith('inventory.alert.')) {
+    const status = event === 'inventory.alert.opened' ? 'OPEN' : 'RESOLVED';
+    const keys = (object, allowed) => isPlainObject(object) && Object.keys(object).every(key => allowed.includes(key));
+    if (!keys(payload, ['eventId', 'eventType', 'occurredAt', 'data'])
+      || payload.eventType !== event || typeof payload.eventId !== 'string'
+      || !/^[a-f0-9]{24}:inventory\.alert\.(opened|resolved)$/.test(payload.eventId)
+      || typeof payload.occurredAt !== 'string' || !Number.isFinite(Date.parse(payload.occurredAt))
+      || !keys(data, ['alertId', 'source', 'product', 'condition', 'previousStock', 'newStock', 'status'])
+      || !/^[a-f0-9]{24}$/.test(data.alertId) || payload.eventId !== `${data.alertId}:${event}`
+      || data.source !== 'stock_alert_rule' || data.status !== status
+      || !keys(data.product, ['sku', 'name']) || !['sku', 'name'].every(key => typeof data.product[key] === 'string'
+        && data.product[key].length > 0 && data.product[key].length <= 200)
+      || !keys(data.condition, ['operator', 'threshold']) || !['<', '<='].includes(data.condition.operator)
+      || !Number.isSafeInteger(data.condition.threshold) || data.condition.threshold < 0 || data.condition.threshold > 1000000
+      || ![data.previousStock, data.newStock].every(value => Number.isSafeInteger(value) && value >= 0)) {
+      return rejection(400, 'INVALID_ALERT_EVENT', 'Invalid inventory alert event');
+    }
+  }
   if (payload.event === 'telegram.command') {
     const chatId = normalizeChatId(data.chatId);
     if (!chatId) {
@@ -101,12 +122,34 @@ const validateWebhookRequest = ({ headers, payload }, expectedSecret) => {
 
   return {
     ok: true,
-    event: payload.event,
+    event,
     data
   };
 };
 
 const createWebhookSecurity = (expectedSecret) => ({
+  async receiveInventoryAlert(message, baseUrl, fetchImpl = fetch) {
+    const validated = validateWebhookRequest({ headers: message?.req?.headers || {}, payload: message.payload }, expectedSecret);
+    const reply = (statusCode, payload) => ({ ...message, statusCode, headers: { 'Content-Type': 'application/json' }, payload });
+    if (!validated.ok) return reply(validated.statusCode, { success: false, code: validated.code });
+    if (!validated.event.startsWith('inventory.alert.')) return reply(400, { success: false, code: 'INVALID_ALERT_EVENT' });
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 5000);
+    try {
+      const target = new URL(`${String(baseUrl).replace(/\/$/, '')}/internal/inventory-alert-dispatch/receipt`);
+      if (target.protocol !== 'https:' && !(target.protocol === 'http:' && ['localhost', '127.0.0.1', 'backend'].includes(target.hostname))) {
+        return reply(503, { success: false, code: 'RECEIPT_UNAVAILABLE' });
+      }
+      const response = await fetchImpl(target.href, { method: 'POST', redirect: 'error', signal: controller.signal,
+        headers: { 'Content-Type': 'application/json', 'X-Internal-Secret': expectedSecret }, body: JSON.stringify(message.payload) });
+      const result = await response.json();
+      if (!response.ok || result.success !== true || result.eventId !== message.payload.eventId) {
+        const status = response.status >= 500 ? 503 : [401, 403, 429].includes(response.status) ? response.status : 400;
+        return reply(status, { success: false, code: 'INVALID_ALERT_RECEIPT' });
+      }
+      return reply(200, { success: true, eventId: result.eventId, duplicate: result.duplicate === true });
+    } catch { return reply(503, { success: false, code: 'RECEIPT_UNAVAILABLE' }); }
+    finally { clearTimeout(timer); }
+  },
   routeMessage(message) {
     const headers = message?.req?.headers || message?.headers || {};
     const result = validateWebhookRequest({ headers, payload: message?.payload }, expectedSecret);

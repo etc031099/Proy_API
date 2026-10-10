@@ -6,6 +6,7 @@ const { Product, Transaction, Contact, InventoryMovement, CreditPayment } = requ
 const PendingAction = require('../../src/models/PendingAction');
 const StockAlertRule = require('../../src/models/StockAlertRule');
 const InventoryAlert = require('../../src/models/InventoryAlert');
+const InventoryAlertOutboxEvent = require('../../src/models/InventoryAlertOutboxEvent');
 const { createAgentExecution, createAgentRequestContext } = require('../../src/agents');
 const ActionAudit = require('../../src/models/ActionAudit');
 const Outbox = require('../../src/models/ActionDomainEvent');
@@ -42,7 +43,7 @@ test.before(async () => {
   await mongoose.connect(uri, { serverSelectionTimeoutMS: 10000 });
   const hello = await mongoose.connection.db.admin().command({ hello: 1 });
   assert.equal(hello.isWritablePrimary, true); assert.ok(hello.setName);
-  await Promise.all([Product, Contact, Transaction, InventoryMovement, CreditPayment, PendingAction, ActionAudit, Outbox, Conversation, StockAlertRule, InventoryAlert].map(model => model.init()));
+  await Promise.all([Product, Contact, Transaction, InventoryMovement, CreditPayment, PendingAction, ActionAudit, Outbox, Conversation, StockAlertRule, InventoryAlert, InventoryAlertOutboxEvent].map(model => model.init()));
   global.fetch = async () => ({ ok: true, json: async () => ({ rates: { USD: 1, PEN: 3.7, EUR: 0.92 } }) });
   [vendor, customer] = await Contact.create([{ businessId, name: 'Proveedor sintético', type: 'vendor', phone: '000000000' },
     { businessId, name: 'Cliente sintético', type: 'customer', phone: '000000001', creditLimit: 100 }]);
@@ -52,7 +53,7 @@ test.after(async () => {
   global.fetch = originalFetch;
   if (mongoose.connection.readyState === 1 && mongoose.connection.name.endsWith('_test')) {
     const filter = { businessId: { $in: [businessId, foreignBusiness] } };
-    await Promise.all([Product, Contact, Transaction, CreditPayment, PendingAction, ActionAudit, Outbox, Conversation, StockAlertRule, InventoryAlert].map(model => model.deleteMany(filter)));
+    await Promise.all([Product, Contact, Transaction, CreditPayment, PendingAction, ActionAudit, Outbox, Conversation, StockAlertRule, InventoryAlert, InventoryAlertOutboxEvent].map(model => model.deleteMany(filter)));
     await InventoryMovement.collection.deleteMany(filter); // Fixture-only cleanup; production remains append-only.
   }
   await mongoose.disconnect();

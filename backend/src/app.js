@@ -126,6 +126,7 @@ app.use('/api/telegram', telegramRoutes);
 app.use('/api/credit-payments', creditPaymentRoutes);
 if (environmentConfiguration.mlEnabled) app.use('/api/ml', mlRoutes);
 app.use('/api/agent', createAgentRoutes({ enabled: environmentConfiguration.agentEnabled }));
+app.use('/api/internal/inventory-alert-dispatch', require('./routes/inventoryAlertDispatch').createInventoryAlertDispatchRoutes());
 
 // Welcome route
 app.get('/', (req, res) => {

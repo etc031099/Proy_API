@@ -94,6 +94,34 @@ la imagen.
 
 ## Límites de esta iteración
 
+### InventoryAlert outbox (ACT-04A)
+
+`inventory.alert.opened` y `inventory.alert.resolved` se reciben sin evaluar reglas
+ni enviar Telegram. El flow valida el secreto/payload y confirma el evento exacto
+contra `API_BASE/internal/inventory-alert-dispatch/receipt`. Mongo guarda un único
+`receivedAt` por `eventId`; solo entonces Node-RED responde 200. Repeticiones
+devuelven `duplicate=true`. DELIVERED significa recepción, no entrega por canal.
+
+El backend inserta el snapshot en la transacción de inventario. RESOLVED captura
+el stock real de recuperación. Un lease de 15 s protege cada intento HTTP de 5 s;
+un worker muerto puede recuperarse. Los reintentos usan 30 s, 2 min, 5 min y 15 min
+como máximo. Auth/payload rechazado queda FAILED sin reintento automático.
+
+Recuperación: invocar `POST /api/internal/inventory-alert-dispatch/run` con `{}` y
+`X-Internal-Secret` configurado como `INVENTORY_ALERT_DISPATCH_SECRET` del backend
+(32+ caracteres, distinto del secreto del webhook). Procesa hasta 10 eventos.
+No hay scheduler configurado ni garantía de entrega mientras nadie lo invoque.
+Un workflow programado de GitHub Actions puede llamar este endpoint usando un
+repository secret; su frecuencia/horarios están sujetos a disponibilidad del
+scheduler. No se configuró ningún servicio externo en esta fase. Los registros
+pendientes sobreviven reinicios y pueden despacharse después. No usar context ni
+filesystem Node-RED para dedupe durable. ACT-04B deberá persistir por separado la
+entrega por canal; esta recepción no autoriza efectos Telegram automáticos.
+
+Pruebas Mongo locales: desde `backend/`, ejecutar
+`node test/integration/inventoryAlertOutbox.run.js`. Requiere `MONGODB_TEST_URI`
+local con nombre terminado en `_test`; el runner usa una base de test aislada.
+
 El secreto compartido protege el origen, pero aún no incorpora timestamp,
 nonce ni almacenamiento anti-replay. Tampoco sustituye una futura identidad de
 servicio para las consultas de Node-RED al backend.
