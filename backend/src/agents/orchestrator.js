@@ -11,6 +11,7 @@ const { buildSkillAnswer, buildCheapestSupplierAnswer, llmObservation, safeText,
 const { buildSynthesisInput, buildNarrativeSynthesisInput, validateNarrativeSynthesis, renderNarrativeSynthesis, renderNarrativeFallback } = require('./synthesis');
 const { normalizeSupplier, resolveSupplier } = require('./replenishmentPlanning');
 const { SUPPLIER_SELECTION_TTL_MS, contextBinding } = require('./memory');
+const { resolveProductListFollowup } = require('./productListFollowups');
 
 const supplierSelection = (message, state, now) => {
   const pending = state.supplierResolution;
@@ -258,6 +259,39 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
                 evidence: saved.evidence } });
               break;
             }
+            case 'product_list_followup': {
+              if (!plan.needsLookup) { answer = plan.deterministicAnswer; break; }
+              const selection = state.lastProductSelection;
+              const ids = (selection?.items || []).map(item => item.id).filter(Boolean);
+              if (!ids.length) { plan.clarificationQuestion = 'No tengo los productos de esa lista disponibles para completar la consulta. Muéstrame la lista nuevamente.'; break; }
+              const fetched = plan.needsLookup === 'stock'
+                ? await run('operations', 'get_product_details', { productIds: ids.join(',') })
+                : await run('analyst', 'get_demand_forecast', {});
+              if (!['READY', 'NO_DATA'].includes(fetched.status)) {
+                plan.clarificationQuestion = 'No pude obtener ese dato de forma segura. Puedes volver a mostrar la lista e intentarlo nuevamente.';
+                break;
+              }
+              const fetchedRows = Array.isArray(fetched.data) ? fetched.data : [];
+              const byId = new Map(fetchedRows.map(row => [String(row.productId || row.id).toLowerCase(), row]));
+              const enriched = { ...selection, items: selection.items.map(item => {
+                const row = byId.get(String(item.id).toLowerCase());
+                if (!row) return item;
+                return { ...item,
+                  ...(plan.needsLookup === 'stock' && Number.isFinite(row.stock) ? { stock: row.stock } : {}),
+                  ...(Number.isFinite(row.predictedDemand7d) ? { predictedDemand: row.predictedDemand7d } : {}),
+                  ...(Number.isFinite(row.recommendedQty) ? { recommendedQty: row.recommendedQty } : {}),
+                  ...(['OK', 'VIGILAR', 'REPONER'].includes(row.inventoryStatus) ? { status: row.inventoryStatus } : {}) };
+              }) };
+              const resolved = resolveProductListFollowup(plan.listFollowupType, enriched);
+              if (resolved.clarificationQuestion || resolved.needsLookup) {
+                plan.clarificationQuestion = resolved.clarificationQuestion || 'La información de esa lista no contiene el dato solicitado.';
+                break;
+              }
+              plan.deterministicAnswer = resolved.answer;
+              plan.selectedProduct = resolved.selectedProduct;
+              answer = resolved.answer;
+              break;
+            }
             case 'supplier_products': {
               const result = await run('operations', 'get_supplier_products', plan.args);
               if (result.status === 'CLARIFICATION') plan.clarificationQuestion = result.metadata.clarificationQuestion;
@@ -387,6 +421,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             sections = [];
           }
           if (sections.length) answer = sections.map(index => buildSkillAnswer(results[index].skillId, results[index].result)).join('\n\n');
+          if (plan.intent === 'product_list_followup') { answer = plan.deterministicAnswer; sections = []; }
           if (plan.inventoryCountOnly) {
             const summary = results.find(({ skillId }) => skillId === 'get_business_summary')?.result;
             if (summary?.status === 'READY') answer = productCountAnswer(summary.data);
@@ -424,9 +459,15 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             supplierResolution: null,
             supplierProductListing: null,
             lastForecastAnalytics: plan.intent === 'ml_analytics' ? plan.analyticsArgs : null,
-            lastEntity: entities?.length === 1 ? entities[0] : undefined,
+            lastEntity: plan.selectedProduct || (entities?.length === 1 ? entities[0] : undefined),
+            ...((plan.selectedProduct || entities?.length === 1) ? { selectedProductReference: {
+              id: plan.selectedProduct?.id || entities[0].id || entities[0].productId,
+              sku: plan.selectedProduct?.sku || entities[0].sku,
+              name: plan.selectedProduct?.name || plan.selectedProduct?.label || entities[0].name } } : {}),
             ...(productResult && productListIntents.includes(plan.intent) && Array.isArray(raw)
-              ? { lastProductSelection: { sourceIntent: plan.intent, items: raw.slice(0, 5) } } : {}),
+              ? { lastProductSelection: { sourceIntent: plan.intent, items: raw.slice(0, 5), createdAt: Date.now() },
+                selectedProductReference: plan.selectedProduct ? { id: plan.selectedProduct.id, sku: plan.selectedProduct.sku,
+                  name: plan.selectedProduct.name || plan.selectedProduct.label } : null } : {}),
             lastPeriod: latest?.metadata.period || plan.period, lastPeriodExplicit: plan.periodExplicit === true,
             listLimit: plan.limit || 5,
             lastSearchQuery: plan.query, lastCurrency: latest?.data?.currency,
@@ -442,6 +483,11 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
         }
       } catch (error) {
         code = errorCode(error);
+        if (plan.intent === 'product_list_followup') {
+          const diagnosticCode = error?.code === 'AGENT_INVALID_SKILL_ARGS' ? 'PRODUCT_LIST_FOLLOWUP_INVALID'
+            : error?.code === 'AGENT_INTERNAL_ERROR' ? 'PRODUCT_LIST_FOLLOWUP_FORMAT_ERROR' : 'PRODUCT_LIST_FOLLOWUP_FAILED';
+          execution.recordProductListDiagnostic(plan.listFollowupType || 'unknown', 'last_product_list', diagnosticCode);
+        }
         if (code === 'AGENT_CLARIFICATION_REQUIRED') { question = 'No pude identificar el producto o el periodo. ¿Puedes confirmar su SKU y las fechas que deseas consultar?'; answer = question; }
         else answer = code === 'AGENT_PROVIDER_FAILED' ? 'El servicio de IA no está disponible temporalmente. Vuelve a intentarlo.'
           : code === 'AGENT_BUDGET_EXCEEDED' ? 'La consulta alcanzó su límite de ejecución. Haz una pregunta más concreta.'

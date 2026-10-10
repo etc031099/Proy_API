@@ -230,7 +230,7 @@ test('compact history snapshot preserves a bounded budget plan for follow-up but
 });
 
 test('real compact memory hydrates on restart/TTL with ordinal references and zero provider calls, scoped by auth', async () => {
-  let now = 0;
+  let now = Date.now();
   const runtime = createAgentOrchestrator({ memory: createConversationMemory({ now: () => now, ttlMs: 10 }),
     provider: { generateStructured() { assert.fail('no generation'); }, generateWithTools() { assert.fail('no generation'); } } });
   const id = randomUUID(), state = snapshot({ lastIntent: 'replenishment_candidates', lastAgent: 'analyst',
@@ -239,7 +239,7 @@ test('real compact memory hydrates on restart/TTL with ordinal references and ze
   const read = await runtime.getContextSnapshot(req(), id);
   assert.equal(routeDeterministically('¿Y cuánto vendió el primero este mes?', read, new Date('2026-10-08')).selector.productId, 'aaaaaaaaaaaaaaaaaaaaaaab');
   assert.deepEqual(await runtime.getContextSnapshot(req('bbbbbbbbbbbbbbbbbbbbbbbb'), id), {});
-  now = 20; assert.deepEqual(await runtime.getContextSnapshot(req(), id), {});
+  now += 20; assert.deepEqual(await runtime.getContextSnapshot(req(), id), {});
   await runtime.restoreContext(req(), id, state); assert.ok((await runtime.getContextSnapshot(req(), id)).lastProductSelection);
   await runtime.forgetConversation(req(), id); assert.deepEqual(await runtime.getContextSnapshot(req(), id), {});
 });

@@ -38,7 +38,7 @@ const SKILLS = deepFreeze([
   entry('search_products', 'Busca productos activos por texto.', both,
     schema({ query: text(100), category: text(50), limit: limit(20) }, ['query']), 20, 'OPERATIONAL', 'Product identity and category matches'),
   entry('get_product_details', 'Consulta un producto por ID o SKU.', both,
-    schema(product, [], ['productId', 'sku']), 1, 'OPERATIONAL', 'Product identity, stock, minimum, price and currency'),
+    schema({ ...product, productIds: text(125) }, [], ['productId', 'sku', 'productIds']), 5, 'OPERATIONAL', 'Product identity, stock, minimum, price and currency; bounded list lookup accepts at most five comma-separated ObjectIds'),
   entry('get_low_stock_products', 'Consulta productos bajo su stock mínimo.', both,
     schema({ limit: limit(20) }), 20, 'OPERATIONAL', 'Product identity, stock and minimum stock'),
   entry('get_inventory_summary', 'Obtiene un resumen acotado del inventario.', both,

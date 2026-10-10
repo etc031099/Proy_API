@@ -1,4 +1,5 @@
 const { isDate } = require('./contracts');
+const { productListFollowupType, resolveProductListFollowup } = require('./productListFollowups');
 
 const normalize = value => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 const normalizeBasicInventory = value => normalize(value)
@@ -31,8 +32,8 @@ const budgetPlanFollowupType = message => {
   if (/\bque proveedor se usaria para\b/.test(text)) return 'supplier_for_product';
   return null;
 };
-const routeProductSupplierLookup = message => {
-  const sku = canonicalProductSku(message);
+const routeProductSupplierLookup = (message, memory = {}) => {
+  const sku = canonicalProductSku(message) || memory.selectedProductReference?.sku;
   if (!sku) return null;
   const text = normalize(message);
   // An explicitly named supplier followed by "provee SKU" is supplier -> product.
@@ -156,9 +157,23 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
     return { intent: 'replenishment_plan_followup', agent: 'coordinator', followupType,
       ...(productRef ? { productRef } : {}) };
   }
+  const listFollowup = productListFollowupType(message);
+  if (listFollowup) {
+    const resolved = resolveProductListFollowup(listFollowup, {
+      ...memory.lastProductSelection, selectedProductReference: memory.selectedProductReference
+    });
+    if (resolved.clarificationQuestion) return clarify(resolved.clarificationQuestion);
+    if (listFollowup === 'explain_selected') return { intent: 'product_details', agent: 'operations',
+      selector: { productId: resolved.selectedProduct.id }, selectedProduct: resolved.selectedProduct };
+    if (resolved.needsLookup) return { intent: 'product_list_followup', agent: 'operations', listFollowupType: listFollowup,
+      needsLookup: resolved.needsLookup };
+    return { intent: 'product_list_followup', agent: 'coordinator', listFollowupType: listFollowup,
+      ...(resolved.answer ? { deterministicAnswer: resolved.answer } : {}),
+      ...(resolved.selectedProduct ? { selectedProduct: resolved.selectedProduct } : {}) };
+  }
   const commercialPlan = routeCommercial(message, memory);
   if (commercialPlan) return commercialPlan;
-  const productSupplierLookup = routeProductSupplierLookup(message);
+  const productSupplierLookup = routeProductSupplierLookup(message, memory);
   if (productSupplierLookup) return productSupplierLookup;
   const supplierProducts = routeSupplierProducts(message, memory);
   if (supplierProducts) return supplierProducts;

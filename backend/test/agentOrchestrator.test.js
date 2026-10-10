@@ -1402,3 +1402,92 @@ test('all priority intents are deterministically recognized, and unfamiliar quer
     'Qué debería reponer', 'Explica por qué reponer el producto SKU-001']) assert.ok(routeDeterministically(query, {}, clock()));
   assert.equal(routeDeterministically('Necesito una cosa.', {}, clock()), null);
 });
+
+const demoForecastList = () => ({ status: 'READY', anchorOperationalDate: '2026-05-17', products: [
+  { productId: id(1), sku: 'M5-FOODS_3_511', name: 'Producto 511', mlStatus: 'READY', predictedDemand7d: 73.13, stockAtAnchor: 4, salesLast7Days: 1, safetyStock: 1, recommendedQty: 88, inventoryStatus: 'REPONER' },
+  { productId: id(2), sku: 'M5-FOODS_3_491', name: 'Producto 491', mlStatus: 'READY', predictedDemand7d: 66.15, stockAtAnchor: 16, salesLast7Days: 1, safetyStock: 1, recommendedQty: 50, inventoryStatus: 'REPONER' },
+  { productId: id(3), sku: 'M5-HOUSEHOLD_1_004', name: 'Producto 004', mlStatus: 'READY', predictedDemand7d: 46.37, stockAtAnchor: 68, salesLast7Days: 1, safetyStock: 1, recommendedQty: 0, inventoryStatus: 'OK' },
+  { productId: id(4), sku: 'M5-FOODS_3_661', name: 'Producto 661', mlStatus: 'READY', predictedDemand7d: 44.66, stockAtAnchor: 63, salesLast7Days: 1, safetyStock: 1, recommendedQty: 1, inventoryStatus: 'REPONER' },
+  { productId: id(5), sku: 'M5-HOUSEHOLD_1_389', name: 'Producto 389', mlStatus: 'READY', predictedDemand7d: 40.67, stockAtAnchor: 11, salesLast7Days: 1, safetyStock: 1, recommendedQty: 3, inventoryStatus: 'REPONER' }
+] });
+
+test('forecast product-list follow-ups compare the saved DTO with zero skills and zero LLM', async () => {
+  const rows = demoForecastList().products;
+  const f = fixture({
+    products: rows.map((row, index) => ({ ...product(index + 1), sku: row.sku, name: row.name, stock: row.stockAtAnchor })),
+    forecastService: { getDemandForecast: async () => demoForecastList() }
+  });
+  const conversationId = randomUUID();
+  const first = await f.run('Muéstrame los 5 productos con mayor demanda prevista.', conversationId);
+  assert.equal(first.code, null); assert.equal(first.intent, 'ml_analytics');
+  assert.equal(first.usage.totalLlmCalls, 0); assert.equal(first.usage.totalSkillCalls, 1);
+  const checks = [
+    ['¿Cuál de esos tiene menos stock?', /M5-FOODS_3_511.*4 unidades disponibles/, 'M5-FOODS_3_511'],
+    ['¿Cuál tiene más stock?', /M5-HOUSEHOLD_1_004.*68 unidades disponibles/, 'M5-HOUSEHOLD_1_004'],
+    ['¿Cuál de esos tiene mayor demanda?', /M5-FOODS_3_511.*73,13 unidades de demanda prevista/, 'M5-FOODS_3_511'],
+    ['¿Cuál necesita más reposición?', /M5-FOODS_3_511.*88 unidades de reposición sugerida/, 'M5-FOODS_3_511']
+  ];
+  for (const [message, answer, sku] of checks) {
+    const result = await f.run(message, conversationId);
+    assert.equal(result.code, null, message); assert.match(result.answer, answer, message);
+    assert.equal(result.usage.totalLlmCalls, 0, message); assert.equal(result.usage.totalSkillCalls, 0, message);
+    assert.equal(result.usage.totalTokens, 0, message); assert.deepEqual(result.actions, [], message);
+    const context = await f.orchestrator.getContextSnapshot(req(), conversationId);
+    assert.equal(context.selectedProductReference?.sku, sku, message);
+  }
+  const filtered = await f.run('¿Cuáles de esos están en REPONER?', conversationId);
+  assert.equal(filtered.code, null); assert.equal(filtered.usage.totalLlmCalls, 0); assert.equal(filtered.usage.totalSkillCalls, 0);
+  assert.match(filtered.answer, /M5-FOODS_3_511/); assert.match(filtered.answer, /M5-FOODS_3_491/);
+  assert.doesNotMatch(filtered.answer, /M5-HOUSEHOLD_1_004/);
+  const explained = await f.run('Explícame ese producto.', conversationId);
+  assert.equal(explained.code, null); assert.equal(explained.intent, 'product_details');
+  assert.match(explained.answer, /M5-FOODS_3_511/); assert.equal(explained.usage.totalLlmCalls, 0);
+  assert.equal(f.calls.length, 0);
+});
+
+test('product-list follow-up without a list is an isolated zero-cost clarification', async () => {
+  const f = fixture();
+  const result = await f.run('¿Cuál de esos tiene menos stock?', randomUUID());
+  assert.equal(result.requiresClarification, true); assert.match(result.answer, /lista de productos previa en esta conversación/i);
+  assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalSkillCalls, 0); assert.equal(result.usage.totalTokens, 0);
+  assert.equal(f.calls.length, 0);
+});
+
+test('a saved product list never crosses conversation, user or tenant scope', async () => {
+  const f = fixture({ forecastService: { getDemandForecast: async () => demoForecastList() } });
+  const conversationA = randomUUID();
+  await f.run('Muéstrame los 5 productos con mayor demanda prevista.', conversationA, req('A', 900));
+  for (const [conversationId, request] of [[randomUUID(), req('A', 900)],
+    [conversationA, req('A', 901)], [conversationA, req('B', 900)]]) {
+    const result = await f.run('¿Cuál de esos tiene menos stock?', conversationId, request);
+    assert.equal(result.requiresClarification, true);
+    assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalSkillCalls, 0);
+    assert.equal(result.usage.totalTokens, 0);
+  }
+});
+
+test('product-list stock follow-up fetches missing current stock once through tenant-scoped batch skill', async () => {
+  const f = fixture({ products: [product(1), { ...product(2), stock: 6 }] });
+  const conversationId = randomUUID();
+  await f.orchestrator.restoreContext(req(), conversationId, { lastProductSelection: { sourceIntent: 'top_selling_products', items: [
+    { id: id(1), sku: 'SKU-001', name: 'Producto 1' }, { id: id(2), sku: 'SKU-002', name: 'Producto 2' }
+  ] } });
+  const result = await f.run('¿Cuál de esos tiene menos stock?', conversationId);
+  assert.equal(result.code, null); assert.match(result.answer, /SKU-001.*2 unidades disponibles/);
+  assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalSkillCalls, 1);
+  assert.deepEqual(result.actions.map(action => action.skillId), ['get_product_details']);
+  const query = f.reads.find(row => row.model === 'Product' && row.match?._id?.$in);
+  assert.ok(query); assert.equal(query.match.businessId, 'A');
+});
+
+test('product-list follow-up gets an absent forecast status through one existing batch skill', async () => {
+  const f = fixture({ forecastService: { getDemandForecast: async () => demoForecastList() } });
+  const conversationId = randomUUID();
+  await f.orchestrator.restoreContext(req(), conversationId, { lastProductSelection: { sourceIntent: 'top_selling_products', items: [
+    { id: id(1), sku: 'M5-FOODS_3_511', name: 'Producto 511', stock: 4 }
+  ] } });
+  const result = await f.run('¿Cuántos de esos están en REPONER?', conversationId);
+  assert.equal(result.code, null); assert.match(result.answer, /1 de 1.*REPONER/);
+  assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalSkillCalls, 1);
+  assert.deepEqual(result.actions.map(action => action.skillId), ['get_demand_forecast']);
+});

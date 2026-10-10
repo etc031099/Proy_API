@@ -292,6 +292,20 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
     async get_product_details(invocation) {
       const { args, context, signal, skill } = invocation;
       signal.throwIfAborted();
+      if (args.productIds) {
+        const ids = args.productIds.split(',').map(value => value.trim());
+        if (ids.length < 1 || ids.length > 5 || ids.some(value => !/^[a-f\d]{24}$/i.test(value))) {
+          throw new AgentError('AGENT_INVALID_SKILL_ARGS');
+        }
+        const rows = await getModels().Product.find({ businessId: context.businessId,
+          _id: { $in: ids.map(objectId) } }).select({ ...productFields, price: 1, currency: 1, isActive: 1 })
+          .limit(5).maxTimeMS(skill.timeoutMs).lean().exec();
+        const byId = new Map(rows.map(row => [String(row._id).toLowerCase(), row]));
+        const ordered = ids.map(value => byId.get(value.toLowerCase())).filter(Boolean);
+        return listResult(ordered.map(row => ({ ...productDto(row), price: row.price, currency: row.currency, isActive: row.isActive })), ordered.length,
+          { asOf: asOf(), requestedCount: ids.length, missingCount: ids.length - ordered.length,
+            evidenceLabel: 'Detalles actuales de productos de la lista previa' });
+      }
       const row = await getModels().Product.findOne({ businessId: context.businessId,
         ...(args.productId ? { _id: objectId(args.productId) } : { sku: args.sku.trim() }) })
         .select({ ...productFields, price: 1, currency: 1, isActive: 1 }).maxTimeMS(skill.timeoutMs).lean().exec();

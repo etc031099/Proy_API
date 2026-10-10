@@ -15,8 +15,32 @@ const compactSupplier = value => value && isObjectId(value.id) && typeof value.n
 const LIST_INTENTS = new Set(['search_product', 'low_stock', 'top_selling_products', 'replenishment_candidates', 'demand_forecast', 'ml_analytics']);
 const compactProductSelection = (value, now) => {
   if (!value || !LIST_INTENTS.has(value.sourceIntent) || !Array.isArray(value.items)) return null;
-  return deepFreeze({ sourceIntent: value.sourceIntent,
-    items: value.items.map(compactEntity).filter(Boolean).slice(0, 5), createdAt: now() });
+  const currentTime = now();
+  const sourceTime = Number.isSafeInteger(value.createdAt) ? value.createdAt : currentTime;
+  if (sourceTime > currentTime + 5000 || sourceTime <= currentTime - TTL_MS) return null;
+  const timestamp = Math.min(sourceTime, currentTime);
+  const items = value.items.slice(0, 5).map(row => {
+    const entity = compactEntity(row);
+    if (!entity) return null;
+    const stock = finiteNonNegative(row.stock ?? row.stockAtAnchor);
+    const predictedDemand = finiteNonNegative(row.predictedDemand7d ?? row.predictedDemand);
+    const recommendedQty = finiteNonNegative(row.recommendedQty);
+    const status = ['OK', 'VIGILAR', 'REPONER'].includes(row.inventoryStatus ?? row.status)
+      ? row.inventoryStatus ?? row.status : null;
+    return { ...entity, ...(stock !== null ? { stock } : {}),
+      ...(predictedDemand !== null ? { predictedDemand } : {}),
+      ...(recommendedQty !== null ? { recommendedQty } : {}), ...(status ? { status } : {}) };
+  }).filter(Boolean);
+  if (!items.length) return null;
+  return deepFreeze({ semanticReference: 'last_product_list', sourceIntent: value.sourceIntent, items, createdAt: timestamp });
+};
+const compactSelectedProductReference = (value, now = Date.now) => {
+  const entity = compactEntity(value);
+  if (!entity) return null;
+  const currentTime = now();
+  const sourceTime = Number.isSafeInteger(value.createdAt) ? value.createdAt : currentTime;
+  return sourceTime > currentTime + 5000 || sourceTime <= currentTime - TTL_MS
+    ? null : deepFreeze({ ...entity, createdAt: Math.min(sourceTime, currentTime) });
 };
 const finiteNonNegative = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 const compactBudgetPlan = (value, now = Date.now()) => {
@@ -139,6 +163,8 @@ const createConversationMemory = ({ now = Date.now, ttlMs = TTL_MS, maxEntries =
             lastEntity: entity || (entities.length === 1 ? entities[0] : null), recentEntities: entities,
             lastSupplier: supplier || (Object.hasOwn(patch, 'lastSupplier') ? null : state.lastSupplier || null),
             lastProductSelection: productSelection,
+            selectedProductReference: Object.hasOwn(patch, 'selectedProductReference')
+              ? compactSelectedProductReference(patch.selectedProductReference, now) : state.selectedProductReference || null,
             supplierResolution,
             supplierProductListing,
             lastPeriod: period && isDate(period.startDate) && isDate(period.endDate)
@@ -174,4 +200,5 @@ const createConversationMemory = ({ now = Date.now, ttlMs = TTL_MS, maxEntries =
 };
 
 module.exports = { createConversationMemory, compactEntity, compactSupplier, compactProductSelection, compactSupplierResolution,
-  compactSupplierProductListing, compactBudgetPlan, contextBinding, SUPPLIER_SELECTION_TTL_MS, BUDGET_PLAN_TTL_MS, TTL_MS };
+  compactSelectedProductReference, compactSupplierProductListing, compactBudgetPlan, contextBinding,
+  SUPPLIER_SELECTION_TTL_MS, BUDGET_PLAN_TTL_MS, TTL_MS };
