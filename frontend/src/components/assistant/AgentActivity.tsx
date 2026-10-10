@@ -2,6 +2,7 @@ import type { AgentResponse, AgentUsage } from '@/types/agent';
 
 const names = { coordinator: 'Coordinador', operations: 'Operaciones', analyst: 'Analista' };
 const labels: Record<string, string> = {
+  list_stock_alert_rules: 'Consultó reglas de alerta de stock configuradas',
   search_products: 'Buscó productos', get_product_details: 'Consultó un producto',
   get_low_stock_products: 'Consultó productos con stock bajo', get_recent_transactions: 'Consultó transacciones recientes',
   get_sales_summary: 'Consultó ventas completadas', get_top_selling_products: 'Consultó productos más vendidos',

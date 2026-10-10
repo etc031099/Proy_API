@@ -26,6 +26,15 @@ const response: AgentResponse = {
 beforeEach(() => { send.mockReset(); localStorage.clear(); vi.mocked(apiClient.listAgentConversations).mockResolvedValue({ success: true,
   data: { items: [], pagination: { page: 1, limit: 10, total: 0, totalPages: 1 } } }); });
 function submit(text = 'stock bajo') { fireEvent.change(screen.getByLabelText('Tu consulta'), { target: { value: text } }); fireEvent.click(screen.getByRole('button', { name: 'Enviar' })); }
+it('labels configured stock rules as a read-only consultation with real zero-token activity', async () => {
+  send.mockResolvedValue({ success: true, data: { ...response, answer: 'Tienes 1 regla de alerta de stock configurada.',
+    intent: 'stock_alert_rules', actions: [{ skillId: 'list_stock_alert_rules', agentId: 'operations', status: 'SUCCEEDED', durationMs: 20 }],
+    evidence: [{ evidenceId: 'rule-1', sourceType: 'skill', skillId: 'list_stock_alert_rules', label: 'Reglas de alerta de stock configuradas', recordCount: 1 }] } });
+  render(<AssistantPage />); submit('¿Qué alertas tengo configuradas?');
+  await screen.findByText('Tienes 1 regla de alerta de stock configurada.');
+  expect(screen.getByText(/Consultó reglas de alerta de stock configuradas/)).toBeTruthy();
+  expect(screen.getAllByText(/0 tokens IA/).length).toBeGreaterThan(0);
+});
 it('navigates five visible candidates with real totals and starts refinement in the same conversation', async () => {
   const page = (offset: number): AgentResponse => ({ ...response, answer: `Opciones ${offset}`, suggestionsExpiresAt: Date.now() + 120000,
     suggestionsPagination: { query: 'food', offset, limit: 5, totalMatches: 28, hasMore: offset < 25, hasPrevious: offset > 0 },

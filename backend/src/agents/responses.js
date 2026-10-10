@@ -152,6 +152,14 @@ const productCountAnswer = data => `Tienes ${countLabel(data.activeProducts, 'pr
 const buildSkillAnswer = (skillId, result) => {
   if (skillId === 'analyze_demand_forecast') return require('./forecastResponses').buildForecastAnalysisAnswer(result);
   const { data, metadata, status } = result;
+  if (skillId === 'list_stock_alert_rules') {
+    const note = 'Estas reglas están configuradas, pero todavía no se evalúan ni envían avisos automáticamente.';
+    if (!data.length) return `No tienes reglas de alerta de stock configuradas${metadata.sku ? ` para ${metadata.sku}` : ''}.\n${note}`;
+    const count = metadata.totalMatches;
+    return `Tienes ${count} ${count === 1 ? 'regla de alerta de stock configurada' : 'reglas de alerta de stock configuradas'}:\n`
+      + data.map(row => `• ${row.sku} — stock ${row.operator} ${row.threshold} ${row.threshold === 1 ? 'unidad' : 'unidades'}.`).join('\n')
+      + (metadata.truncated ? `\nMostrando ${metadata.returnedCount} de ${count} reglas.` : '') + `\n\n${note}`;
+  }
   if (status === 'ML_NOT_READY') return 'Este negocio aún no cuenta con historial o configuración suficiente para generar predicciones.';
   if (skillId === 'get_replenishment_cost') {
     if (Array.isArray(data)) return metadata.clarificationQuestion || 'Indica el SKU exacto del producto.';

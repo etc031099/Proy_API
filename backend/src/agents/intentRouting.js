@@ -245,6 +245,15 @@ const ordinalReference = text => {
 const routeDeterministically = (message, memory, now, conversationId, scopeBinding, businessId) => {
   const tenantGuard = tenantScopeViolation(message);
   if (tenantGuard) return tenantGuard;
+  const alertText = normalize(message);
+  const alertSku = canonicalProductSku(message) || message.match(/\bSKU-[\w.-]{1,100}\b/i)?.[0];
+  const configuredAlerts = /\balertas?\b/.test(alertText)
+    && /\b(configuradas?|configurados?|tengo|stock)\b/.test(alertText)
+    && !/\b(crea|crear|elimina|borra|modifica|deshabilita|generadas?|generaron|produjeron)\b/.test(alertText);
+  const alertFollowup = memory.lastIntent === 'stock_alert_rules'
+    && /^\s*[¿?]?\s*y\s+para\b/.test(alertText) && alertSku;
+  if (configuredAlerts || alertFollowup) return { intent: 'stock_alert_rules', agent: 'operations',
+    ...(alertSku ? { selector: { sku: alertSku } } : {}) };
   const followupType = budgetPlanFollowupType(message);
   if (followupType) {
     const candidate = memory.lastReplenishmentPlan;

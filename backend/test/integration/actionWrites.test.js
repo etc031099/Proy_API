@@ -5,6 +5,8 @@ const { randomUUID } = require('node:crypto');
 const { Product, Transaction, Contact, InventoryMovement, CreditPayment } = require('../../src/models');
 const PendingAction = require('../../src/models/PendingAction');
 const StockAlertRule = require('../../src/models/StockAlertRule');
+const InventoryAlert = require('../../src/models/InventoryAlert');
+const { createAgentExecution, createAgentRequestContext } = require('../../src/agents');
 const ActionAudit = require('../../src/models/ActionAudit');
 const Outbox = require('../../src/models/ActionDomainEvent');
 const Conversation = require('../../src/models/AgentConversation');
@@ -47,7 +49,7 @@ test.after(async () => {
   global.fetch = originalFetch;
   if (mongoose.connection.readyState === 1 && mongoose.connection.name.endsWith('_test')) {
     const filter = { businessId: { $in: [businessId, foreignBusiness] } };
-    await Promise.all([Product, Contact, Transaction, CreditPayment, PendingAction, ActionAudit, Outbox, Conversation, StockAlertRule].map(model => model.deleteMany(filter)));
+    await Promise.all([Product, Contact, Transaction, CreditPayment, PendingAction, ActionAudit, Outbox, Conversation, StockAlertRule, InventoryAlert].map(model => model.deleteMany(filter)));
     await InventoryMovement.collection.deleteMany(filter); // Fixture-only cleanup; production remains append-only.
   }
   await mongoose.disconnect();
@@ -81,6 +83,29 @@ test('stock rule real Mongo preview, confirm and cross-conversation semantic ded
   assert.equal(await StockAlertRule.countDocuments({ businessId, productId: p._id }), 2);
   assert.equal((await Product.findById(p._id)).stock, p.stock);
 });
+test('configured rule read uses real persisted, deduplicated rules and excludes canceled actions, events and foreign references', async () => {
+  const p = await newProduct(), args = { productId: String(p._id), operator: '<=', threshold: 3 };
+  const pending = await prepare('create_stock_alert_rule', args);
+  const read = async sku => createAgentExecution({ context: createAgentRequestContext(req()) })
+    .executeSkill({ agentId: 'operations', skillId: 'list_stock_alert_rules', args: { sku } });
+  assert.equal((await read(p.sku)).metadata.totalMatches, 0);
+  await service.confirmPendingAction(context(), pending.pendingActionId);
+  await service.confirmPendingAction(context(), pending.pendingActionId);
+  const duplicate = await prepare('create_stock_alert_rule', args);
+  await service.confirmPendingAction(context(), duplicate.pendingActionId);
+  const canceled = await prepare('create_stock_alert_rule', { ...args, operator: '<', threshold: 2 });
+  await service.cancelPendingAction(context(), canceled.pendingActionId);
+  await InventoryAlert.create({ businessId, actionId: randomUUID(), type: 'LOW_STOCK', productId: p._id, label: 'Evento sintético' });
+  const foreign = await newProduct({ businessId: foreignBusiness });
+  await StockAlertRule.create({ businessId: foreignBusiness, productId: foreign._id, operator: '<', threshold: 2, createdBy: userId });
+  const before = await Promise.all([counts(), StockAlertRule.countDocuments({ businessId }), InventoryAlert.countDocuments({ businessId })]);
+  const result = await read(p.sku);
+  assert.equal(result.metadata.totalMatches, 1);
+  assert.deepEqual(result.data, [{ sku: p.sku, name: p.name, operator: '<=', threshold: 3, enabled: true }]);
+  assert.equal((await read(foreign.sku)).metadata.totalMatches, 0);
+  assert.deepEqual(await Promise.all([counts(), StockAlertRule.countDocuments({ businessId }), InventoryAlert.countDocuments({ businessId })]), before);
+});
+
 test('stock rules concurrent different pending actions cannot duplicate equivalent active rules', async () => {
   const p = await newProduct(), args = { productId: String(p._id), operator: '<=', threshold: 8 };
   const pending = await Promise.all([1, 2].map(() => prepare('create_stock_alert_rule', args)));

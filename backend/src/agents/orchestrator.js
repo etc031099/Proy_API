@@ -195,6 +195,9 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             selector = { productId: product.data.id };
           }
           if (!plan.clarificationQuestion) switch (plan.intent) {
+            case 'stock_alert_rules':
+              await run('operations', 'list_stock_alert_rules', plan.selector || {});
+              break;
             case 'tenant_access_denied':
               answer = 'Solo puedo consultar información del negocio asociado a tu sesión. No puedo acceder ni mostrar datos de otros negocios o usuarios. Puedo ayudarte con la información de tu propio negocio.';
               break;

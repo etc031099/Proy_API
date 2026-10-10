@@ -222,6 +222,30 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
   };
 
   return Object.freeze({
+    async list_stock_alert_rules(invocation) {
+      const { Product } = getModels();
+      const Rule = getModels().StockAlertRule || require('../models/StockAlertRule');
+      const { businessId } = invocation.context;
+      const metadata = { asOf: asOf(), evidenceLabel: 'Reglas de alerta de stock configuradas',
+        ...(invocation.args.sku ? { sku: invocation.args.sku } : {}) };
+      const match = { businessId, enabled: true };
+      if (invocation.args.sku) {
+        const product = await Product.findOne({ businessId, sku: invocation.args.sku })
+          .select('_id').maxTimeMS(invocation.skill.timeoutMs).lean().exec();
+        if (!product) return listResult([], 0, metadata);
+        match.productId = product._id;
+      }
+      // Join within the same tenant as well: malformed foreign references must not leak product labels.
+      const result = await paged(Rule, [{ $match: match }, { $lookup: {
+        from: Product.collection.name, let: { productId: '$productId' }, pipeline: [
+          { $match: { $expr: { $and: [{ $eq: ['$_id', '$$productId'] }, { $eq: ['$businessId', businessId] }] } } },
+          { $project: { _id: 0, sku: 1, name: 1 } }
+        ], as: 'product'
+      } }, { $unwind: '$product' }],
+      { _id: 0, sku: '$product.sku', name: '$product.name', operator: 1, threshold: 1, enabled: 1 },
+      { 'product.sku': 1, operator: 1, threshold: 1, _id: 1 }, invocation);
+      return listResult(result.rows, result.total, metadata);
+    },
     async get_supplier_products(invocation) {
       const { Contact, Product } = getModels();
       const { businessId } = invocation.context;

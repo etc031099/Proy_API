@@ -17,7 +17,7 @@ const READY_SKILL_IDS = Object.freeze([
   'search_products', 'get_product_details', 'get_low_stock_products', 'get_recent_transactions',
   'get_sales_summary', 'get_top_selling_products', 'get_business_summary',
   'get_demand_forecast', 'get_replenishment_candidates', 'get_product_sales_summary', 'analyze_demand_forecast',
-  'get_replenishment_cost', 'plan_replenishment_budget', 'compare_supplier_costs', 'get_supplier_products'
+  'get_replenishment_cost', 'plan_replenishment_budget', 'compare_supplier_costs', 'get_supplier_products', 'list_stock_alert_rules'
 ]);
 const entry = (skillId, description, allowedAgents, inputSchema, maxRecords, dataSensitivity, outputDescription) => ({
   id: skillId, version: '1.0.0', description, readOnly: true, allowedAgents, inputSchema,
@@ -30,6 +30,8 @@ const entry = (skillId, description, allowedAgents, inputSchema, maxRecords, dat
 });
 
 const SKILLS = deepFreeze([
+  entry('list_stock_alert_rules', 'Consultó reglas de alerta de stock configuradas.', ['operations'],
+    schema({ sku: text(100), limit: limit(20) }), 20, 'OPERATIONAL', 'Active configured rules with product SKU/name, operator and threshold; excludes alert events and internal IDs'),
   entry('analyze_demand_forecast', 'Analiza el batch histórico: demanda, stock, readiness, comparación y resumen.', ['analyst'],
     schema({ mode: { type: 'string', enum: ['top', 'exceeding_stock', 'not_ready', 'compare', 'summary'] },
       limit: limit(20), offset: { type: 'integer', minimum: 0, maximum: 60 }, department: text(50),
