@@ -1,5 +1,6 @@
 const { InventoryMovement } = require('../models');
 const { toFiniteNumber } = require('../utils/numbers');
+const { evaluateStockAlertRules } = require('./stockAlertRuleEvaluator');
 
 const normalizeDate = (value, field = 'occurredAt') => {
   const date = value === undefined ? new Date() : new Date(value);
@@ -18,6 +19,7 @@ const applyStockChange = async ({
   source = 'api',
   scenarioId = null,
   sourceEventId = null,
+  evaluateAlerts = source === 'api',
   session
 }) => {
   if (!session) throw new Error('A MongoDB session is required for stock changes');
@@ -47,6 +49,12 @@ const applyStockChange = async ({
     scenarioId,
     sourceEventId
   }], { session });
+  // Historical reconstruction/backfill must never produce or resolve live alerts.
+  // This switch is internal only; controllers do not accept it from request bodies.
+  if (evaluateAlerts && source === 'api') await evaluateStockAlertRules({
+    businessId: product.businessId, productId: product._id,
+    previousStock: stockBefore, newStock: stockAfter, inventoryMovementId: movement._id, session
+  });
   return movement;
 };
 

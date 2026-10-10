@@ -153,7 +153,7 @@ const buildSkillAnswer = (skillId, result) => {
   if (skillId === 'analyze_demand_forecast') return require('./forecastResponses').buildForecastAnalysisAnswer(result);
   const { data, metadata, status } = result;
   if (skillId === 'list_stock_alert_rules') {
-    const note = 'Estas reglas están configuradas, pero todavía no se evalúan ni envían avisos automáticamente.';
+    const note = 'Estas reglas se evalúan al cambiar el stock y registran alertas internas cuando se cruza la condición. Todavía no envían avisos automáticos.';
     if (!data.length) return `No tienes reglas de alerta de stock configuradas${metadata.sku ? ` para ${metadata.sku}` : ''}.\n${note}`;
     const count = metadata.totalMatches;
     return `Tienes ${count} ${count === 1 ? 'regla de alerta de stock configurada' : 'reglas de alerta de stock configuradas'}:\n`

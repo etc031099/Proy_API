@@ -1,6 +1,5 @@
 const mongoose = require('mongoose');
-// Configuration only; InventoryAlert stores emitted events, not future conditions.
-// A future evaluator may consume these without changing automatic alert semantics.
+// Configuration only; InventoryAlert stores crossings detected during real stock changes.
 const schema = new mongoose.Schema({
   businessId: { type: String, required: true },
   productId: { type: mongoose.Schema.Types.ObjectId, required: true },
@@ -11,4 +10,5 @@ const schema = new mongoose.Schema({
 }, { timestamps: true, strict: 'throw' });
 schema.index({ businessId: 1, productId: 1, operator: 1, threshold: 1 },
   { unique: true, partialFilterExpression: { enabled: true } });
+schema.index({ businessId: 1, productId: 1, enabled: 1 });
 module.exports = mongoose.model('StockAlertRule', schema);

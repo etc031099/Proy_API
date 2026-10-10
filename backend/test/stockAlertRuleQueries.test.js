@@ -89,12 +89,13 @@ test('rules schemas reject tenant override, excess limit and unauthorized agents
     { code: 'AGENT_SKILL_NOT_ALLOWED' });
 });
 
-test('general and SKU answers include safe evidence, count, inactive-evaluator note and zero LLM usage', async () => {
+test('general and SKU answers include safe evidence, count, evaluation-without-notifications note and zero LLM usage', async () => {
   const f = fixture();
   for (const message of ['¿Qué alertas tengo configuradas?', `¿Qué alertas tengo para ${sku}?`]) {
     const result = await f.orchestrator.handle(req('A'), { message });
     assert.equal(result.code, null); assert.match(result.answer, /stock <= 3 unidades/);
-    assert.match(result.answer, /todavía no se evalúan ni envían avisos/);
+    assert.match(result.answer, /se evalúan al cambiar el stock/);
+    assert.match(result.answer, /Todavía no envían avisos automáticos/);
     assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
     assert.equal(result.usage.totalSkillCalls, 1); assert.equal(result.evidence[0].recordCount, 1);
     assert.equal(result.evidence[0].skillId, 'list_stock_alert_rules');

@@ -44,7 +44,7 @@ const createActionExecutors = () => ({
       const product = await ruleProduct(args, context);
       return { summary: `Configurar regla para ${redact(product.sku)}: stock ${args.operator} ${args.threshold} unidades.`,
         fields: { sku: redact(product.sku), name: redact(product.name),
-          description: `Condición: stock ${args.operator} ${args.threshold} unidades. Solo configuración; no envía avisos automáticos todavía.` } };
+          description: `Condición: stock ${args.operator} ${args.threshold} unidades. Tras confirmar se evaluará en los cambios futuros de stock; no envía avisos automáticos todavía.` } };
     },
     async execute(args, context, session) {
       const product = await ruleProduct(args, context, session);

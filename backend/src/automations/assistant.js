@@ -7,7 +7,7 @@ const { compactDraft, updateDraft, resolveDraft, applyResolution, TTL_MS } = req
 const { resolveReference, configuredSuppliers } = require('./entityResolution');
 const { Product } = require('../models');
 const resultAnswer = pending => pending.status !== 'EXECUTED' ? 'Acción cancelada.' : pending.result?.ruleConfigured
-  ? `${pending.result.alreadyExists ? 'Ya existe una regla activa' : 'Regla configurada'} para ${pending.result.sku}: stock ${pending.result.operator} ${pending.result.threshold} unidades. Solo queda configurada; todavía no envía avisos automáticos.` : pending.result?.type
+  ? `${pending.result.alreadyExists ? 'Ya existe una regla activa' : 'Regla configurada'} para ${pending.result.sku}: stock ${pending.result.operator} ${pending.result.threshold} unidades. Se evaluará en los cambios futuros de stock; todavía no envía avisos automáticos.` : pending.result?.type
   ? `${pending.result.type === 'sale' ? 'Venta' : 'Compra'} registrada correctamente. ${pending.result.items.map(item => `${item.quantity} unidades de ${item.sku}; stock resultante: ${item.stock}`).join('. ')}. Total: ${pending.result.total} ${pending.result.currency}. Operación: ${pending.result.id}.`
   : `Producto registrado correctamente. SKU: ${pending.result?.sku || '—'}. Stock: ${pending.result?.stock ?? '—'}.${pending.result?.needsSupplierSetup ? ' Todavía no tiene proveedor con precio de compra; configúralo desde Productos antes de registrar compras.' : ''}`;
 // Bounded draft slots never authorize writes. Restored candidate IDs are looked up

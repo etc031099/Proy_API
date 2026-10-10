@@ -17,7 +17,10 @@ const { createActionExecutors } = require('../../src/automations/executors');
 const { resolveReference } = require('../../src/automations/actionInput');
 const { withActionAssistant } = require('../../src/automations/assistant');
 const { createAgentConversationService } = require('../../src/services/agentConversationService');
-const { createTransaction } = require('../../src/controllers/transactionController');
+const { createTransaction, updateTransactionStatus } = require('../../src/controllers/transactionController');
+const { updateProductStock } = require('../../src/controllers/productController');
+const { applyStockChange } = require('../../src/services/inventoryService');
+const { evaluateStockAlertRules } = require('../../src/services/stockAlertRuleEvaluator');
 const businessId = `auto-r2-${randomUUID()}`, foreignBusiness = `auto-r2-${randomUUID()}`;
 const conversationId = randomUUID(), userId = new mongoose.Types.ObjectId();
 const req = business => ({ businessId: business || businessId, user: { _id: userId, businessId: business || businessId, role: 'user', isActive: true } });
@@ -39,7 +42,7 @@ test.before(async () => {
   await mongoose.connect(uri, { serverSelectionTimeoutMS: 10000 });
   const hello = await mongoose.connection.db.admin().command({ hello: 1 });
   assert.equal(hello.isWritablePrimary, true); assert.ok(hello.setName);
-  await Promise.all([Product, Contact, Transaction, InventoryMovement, CreditPayment, PendingAction, ActionAudit, Outbox, Conversation, StockAlertRule].map(model => model.init()));
+  await Promise.all([Product, Contact, Transaction, InventoryMovement, CreditPayment, PendingAction, ActionAudit, Outbox, Conversation, StockAlertRule, InventoryAlert].map(model => model.init()));
   global.fetch = async () => ({ ok: true, json: async () => ({ rates: { USD: 1, PEN: 3.7, EUR: 0.92 } }) });
   [vendor, customer] = await Contact.create([{ businessId, name: 'Proveedor sintético', type: 'vendor', phone: '000000000' },
     { businessId, name: 'Cliente sintético', type: 'customer', phone: '000000001', creditLimit: 100 }]);
@@ -127,6 +130,142 @@ test('stock rules cancelled/expired pending and foreign product cannot create ru
   await assert.rejects(prepare('create_stock_alert_rule', { ...args, productId: String(foreign._id) }), { code: 'ACTION_VALIDATION_FAILED' });
   assert.equal(await StockAlertRule.countDocuments({ businessId, productId: p._id }), 0);
 });
+const makeRule = (product, operator = '<=', threshold = 3, extra = {}) => StockAlertRule.create({
+  businessId, productId: product._id, operator, threshold, createdBy: userId, ...extra
+});
+const changeStock = async (product, newStock, options = {}) => {
+  const session = await mongoose.startSession();
+  try {
+    session.startTransaction();
+    const row = await Product.findOne({ _id: product._id, businessId: product.businessId }).session(session);
+    const movement = await applyStockChange({ product: row, quantityDelta: newStock - row.stock,
+      type: 'manual_adjustment', session, ...options });
+    await session.commitTransaction(); return movement;
+  } catch (error) { await session.abortTransaction(); throw error; }
+  finally { await session.endSession(); }
+};
+const invoke = (controller, request) => new Promise((resolve, reject) => controller(request,
+  { status() { return this; }, json: resolve }, reject));
+
+test('real stock-rule crossing/recovery cycle keeps evidence and only resolves its own custom events', async () => {
+  const p = await newProduct({ stock: 4 }), rule = await makeRule(p);
+  const legacy = await InventoryAlert.create({ businessId, productId: p._id, actionId: randomUUID(), type: 'LOW_STOCK', label: 'Legacy' });
+  const first = await changeStock(p, 3);
+  let alerts = await InventoryAlert.find({ businessId, ruleId: rule._id }).lean();
+  assert.equal(alerts.length, 1); assert.equal(alerts[0].status, 'OPEN');
+  assert.equal(String(alerts[0].inventoryMovementId), String(first._id));
+  assert.deepEqual(alerts[0].condition, { operator: '<=', threshold: 3 });
+  assert.deepEqual([alerts[0].previousStock, alerts[0].newStock], [4, 3]); assert.ok(alerts[0].createdAt instanceof Date);
+  await changeStock(p, 2); assert.equal(await InventoryAlert.countDocuments({ ruleId: rule._id }), 1);
+  await changeStock(p, 5); assert.equal((await InventoryAlert.findOne({ ruleId: rule._id })).status, 'RESOLVED');
+  assert.equal((await InventoryAlert.findById(legacy._id)).status, 'OPEN');
+  await changeStock(p, 3);
+  assert.equal(await InventoryAlert.countDocuments({ ruleId: rule._id }), 2);
+  assert.equal(await InventoryAlert.countDocuments({ ruleId: rule._id, status: 'OPEN' }), 1);
+});
+
+test('two crossed rules create distinct events; disabled and cross-tenant rules are ignored', async () => {
+  const p = await newProduct({ stock: 4 }), rules = await Promise.all([makeRule(p), makeRule(p, '<', 1)]);
+  await makeRule(p, '<=', 4, { enabled: false });
+  await makeRule(p, '<=', 3, { businessId: foreignBusiness });
+  const movement = await changeStock(p, 0);
+  const events = await InventoryAlert.find({ productId: p._id, source: 'stock_alert_rule' }).lean();
+  assert.equal(events.length, 2);
+  assert.deepEqual(events.map(e => String(e.ruleId)).sort(), rules.map(r => String(r._id)).sort());
+  assert.ok(events.every(e => e.businessId === businessId && String(e.inventoryMovementId) === String(movement._id)));
+});
+
+test('rule creation while already below threshold is not retroactive', async () => {
+  const p = await newProduct({ stock: 2 });
+  const pending = await prepare('create_stock_alert_rule', { productId: String(p._id), operator: '<=', threshold: 3 });
+  await service.confirmPendingAction(context(), pending.pendingActionId);
+  assert.equal(await InventoryAlert.countDocuments({ businessId, productId: p._id }), 0);
+  await changeStock(p, 1); assert.equal(await InventoryAlert.countDocuments({ productId: p._id }), 0);
+  await changeStock(p, 5); await changeStock(p, 3);
+  assert.equal(await InventoryAlert.countDocuments({ productId: p._id }), 1);
+});
+
+test('real unique index and concurrent evaluation prevent duplicate rule/movement events', async () => {
+  const p = await newProduct({ stock: 4 }), rule = await makeRule(p);
+  const movement = await changeStock(p, 3, { evaluateAlerts: false });
+  const evaluate = async repeat => {
+    const session = await mongoose.startSession();
+    try {
+      session.startTransaction();
+      for (let i = 0; i < repeat; i++) await evaluateStockAlertRules({ businessId, productId: p._id,
+        previousStock: 4, newStock: 3, inventoryMovementId: movement._id, session });
+      await session.commitTransaction();
+    } catch (error) { await session.abortTransaction(); throw error; }
+    finally { await session.endSession(); }
+  };
+  const results = await Promise.allSettled([evaluate(2), evaluate(1)]);
+  assert.ok(results.some(r => r.status === 'fulfilled'));
+  for (const result of results) if (result.status === 'rejected') assert.ok([11000, 112].includes(result.reason.code));
+  await evaluate(1);
+  assert.equal(await InventoryAlert.countDocuments({ businessId, ruleId: rule._id, inventoryMovementId: movement._id }), 1);
+  const indexes = await InventoryAlert.collection.indexes();
+  assert.ok(indexes.some(index => index.unique && index.key.ruleId && index.key.inventoryMovementId
+    && index.partialFilterExpression.source === 'stock_alert_rule'));
+  const existing = await InventoryAlert.findOne({ ruleId: rule._id }).lean();
+  const { _id, ...duplicate } = existing;
+  await assert.rejects(InventoryAlert.create({ ...duplicate, actionId: randomUUID() }), error => error.code === 11000);
+});
+
+test('alert persistence failure rolls stock and movement back; later audit failure also rolls back the alert', async () => {
+  const p = await newProduct({ stock: 4 }); await makeRule(p);
+  const before = await counts(); const original = InventoryAlert.updateOne;
+  InventoryAlert.updateOne = () => { throw Error('synthetic alert persistence failure'); };
+  try { await assert.rejects(changeStock(p, 3), /alert persistence/); }
+  finally { InventoryAlert.updateOne = original; }
+  assert.deepEqual(await counts(), before); assert.equal((await Product.findById(p._id)).stock, 4);
+  assert.equal(await InventoryAlert.countDocuments({ productId: p._id }), 0);
+  const failing = createActionService({ repository: createActionRepository({ audit: async () => { throw Error('synthetic audit failure'); } }) });
+  const pending = await prepare('create_sale', saleArgs(p), failing);
+  await assert.rejects(failing.confirmPendingAction(context(), pending.pendingActionId), { code: 'ACTION_EXECUTION_FAILED' });
+  assert.deepEqual(await counts(), before); assert.equal((await Product.findById(p._id)).stock, 4);
+  assert.equal(await InventoryAlert.countDocuments({ productId: p._id }), 0);
+});
+
+test('historical import, bootstrap, backfill and explicit internal exclusion produce no alerts; normal changes resume evaluation', async () => {
+  const p = await newProduct({ stock: 4 }); await makeRule(p);
+  for (const options of [{ source: 'historical_import' }, { source: 'backfill' }, { evaluateAlerts: false },
+    { source: 'historical_import', evaluateAlerts: true }]) {
+    await changeStock(p, 3, options); await changeStock(p, 4, options);
+  }
+  assert.equal(await InventoryAlert.countDocuments({ productId: p._id }), 0);
+  await changeStock(p, 3); assert.equal(await InventoryAlert.countDocuments({ productId: p._id }), 1);
+});
+
+test('traditional sale, purchase cancellation and manual stock adjustment share the evaluator; request cannot disable it', async () => {
+  const p = await newProduct({ stock: 4 }); await makeRule(p);
+  await invoke(createTransaction, { ...req(), body: { ...saleArgs(p), type: 'sale', evaluateAlerts: false } });
+  assert.equal(await InventoryAlert.countDocuments({ productId: p._id, status: 'OPEN' }), 1);
+  const purchase = await invoke(createTransaction, { ...req(), body: { ...saleArgs(p, { vendorId: String(vendor._id) }), type: 'purchase' } });
+  assert.equal(await InventoryAlert.countDocuments({ productId: p._id, status: 'OPEN' }), 0);
+  await invoke(updateTransactionStatus, { ...req(), params: { id: String(purchase.data.transaction._id) }, body: { status: 'cancelled' } });
+  assert.equal(await InventoryAlert.countDocuments({ productId: p._id, status: 'OPEN' }), 1);
+  await invoke(updateProductStock, { ...req(), params: { id: String(p._id) }, body: { operation: 'set', quantity: 5 } });
+  assert.equal(await InventoryAlert.countDocuments({ productId: p._id, status: 'OPEN' }), 0);
+  await invoke(updateProductStock, { ...req(), params: { id: String(p._id) }, body: { operation: 'set', quantity: 3, evaluateAlerts: false } });
+  assert.equal(await InventoryAlert.countDocuments({ productId: p._id, status: 'OPEN' }), 1);
+});
+
+test('assistant sale/purchase confirmations use evaluator; previews, rule reads and repeated confirms never emit additional events', async () => {
+  const p = await newProduct({ stock: 4 }); await makeRule(p);
+  const sale = await prepare('create_sale', saleArgs(p));
+  assert.equal(await InventoryAlert.countDocuments({ productId: p._id }), 0);
+  await createAgentExecution({ context: createAgentRequestContext(req()) })
+    .executeSkill({ agentId: 'operations', skillId: 'list_stock_alert_rules', args: { sku: p.sku } });
+  assert.equal(await InventoryAlert.countDocuments({ productId: p._id }), 0);
+  await service.confirmPendingAction(context(), sale.pendingActionId);
+  await service.confirmPendingAction(context(), sale.pendingActionId);
+  assert.equal(await InventoryAlert.countDocuments({ productId: p._id }), 1);
+  const purchase = await prepare('create_purchase', saleArgs(p, { vendorId: String(vendor._id) }));
+  assert.equal(await InventoryAlert.countDocuments({ productId: p._id, status: 'OPEN' }), 1);
+  await service.confirmPendingAction(context(), purchase.pendingActionId);
+  assert.equal(await InventoryAlert.countDocuments({ productId: p._id, status: 'OPEN' }), 0);
+});
+
 test('guided purchase retrieves real supplier costs and preview remains read-only', async () => {
   const p = await newProduct({ name: 'Arroz Superior Guiado', sku: 'GUIDED-ARROZ' });
   const adapter = withActionAssistant({}, service);

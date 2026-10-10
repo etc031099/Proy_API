@@ -224,11 +224,17 @@ test('automation executes one read batch and bounded internal alerts, records ru
 test('actual create_product executor shares CRUD opening movement/session and minimizes DTO', async t => {
   const { Product, InventoryMovement } = require('../src/models');
   const { createActionExecutors } = require('../src/automations/executors');
-  const session = {}; let movement, insert, saves = 0;
+  const session = { inTransaction: () => true }; let movement, insert, saves = 0;
+  t.mock.method(require('../src/models/StockAlertRule'), 'find', filter => {
+    assert.equal(filter.businessId, 'A');
+    const query = { select: () => query, session: value => { assert.equal(value, session); return query; },
+      lean: () => query, maxTimeMS: () => query, exec: async () => [] };
+    return query;
+  });
   t.mock.method(Product, 'exists', filter => { assert.equal(filter.businessId, 'A'); return { maxTimeMS: async () => false }; });
   t.mock.method(Product, 'create', async (docs, options) => { assert.equal(options.session, session); insert = docs[0];
     return [{ ...docs[0], _id: 'cccccccccccccccccccccccc', async save(options) { assert.equal(options.session, session); saves++; } }]; });
-  t.mock.method(InventoryMovement, 'create', async (docs, options) => { assert.equal(options.session, session); movement = docs[0]; return docs; });
+  t.mock.method(InventoryMovement, 'create', async (docs, options) => { assert.equal(options.session, session); movement = docs[0]; return [{ ...docs[0], _id: 'dddddddddddddddddddddddd' }]; });
   t.mock.method(require('../src/models/ActionDomainEvent'), 'create', async (docs, options) => { assert.equal(options.session, session); assert.equal(options.ordered, true); return docs; });
   const executor = createActionExecutors().create_product;
   const preview = await executor.preview(product, ctx()); assert.equal(preview.fields.resultingStock, 5);
