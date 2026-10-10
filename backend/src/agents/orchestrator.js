@@ -5,7 +5,7 @@ const { createAgentExecution } = require('./execution');
 const { classifyAgentIntent } = require('./routing');
 const { executeRequestedSkill } = require('./toolCalls');
 const { createConversationMemory } = require('./memory');
-const { routeDeterministically, clarify, budgetPlanFollowupType } = require('./intentRouting');
+const { routeDeterministically, clarify, budgetPlanFollowupType, tenantScopeViolation } = require('./intentRouting');
 const { buildSkillAnswer, buildCheapestSupplierAnswer, llmObservation, safeText, replenishmentExplanation,
   budgetPlanExplanation, budgetPlanFollowupAnswer, productCountAnswer, unsupportedClaimAnswer, salesCausalityAnswer } = require('./responses');
 const { buildSynthesisInput, buildNarrativeSynthesisInput, validateNarrativeSynthesis, renderNarrativeSynthesis, renderNarrativeFallback } = require('./synthesis');
@@ -135,9 +135,11 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
         return result;
       };
       try {
-        const selectedSupplier = supplierSelection(message, state, Date.now());
-        const productPage = supplierProductPage(message, state, Date.now());
-        const deterministicPlan = await execution.runAgent('coordinator', () => selectedSupplier?.expired
+        // Access-scope requests are rejected before consulting conversation snapshots, routing LLM, or skills.
+        const securityPlan = tenantScopeViolation(message);
+        const selectedSupplier = securityPlan ? null : supplierSelection(message, state, Date.now());
+        const productPage = securityPlan ? null : supplierProductPage(message, state, Date.now());
+        const deterministicPlan = await execution.runAgent('coordinator', () => securityPlan || (selectedSupplier?.expired
           ? clarify('Estas opciones de proveedor ya expiraron. Repite la consulta indicando el producto y el proveedor.')
           : selectedSupplier?.noMore ? clarify('Ya estás en la última página de proveedores.')
           : selectedSupplier?.noPrevious ? clarify('Ya estás en la primera página de proveedores.')
@@ -156,7 +158,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
                     execution.recordPlanFollowupDiagnostic(followupType, 'PLAN_CONTEXT_INVALID');
                     throw new AgentError('AGENT_INTERNAL_ERROR');
                   }
-                })());
+                })()));
         plan = deterministicPlan || plan;
         if (!deterministicPlan) {
           const routing = await classifyAgentIntent(execution, message);
@@ -193,6 +195,9 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             selector = { productId: product.data.id };
           }
           if (!plan.clarificationQuestion) switch (plan.intent) {
+            case 'tenant_access_denied':
+              answer = 'Solo puedo consultar información del negocio asociado a tu sesión. No puedo acceder ni mostrar datos de otros negocios o usuarios. Puedo ayudarte con la información de tu propio negocio.';
+              break;
             case 'unsupported_supplier_causality':
             case 'forecast_confidence':
             case 'unsupported_financial_impact':
@@ -481,7 +486,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
           const productListIntents = ['search_product', 'low_stock', 'top_selling_products', 'replenishment_candidates', 'demand_forecast', 'ml_analytics'];
           const supplierProductsResult = [...results].reverse().find(({ skillId }) => skillId === 'get_supplier_products')?.result;
           const supplierProductsData = supplierProductsResult?.data;
-          commit({ lastIntent: plan.intent, lastAgent: plan.agent, recentEntities: entities,
+          if (plan.intent !== 'tenant_access_denied') commit({ lastIntent: plan.intent, lastAgent: plan.agent, recentEntities: entities,
             ...(['replenishment_commercial', 'replenishment_plan_explanation'].includes(plan.intent) && plan.skillId === 'plan_replenishment_budget'
               ? (() => {
                 const saved = results.find(({ skillId }) => skillId === 'plan_replenishment_budget')?.result;

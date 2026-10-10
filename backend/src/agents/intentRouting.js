@@ -2,6 +2,17 @@ const { isDate } = require('./contracts');
 const { productListFollowupType, resolveProductListFollowup } = require('./productListFollowups');
 
 const normalize = value => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const tenantScopeViolation = message => {
+  const text = normalize(message).replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+  const scopes = '(?:negocio|empresa|usuario|tenant|business|cuenta|cliente|negocios|empresas|usuarios|tenants|businesses|cuentas)';
+  const crossTenantTarget = new RegExp(`\\b(?:otro|otra|otros|otras|ajeno|ajena|ajenos|ajenas|distinto|distinta|diferente|demas)\\s+${scopes}\\b`).test(text)
+    || new RegExp(`\\b(?:todos|todas|cada|cualquier)\\s+(?:(?:los|las)\\s+)?${scopes}\\b`).test(text)
+    || new RegExp(`\\b(?:negocio|empresa|usuario|tenant|business|cuenta)\\s+de\\s+(?:otro|otra|algun\\s+otro|otra persona)\\b`).test(text)
+    || new RegExp(`\\b(?:de|del)\\s+(?:(?:negocio|empresa|business|cuenta)\\s+)?(?:otro|otra|otros|otras|todos|todas|cualquier|demas)\\s+${scopes}\\b`).test(text)
+    || new RegExp(`\\b(?:ventas?|inventario|datos|informacion|productos?|transacciones?)\\s+(?:de|del)\\s+(?:otro|otra|otros|otras|todos|todas|cualquier|demas)\\s+${scopes}\\b`).test(text);
+  if (!crossTenantTarget) return null;
+  return { intent: 'tenant_access_denied', agent: 'coordinator' };
+};
 const normalizeBasicInventory = value => normalize(value)
   .replace(/\bq(?=\s+(?:productos?|stock)\b)/g, 'que')
   .replace(/\bd(?=\s+stock\b)/g, 'de')
@@ -152,6 +163,8 @@ const ordinalReference = text => {
 
 /** High-confidence routing only. Unrecognized language is delegated, never guessed. */
 const routeDeterministically = (message, memory, now, conversationId, scopeBinding) => {
+  const tenantGuard = tenantScopeViolation(message);
+  if (tenantGuard) return tenantGuard;
   const followupType = budgetPlanFollowupType(message);
   if (followupType) {
     const candidate = memory.lastReplenishmentPlan;
@@ -354,4 +367,4 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   return { ...plan, period, periodExplicit: Boolean(explicitPeriod), limit: plan.limit || 5 };
 };
 
-module.exports = { routeDeterministically, routeCommercial, routeSupplierProducts, monthPeriod, weekPeriod, clarify, budgetPlanFollowupType };
+module.exports = { routeDeterministically, routeCommercial, routeSupplierProducts, monthPeriod, weekPeriod, clarify, budgetPlanFollowupType, tenantScopeViolation };
