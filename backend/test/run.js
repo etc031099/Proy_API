@@ -28,3 +28,4 @@ require('./guidedActions.test');
 require('./stockAlertRules.test');
 require('./stockAlertRuleQueries.test');
 require('./stockAlertRuleEvaluator.test');
+require('./inventoryAlertQueries.test');

@@ -160,6 +160,26 @@ const buildSkillAnswer = (skillId, result) => {
       + data.map(row => `• ${row.sku} — stock ${row.operator} ${row.threshold} ${row.threshold === 1 ? 'unidad' : 'unidades'}.`).join('\n')
       + (metadata.truncated ? `\nMostrando ${metadata.returnedCount} de ${count} reglas.` : '') + `\n\n${note}`;
   }
+  if (skillId === 'list_inventory_alerts') {
+    if (!data.length) {
+      const status = metadata.status === 'OPEN' ? ' abiertas' : metadata.status === 'RESOLVED' ? ' resueltas' : '';
+      const source = metadata.source === 'stock_alert_rule' ? ' por reglas de stock' : '';
+      return `No se han generado alertas de inventario${source}${status}${metadata.sku ? ` para ${metadata.sku}` : ''}.`;
+    }
+    const stateLabel = { OPEN: 'Abierta', RESOLVED: 'Resuelta' };
+    const lines = data.map(row => {
+      const product = row.sku ? `${row.sku}${row.productName ? ` (${row.productName})` : ''}` : 'Producto no disponible';
+      const source = row.source === 'stock_alert_rule' ? 'Origen: regla de stock.' : 'Origen: evento de inventario.';
+      const condition = row.condition ? ` Regla: stock ${row.condition.operator} ${row.condition.threshold}.` : '';
+      const transition = Number.isSafeInteger(row.previousStock) && Number.isSafeInteger(row.newStock)
+        ? ` Cambio: ${row.previousStock} → ${row.newStock} unidades.` : '';
+      const created = row.createdAt ? ` Fecha: ${dateLabel(row.createdAt)}.` : '';
+      return `• ${product} — ${stateLabel[row.status] || 'Estado no disponible'}. ${source}${condition}${transition}${created}`;
+    });
+    const count = metadata.totalMatches;
+    const heading = `Se ${count === 1 ? 'generó' : 'generaron'} ${count} ${count === 1 ? 'alerta' : 'alertas'} de inventario${metadata.truncated ? ` (mostrando ${metadata.returnedCount})` : ''}:`;
+    return `${heading}\n${lines.join('\n')}`;
+  }
   if (status === 'ML_NOT_READY') return 'Este negocio aún no cuenta con historial o configuración suficiente para generar predicciones.';
   if (skillId === 'get_replenishment_cost') {
     if (Array.isArray(data)) return metadata.clarificationQuestion || 'Indica el SKU exacto del producto.';

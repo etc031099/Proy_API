@@ -35,6 +35,20 @@ it('labels configured stock rules as a read-only consultation with real zero-tok
   expect(screen.getByText(/Consultó reglas de alerta de stock configuradas/)).toBeTruthy();
   expect(screen.getAllByText(/0 tokens IA/).length).toBeGreaterThan(0);
 });
+it('shows generated inventory alert evidence separately from configured rules', async () => {
+  send.mockResolvedValue({ success: true, data: { ...response,
+    answer: '• M5-FOODS_3_511 (Producto demo) — Abierta. Origen: regla de stock. Regla: stock <= 3. Cambio: 4 → 3 unidades.',
+    intent: 'inventory_alert_events',
+    actions: [{ skillId: 'list_inventory_alerts', agentId: 'operations', status: 'SUCCEEDED', durationMs: 20 }],
+    evidence: [{ evidenceId: 'alert-event-1', sourceType: 'skill', skillId: 'list_inventory_alerts',
+      label: 'Alertas de inventario generadas', recordCount: 1 }] } });
+  render(<AssistantPage />); submit('¿Qué alertas de inventario se generaron?');
+  await screen.findByText(/M5-FOODS_3_511 \(Producto demo\).*Abierta/);
+  expect(screen.getByText(/Consultó alertas de inventario generadas/)).toBeTruthy();
+  expect(screen.getByText('Alertas de inventario generadas')).toBeTruthy();
+  expect(screen.getByText('1 registros')).toBeTruthy();
+  expect(screen.getAllByText(/0 tokens IA/).length).toBeGreaterThan(0);
+});
 it('navigates five visible candidates with real totals and starts refinement in the same conversation', async () => {
   const page = (offset: number): AgentResponse => ({ ...response, answer: `Opciones ${offset}`, suggestionsExpiresAt: Date.now() + 120000,
     suggestionsPagination: { query: 'food', offset, limit: 5, totalMatches: 28, hasMore: offset < 25, hasPrevious: offset > 0 },

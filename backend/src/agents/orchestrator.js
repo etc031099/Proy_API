@@ -198,6 +198,9 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             case 'stock_alert_rules':
               await run('operations', 'list_stock_alert_rules', plan.selector || {});
               break;
+            case 'inventory_alert_events':
+              await run('operations', 'list_inventory_alerts', plan.selector || {});
+              break;
             case 'tenant_access_denied':
               answer = 'Solo puedo consultar información del negocio asociado a tu sesión. No puedo acceder ni mostrar datos de otros negocios o usuarios. Puedo ayudarte con la información de tu propio negocio.';
               break;

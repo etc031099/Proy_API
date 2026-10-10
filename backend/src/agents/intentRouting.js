@@ -254,6 +254,13 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
     && /^\s*[¿?]?\s*y\s+para\b/.test(alertText) && alertSku;
   if (configuredAlerts || alertFollowup) return { intent: 'stock_alert_rules', agent: 'operations',
     ...(alertSku ? { selector: { sku: alertSku } } : {}) };
+  const inventoryAlertEvents = /\balertas?\b/.test(alertText)
+    && /\b(generad[oa]s?|generaron|producid[oa]s?|ocurrid[oa]s?|abiertas?|resueltas?|resolvieron)\b/.test(alertText);
+  if (inventoryAlertEvents) return { intent: 'inventory_alert_events', agent: 'operations', selector: {
+    ...(alertSku ? { sku: alertSku } : {}),
+    ...( /\breglas?\s+de\s+stock\b/.test(alertText) ? { source: 'stock_alert_rule' } : {}),
+    ...( /\babiertas?\b/.test(alertText) ? { status: 'OPEN' } : /\b(?:resueltas?|resolvieron)\b/.test(alertText) ? { status: 'RESOLVED' } : {})
+  } };
   const followupType = budgetPlanFollowupType(message);
   if (followupType) {
     const candidate = memory.lastReplenishmentPlan;

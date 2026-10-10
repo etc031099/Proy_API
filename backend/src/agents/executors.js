@@ -246,6 +246,43 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
       { 'product.sku': 1, operator: 1, threshold: 1, _id: 1 }, invocation);
       return listResult(result.rows, result.total, metadata);
     },
+    async list_inventory_alerts(invocation) {
+      const { Product } = getModels();
+      const Alert = getModels().InventoryAlert || require('../models/InventoryAlert');
+      const { businessId } = invocation.context;
+      const { sku, status, source } = invocation.args;
+      const metadata = { asOf: asOf(), evidenceLabel: 'Alertas de inventario generadas',
+        ...(sku ? { sku } : {}), ...(source ? { source } : {}), ...(status ? { status } : {}) };
+      const match = { businessId, ...(status ? { status } : {}), ...(source ? { source } : {}) };
+      if (sku) {
+        const product = await Product.findOne({ businessId, sku }).select('_id')
+          .maxTimeMS(invocation.skill.timeoutMs).lean().exec();
+        if (!product) return listResult([], 0, metadata);
+        match.productId = product._id;
+      }
+      const limit = invocation.args.limit ?? invocation.skill.maxRecords;
+      const [events, totalMatches] = await Promise.all([
+        Alert.find(match).select('productId status source condition previousStock newStock createdAt')
+          .sort({ createdAt: -1, _id: -1 }).limit(limit).maxTimeMS(invocation.skill.timeoutMs).lean().exec(),
+        Alert.countDocuments(match).maxTimeMS(invocation.skill.timeoutMs).exec()
+      ]);
+      const productIds = [...new Set(events.filter(row => row.productId).map(row => String(row.productId)))].map(objectId);
+      const products = productIds.length ? await Product.find({ businessId, _id: { $in: productIds } })
+        .select('_id sku name').maxTimeMS(invocation.skill.timeoutMs).lean().exec() : [];
+      const productById = new Map(products.map(row => [String(row._id), row]));
+      const data = events.map(event => {
+        const product = event.productId ? productById.get(String(event.productId)) : null;
+        return { sku: product?.sku ?? null, productName: product?.name ?? null,
+          status: event.status, source: event.source === 'stock_alert_rule' ? 'stock_alert_rule' : 'automatic',
+          ...(event.source === 'stock_alert_rule' && event.condition ? { condition: {
+            operator: event.condition.operator, threshold: event.condition.threshold
+          } } : {}),
+          ...(Number.isSafeInteger(event.previousStock) ? { previousStock: event.previousStock } : {}),
+          ...(Number.isSafeInteger(event.newStock) ? { newStock: event.newStock } : {}),
+          ...(event.createdAt instanceof Date ? { createdAt: event.createdAt.toISOString() } : {}) };
+      });
+      return listResult(data, totalMatches, metadata);
+    },
     async get_supplier_products(invocation) {
       const { Contact, Product } = getModels();
       const { businessId } = invocation.context;

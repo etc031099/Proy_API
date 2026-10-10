@@ -32,9 +32,9 @@ test('registry contains exactly three distinct immutable agent definitions', () 
   assert.equal(getAgentDefinition('analyst').llmPolicy.preferredMode, 'hybrid');
 });
 
-test('all nineteen skills are unique read-only contracts with sixteen implemented executors', () => {
-  assert.equal(SKILLS.length, 19);
-  assert.equal(new Set(SKILLS.map(skill => skill.id)).size, 19);
+test('all twenty skills are unique read-only contracts with seventeen implemented executors', () => {
+  assert.equal(SKILLS.length, 20);
+  assert.equal(new Set(SKILLS.map(skill => skill.id)).size, 20);
   for (const skill of SKILLS) {
     assert.equal(skill.readOnly, true);
     assert.ok(['READY', 'PENDING_IMPLEMENTATION'].includes(skill.executorStatus));
@@ -45,7 +45,7 @@ test('all nineteen skills are unique read-only contracts with sixteen implemente
     assert.ok(Object.isFrozen(skill.inputSchema.properties));
     assert.equal(new Set(skill.allowedAgents).size, skill.allowedAgents.length);
   }
-  assert.equal(SKILLS.filter(skill => skill.executorStatus === 'READY').length, 16);
+  assert.equal(SKILLS.filter(skill => skill.executorStatus === 'READY').length, 17);
   assert.equal(getSkillDefinition('get_supplier_products').executorStatus, 'READY');
   assert.deepEqual(getSkillDefinition('get_supplier_products').allowedAgents, ['operations']);
 });
@@ -124,6 +124,7 @@ test('all registered schemas accept their canonical minimal arguments without co
   const productId = '507f1f77bcf86cd799439011';
   const examples = {
     list_stock_alert_rules: {},
+    list_inventory_alerts: {},
     analyze_demand_forecast: { mode: 'summary' },
     search_products: { query: 'arroz', limit: 20 }, get_product_details: { productId },
     get_low_stock_products: { limit: 20 }, get_inventory_summary: {}, get_recent_transactions: {},
