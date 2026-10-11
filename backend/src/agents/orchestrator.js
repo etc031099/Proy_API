@@ -68,6 +68,28 @@ const supplierSelection = (message, state, now) => {
   return { plan: { intent: supplierProducts ? 'supplier_products' : 'replenishment_commercial', agent: supplierProducts ? 'operations' : 'analyst', skillId: pending.skillId,
     args: { ...pending.args, supplierRef: candidate.id }, supplierSelectedName: candidate.name } };
 };
+
+const productCandidateSelection = (message, state) => {
+  const selection = state.lastProductSelection;
+  if (selection?.sourceIntent !== 'search_product' || selection.items?.length < 2) return null;
+  const text = message.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim().replace(/[?.!¿¡]/g, '').replace(/\s+/g, ' ');
+  const ordinal = /^(?:(?:el|la)\s+)?(primer[oa]?|segund[oa]|tercer[oa]?|cuart[oa]|quint[oa])$/.exec(text);
+  const ordinalIndex = { primero: 0, primera: 0, primer: 0, segundo: 1, segunda: 1, tercero: 2, tercera: 2,
+    tercer: 2, cuarto: 3, cuarta: 3, quinto: 4, quinta: 4 };
+  const number = /^(?:opcion\s+)?([1-5])$/.exec(text);
+  const sku = /^(?:sku\s+)?(M5-[A-Z]+_\d+_\d+)$/i.exec(message.trim())?.[1];
+  let index = ordinal ? ordinalIndex[ordinal[1]] : number ? Number(number[1]) - 1 : -1;
+  const candidate = sku ? selection.items.find(item => item.sku?.toLowerCase() === sku.toLowerCase())
+    : index >= 0 ? selection.items[index] : selection.items.find(item => item.name?.normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '').toLowerCase().trim() === text);
+  const selectionLike = Boolean(ordinal || number || sku || selection.items.some(item => item.name?.normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '').toLowerCase().trim() === text));
+  if (candidate) return { plan: { intent: selection.continuationIntent || 'product_details',
+    agent: selection.continuationIntent === 'demand_forecast' ? 'analyst' : 'operations',
+    selector: { productId: candidate.id }, selectedProduct: candidate,
+    ...(selection.continuationPeriod ? { period: selection.continuationPeriod } : {}), limit: 1 } };
+  return selectionLike ? { invalid: true } : null;
+};
 const supplierProductPage = (message, state, now) => {
   const listing = state.supplierProductListing;
   if (!listing) return null;
@@ -126,6 +148,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
       let plan = { intent: 'ambiguous_query', agent: 'coordinator' }, answer, code = null, question = null;
       let supplierResolutionExpiry;
       let supplierProductListingExpiry;
+      let productSelectionExpiry;
       let supplierPageResponse;
       let synthesisStatus;
       let synthesisDiagnostic;
@@ -138,17 +161,19 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
         // Access-scope requests are rejected before consulting conversation snapshots, routing LLM, or skills.
         const securityPlan = tenantScopeViolation(message);
         const selectedSupplier = securityPlan ? null : supplierSelection(message, state, Date.now());
+        const selectedProduct = securityPlan ? null : productCandidateSelection(message, state);
         const productPage = securityPlan ? null : supplierProductPage(message, state, Date.now());
         const deterministicPlan = await execution.runAgent('coordinator', () => securityPlan || (selectedSupplier?.expired
           ? clarify('Estas opciones de proveedor ya expiraron. Repite la consulta indicando el producto y el proveedor.')
           : selectedSupplier?.noMore ? clarify('Ya estás en la última página de proveedores.')
           : selectedSupplier?.noPrevious ? clarify('Ya estás en la primera página de proveedores.')
+          : selectedProduct?.invalid ? clarify('No encuentro esa opción entre los productos mostrados. Elige una opción válida o indica su SKU.')
           : productPage?.expired ? clarify('Esta lista de productos ya expiró. Vuelve a consultar los productos del proveedor.')
           : selectedSupplier?.pageOffset !== undefined ? clarify('Elige un proveedor de la página mostrada.')
             : selectedSupplier?.refine ? clarify('Escribe una parte más específica del nombre del proveedor.')
-              : selectedSupplier?.filteredCandidates ? clarify('Elige una de las coincidencias refinadas.')
+          : selectedSupplier?.filteredCandidates ? clarify('Elige una de las coincidencias refinadas.')
                 : selectedSupplier?.noRefinementMatch ? clarify('No encontré ese texto entre las opciones actuales. Prueba otra parte del nombre del proveedor.')
-          : selectedSupplier?.plan || (productPage && { intent: 'supplier_products', agent: 'operations', skillId: 'get_supplier_products',
+          : selectedSupplier?.plan || selectedProduct?.plan || (productPage && { intent: 'supplier_products', agent: 'operations', skillId: 'get_supplier_products',
             args: { supplierRef: state.supplierProductListing.supplierId, limit: 5, offset: productPage.offset } })
                 || (() => {
                   try { return routeDeterministically(message, state, clock(), conversationId, contextBinding(context), context.businessId); }
@@ -517,11 +542,16 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             commit({ supplierResolution: { ...state.supplierResolution, refining: true } });
           }
           const search = results.find(({ skillId }) => skillId === 'search_products');
-          if (search) commit({ lastIntent: 'search_product', lastAgent: 'operations',
+          if (search) {
+            const createdAt = Date.now();
+            productSelectionExpiry = search.result.data.length > 1 ? createdAt + require('./memory').TTL_MS : undefined;
+            commit({ lastIntent: 'search_product', lastAgent: 'operations',
             recentEntities: search.result.data, lastSearchQuery: plan.lookupQuery, listLimit: 5,
             lastEntity: null, selectedProductReference: null,
-            lastProductSelection: search.result.data.length ? { sourceIntent: 'search_product',
-              items: search.result.data, createdAt: Date.now() } : null });
+            lastProductSelection: search.result.data.length ? { sourceIntent: 'search_product', continuationIntent: plan.intent,
+              continuationPeriod: plan.period,
+              items: search.result.data, createdAt } : null });
+          }
         } else {
           let sections = results.map((_, index) => index);
           const synthesisEligible = results.length > 0 && results.every(({ result }) => ['READY', 'NO_DATA'].includes(result.status));
@@ -652,6 +682,9 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
                   : plan.intent === 'demand_forecast' && (plan.selector?.productId || plan.selector?.sku || plan.lookupQuery) && entities?.length === 1
                     ? { id: entities[0].id || entities[0].productId, sku: entities[0].sku, name: entities[0].name || entities[0].label }
                     : null } : {}),
+            ...(plan.selectedProduct && ['product_details', 'product_sales_summary'].includes(plan.intent)
+              && state.lastProductSelection?.sourceIntent === 'search_product'
+              ? { lastProductSelection: null } : {}),
             lastPeriod: plan.intent === 'sales_causality' ? plan.period : latest?.metadata.period || plan.period,
             lastPeriodExplicit: plan.periodExplicit === true,
             listLimit: plan.limit || 5,
@@ -706,10 +739,14 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
         ...(synthesisDiagnostic ? { synthesisDiagnostic } : {}),
         ...(suggested ? { suggestions: suggested.result.metadata.suggestions,
           ...(supplierResult ? { suggestionsEntityType: supplierResult.result.metadata.supplierResolution?.candidateType || 'supplier' } : {}) }
+          : plan.lookupCandidates?.length ? { suggestions: plan.lookupCandidates.slice(0, 5).map((product, index) => ({
+            label: product.name, message: `el ${['primero', 'segundo', 'tercero', 'cuarto', 'quinto'][index]}`,
+            ...(product.sku ? { detail: product.sku } : {}) })), suggestionsEntityType: 'product' }
           : supplierPageResponse?.suggestions ? { suggestions: supplierPageResponse.suggestions, suggestionsEntityType: 'supplier' } : {}),
         ...(suggested?.result.metadata.suggestionsPagination ? { suggestionsPagination: suggested.result.metadata.suggestionsPagination }
           : supplierPageResponse?.suggestionsPagination ? { suggestionsPagination: supplierPageResponse.suggestionsPagination } : {}),
-        ...(supplierResolutionExpiry && (suggested || supplierPageResponse) ? { suggestionsExpiresAt: supplierResolutionExpiry } : {}),
+        ...(supplierResolutionExpiry && (suggested || supplierPageResponse) ? { suggestionsExpiresAt: supplierResolutionExpiry }
+          : productSelectionExpiry ? { suggestionsExpiresAt: productSelectionExpiry } : {}),
         ...(contextProvenance ? { contextProvenance } : {}),
         participants, actions, evidence: results.map(({ result }) => ({ ...result.evidence, recordCount: result.metadata.returnedCount })),
         usage: { ...usage, toolSelectionCycles: execution.getBudget().toolSelectionCycles, totalLatencyMs: latencyMs }, requiresClarification: Boolean(question), clarificationQuestion: question,
@@ -718,4 +755,4 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
   }
 });
 
-module.exports = { createAgentOrchestrator, supplierSelection };
+module.exports = { createAgentOrchestrator, supplierSelection, productCandidateSelection };

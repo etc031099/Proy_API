@@ -32,7 +32,13 @@ const compactProductSelection = (value, now) => {
       ...(recommendedQty !== null ? { recommendedQty } : {}), ...(status ? { status } : {}) };
   }).filter(Boolean);
   if (!items.length) return null;
-  return deepFreeze({ semanticReference: 'last_product_list', sourceIntent: value.sourceIntent, items, createdAt: timestamp });
+  const continuationIntent = ['product_details', 'demand_forecast', 'product_sales_summary'].includes(value.continuationIntent)
+    ? value.continuationIntent : null;
+  const continuationPeriod = value.continuationPeriod && isDate(value.continuationPeriod.startDate)
+    && isDate(value.continuationPeriod.endDate) && value.continuationPeriod.startDate <= value.continuationPeriod.endDate
+    ? { startDate: value.continuationPeriod.startDate, endDate: value.continuationPeriod.endDate } : null;
+  return deepFreeze({ semanticReference: 'last_product_list', sourceIntent: value.sourceIntent, items,
+    ...(continuationIntent ? { continuationIntent } : {}), ...(continuationPeriod ? { continuationPeriod } : {}), createdAt: timestamp });
 };
 const compactSelectedProductReference = (value, now = Date.now) => {
   const entity = compactEntity(value);

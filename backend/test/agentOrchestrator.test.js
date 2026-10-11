@@ -574,6 +574,21 @@ test('informal product ambiguity clears old entity; stock followup clarifies and
   await f.run('¿Cuánto stock tiene M5-FOODS_3_511?', conversationId);
   const ambiguous = await f.run('¿Cuánto stock tiene el food 210?', conversationId);
   assert.equal(ambiguous.requiresClarification, true);
+  assert.equal(ambiguous.suggestionsEntityType, 'product');
+  assert.deepEqual(ambiguous.suggestions.map(option => [option.label, option.detail, option.message]), [
+    ['Alimentos M5 · FOODS_2 · Ítem 210', 'M5-FOODS_2_210', 'el primero'],
+    ['Alimentos M5 · FOODS_3 · Ítem 210', 'M5-FOODS_3_210', 'el segundo']
+  ]);
+  assert.ok(ambiguous.suggestionsExpiresAt > Date.now());
+  assert.doesNotMatch(JSON.stringify(ambiguous.suggestions), /aaaaaaaaaaaaaaaaaaaaaaaa/);
+  assert.equal(ambiguous.intent, 'product_details');
+  assert.equal(ambiguous.suggestionsEntityType, 'product');
+  assert.deepEqual(ambiguous.suggestions.map(option => [option.label, option.detail, option.message]), [
+    ['Alimentos M5 · FOODS_2 · Ítem 210', 'M5-FOODS_2_210', 'el primero'],
+    ['Alimentos M5 · FOODS_3 · Ítem 210', 'M5-FOODS_3_210', 'el segundo']
+  ]);
+  assert.ok(ambiguous.suggestionsExpiresAt > Date.now());
+  assert.ok(ambiguous.suggestions.every(option => !option.label.includes('aaaaaaaaaaaaaaaaaaaaaaaa')));
   assert.match(ambiguous.answer, /FOODS_2.*Ítem 210/); assert.match(ambiguous.answer, /FOODS_3.*Ítem 210/);
   assert.doesNotMatch(ambiguous.answer, /M5-FOODS_3_511/);
   const temporal = await f.run('¿Cuál es la predicción de ayer?', conversationId);
@@ -584,6 +599,8 @@ test('informal product ambiguity clears old entity; stock followup clarifies and
   assert.equal(unresolved.actions.length, 0); assert.match(unresolved.answer, /varios productos|qué producto/i);
   const selected = await f.run('el segundo', conversationId);
   assert.equal(selected.code, null); assert.match(selected.answer, /M5-FOODS_3_210/);
+  assert.deepEqual(selected.actions.map(action => action.skillId), ['get_product_details']);
+  assert.equal(selected.pendingAction, undefined);
   const followup = await f.run('¿Y cuánto stock tiene?', conversationId);
   assert.equal(followup.code, null); assert.match(followup.answer, /M5-FOODS_3_210.*1 unidad disponible/);
   for (const result of [ambiguous, temporal, unresolved, selected, followup]) {
@@ -592,6 +609,23 @@ test('informal product ambiguity clears old entity; stock followup clarifies and
   const newConversation = await f.run('¿Y cuánto stock tiene?', randomUUID());
   assert.equal(newConversation.requiresClarification, true); assert.equal(newConversation.usage.totalSkillCalls, 0);
   assert.equal(newConversation.usage.totalLlmCalls, 0); assert.equal(f.calls.length, 0);
+});
+
+test('product disambiguation accepts numeric, option, ordinal and exact SKU through the same read-only continuation', async () => {
+  const candidates = [
+    { ...product(2), sku: 'M5-FOODS_2_210', name: 'Alimentos M5 · FOODS_2 · Ítem 210' },
+    { ...product(4), sku: 'M5-FOODS_3_210', name: 'Alimentos M5 · FOODS_3 · Ítem 210', stock: 1 }
+  ];
+  for (const choice of ['2', 'opcion 2', 'la segunda', 'M5-FOODS_3_210']) {
+    const f = fixture({ products: candidates }); const id = randomUUID();
+    await f.run('¿Cuánto stock tiene food 210?', id);
+    const selected = await f.run(choice, id);
+    assert.equal(selected.intent, 'product_details', choice);
+    assert.match(selected.answer, /M5-FOODS_3_210.*1 unidad disponible/, choice);
+    assert.deepEqual(selected.actions.map(action => action.skillId), ['get_product_details'], choice);
+    assert.equal(selected.pendingAction, undefined, choice);
+    assert.equal(selected.usage.totalLlmCalls, 0, choice); assert.equal(selected.usage.totalTokens, 0, choice);
+  }
 });
 
 test('single-day Spanish sales queries use deterministic summary without synthesis', async () => {

@@ -114,16 +114,18 @@ it('navigates five visible candidates with real totals and starts refinement in 
   expect(send.mock.calls.slice(1).map(call => call[0].message)).toEqual(['Ver más', 'Anterior', 'Ver más', 'Refinar búsqueda', 'food 3']);
   expect(send.mock.calls.slice(1).every(call => call[0].conversationId === response.conversationId)).toBe(true);
 });
-it('food choices show names/SKUs and numbered fallback, and click sends deterministic selection', async () => {
-  const answer = 'Elige una coincidencia.\n1. Foods A — FOOD-A\n2. Foods B — FOOD-B';
+it('product disambiguation shows names/SKUs and click continues the same query with a safe ordinal', async () => {
+  const answer = 'Encontré varias coincidencias para «food 210». Elige una o indícame su SKU.\n1. Foods A — FOOD-A\n2. Foods B — FOOD-B';
   send.mockResolvedValueOnce({ success: true, data: { ...response, answer, suggestionsExpiresAt: Date.now() + 120000,
-    suggestions: [{ label: '1. Foods A — FOOD-A', message: 'Opción 1' }, { label: '2. Foods B — FOOD-B', message: 'Opción 2' }] } })
+    suggestionsEntityType: 'product', suggestions: [{ label: 'Foods A', detail: 'FOOD-A', message: 'el primero' },
+      { label: 'Foods B', detail: 'FOOD-B', message: 'el segundo' }] } })
     .mockResolvedValueOnce({ success: true, data: response });
-  render(<AssistantPage />); submit('vende 2 food');
-  const button = await screen.findByRole('button', { name: '1. Foods A — FOOD-A' });
-  expect(screen.getByText(/Elige una coincidencia/).textContent).toContain('2. Foods B — FOOD-B');
+  render(<AssistantPage />); submit('¿Cuánto stock tiene food 210?');
+  const button = await screen.findByRole('button', { name: /Foods B/ });
+  expect(screen.getByText('FOOD-B')).toBeTruthy();
+  expect(screen.getByText(/Elige una o indícame su SKU/).textContent).toContain('2. Foods B — FOOD-B');
   fireEvent.click(button); await screen.findByText(response.answer);
-  expect(send.mock.calls[1][0]).toEqual({ message: 'Opción 1', conversationId: response.conversationId });
+  expect(send.mock.calls[1][0]).toEqual({ message: 'el segundo', conversationId: response.conversationId });
 });
 it('does not render an empty choices container', async () => {
   send.mockResolvedValue({ success: true, data: { ...response, suggestions: [] } });

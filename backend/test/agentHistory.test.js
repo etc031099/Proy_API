@@ -87,6 +87,22 @@ test('history retains safe choices while draft is valid and disables stale/expir
   assert.equal(result.suggestionsExpiresAt, 0); assert.equal(result.suggestions.length, 1);
 });
 
+test('history keeps product disambiguation clickable while its scoped conversation selection is valid', async () => {
+  const f = fixture(), id = randomUUID(), createdAt = Date.now(), expiresAt = createdAt + require('../src/agents/memory').TTL_MS;
+  const selection = { sourceIntent: 'search_product', continuationIntent: 'product_details', createdAt,
+    items: [{ id: 'bbbbbbbbbbbbbbbbbbbbbbbb', sku: 'M5-FOODS_2_210', name: 'Foods 2' },
+      { id: 'cccccccccccccccccccccccc', sku: 'M5-FOODS_3_210', name: 'Foods 3' }] };
+  f.runtime.handle = async (auth, input) => ({ ...response(input.conversationId), suggestionsExpiresAt: expiresAt,
+    suggestionsEntityType: 'product', suggestions: [{ label: 'Foods 2', detail: 'M5-FOODS_2_210', message: 'el primero' }] });
+  f.runtime.getContextSnapshot = async () => ({ lastProductSelection: selection });
+  const sent = await f.service.send(req(), { message: '¿Cuánto stock tiene food 210?' });
+  const restored = await f.service.get(req(), sent.conversationId, 1, 50);
+  const result = restored.messages.find(row => row.response).response;
+  assert.equal(result.suggestionsExpiresAt, expiresAt);
+  assert.equal(result.suggestionsEntityType, 'product');
+  assert.deepEqual(result.suggestions, [{ label: 'Foods 2', detail: 'M5-FOODS_2_210', message: 'el primero' }]);
+});
+
 test('first message creates a deterministic titled conversation, both messages, counts and safe activity', async () => {
   const f = fixture(); assert.equal(f.conversations.length, 0);
   const result = await f.service.send(req(), { message: 'Muéstrame los productos con stock bajo' });
