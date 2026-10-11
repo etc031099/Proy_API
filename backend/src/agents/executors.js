@@ -413,11 +413,13 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
       const { args, context } = invocation;
       const literal = new RegExp(escapeLiteral(args.query.trim()), 'i');
       const match = { businessId: context.businessId, isActive: true, $or: [{ name: literal }, { sku: literal }] };
+      Object.assign(match, require('../utils/entityIdentity').numericIdentityFilter(args.query));
       if (args.category) match.category = args.category.trim();
       const result = await paged(getModels().Product, [{ $match: match }], productFields, { name: 1, _id: 1 }, invocation);
       if (!result.total) {
         const tokens = require('./productSearch').productTokenFilter(args.query.trim());
         if (tokens) {
+          tokens.$and.push(...(require('../utils/entityIdentity').numericIdentityFilter(args.query).$and || []));
           const fallback = await paged(getModels().Product, [{ $match: { businessId: context.businessId, isActive: true,
             ...tokens, ...(args.category ? { category: args.category.trim() } : {}) } }], productFields, { name: 1, _id: 1 }, invocation);
           return listResult(fallback.rows.map(productDto), fallback.total, { asOf: asOf() });

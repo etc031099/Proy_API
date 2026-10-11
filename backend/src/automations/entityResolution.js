@@ -1,6 +1,7 @@
 const { Product, Contact } = require('../models');
 const { fail } = require('./contracts');
 const { normalizeSku } = require('../utils/sku');
+const { normalizeProductText, numbersCompatible, exactProductComponents } = require('../utils/entityIdentity');
 const normalize = value => String(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
   .toLowerCase().replace(/litro y medio/g, '1.5 l').replace(/\blitros?\b/g, 'l')
   .replace(/([a-z])(\d)/g, '$1 $2')
@@ -20,7 +21,7 @@ const distance = (a, b) => {
 const stem = token => token.length > 4 && token.endsWith('s') ? token.slice(0, -1) : token;
 function createRanking(ref, offset = 0) {
   if (!Number.isSafeInteger(offset) || offset < 0 || offset % 5 !== 0) fail('ACTION_VALIDATION_FAILED');
-  const query = compact(ref), words = normalize(ref).split(' ').map(stem);
+  const query = compact(ref), words = normalizeProductText(normalize(ref)).split(' ').map(stem);
   let total = 0, exactCount = 0;
   const ranked = [], exactRows = [];
   const compare = (a, b) => b.score - a.score || String(a.value._id).localeCompare(String(b.value._id));
@@ -31,9 +32,10 @@ function createRanking(ref, offset = 0) {
   return {
     add(value) {
       if (!query) return;
+      if (!numbersCompatible(normalize(ref), { ...value, name: normalize(value.name), sku: normalize(value.sku || '') }, { product: Boolean(value.sku) })) return;
       const name = compact(value.name), sku = compact(value.sku || '');
-      const exact = query === name || query === sku;
-      const tokens = normalize(value.name).split(' ').map(stem);
+      const exact = query === name || query === sku || exactProductComponents(ref, value);
+      const tokens = normalizeProductText(`${normalize(value.name)} ${normalize(value.sku || '')}`).split(' ').map(stem);
       const coverage = words.filter(word => tokens.some(token => token === word || (word.length >= 4 && distance(word, token) <= 1))).length / words.length;
       const similarity = 1 - distance(query, name) / Math.max(query.length, name.length, 1);
       const score = exact ? 1 : name.includes(query) || sku.includes(query) ? 0.9 : Math.max(coverage * 0.85, similarity);

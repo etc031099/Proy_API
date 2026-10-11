@@ -151,11 +151,11 @@ function parseStockRule(message) {
   // Arrival at N is explicitly normalized to <= N (and shown in the preview).
   const numeric = `(${numericToken})`;
   const inclusive = new RegExp(`(?:menor o igual a|<=|llegue a)\\s*${numeric}|${numeric}\\s*(?:unidades?\\s+)?o menos`).exec(text);
-  const strict = new RegExp(`(?:menor que|menos de|baja de|<)\\s*${numeric}`).exec(text);
+  const strict = new RegExp(`(?:menor que|menos de|baj[ae] de|<)\\s*${numeric}`).exec(text);
   const condition = inclusive || strict;
   const threshold = condition ? integerToken(condition[1] || condition[2], 0) : undefined;
   const sku = /\bSKU\s*[:=]?\s*([\w-]+)/i.exec(message) || /\b([A-Za-z][\w]*[-_][\w-]+)\b/.exec(message);
-  const named = /(?:alerta(?: de (?:stock|inventario))? para|avisame (?:si|cuando))\s+(.+?)(?=\s+(?:cuando|si|tenga|baja|stock|llegue)\b|$)/.exec(text);
+  const named = /(?:alerta(?: de (?:stock|inventario))? para|avisame (?:si|cuando))\s+(.+?)(?=\s+(?:cuando|si|tenga|baj[ae]|stock|llegue)\b|$)/.exec(text);
   const namedRef = named?.[1]?.trim();
   const ref = sku?.[1] || (namedRef && !/^(?:stock|el stock|tenga|llegue|baja|sea|menor)\b/.test(namedRef) ? namedRef : undefined);
   return { action: 'create_stock_alert_rule', ...(ref && !/^(?:este|ese|el|este producto|ese producto|el producto)$/.test(ref) ? { items: [{ ref }] } : {}),

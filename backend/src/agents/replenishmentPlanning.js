@@ -3,6 +3,7 @@ const normalizeSupplier = value => normalize(value).replace(/\b(?:proveedor|supp
   .replace(/\b(?:el|la|de|del)\b/g, ' ').replace(/\b0*(\d+)\b/g, (_, digits) => String(Number(digits)))
   .replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
 const MAX_SUPPLIER_CANDIDATES = 100;
+const { numbersCompatible } = require('../utils/entityIdentity');
 const editDistance = (left, right) => {
   let row = Array.from({ length: right.length + 1 }, (_, index) => index);
   for (let i = 1; i <= left.length; i++) {
@@ -21,6 +22,7 @@ const resolveSupplier = (reference, offers, suppliers = [], candidateLimit = 20)
   const rank = rows => rows.map(row => {
     const name = normalizeSupplier(row.supplierName || row.name);
     if (!name) return null;
+    if (!numbersCompatible(query, { name })) return null;
     const queryTokens = query.split(' '), nameTokens = name.split(' ');
     const matched = queryTokens.filter(token => nameTokens.some(candidate => candidate === token
       || (token.length >= 4 && editDistance(token, candidate) <= 1)));

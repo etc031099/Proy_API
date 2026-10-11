@@ -37,6 +37,45 @@ function fixture({ products = [p1, p2], suppliers = [vendor], configured = [vend
 }
 const pagedProducts = () => Array.from({ length: 28 }, (_, i) => ({ ...p1, _id: (i + 1).toString(16).padStart(24, '0'),
   name: `Food ${i % 4} variant ${i}`, sku: `PAGE-${i}` }));
+const identityProducts = [2, 3].map((group, i) => ({ ...p1, _id: String(i + 2).repeat(24),
+  name: `Alimentos M5 · FOODS_${group} · Ítem 210`, sku: `M5-FOODS_${group}_210` }));
+for (const reference of ['food 210', 'foods 210', 'food-210', 'item 210', 'ítem 210', 'item210', 'fods 210', 'fooods 210', 'itme 210']) {
+  test(`P2A product identity ${reference} preserves both valid candidates`, () => {
+    const impostors = [211, 1210, 2100].map(number => ({ ...p1, name: `Alimentos M5 FOODS_3 Item ${number}`, sku: `M5-FOODS_3_${number}` }));
+    const result = rankEntities([...identityProducts, ...impostors], reference);
+    assert.equal(result.confidence, 'AMBIGUOUS'); assert.equal(result.pagination.totalMatches, 2);
+    assert.deepEqual(result.candidates.map(row => row.sku).sort(), identityProducts.map(row => row.sku).sort());
+  });
+}
+for (const reference of ['food 3 210', 'foods 3 210', 'M5-FOODS_3_210']) test(`P2A structured identity ${reference} respects subgroup`, () => {
+  const result = rankEntities(identityProducts, reference);
+  assert.deepEqual(result.value ? [result.value.sku] : result.candidates.map(row => row.sku), ['M5-FOODS_3_210']);
+});
+test('P2A incompatible numbers never become HIGH_CONFIDENCE even with nearly identical names', () => {
+  for (const number of [211, 1210, 2100]) {
+    const row = { ...p1, name: `Item ${number}`, sku: `M5-FOODS_3_${number}` };
+    assert.equal(rankEntities([row], 'item 210').confidence, 'NOT_FOUND');
+  }
+  assert.equal(rankEntities([{ ...identityProducts[1], name: 'Item 210', sku: 'M5-FOODS_3_211' }], 'item 210').confidence, 'NOT_FOUND');
+});
+test('P2A write selection retains quantity and only prepares; wrong item prepares nothing', async () => {
+  const f = fixture({ products: identityProducts });
+  const first = await f.send('vende 3 del food 210');
+  assert.equal(first.suggestions.length, 2); assert.equal(f.prepared.length, 0);
+  const second = await f.send(identityProducts[1].sku);
+  assert.equal(second.pendingAction.status, 'PENDING'); assert.equal(f.prepared[0].products[0].quantity, 3);
+  assert.equal(f.prepared[0].products[0].productId, identityProducts[1]._id); assert.equal(second.usage.totalLlmCalls, 0);
+  const missing = fixture({ products: identityProducts }); const result = await missing.send('vende 3 del food 211');
+  assert.equal(missing.prepared.length, 0); assert.equal(result.pendingAction, undefined); assert.equal(result.suggestions?.length || 0, 0);
+});
+test('P2A alert disambiguation keeps threshold and operator without creating a rule', async () => {
+  const f = fixture({ products: identityProducts });
+  const first = await f.send('avísame cuando food 210 baje de 3');
+  assert.equal(first.suggestions.length, 2); assert.equal(f.prepared.length, 0);
+  const second = await f.send('el segundo');
+  assert.equal(f.prepared[0].productId, identityProducts[1]._id); assert.equal(f.prepared[0].threshold, 3);
+  assert.equal(f.prepared[0].operator, '<'); assert.equal(second.pendingAction.status, 'PENDING');
+});
 for (const choice of ['no es el segundo, es el primero', 'no el segundo, el primero',
   'el primero, no el segundo', 'me equivoqué, era el primero', 'mejor el primero', 'no, el primero']) {
   test(`write correction selects first, keeps quantity, and only prepares: ${choice}`, async () => {

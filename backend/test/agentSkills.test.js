@@ -205,6 +205,27 @@ test('product search caps active tenant matches, projects DTOs and reports trunc
   assert.ok(Object.isFrozen(result.data[0]));
   f.assertNoMutation();
 });
+test('P2A READ matches complete numbers, controlled aliases and explicit subgroup within tenant', async () => {
+  const products = [2, 3].map((group, index) => product(index + 1, {
+    name: `Alimentos M5 FOODS_${group} Ítem 210`, sku: `M5-FOODS_${group}_210` }));
+  products.push(...[211, 1210, 2100].map((number, index) => product(index + 10, {
+    name: `Alimentos M5 FOODS_3 Ítem ${number}`, sku: `M5-FOODS_3_${number}`, category: 'Food 210' })));
+  products.push(product(20, { businessId: 'B', name: 'Item 210', sku: 'M5-FOODS_4_210' }));
+  for (const query of ['food 210', 'foods 210', 'food-210', 'item 210', 'ítem 210', 'item210', 'fods 210', 'fooods 210', 'itme 210']) {
+    const result = await fixture({ products }).run('search_products', { query });
+    assert.equal(result.metadata.totalMatches, 2, query);
+    assert.deepEqual(result.data.map(row => row.sku).sort(), ['M5-FOODS_2_210', 'M5-FOODS_3_210']);
+  }
+  for (const query of ['food 3 210', 'foods 3 210', 'M5-FOODS_3_210']) {
+    const result = await fixture({ products }).run('search_products', { query });
+    assert.equal(result.metadata.totalMatches, 1, query); assert.equal(result.data[0].sku, 'M5-FOODS_3_210');
+  }
+  const missing = await fixture({ products: products.slice(0, 2) }).run('search_products', { query: 'food 211' });
+  assert.equal(missing.metadata.totalMatches, 0);
+  // The initial literal path must not return a longer numeric substring.
+  const numbers = await fixture({ products }).run('search_products', { query: '210' });
+  assert.equal(numbers.metadata.totalMatches, 2);
+});
 test('search treats regex metacharacters and control input as literal text', async () => {
   const f = fixture({ products: [product(1, { name: 'Literal .* [a] $where\n' }), product(2)] });
   assert.equal((await f.run('search_products', { query: '.* [a] $where\n' })).metadata.totalMatches, 1);

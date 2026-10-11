@@ -34,6 +34,20 @@ function fixture({ products = rows, status = 'READY', memory = createConversatio
 }
 const zero = response => { assert.equal(response.code, null); assert.equal(response.usage.totalLlmCalls, 0);
   assert.equal(response.usage.totalTokens, 0); assert.equal(response.usage.metricsComplete, true); };
+test('P2A forecast comparison never substitutes numerically different products and preserves clickable ambiguity', async () => {
+  const products = [2, 3].map((group, index) => ({ ...rows[index], sku: `M5-FOODS_${group}_210`, name: `Foods ${group} Item 210` }));
+  products.push({ ...rows[2], sku: 'M5-FOODS_3_211', name: 'Foods 3 Item 211' });
+  const f = fixture({ products });
+  const ambiguous = await f.send('Compara food 210 con M5-FOODS_3_211');
+  assert.equal(ambiguous.requiresClarification, true); assert.equal(ambiguous.suggestions.length, 2);
+  assert.ok(ambiguous.suggestions.every(row => row.detail.endsWith('_210'))); assert.equal(ambiguous.usage.totalLlmCalls, 0);
+  const result = await f.send('Compara foods 3 210 con M5-FOODS_3_211');
+  zero(result); assert.equal(result.requiresClarification, false);
+  assert.equal(result.evidence[0].recordCount, 2); assert.match(result.answer, /M5-FOODS_3_210/);
+  const missing = await fixture({ products: products.slice(0, 2) }).send('Compara item 211 con M5-FOODS_3_210');
+  assert.equal(missing.requiresClarification, true); assert.equal(missing.suggestions?.length || 0, 0);
+  assert.equal(missing.usage.totalLlmCalls, 0);
+});
 for (const query of ['¿Qué productos tendrán mayor demanda?', 'Muéstrame los productos con mayor demanda prevista',
   'Top 5 por demanda', '¿Cuál tiene la mayor predicción?']) test(`deterministic top: ${query}`, async () => {
   const f = fixture(), result = await f.send(query); zero(result);

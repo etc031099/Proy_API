@@ -226,3 +226,11 @@ test('known supplier without this product offer is distinguished and valid alter
   assert.equal(execution.finish().totalTokens, 0);
   assert.equal(reads.filter(query => query.type === 'vendor').every(query => query.businessId === 'V2'), true);
 });
+test('P2A supplier numeric aliases retain leading-zero equivalence without fuzzy numeric substitution', () => {
+  const { resolveSupplier } = require('../src/agents/replenishmentPlanning');
+  const offers = [{ supplierId: 'vendor-one', supplierName: 'Proveedor sintético 001 FOODS' }];
+  assert.equal(resolveSupplier('1 foods', offers).status, 'MATCH');
+  assert.equal(resolveSupplier('001 foods', offers).status, 'MATCH');
+  assert.equal(resolveSupplier('2 foods', offers).status, 'NOT_FOUND');
+  assert.equal(resolveSupplier('11 foods', offers).status, 'NOT_FOUND');
+});
