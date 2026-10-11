@@ -6,6 +6,14 @@ const quantityWords = { uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, se
   once: 11, doce: 12, veinte: 20, treinta: 30, cincuenta: 50, cien: 100 };
 const numericWords = text => text.replace(/\b(uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|veinte|treinta|cincuenta|cien)\b/gi,
   word => String(quantityWords[word.toLowerCase()]));
+// Validate the entire numeric token; never search for a valid digit suffix.
+const integerToken = (token, minimum = 1) => {
+  const value = Object.hasOwn(quantityWords, token.toLowerCase()) ? quantityWords[token.toLowerCase()] : token;
+  if (!/^\d+$/.test(String(value)) || !Number.isSafeInteger(Number(value))
+    || Number(value) < minimum || Number(value) > 1000000) fail('ACTION_VALIDATION_FAILED');
+  return Number(value);
+};
+const numericToken = '[^\\s,]+(?:,\\d+)?';
 const itemSchema = schema({ ref: string(100), quantity: { ...integer(1000000), minimum: 1 } });
 const extractionSchema = schema({
   action: { ...string(30), enum: ['create_product', 'create_sale', 'create_purchase'] },
@@ -36,27 +44,41 @@ function parseAction(message, action) {
       || /^(?:agrega|añade)\s+([^,]+?)(?=,|\s+a\s+\d|$)/i.exec(message);
     const sku = /\bSKU\s*[:=]?\s*([\w-]+)/i.exec(message);
     const price = /(?:precio\s*[:=]?|\ba)\s*(?:S\/|USD|PEN|EUR|\$|€)?\s*(\d+(?:[.,]\d+)?)/i.exec(message);
-    const stock = /\bstock\s*(?:inicial)?\s*[:=]?\s*(\d+)/i.exec(message);
-    const minimum = /m[ií]nimo\s*[:=]?\s*(\d+)/i.exec(message);
+    const stock = new RegExp(`\\bstock\\s*(?:inicial)?\\s*[:=]?\\s*(${numericToken})`, 'i').exec(message);
+    const minimum = new RegExp(`m[ií]nimo\\s*[:=]?\\s*(${numericToken})`, 'i').exec(message);
     const category = /categor[ií]a\s*[:=]?\s*([^,.]+)/i.exec(message);
     const supplier = /\bprove(?:edor|edro)\s+(.+?)(?=,|\s+precio de compra|$)/i.exec(message);
     const purchasePrice = /precio de compra\s*[:=]?\s*(?:S\/|USD|PEN|EUR|\$|€)?\s*(\d+(?:[.,]\d+)?)/i.exec(message);
     if (name) product.name = name[1].trim(); if (sku) product.sku = sku[1];
-    if (price) product.price = Number(price[1].replace(',', '.')); if (stock) product.stock = Number(stock[1]);
-    if (minimum) product.minStockLevel = Number(minimum[1]); if (category) product.category = category[1].trim();
+    if (price) product.price = Number(price[1].replace(',', '.')); if (stock) product.stock = integerToken(stock[1], 0);
+    if (minimum) product.minStockLevel = integerToken(minimum[1], 0); if (category) product.category = category[1].trim();
     if (money(price?.[0] || '') || money(message)) product.currency = money(price?.[0] || '') || money(message);
     return { action, product, ...(supplier ? { supplierRef: supplier[1].trim() } : {}),
       ...(purchasePrice ? { purchasePrice: Number(purchasePrice[1].replace(',', '.')) } : {}) };
   }
   message = message.replace(/^(vende|vender|compre|compré|comprar|compra)\s+(\w+)\b/i,
     (match, command, word) => Object.hasOwn(quantityWords, word.toLowerCase()) ? `${command} ${quantityWords[word.toLowerCase()]}` : match);
-  if (/(?:^|\s)-\d+\s*(?:unidades?|de|del)/i.test(message)) fail('ACTION_VALIDATION_FAILED');
   const supplier = /\bprove(?:edor|edro)\s+(.+?)(?=,|\s+(?:en|a)\s+(?:cr[eé]dito|contado)|$)/i.exec(message);
   const customer = /\b(?:al|para el|para|cliente|a)\s+(?:cliente\s+)?([a-záéíóúñ].+?)(?=,|\s+(?:en|a)\s+(?:cr[eé]dito|contado)|$)/i.exec(message.replace(/(?:al|de)\s+prove(?:edor|edro).*/i, '').replace(/a\s+cr[eé]dito.*/i, ''));
   const itemText = message.replace(/\s+(?:(?:al|del|de|con el)\s+)?prove(?:edor|edro)\s+.*/i, '').replace(/\s+(?:al|para el|para|a)\s+(?:cliente\s+)?[A-Za-z].*/i, '')
     .replace(/\s+(?:fiado|(?:en|a|al)\s+(?:cr[eé]dito|contado)).*/i, '').replace(/\s+(?:moneda|en)\s+(?:PEN|USD|EUR|soles|d[oó]lares|euros).*/i, '');
-  const items = [...itemText.matchAll(/(?:^|\b)(\d+)\s+(?:unidades?\s+)?(?:de(?:l)?\s+)?(?:SKU\s+|producto\s+)?(.+?)(?=\s*(?:,|\by\s+\d+)|[.!?]*$)/gi)]
-    .map(match => ({ quantity: Number(match[1]), ref: match[2].trim().replace(/[.!?]+$/, '').replace(/^(?:la|el)\s+/i, '') }));
+  const content = itemText.replace(/^(?:vende|vender|compre|compré|comprar|compra|registra(?:r)?(?: una)? (?:venta|compra))\s*(?:de\s+)?/i, '');
+  // A comma inside a number stays part of that token. Quantities only occur at
+  // the beginning of an item, never inside its name, item number or SKU.
+  const segments = content.split(/(?<=\S),\s+|(?<=[^\d\s]),|\s+y\s+(?=[+\-−]?\d|uno\b|una\b|dos\b|tres\b|cuatro\b|cinco\b|seis\b|siete\b|ocho\b|nueve\b|diez\b|once\b|doce\b|veinte\b|treinta\b|cincuenta\b|cien\b)/i);
+  const items = [];
+  for (const segment of segments) {
+    const match = /^\s*(\S+)(?:\s+(?:unidades?\s+)?(?:de(?:l)?\s+)?(?:SKU\s+|producto\s+)?(.+?))?\s*$/.exec(segment);
+    if (!match) continue;
+    if (/^[+\-−]?(?:\d|[.,]\d)/.test(match[1]) || Object.hasOwn(quantityWords, match[1].toLowerCase())) {
+      // A raw ObjectId/SKU is a reference, not a quantity.
+      if (/^[a-f\d]{24}$/i.test(match[1])) continue;
+      const quantity = integerToken(match[1]);
+      if (segments.length > 1 && !match[2]) fail('ACTION_VALIDATION_FAILED');
+      if (/,\d/.test(match[2] || '')) fail('ACTION_VALIDATION_FAILED');
+      if (match[2]) items.push({ quantity, ref: match[2].trim().replace(/[.!?]+$/, '').replace(/^(?:la|el)\s+/i, '') });
+    } else if (segments.length > 1) fail('ACTION_VALIDATION_FAILED');
+  }
   if (!items.length) {
     const ref = message.replace(/^(?:vende|vender|compre|compré|comprar|compra|registra(?:r)?(?: una)? (?:venta|compra))\s*(?:de\s+)?/i, '').trim();
     if (ref) items.push({ ref });
@@ -127,11 +149,11 @@ async function resolveAction(extracted, context, resolver = resolveReference, su
 function parseStockRule(message) {
   const text = normalize(numericWords(message)).trim().replace(/[.!?]+$/, '');
   // Arrival at N is explicitly normalized to <= N (and shown in the preview).
-  const numeric = '(-?\\d+(?:[.,]\\d+)?)';
+  const numeric = `(${numericToken})`;
   const inclusive = new RegExp(`(?:menor o igual a|<=|llegue a)\\s*${numeric}|${numeric}\\s*(?:unidades?\\s+)?o menos`).exec(text);
   const strict = new RegExp(`(?:menor que|menos de|baja de|<)\\s*${numeric}`).exec(text);
   const condition = inclusive || strict;
-  const threshold = condition ? Number((condition[1] || condition[2]).replace(',', '.')) : undefined;
+  const threshold = condition ? integerToken(condition[1] || condition[2], 0) : undefined;
   const sku = /\bSKU\s*[:=]?\s*([\w-]+)/i.exec(message) || /\b([A-Za-z][\w]*[-_][\w-]+)\b/.exec(message);
   const named = /(?:alerta(?: de (?:stock|inventario))? para|avisame (?:si|cuando))\s+(.+?)(?=\s+(?:cuando|si|tenga|baja|stock|llegue)\b|$)/.exec(text);
   const namedRef = named?.[1]?.trim();
@@ -139,4 +161,4 @@ function parseStockRule(message) {
   return { action: 'create_stock_alert_rule', ...(ref && !/^(?:este|ese|el|este producto|ese producto|el producto)$/.test(ref) ? { items: [{ ref }] } : {}),
     ...(condition ? { operator: inclusive ? '<=' : '<', threshold } : {}) };
 }
-module.exports = { actionIntent, parseAction, resolveAction, resolveReference, numericWords, extractionSchema, validateExtraction: value => validateArgs(extractionSchema, value) };
+module.exports = { actionIntent, parseAction, resolveAction, resolveReference, numericWords, integerToken, extractionSchema, validateExtraction: value => validateArgs(extractionSchema, value) };

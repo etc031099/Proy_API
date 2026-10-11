@@ -1,7 +1,7 @@
 const { Contact } = require('../models');
 const { schema, string, integer, number, objectId, validateArgs } = require('./contracts');
 const { getActionSkill } = require('./skills');
-const { resolveAction, numericWords } = require('./actionInput');
+const { resolveAction, numericWords, integerToken } = require('./actionInput');
 const { normalize, configuredSuppliers, resolveReference } = require('./entityResolution');
 const TTL_MS = 20 * 60 * 1000;
 // REQUIRED comes from the write contract. Only supplierPrices is RECOMMENDED;
@@ -105,6 +105,7 @@ function updateDraft(previous, extracted, message) {
     if (previous && missing.length === 1 && !Object.keys(extracted.product || {}).length) {
       const key = missing[0], value = message.trim();
       if (['name', 'sku', 'category', 'currency'].includes(key)) draft.product[key] = key === 'currency' ? value.toUpperCase() : value;
+      else if (['stock', 'minStockLevel'].includes(key)) draft.product[key] = integerToken(value, 0);
       else if (/^\d+(?:[.,]\d+)?$/.test(value)) draft.product[key] = Number(value.replace(',', '.'));
     }
     if (/sin proveedor|continuar sin|hacerlo manual|mas tarde/.test(text)) draft.enrichment = 'skip';
@@ -116,11 +117,13 @@ function updateDraft(previous, extracted, message) {
       if (price && (!explicitCurrency || explicitCurrency === draft.product.currency)) { draft.product.supplierPrices = [{ supplierId: draft.supplierId, purchasePrice: Number(price[1].replace(',', '.')) }]; draft.enrichment = 'done'; }
     }
   } else {
-    const correction = /(?:mejor(?: que)?(?: sean)?|pon|cantidad(?: del producto (\d+))? a|cantidad)\s+(\d+)\b/.exec(text);
+    // Entity normalization removes punctuation; numeric corrections must not use it.
+    const numericText = numericWords(message).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+    const correction = /(?:mejor(?: que)?(?: sean)?|pon|cantidad(?: del producto (\d+))? a|cantidad)\s+(\S+)/.exec(numericText);
     if (correction && draft.items?.length) {
       const index = correction[1] ? Number(correction[1]) - 1 : draft.items.length === 1 ? 0 : -1;
-      if (draft.items[index]) draft.items[index].quantity = Number(correction[2]);
-    } else if (previous?.missingFields?.includes('quantity') && /^\d+(?: unidades?)?$/.test(text)) draft.items[previous.itemIndex || 0].quantity = Number(text.split(' ')[0]);
+      if (draft.items[index]) draft.items[index].quantity = integerToken(correction[2]);
+    } else if (previous?.missingFields?.includes('quantity') && /^\S+(?: unidades?)?$/.test(numericText)) draft.items[previous.itemIndex || 0].quantity = integerToken(numericText.split(' ')[0]);
     else if (!previous || /^(?:vende|vender|compre|compra|comprar|registra)/.test(text)) draft.items = extracted.items;
     const changeProduct = /^(?:no es .+?,? es|cambia (?:el )?producto (?:a|por)|producto|sku)\s+(.+)$/.exec(text);
     if (changeProduct && draft.items?.length === 1) { draft.items[0].ref = changeProduct[1].replace(/^la de /, ''); delete draft.selection; }

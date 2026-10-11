@@ -75,7 +75,12 @@ const withActionAssistant = (runtime, service, options = {}) => {
           delete previous.pendingActionId;
         }
       }
-      let extracted = parseAction(input.message, skillId);
+      let extracted;
+      try { extracted = parseAction(input.message, skillId); }
+      catch (error) {
+        if (error.code !== 'ACTION_VALIDATION_FAILED') throw error;
+        return response('Revisa los valores: la cantidad debe ser un entero mayor que cero; el stock, mínimo y umbral deben ser enteros desde cero.', undefined, true);
+      }
       if (skillId === 'create_stock_alert_rule' && !previous && !extracted.items?.length && input.conversationId) {
         const state = await runtime.getContextSnapshot?.(req, input.conversationId);
         const selected = require('../agents/memory').compactSelectedProductReference(state?.selectedProductReference, now);
@@ -83,18 +88,28 @@ const withActionAssistant = (runtime, service, options = {}) => {
         if (entity?.id && (!entity.type || entity.type === 'product')) extracted.items = [{ ref: entity.sku || entity.id }];
       }
       const unclear = skillId !== 'create_stock_alert_rule' && !previous && !extracted.direct && (skillId === 'create_product' ? !Object.keys(extracted.product || {}).length
-        : !extracted.items?.length || (!extracted.items[0].quantity && /\b(?:tres|dos|cinco)\s+botellas/.test(normalized)));
+        : !extracted.items?.length || /\b(?:tres|dos|cinco)\s+botellas/.test(normalized));
       if (unclear) {
         execution = createAgentExecution({ context: context.agentContext, ...(options.onEvent ? { onEvent: options.onEvent } : {}), ...(options.provider ? { provider: options.provider } : {}) });
         try {
           const result = await execution.generateStructured({ agentId: 'operations', schema: extractionSchema,
             systemInstruction: 'Extrae solamente campos explícitos. No inventes valores, precios, monedas, clientes ni proveedores. No ejecutes acciones. JSON breve.',
             messages: [{ role: 'user', text: redact(input.message) }] });
-          extracted = validateExtraction(result.output);
+          const interpreted = validateExtraction(result.output);
+          if (extracted.items?.some(item => item.quantity !== undefined)
+            && (interpreted.items?.length !== extracted.items.length
+              || extracted.items.some((item, index) => item.quantity !== undefined && item.quantity !== interpreted.items[index].quantity)))
+            require('./contracts').fail('ACTION_VALIDATION_FAILED');
+          extracted = interpreted;
           if (extracted.action !== skillId) require('./contracts').fail('ACTION_VALIDATION_FAILED');
         } finally { execution.finish(); }
       }
-      const draft = updateDraft(explicit ? undefined : previous, extracted, input.message);
+      let draft;
+      try { draft = updateDraft(explicit ? undefined : previous, extracted, input.message); }
+      catch (error) {
+        if (error.code !== 'ACTION_VALIDATION_FAILED') throw error;
+        return response('Indica una cantidad entera válida: mayor que cero para ventas/compras, o desde cero para stock, mínimo y umbral.', undefined, true);
+      }
       if (extracted.direct && (explicit || !previous)) draft.direct = extracted.direct;
       const resolved = applyResolution(draft, await resolveDraft(draft, context, options), now());
       suggestions = resolved.suggestions || [];
