@@ -32,12 +32,21 @@ const compactProductSelection = (value, now) => {
       ...(recommendedQty !== null ? { recommendedQty } : {}), ...(status ? { status } : {}) };
   }).filter(Boolean);
   if (!items.length) return null;
-  const continuationIntent = ['product_details', 'demand_forecast', 'product_sales_summary'].includes(value.continuationIntent)
+  const continuationIntent = ['product_details', 'demand_forecast', 'product_sales_summary', 'stock_alert_rules',
+    'inventory_alert_events', 'inventory_alert_deliveries', 'inventory_alert_channel_deliveries'].includes(value.continuationIntent)
     ? value.continuationIntent : null;
   const continuationPeriod = value.continuationPeriod && isDate(value.continuationPeriod.startDate)
     && isDate(value.continuationPeriod.endDate) && value.continuationPeriod.startDate <= value.continuationPeriod.endDate
     ? { startDate: value.continuationPeriod.startDate, endDate: value.continuationPeriod.endDate } : null;
-  return deepFreeze({ semanticReference: 'last_product_list', sourceIntent: value.sourceIntent, items,
+  const filters = value.continuationFilters || {};
+  const allowedStatuses = { inventory_alert_events: ['OPEN', 'RESOLVED'], inventory_alert_deliveries: ['PENDING', 'IN_FLIGHT', 'DELIVERED', 'FAILED'],
+    inventory_alert_channel_deliveries: ['PENDING', 'IN_FLIGHT', 'DELIVERED', 'FAILED', 'SKIPPED'] };
+  const continuationFilters = {
+    ...(allowedStatuses[continuationIntent]?.includes(filters.status) ? { status: filters.status } : {}),
+    ...(continuationIntent === 'inventory_alert_events' && filters.source === 'stock_alert_rule' ? { source: filters.source } : {}),
+    ...(Number.isInteger(filters.limit) && filters.limit > 0 && filters.limit <= 20 ? { limit: filters.limit } : {})
+  };
+  return deepFreeze({ semanticReference: 'last_product_list', sourceIntent: value.sourceIntent, items, continuationFilters,
     ...(continuationIntent ? { continuationIntent } : {}), ...(continuationPeriod ? { continuationPeriod } : {}), createdAt: timestamp });
 };
 const compactSelectedProductReference = (value, now = Date.now) => {

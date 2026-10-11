@@ -88,8 +88,9 @@ const productCandidateSelection = (message, state) => {
     .replace(/[\u0300-\u036f]/g, '').toLowerCase().trim() === text));
   if (candidate) return { plan: { intent: selection.continuationIntent || 'product_details',
     agent: selection.continuationIntent === 'demand_forecast' ? 'analyst' : 'operations',
-    selector: { productId: candidate.id }, selectedProduct: candidate,
-    ...(selection.continuationPeriod ? { period: selection.continuationPeriod } : {}), limit: 1 } };
+    selector: selection.continuationIntent?.startsWith('inventory_alert_') || selection.continuationIntent === 'stock_alert_rules'
+      ? { ...selection.continuationFilters, sku: candidate.sku } : { productId: candidate.id }, selectedProduct: candidate,
+    ...(selection.continuationPeriod ? { period: selection.continuationPeriod, periodExplicit: true } : {}), limit: 1 } };
   return selectionLike ? { invalid: true } : null;
 };
 const supplierProductPage = (message, state, now) => {
@@ -219,7 +220,11 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
               plan.clarificationQuestion = matched.metadata.totalMatches === 0
                 ? `No encontré productos que coincidan con «${plan.lookupQuery}». Revisa el nombre o indícame el SKU.`
                 : `Encontré varias coincidencias para «${plan.lookupQuery}». Elige una o indícame su SKU.`;
-            } else selector = { productId: matched.data[0].id };
+            } else {
+              plan.selectedProduct = matched.data[0];
+              selector = plan.intent.startsWith('inventory_alert_') || plan.intent === 'stock_alert_rules'
+                ? { ...selector, sku: matched.data[0].sku } : { productId: matched.data[0].id };
+            }
           }
           if (selector?.sku && ['demand_forecast', 'explain_replenishment'].includes(plan.intent)) {
             const product = await run('operations', 'get_product_details', selector);
@@ -227,16 +232,16 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
           }
           if (!plan.clarificationQuestion) switch (plan.intent) {
             case 'stock_alert_rules':
-              await run('operations', 'list_stock_alert_rules', plan.selector || {});
+              await run('operations', 'list_stock_alert_rules', selector || {});
               break;
             case 'inventory_alert_events':
-              await run('operations', 'list_inventory_alerts', plan.selector || {});
+              await run('operations', 'list_inventory_alerts', selector || {});
               break;
             case 'inventory_alert_deliveries':
-              await run('operations', 'list_inventory_alert_outbox_events', plan.selector || {});
+              await run('operations', 'list_inventory_alert_outbox_events', selector || {});
               break;
             case 'inventory_alert_channel_deliveries':
-              await run('operations', 'list_inventory_alert_channel_deliveries', plan.selector || {});
+              await run('operations', 'list_inventory_alert_channel_deliveries', selector || {});
               break;
             case 'tenant_access_denied':
               answer = 'Solo puedo consultar información del negocio asociado a tu sesión. No puedo acceder ni mostrar datos de otros negocios o usuarios. Puedo ayudarte con la información de tu propio negocio.';
@@ -553,6 +558,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             lastEntity: null, selectedProductReference: null,
             lastProductSelection: search.result.data.length ? { sourceIntent: 'search_product', continuationIntent: plan.intent,
               continuationPeriod: plan.period,
+              continuationFilters: plan.selector,
               items: search.result.data, createdAt } : null });
           }
         } else {
@@ -685,7 +691,8 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
                   : plan.intent === 'demand_forecast' && (plan.selector?.productId || plan.selector?.sku || plan.lookupQuery) && entities?.length === 1
                     ? { id: entities[0].id || entities[0].productId, sku: entities[0].sku, name: entities[0].name || entities[0].label }
                     : null } : {}),
-            ...(plan.selectedProduct && ['product_details', 'product_sales_summary'].includes(plan.intent)
+            ...(plan.selectedProduct && ['product_details', 'product_sales_summary', 'stock_alert_rules', 'inventory_alert_events',
+              'inventory_alert_deliveries', 'inventory_alert_channel_deliveries'].includes(plan.intent)
               && state.lastProductSelection?.sourceIntent === 'search_product'
               ? { lastProductSelection: null } : {}),
             lastPeriod: plan.intent === 'sales_causality' ? plan.period : latest?.metadata.period || plan.period,

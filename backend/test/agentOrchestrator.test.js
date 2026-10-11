@@ -22,6 +22,112 @@ const forecast = { status: 'READY', anchorOperationalDate: '2025-07-01', product
     stockAtAnchor: 2, salesLast7Days: 3, safetyStock: 5, recommendedQty: 12, inventoryStatus: 'REPONER' }
 ] };
 
+const scopedProducts = () => [2, 3].map((n, i) => ({ ...product(n), sku: `M5-FOODS_${i + 2}_210`, name: `Foods ${i + 2} item 210` }));
+const assertNoLLM = result => { assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
+  assert.ok([null, 'AGENT_CLARIFICATION_REQUIRED'].includes(result.code), result.code); };
+for (const choice of ['2', 'el segundo', 'M5-FOODS_3_210']) {
+  test(`P1C product sales candidate ${choice} retains date and follow-ups`, async () => {
+    const f = fixture({ products: scopedProducts() }), conversationId = randomUUID();
+    const first = await f.run('¿Cuánto vendí de food 210 ayer?', conversationId);
+    assertNoLLM(first); assert.equal(first.suggestions.length, 2); assert.equal(first.requiresClarification, true);
+    const second = await f.run(choice, conversationId);
+    assertNoLLM(second); assert.equal(second.intent, 'product_sales_summary');
+    const pipeline = f.reads.find(row => row.model === 'Transaction').pipeline;
+    assert.equal(pipeline[0].$match.date.$gte.toISOString(), '2025-01-19T00:00:00.000Z');
+    assert.equal(pipeline[0].$match.businessId, 'A');
+    assert.equal(pipeline.find(row => row.$match?.['products.productId']).$match['products.productId'], id(3));
+    assertNoLLM(await f.run('¿Y anteayer?', conversationId));
+    assertNoLLM(await f.run('¿Y cuánto vendí?', conversationId));
+    const last = f.reads.filter(row => row.model === 'Transaction').at(-1).pipeline;
+    assert.equal(last[0].$match.date.$gte.toISOString(), '2025-01-18T00:00:00.000Z');
+    assert.equal(last.find(row => row.$match?.['products.productId']).$match['products.productId'], id(3));
+  });
+}
+test('P1C explicit product, single informal match, missing product and general sales stay distinct', async () => {
+  for (const query of ['¿Cuánto vendí de M5-FOODS_3_210 ayer?', '¿Cuánto vendí de food 210 ayer?']) {
+    const f = fixture({ products: [scopedProducts()[1]] }); const result = await f.run(query);
+    assertNoLLM(result); assert.equal(result.intent, 'product_sales_summary'); assert.equal(result.requiresClarification, false);
+  }
+  const missing = await fixture({ products: [] }).run('¿Cuánto vendí de food 210 ayer?');
+  assertNoLLM(missing); assert.equal(missing.requiresClarification, true);
+  const general = await fixture().run('ventas de ayer'); assertNoLLM(general); assert.equal(general.intent, 'sales_summary');
+});
+for (const [query, intent, model, status] of [
+  ['alertas generadas del food 210', 'inventory_alert_events', 'InventoryAlert', undefined],
+  ['¿Se entregó la alerta de food 210?', 'inventory_alert_deliveries', 'InventoryAlertOutboxEvent', 'DELIVERED'],
+  ['¿Se envió por Telegram la alerta de food 210?', 'inventory_alert_channel_deliveries', 'InventoryAlertChannelDelivery', 'DELIVERED'],
+  ['¿Qué Telegram fueron omitidas para food 210?', 'inventory_alert_channel_deliveries', 'InventoryAlertChannelDelivery', 'SKIPPED'],
+  ['¿Qué reglas de alerta tengo para food 210?', 'stock_alert_rules', 'StockAlertRule', undefined]
+]) test(`P1C ${intent} resolves clickable products without losing filters`, async () => {
+  const f = fixture({ products: scopedProducts() }), conversationId = randomUUID();
+  const ambiguous = await f.run(query, conversationId); assertNoLLM(ambiguous);
+  assert.equal(ambiguous.suggestions.length, 2); assert.equal(f.reads.some(row => row.model === model), false);
+  const selected = await f.run('M5-FOODS_3_210', conversationId); assertNoLLM(selected);
+  assert.equal(selected.intent, intent); assert.equal(selected.requiresClarification, false);
+  const read = f.reads.find(row => row.model === model); assert.ok(read);
+  const filter = read.match || read.pipeline[0].$match;
+  assert.equal(filter.businessId, 'A'); assert.equal(filter.status, status);
+  if (model === 'InventoryAlertChannelDelivery') assert.equal(filter.sku, 'M5-FOODS_3_210');
+  else assert.equal(filter.productId, id(3));
+  assert.equal(selected.pendingAction, undefined);
+});
+test('P1C alert domains, contextual product and unsupported periods are deterministic', async () => {
+  for (const [query, intent, status] of [
+    ['¿Qué alertas tengo abiertas?', 'inventory_alert_events', 'OPEN'],
+    ['¿Qué reglas de alerta tengo?', 'stock_alert_rules', undefined],
+    ['¿Qué alertas están pendientes de entrega?', 'inventory_alert_deliveries', 'PENDING'],
+    ['¿Qué se envió por Telegram?', 'inventory_alert_channel_deliveries', 'DELIVERED'],
+    ['¿Qué alertas Telegram se enviaron?', 'inventory_alert_channel_deliveries', 'DELIVERED']
+  ]) { const plan = routeDeterministically(query, {}, clock()); assert.equal(plan.intent, intent); assert.equal(plan.selector?.status, status); }
+  const memory = { selectedProductReference: { id: id(3), sku: 'M5-FOODS_3_210' } };
+  assert.deepEqual(routeDeterministically('¿Y sus alertas abiertas?', memory, clock()).selector, { status: 'OPEN', sku: 'M5-FOODS_3_210' });
+  assert.equal(routeDeterministically('¿Y las alertas de food 511?', memory, clock()).lookupQuery, 'food 511');
+  for (const query of ['alertas abiertas ayer', 'alertas generadas desde ayer hasta hoy']) {
+    const result = await fixture().run(query); assertNoLLM(result); assert.equal(result.requiresClarification, true);
+    assert.equal(result.usage.totalSkillCalls, 0); assert.match(result.answer, /no admiten un filtro por periodo/);
+  }
+});
+test('P1C alert lookup handles zero/one matches and excludes foreign products', async () => {
+  for (const query of ['alertas generadas del food 210', '¿Se entregó la alerta de food 210?',
+    '¿Qué Telegram fueron omitidas para food 210?']) {
+    for (const count of [0, 1]) {
+      const own = count ? [scopedProducts()[1]] : [];
+      const foreign = { ...scopedProducts()[0], businessId: 'B' };
+      const f = fixture({ products: [...own, foreign] }); const result = await f.run(query);
+      assertNoLLM(result); assert.equal(result.requiresClarification, count === 0);
+      assert.equal(result.usage.totalSkillCalls, count ? 2 : 1);
+      assert.equal(result.pendingAction, undefined);
+      assert.ok(f.reads.every(row => (row.match || row.pipeline[0].$match).businessId === 'A'));
+    }
+  }
+});
+test('P1C contextual alert product is scoped and new explicit product wins', async () => {
+  const old = scopedProducts()[1], next = { ...product(4), sku: 'M5-FOODS_3_511', name: 'Foods 511' };
+  const f = fixture({ products: [old, next] }), conversationId = randomUUID();
+  await f.run('¿Cuánto stock tiene M5-FOODS_3_210?', conversationId);
+  assertNoLLM(await f.run('¿Y sus alertas abiertas?', conversationId));
+  assert.ok(f.reads.some(row => row.model === 'InventoryAlert' && row.match.productId === id(3) && row.match.status === 'OPEN'));
+  assertNoLLM(await f.run('¿Y las alertas de food 511?', conversationId));
+  assert.equal(f.reads.filter(row => row.model === 'InventoryAlert').at(-1).match.productId, id(4));
+  const isolated = await f.run('¿Y sus alertas abiertas?', randomUUID()); assertNoLLM(isolated);
+  assert.equal(isolated.requiresClarification, true); assert.equal(isolated.usage.totalSkillCalls, 0);
+});
+test('P1C restored selection retains safe alert filters and rejects private selector injection', async () => {
+  const f = fixture({ products: scopedProducts() }), conversationId = randomUUID();
+  await f.run('¿Qué Telegram fueron omitidas para food 210?', conversationId);
+  const snapshot = await f.orchestrator.getContextSnapshot(req(), conversationId);
+  assert.deepEqual(snapshot.lastProductSelection.continuationFilters, { status: 'SKIPPED', limit: 20 });
+  const restored = fixture({ products: scopedProducts() });
+  await restored.orchestrator.restoreContext(req(), conversationId, { ...snapshot, lastProductSelection: {
+    ...snapshot.lastProductSelection, continuationFilters: { status: 'SKIPPED', limit: 20, businessId: 'B', productId: id(99), startDate: '2020-01-01' }
+  } });
+  const clean = await restored.orchestrator.getContextSnapshot(req(), conversationId);
+  assert.deepEqual(clean.lastProductSelection.continuationFilters, { status: 'SKIPPED', limit: 20 });
+  const result = await restored.run('el segundo', conversationId); assertNoLLM(result);
+  assert.equal(result.intent, 'inventory_alert_channel_deliveries');
+  assert.equal(restored.reads.find(row => row.model === 'InventoryAlertChannelDelivery').match.sku, 'M5-FOODS_3_210');
+});
+
 for (const query of ['precio food 511', 'precio del food 511', '¿Y el precio de food 511?',
   '¿Y está activo food 511?', 'stock food 511', 'mínimo food 511', 'predicción food 511']) {
   test(`explicit reference wins over selected context: ${query}`, async () => {
@@ -194,8 +300,19 @@ const fixture = ({ products = [product(1), product(2), product(3, 'B')], contact
   const adapter = { async generateStructured(input) { calls.push({ type: 'structured', input }); return fakeProvider.generateStructured(input); },
     async generateWithTools(input) { calls.push({ type: 'tools', input }); return fakeProvider.generateWithTools(input); } };
   if (fakeProvider.forModel) adapter.forModel = (model, timeoutMs) => fakeProvider.forModel(model, timeoutMs);
+  const alertModels = Object.fromEntries(['StockAlertRule', 'InventoryAlert', 'InventoryAlertOutboxEvent', 'InventoryAlertChannelDelivery']
+    .map(model => [model, {
+      find(match) { assert.ok(match.businessId); reads.push({ model, match });
+        return { select() { return this; }, sort() { return this; }, limit() { return this; }, maxTimeMS() { return this; },
+          lean() { return this; }, exec: async () => [] }; },
+      countDocuments(match) { assert.ok(match.businessId); reads.push({ model, match });
+        return { maxTimeMS() { return this; }, exec: async () => 0 }; },
+      aggregate(pipeline) { assert.ok(pipeline[0].$match.businessId); reads.push({ model, pipeline });
+        return { option() { return this; }, exec: async () => [] }; }
+    }]));
+  Product.collection = { name: 'products' };
   const orchestrator = createAgentOrchestrator({ provider: adapter, memory, clock: now, onEvent,
-    dependencies: { models: { Product, Transaction, Contact }, forecastService, toObjectId: value => value } });
+    dependencies: { models: { Product, Transaction, Contact, ...alertModels }, forecastService, toObjectId: value => value } });
   return { calls, reads, orchestrator, run: (message, conversationId, request = req()) => orchestrator.handle(request, { message, ...(conversationId ? { conversationId } : {}) }) };
 };
 

@@ -268,6 +268,62 @@ const routeCommercial = (message, memory = {}) => {
 };
 const PERIOD_INTENTS = ['sales_summary', 'top_selling_products', 'product_sales_summary', 'recent_transactions'];
 const ordinalReference = ordinalSelection;
+const scopeReadProduct = (plan, reference, memory, contextual = false) => {
+  const sku = reference && (canonicalProductSku(reference) || reference.match(/\bSKU-[\w.-]{1,100}\b/i)?.[0]);
+  if (sku) return { ...plan, selector: { ...plan.selector, sku } };
+  if (reference && !/^(?:ese|este|el mismo|su)\s+producto$/.test(reference)) {
+    if (/^[a-f\d]{24}$/i.test(reference) || isTemporalOnlyReference(reference)) return clarify('Indica el nombre o SKU del producto que deseas consultar.');
+    return { ...plan, lookupQuery: reference, explicitEntity: true };
+  }
+  if (contextual || reference) {
+    const product = memory.selectedProductReference;
+    if (!product?.sku) return clarify('¿Qué producto deseas consultar? Indica su SKU o selecciónalo de la lista.');
+    return { ...plan, selector: { ...plan.selector, sku: product.sku } };
+  }
+  return plan;
+};
+const routeAlertRead = (message, memory, now) => {
+  const text = normalize(message);
+  if (/\b(?:crea|crear|activa|activar|desactiva|desactivar|deshabilita|habilita|elimina|borra|modifica|edita)\b/.test(text)) return null;
+  const telegram = /\btelegram\b/.test(text);
+  const alerts = /\balertas?\b/.test(text);
+  let plan;
+  if (telegram && (alerts || /\b(?:envio|enviaron|enviadas?|omitidas?|entregas?|notificaciones?)\b/.test(text))) {
+    plan = { intent: 'inventory_alert_channel_deliveries', agent: 'operations', selector: { limit: 20,
+      ...(/\bpendientes?\b/.test(text) ? { status: 'PENDING' }
+        : /\b(?:fallaron|fallidas?)\b/.test(text) ? { status: 'FAILED' }
+          : /\bomitidas?\b/.test(text) ? { status: 'SKIPPED' }
+            : /\b(?:envio|enviaron|enviadas?|entregadas?)\b/.test(text) ? { status: 'DELIVERED' } : {}) } };
+  } else if (/\b(?:entrega|entregas|entrego)\b/.test(text)
+    && (alerts || /\b(?:pendientes?|completad[oa]s?|entregad[oa]s?|fallid[oa]s?|fallaron|en proceso|procesando)\b/.test(text))) {
+    plan = { intent: 'inventory_alert_deliveries', agent: 'operations', selector: { limit: 20,
+      ...(/\b(?:completad[oa]s?|entregad[oa]s?|entrego)\b/.test(text) ? { status: 'DELIVERED' }
+        : /\b(?:fallid[oa]s?|fallaron)\b/.test(text) ? { status: 'FAILED' }
+          : /\b(?:en proceso|procesando)\b/.test(text) ? { status: 'IN_FLIGHT' }
+            : /\bpendientes?\b/.test(text) ? { status: 'PENDING' } : {}) } };
+  } else if (alerts && /\b(?:generad[oa]s?|generaron|produjeron|producid[oa]s?|ocurrid[oa]s?|abiertas?|resueltas?|resolvieron)\b/.test(text)) {
+    plan = { intent: 'inventory_alert_events', agent: 'operations', selector: {
+      ...(/\breglas?\s+de\s+stock\b/.test(text) ? { source: 'stock_alert_rule' } : {}),
+      ...(/\babiertas?\b/.test(text) ? { status: 'OPEN' } : /\b(?:resueltas?|resolvieron)\b/.test(text) ? { status: 'RESOLVED' } : {}) } };
+  } else if ((alerts && /\b(?:reglas?|configuradas?|configurados?|tengo|stock)\b/.test(text))
+    || (memory.lastIntent === 'stock_alert_rules' && /^[¿?\s]*y\s+para\b/.test(text))) {
+    plan = { intent: 'stock_alert_rules', agent: 'operations' };
+  } else if (alerts) plan = { intent: 'inventory_alert_events', agent: 'operations', selector: {} };
+  if (!plan) return null;
+  // These existing skills expose recent records, but accept no date arguments.
+  if (relativeSalesPeriod(text, now) || parseRequestedDate(text)
+    || /\b(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo|manana|20\d{2}-\d{2}-\d{2})\b/.test(text)
+    || /\b(?:en|de|del)\s+(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)\b/.test(text))
+    return clarify('Estas consultas de alertas no admiten un filtro por periodo. Puedo mostrar los registros recientes y filtrar por producto y estado.');
+  const sku = canonicalProductSku(message) || message.match(/\bSKU-[\w.-]{1,100}\b/i)?.[0];
+  const targetText = text.replace(/[¿?¡!]/g, '').trim();
+  const target = targetText.match(/\bproducto\s+(.+)$/)?.[1]
+    || targetText.match(/\b(?:del|para|de)\s+(?:el\s+)?((?:(?!\b(?:de|del|para)\b).)+)$/)?.[1];
+  const reference = sku || (target && !/^(?:inventario|stock|entrega|alertas?|mis\s+alertas?|reglas?\s+de\s+stock)\b/.test(target)
+    ? target.replace(/\s+(?:abiertas?|resueltas?|pendientes?|entregadas?|enviadas?|omitidas?|fallidas?)$/, '').trim() : undefined);
+  const contextual = /\b(?:sus|su|ese producto|este producto)\b/.test(text);
+  return scopeReadProduct(plan, reference, memory, contextual);
+};
 const routeTemporalGuard = (message, memory = {}, now = new Date(), businessId) => {
   const text = normalize(message);
   const relative = relativeSalesPeriod(text, now);
@@ -302,45 +358,8 @@ const routeDeterministically = (message, memory = {}, now = new Date(), conversa
   // Forecast dates must win before a product/context route can request replay.
   const temporalGuard = routeTemporalGuard(message, memory, now, businessId);
   if (temporalGuard) return temporalGuard;
-  const alertSku = canonicalProductSku(message) || message.match(/\bSKU-[\w.-]{1,100}\b/i)?.[0];
-  if (/\btelegram\b/.test(alertText) && /\b(?:alertas?|notificaciones?|entregas?)\b/.test(alertText)
-    && !/\b(?:crea|crear|activa|activar|desactiva|desactivar)\b/.test(alertText)) {
-    return { intent: 'inventory_alert_channel_deliveries', agent: 'operations', selector: {
-      ...(alertSku ? { sku: alertSku } : {}), limit: 20,
-      ...(/\bpendientes?\b/.test(alertText) ? { status: 'PENDING' }
-        : /\b(?:fallaron|fallidas?)\b/.test(alertText) ? { status: 'FAILED' }
-          : /\b(?:envio|enviadas?|entregadas?)\b/.test(alertText) ? { status: 'DELIVERED' }
-            : /\bomitidas?\b/.test(alertText) ? { status: 'SKIPPED' } : {})
-    } };
-  }
-  const deliveryStatus = /\b(?:pendientes?|en proceso|procesando|completad[oa]s?|entregad[oa]s?|entrego|fallid[oa]s?|fallaron)\b/.test(alertText);
-  const alertDelivery = /\b(?:estado|estatus)\s+de\s+(?:la\s+)?entrega\b/.test(alertText)
-    || /\bentregas?\b/.test(alertText) && deliveryStatus
-    || /\balertas?\b/.test(alertText) && /\b(?:pendientes?|en proceso|procesando|completad[oa]s?|entregad[oa]s?|entrego|fallid[oa]s?|fallaron)\b/.test(alertText)
-      && /\b(?:de|para)\s+entrega\b/.test(alertText)
-    || /\b(?:se\s+)?entrego\b/.test(alertText) && /\balertas?\b/.test(alertText);
-  if (alertDelivery) return { intent: 'inventory_alert_deliveries', agent: 'operations', selector: {
-    ...(alertSku ? { sku: alertSku } : {}),
-    ...( /\b(?:completad[oa]s?|entregad[oa]s?|entrego)\b/.test(alertText) ? { status: 'DELIVERED' }
-      : /\b(?:fallid[oa]s?|fallaron)\b/.test(alertText) ? { status: 'FAILED' }
-        : /\b(?:en proceso|procesando)\b/.test(alertText) ? { status: 'IN_FLIGHT' }
-          : deliveryStatus ? { status: 'PENDING' } : {}),
-    limit: 20
-  } };
-  const configuredAlerts = /\balertas?\b/.test(alertText)
-    && /\b(configuradas?|configurados?|tengo|stock)\b/.test(alertText)
-    && !/\b(crea|crear|elimina|borra|modifica|deshabilita|generadas?|generaron|produjeron)\b/.test(alertText);
-  const alertFollowup = memory.lastIntent === 'stock_alert_rules'
-    && /^\s*[¿?]?\s*y\s+para\b/.test(alertText) && alertSku;
-  if (configuredAlerts || alertFollowup) return { intent: 'stock_alert_rules', agent: 'operations',
-    ...(alertSku ? { selector: { sku: alertSku } } : {}) };
-  const inventoryAlertEvents = /\balertas?\b/.test(alertText)
-    && /\b(generad[oa]s?|generaron|producid[oa]s?|ocurrid[oa]s?|abiertas?|resueltas?|resolvieron)\b/.test(alertText);
-  if (inventoryAlertEvents) return { intent: 'inventory_alert_events', agent: 'operations', selector: {
-    ...(alertSku ? { sku: alertSku } : {}),
-    ...( /\breglas?\s+de\s+stock\b/.test(alertText) ? { source: 'stock_alert_rule' } : {}),
-    ...( /\babiertas?\b/.test(alertText) ? { status: 'OPEN' } : /\b(?:resueltas?|resolvieron)\b/.test(alertText) ? { status: 'RESOLVED' } : {})
-  } };
+  const alertRead = routeAlertRead(message, memory, now);
+  if (alertRead) return alertRead;
   const followupType = budgetPlanFollowupType(message);
   if (followupType) {
     const candidate = memory.lastReplenishmentPlan;
@@ -499,6 +518,19 @@ const routeDeterministically = (message, memory = {}, now = new Date(), conversa
   const explicitPeriod = dates ? { startDate: dates[0], endDate: dates[1] || dates[0] }
     : parsedNaturalDate ? { startDate: parsedNaturalDate, endDate: parsedNaturalDate } : explicitRelativePeriod;
   const period = explicitPeriod || (memory.lastPeriodExplicit === true ? memory.lastPeriod : undefined) || monthPeriod(now);
+  if (/\b(?:vendi|vendimos|vendio|vendido|ventas)\b/.test(text) && !/\b(?:compra|compras)\b/.test(text)) {
+    const salesReference = canonicalProductSku(message) || message.match(/\bSKU-[\w.-]{1,100}\b/i)?.[0]
+      || text.replace(/[¿?¡!]/g, '').match(/\b(?:vendi|vendimos|vendio|vendido|ventas)\s+(?:de|del)\s+(?:el\s+)?(?:producto\s+)?(.+)$/)?.[1]
+        ?.replace(/\s+(?:(?:desde|entre|hasta|en|el)\s+)?(?:hoy|ayer|anteayer|este mes|el mes pasado|mes (?:pasado|anterior|actual)|esta semana|semana (?:pasada|anterior)|ultimos?\s+(?:\d+|siete|treinta)\s+dias|\d{4}-\d{2}-\d{2}|\d{1,2}\s+de\s+\w+\s+de\s+20\d{2}).*$/, '').trim();
+    const contextualSales = memory.lastIntent === 'product_sales_summary'
+      && /^(?:y\s+)?cuanto\s+(?:vendi|vendio|vendimos)[?.!\s]*$/.test(text.replace(/[¿?]/g, '').trim());
+    const explicitProductSales = salesReference && !isTemporalOnlyReference(salesReference)
+      && !/^(?:mi|nuestro|el|este)?\s*negocio\b|^(?:la|las)?\s*empresa\b/.test(salesReference);
+    if (explicitProductSales || contextualSales) {
+      return scopeReadProduct({ intent: 'product_sales_summary', agent: 'operations', period,
+        periodExplicit: Boolean(explicitPeriod || memory.lastPeriodExplicit === true), limit: 1 }, salesReference, memory, contextualSales);
+    }
+  }
   if (/\b(crea|crear|compra|comprar|borra|elimina|editar|actualiza|cancelar)\b|shell|ejecuta codigo|mongo query|ignora.*instruccion|api.?key|password|jwt/.test(text)) {
     return { intent: 'unsupported', agent: 'coordinator' };
   }
