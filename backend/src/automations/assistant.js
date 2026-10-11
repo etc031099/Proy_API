@@ -1,11 +1,12 @@
 const { createActionContext, randomUUID, zeroUsage } = require('./contracts');
 const { performance } = require('node:perf_hooks');
-const { actionIntent, parseAction, extractionSchema, validateExtraction } = require('./actionInput');
+const { actionIntent, parseAction, extractionSchema, validateExtraction, numericWords } = require('./actionInput');
 const { createAgentExecution } = require('../agents/execution');
 const { redact } = require('../services/agentHistoryProjection');
 const { compactDraft, updateDraft, resolveDraft, applyResolution, TTL_MS } = require('./operationDraft');
 const { resolveReference, configuredSuppliers } = require('./entityResolution');
 const { Product } = require('../models');
+const { ordinalSelection } = require('../agents/ordinalSelection');
 const resultAnswer = pending => pending.status !== 'EXECUTED' ? 'Acción cancelada.' : pending.result?.ruleConfigured
   ? `${pending.result.alreadyExists ? 'Ya existe una regla activa' : 'Regla configurada'} para ${pending.result.sku}: stock ${pending.result.operator} ${pending.result.threshold} unidades. Se evaluará en los cambios futuros de stock; todavía no envía avisos automáticos.` : pending.result?.type
   ? `${pending.result.type === 'sale' ? 'Venta' : 'Compra'} registrada correctamente. ${pending.result.items.map(item => `${item.quantity} unidades de ${item.sku}; stock resultante: ${item.stock}`).join('. ')}. Total: ${pending.result.total} ${pending.result.currency}. Operación: ${pending.result.id}.`
@@ -76,7 +77,15 @@ const withActionAssistant = (runtime, service, options = {}) => {
         }
       }
       let extracted;
-      try { extracted = parseAction(input.message, skillId); }
+      try {
+        const ordinalCorrection = !explicit && previous?.selection && ordinalSelection(input.message).matched;
+        // A selection-only turn cannot silently discard simultaneous numeric
+        // changes or bypass the quantity parser. Ask for separate turns instead.
+        if (ordinalCorrection && /\d|\b(?:cantidad|unidades?|stock|minimo|umbral)\b/.test(numericWords(normalized)))
+          return response('Elige primero una opción de la lista. Después puedes corregir la cantidad o condición antes de confirmar.', undefined, true);
+        extracted = ordinalCorrection
+          ? { action: skillId } : parseAction(input.message, skillId);
+      }
       catch (error) {
         if (error.code !== 'ACTION_VALIDATION_FAILED') throw error;
         return response('Revisa los valores: la cantidad debe ser un entero mayor que cero; el stock, mínimo y umbral deben ser enteros desde cero.', undefined, true);

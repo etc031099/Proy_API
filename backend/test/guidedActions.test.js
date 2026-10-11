@@ -37,6 +37,59 @@ function fixture({ products = [p1, p2], suppliers = [vendor], configured = [vend
 }
 const pagedProducts = () => Array.from({ length: 28 }, (_, i) => ({ ...p1, _id: (i + 1).toString(16).padStart(24, '0'),
   name: `Food ${i % 4} variant ${i}`, sku: `PAGE-${i}` }));
+for (const choice of ['no es el segundo, es el primero', 'no el segundo, el primero',
+  'el primero, no el segundo', 'me equivoqué, era el primero', 'mejor el primero', 'no, el primero']) {
+  test(`write correction selects first, keeps quantity, and only prepares: ${choice}`, async () => {
+    const f = fixture();
+    const ambiguous = await f.send('vende 3 coca');
+    assert.equal(ambiguous.suggestions.length, 2); assert.equal(f.prepared.length, 0);
+    const result = await f.send(choice);
+    assert.equal(f.prepared.length, 1); assert.equal(f.prepared[0].products[0].productId, p1._id);
+    assert.equal(f.prepared[0].products[0].quantity, 3); assert.equal(result.pendingAction.status, 'PENDING');
+    assert.equal(f.cancelled.length, 0); assert.equal(result.usage.totalLlmCalls, 0);
+  });
+}
+for (const choice of ['no el segundo', 'no quiero el segundo', 'el primero y el segundo']) {
+  test(`negative draft choice stays clickable and never prepares: ${choice}`, async () => {
+    const f = fixture(); await f.send('vende 3 coca');
+    const result = await f.send(choice);
+    assert.equal(f.prepared.length, 0); assert.equal(result.suggestions.length, 2);
+    assert.equal(result.requiresClarification, true); assert.equal(result.usage.totalLlmCalls, 0);
+    await f.send('el primero'); assert.equal(f.prepared[0].products[0].quantity, 3);
+  });
+}
+test('supplier draft contrast chooses the corrected provider and never confirms the purchase', async () => {
+  const other = { ...vendor, _id: 'eeeeeeeeeeeeeeeeeeeeeeee', name: 'Proveedor Central' };
+  const f = fixture({ suppliers: [vendor, other], configured: [vendor, other] });
+  await f.send('compra 3 COC500');
+  const result = await f.send('no es el segundo, es el primero');
+  assert.equal(f.prepared[0].vendorId, vendor._id); assert.equal(f.prepared[0].products[0].quantity, 3);
+  assert.equal(result.pendingAction.status, 'PENDING');
+});
+test('rule draft contrast revalidates the corrected product without creating a rule', async () => {
+  const f = fixture(); await f.send('Crea una alerta para coca cuando llegue a 3');
+  const result = await f.send('no es el segundo, es el primero');
+  assert.equal(f.prepared[0].productId, p1._id); assert.equal(f.prepared[0].threshold, 3);
+  assert.equal(result.pendingAction.status, 'PENDING'); assert.equal(result.usage.totalLlmCalls, 0);
+});
+test('an explicit unsafe new quantity cannot bypass P0 while candidates are active', async () => {
+  for (const token of ['-3', '3.5', '0']) {
+    const f = fixture(); await f.send('vende 3 coca');
+    const result = await f.send(`vende ${token} el primero`);
+    assert.equal(result.requiresClarification, true); assert.equal(f.prepared.length, 0);
+    assert.equal(result.pendingAction, undefined); assert.equal(result.usage.totalLlmCalls, 0);
+  }
+});
+
+test('mixed ordinal and quantity corrections cannot silently discard unsafe numbers', async () => {
+  for (const message of ['mejor el primero, cantidad -3', 'el primero cantidad 3.5', 'el primero, cantidad 0']) {
+    const f = fixture(); await f.send('vende 3 coca');
+    const result = await f.send(message);
+    assert.equal(result.requiresClarification, true); assert.equal(f.prepared.length, 0);
+    assert.equal(result.pendingAction, undefined); assert.equal(result.usage.totalLlmCalls, 0);
+    await f.send('el primero'); assert.equal(f.prepared[0].products[0].quantity, 3);
+  }
+});
 test('28 matches are counted exactly with stable five-item pages, no duplicates and a short last page', () => {
   const rows = pagedProducts(), seen = [];
   for (let offset = 0; offset < 28; offset += 5) {

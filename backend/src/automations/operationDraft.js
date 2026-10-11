@@ -3,6 +3,7 @@ const { schema, string, integer, number, objectId, validateArgs } = require('./c
 const { getActionSkill } = require('./skills');
 const { resolveAction, numericWords, integerToken } = require('./actionInput');
 const { normalize, configuredSuppliers, resolveReference } = require('./entityResolution');
+const { ordinalSelection } = require('../agents/ordinalSelection');
 const TTL_MS = 20 * 60 * 1000;
 // REQUIRED comes from the write contract. Only supplierPrices is RECOMMENDED;
 // description/costPrice are OPTIONAL and do not trigger extra questions.
@@ -36,8 +37,10 @@ const suggestionsFor = selection => (selection?.candidates || []).map((candidate
   message: `Opción ${index + 1}`, detail: candidate.costs?.map(cost => `${cost.sku}: ${cost.purchasePrice} ${cost.currency}`).join('; ') }));
 function choose(selection, message) {
   const text = normalize(message).replace(/^(?:el|la|opcion)\s+/, '');
-  const ordinals = ['primero', 'segundo', 'tercero', 'cuarto', 'quinto'];
-  let index = /^\d+$/.test(text) ? Number(text) - 1 : ordinals.indexOf(text.replace(/a$/, 'o'));
+  const ordinal = ordinalSelection(message);
+  if (ordinal.matched && ordinal.index === null) return null;
+  let index = /^\d+$/.test(text) ? Number(text) - 1
+    : ordinal.matched ? (ordinal.index === -1 ? selection.candidates.length - 1 : ordinal.index) : -1;
   if (/^(?:si|correcto|ese|esa|es ese|es esa)$/.test(text) && selection.candidates.length === 1) index = 0;
   if (index >= 0) return selection.candidates[index] || null;
   const query = text.replace(/^de\s+/, '');
@@ -48,6 +51,8 @@ function updateDraft(previous, extracted, message) {
   const draft = previous ? structuredClone(previous) : { action: extracted.action };
   const text = normalize(numericWords(message));
   if (draft.selection) {
+    const ordinal = ordinalSelection(message);
+    if (ordinal.matched && (ordinal.index === null || !choose(draft.selection, message))) return draft;
     const selection = draft.selection;
     if (selection.slot === 'product' && selection.query) {
       if (/^(?:ver mas|siguiente|anteriores|anterior)$/.test(text)) {

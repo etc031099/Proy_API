@@ -5,13 +5,14 @@ const { createAgentExecution } = require('./execution');
 const { classifyAgentIntent } = require('./routing');
 const { executeRequestedSkill } = require('./toolCalls');
 const { createConversationMemory } = require('./memory');
-const { routeDeterministically, clarify, budgetPlanFollowupType, tenantScopeViolation } = require('./intentRouting');
+const { routeDeterministically, clarify, budgetPlanFollowupType, tenantScopeViolation, canonicalProductSku, explicitProductDetailQuery } = require('./intentRouting');
 const { buildSkillAnswer, buildCheapestSupplierAnswer, llmObservation, safeText, replenishmentExplanation,
   buildProductListSupplierComparisonAnswer, budgetPlanExplanation, budgetPlanFollowupAnswer, productCountAnswer, unsupportedClaimAnswer, salesCausalityAnswer } = require('./responses');
 const { buildSynthesisInput, buildNarrativeSynthesisInput, validateNarrativeSynthesis, renderNarrativeSynthesis, renderNarrativeFallback } = require('./synthesis');
 const { normalizeSupplier, resolveSupplier } = require('./replenishmentPlanning');
 const { SUPPLIER_SELECTION_TTL_MS, contextBinding } = require('./memory');
 const { resolveProductListFollowup } = require('./productListFollowups');
+const { ordinalSelection } = require('./ordinalSelection');
 
 const supplierSelection = (message, state, now) => {
   const pending = state.supplierResolution;
@@ -40,13 +41,12 @@ const supplierSelection = (message, state, now) => {
     return { noRefinementMatch: true };
   }
   const number = /^(?:opcion\s+)?([1-5])$/.exec(text);
-  const ordinal = /^(?:(?:el|la)\s+)?(primer[oa]?|segund[oa]|tercer[oa]?|cuart[oa]|quint[oa])$/.exec(text);
-  const ordinals = { primero: 0, primera: 0, primer: 0, segundo: 1, segunda: 1, tercero: 2, tercera: 2,
-    tercer: 2, cuarto: 3, cuarta: 3, quinto: 4, quinta: 4 };
+  const ordinal = ordinalSelection(message);
+  if (ordinal.matched && ordinal.index === null) return { invalid: true };
   const pageOffset = pending.offset || 0;
   const visibleCandidates = pending.candidates.slice(pageOffset, pageOffset + 5);
   let index = number ? pageOffset + Number(number[1]) - 1
-    : ordinal ? pageOffset + ordinals[ordinal[1]] : -1;
+    : ordinal.matched ? pageOffset + (ordinal.index === -1 ? Math.min(5, pending.candidates.length - pageOffset) - 1 : ordinal.index) : -1;
   if (index >= pageOffset + visibleCandidates.length) index = -1;
   if (index < 0) {
     const key = normalizeSupplier(message);
@@ -72,17 +72,19 @@ const supplierSelection = (message, state, now) => {
 const productCandidateSelection = (message, state) => {
   const selection = state.lastProductSelection;
   if (selection?.sourceIntent !== 'search_product' || selection.items?.length < 2) return null;
+  // New queries bypass the old candidate list; bare SKU clicks still resume it.
+  if (explicitProductDetailQuery(message) || (canonicalProductSku(message)
+    && !/^(?:sku\s+)?M5-[A-Z]+_\d+_\d+$/i.test(message.trim()))) return null;
   const text = message.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim().replace(/[?.!¿¡]/g, '').replace(/\s+/g, ' ');
-  const ordinal = /^(?:(?:el|la)\s+)?(primer[oa]?|segund[oa]|tercer[oa]?|cuart[oa]|quint[oa])$/.exec(text);
-  const ordinalIndex = { primero: 0, primera: 0, primer: 0, segundo: 1, segunda: 1, tercero: 2, tercera: 2,
-    tercer: 2, cuarto: 3, cuarta: 3, quinto: 4, quinta: 4 };
+  const ordinal = ordinalSelection(message);
+  if (ordinal.matched && ordinal.index === null) return { invalid: true };
   const number = /^(?:opcion\s+)?([1-5])$/.exec(text);
   const sku = /^(?:sku\s+)?(M5-[A-Z]+_\d+_\d+)$/i.exec(message.trim())?.[1];
-  let index = ordinal ? ordinalIndex[ordinal[1]] : number ? Number(number[1]) - 1 : -1;
+  let index = ordinal.matched ? (ordinal.index === -1 ? selection.items.length - 1 : ordinal.index) : number ? Number(number[1]) - 1 : -1;
   const candidate = sku ? selection.items.find(item => item.sku?.toLowerCase() === sku.toLowerCase())
     : index >= 0 ? selection.items[index] : selection.items.find(item => item.name?.normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '').toLowerCase().trim() === text);
-  const selectionLike = Boolean(ordinal || number || sku || selection.items.some(item => item.name?.normalize('NFD')
+  const selectionLike = Boolean(ordinal.matched || number || sku || selection.items.some(item => item.name?.normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '').toLowerCase().trim() === text));
   if (candidate) return { plan: { intent: selection.continuationIntent || 'product_details',
     agent: selection.continuationIntent === 'demand_forecast' ? 'analyst' : 'operations',
@@ -167,7 +169,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
           ? clarify('Estas opciones de proveedor ya expiraron. Repite la consulta indicando el producto y el proveedor.')
           : selectedSupplier?.noMore ? clarify('Ya estás en la última página de proveedores.')
           : selectedSupplier?.noPrevious ? clarify('Ya estás en la primera página de proveedores.')
-          : selectedProduct?.invalid ? clarify('No encuentro esa opción entre los productos mostrados. Elige una opción válida o indica su SKU.')
+          : selectedProduct?.invalid || selectedSupplier?.invalid ? clarify('Elige una opción válida de la lista; no seleccionaré una opción negada o ambigua.')
           : productPage?.expired ? clarify('Esta lista de productos ya expiró. Vuelve a consultar los productos del proveedor.')
           : selectedSupplier?.pageOffset !== undefined ? clarify('Elige un proveedor de la página mostrada.')
             : selectedSupplier?.refine ? clarify('Escribe una parte más específica del nombre del proveedor.')

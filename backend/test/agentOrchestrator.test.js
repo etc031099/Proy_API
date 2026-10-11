@@ -22,6 +22,90 @@ const forecast = { status: 'READY', anchorOperationalDate: '2025-07-01', product
     stockAtAnchor: 2, salesLast7Days: 3, safetyStock: 5, recommendedQty: 12, inventoryStatus: 'REPONER' }
 ] };
 
+for (const query of ['precio food 511', 'precio del food 511', '¿Y el precio de food 511?',
+  '¿Y está activo food 511?', 'stock food 511', 'mínimo food 511', 'predicción food 511']) {
+  test(`explicit reference wins over selected context: ${query}`, async () => {
+    const old = { ...product(1), sku: 'M5-FOODS_3_210' };
+    const next = { ...product(2), sku: 'M5-FOODS_3_511', name: 'Foods 511', stock: 20 };
+    const f = fixture({ products: [old, next], forecastService: { getDemandForecast: async () => ({ ...forecast,
+      products: [{ ...forecast.products[0], productId: next.id, sku: next.sku, name: next.name }] }) } });
+    const conversationId = randomUUID();
+    await f.run('¿Cuánto stock tiene M5-FOODS_3_210?', conversationId);
+    const result = await f.run(query, conversationId);
+    assert.equal(result.requiresClarification, false); assert.match(result.answer, /M5-FOODS_3_511/);
+    assert.doesNotMatch(result.answer, /M5-FOODS_3_210/);
+    assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
+    assert.equal((await f.orchestrator.getContextSnapshot(req(), conversationId)).selectedProductReference.sku, next.sku);
+  });
+}
+for (const query of ['¿Y el precio?', '¿Y su stock mínimo?', '¿Está activo?']) {
+  test(`pure follow-up retains the selected product: ${query}`, async () => {
+    const row = { ...product(1), sku: 'M5-FOODS_3_210' };
+    const f = fixture({ products: [row] }), conversationId = randomUUID();
+    await f.run('¿Cuánto stock tiene M5-FOODS_3_210?', conversationId);
+    const result = await f.run(query, conversationId);
+    assert.equal(result.requiresClarification, false); assert.match(result.answer, /M5-FOODS_3_210/);
+    assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
+  });
+}
+test('a new explicit query wins over an outstanding candidate list', async () => {
+  const rows = [2, 3].map((n, i) => ({ ...product(n), sku: `M5-FOODS_${i + 2}_210`, name: `Foods ${i + 2} item 210` }));
+  rows.push({ ...product(4), sku: 'M5-FOODS_3_511', name: 'Foods 511' });
+  const f = fixture({ products: rows }), conversationId = randomUUID();
+  await f.run('precio food 210', conversationId);
+  const result = await f.run('¿Cuánto stock tiene el segundo producto M5-FOODS_3_511?', conversationId);
+  assert.equal(result.requiresClarification, false); assert.match(result.answer, /M5-FOODS_3_511/);
+  assert.doesNotMatch(result.answer, /M5-FOODS_[23]_210/); assert.equal(result.usage.totalLlmCalls, 0);
+});
+test('short explicit references preserve 0/1/N and never fall back to the selected product', async () => {
+  for (const count of [0, 2]) {
+    const old = { ...product(1), sku: 'M5-FOODS_3_511' };
+    const matches = Array.from({ length: count }, (_, i) => ({ ...product(i + 2),
+      sku: `M5-FOODS_${i + 2}_210`, name: `Foods ${i + 2} item 210` }));
+    const f = fixture({ products: [old, ...matches] }), conversationId = randomUUID();
+    await f.run('¿Cuánto stock tiene M5-FOODS_3_511?', conversationId);
+    const result = await f.run(count ? 'precio food 210' : 'stock food inexistente', conversationId);
+    assert.equal(result.requiresClarification, true); assert.doesNotMatch(result.answer, /M5-FOODS_3_511/);
+    assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
+    if (count) assert.equal(result.suggestions.length, 2);
+    assert.equal((await f.orchestrator.getContextSnapshot(req(), conversationId)).selectedProductReference, null);
+  }
+});
+for (const choice of ['el primero', 'no es el segundo, es el primero', 'no el segundo, el primero',
+  'el primero, no el segundo', 'me equivoqué, era el primero', 'mejor el primero', 'no, el primero']) {
+  test(`read correction preserves original clickable continuation: ${choice}`, async () => {
+    const rows = [2, 3].map((n, i) => ({ ...product(n), sku: `M5-FOODS_${i + 2}_210`, name: `Foods ${i + 2} item 210` }));
+    const f = fixture({ products: rows }), conversationId = randomUUID();
+    const ambiguous = await f.run('precio food 210', conversationId);
+    assert.equal(ambiguous.suggestions.length, 2);
+    const result = await f.run(choice, conversationId);
+    assert.match(result.answer, /M5-FOODS_2_210/); assert.doesNotMatch(result.answer, /M5-FOODS_3_210/);
+    assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.pendingAction, undefined);
+  });
+}
+for (const choice of ['no el segundo', 'no quiero el segundo', 'el primero y el segundo']) {
+  test(`negative or conflicting selection does not choose: ${choice}`, async () => {
+    const rows = [2, 3].map((n, i) => ({ ...product(n), sku: `M5-FOODS_${i + 2}_210`, name: `Foods ${i + 2} item 210` }));
+    const f = fixture({ products: rows }), conversationId = randomUUID();
+    await f.run('stock food 210', conversationId);
+    const result = await f.run(choice, conversationId);
+    assert.equal(result.requiresClarification, true); assert.equal(result.usage.totalSkillCalls, 0);
+    assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.pendingAction, undefined);
+  });
+}
+test('explicit supplier replaces a remembered supplier without changing purchase capabilities', () => {
+  const plan = routeDeterministically('¿Qué productos ofrece proveedor B?', { lastSupplier: { id: id(80), name: 'Proveedor A' } }, clock());
+  assert.equal(plan.args.supplierRef, 'B'); assert.equal(plan.skillId, 'get_supplier_products');
+});
+test('supplier correction selects only from the visible page; pure negation has no selection', () => {
+  const candidates = Array.from({ length: 10 }, (_, i) => ({ id: id(i + 30), name: `Proveedor ${i + 1}` }));
+  const state = { supplierResolution: { candidates, offset: 5, expiresAt: Date.now() + 10000,
+    skillId: 'get_supplier_products', args: { limit: 5 } } };
+  const corrected = supplierSelection('no es el segundo, es el primero', state, Date.now());
+  assert.equal(corrected.plan.args.supplierRef, candidates[5].id);
+  assert.deepEqual(supplierSelection('no quiero el segundo', state, Date.now()), { invalid: true });
+});
+
 // Runs the real execution layer and executors. Only the database driver/provider
 // are replaced; fakes assert tenant predicates and expose no write methods.
 const fixture = ({ products = [product(1), product(2), product(3, 'B')], contacts = [], provider, emptySalesHistory = false, emptyProductSalesHistory = false,

@@ -1,6 +1,7 @@
 const { isDate } = require('./contracts');
 const { productListFollowupType, resolveProductListFollowup } = require('./productListFollowups');
 const { parseRequestedDate } = require('./forecastRouting');
+const { ordinalSelection } = require('./ordinalSelection');
 
 const normalize = value => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 const tenantScopeViolation = message => {
@@ -81,10 +82,12 @@ const canonicalProductSku = message => message.match(/\bM5-[A-Z]+_\d+_\d+\b/i)?.
 const explicitProductDetailQuery = message => {
   const text = normalize(message).replace(/[¿?¡!]/g, '').trim();
   const target = text.match(/\b(?:cuanto|cuanta)\s+(?:stock|inventario|precio|minimo)\s+(?:tiene|cuesta|es)\s+(?:el\s+)?(?:producto\s+)?(.+?)\s*$/)?.[1]
-    || text.match(/\b(?:cual\s+es\s+)?(?:el\s+)?(?:precio|stock|minimo)\s+(?:de|del|para)\s+(?:el\s+)?(?:producto\s+)?(.+?)\s*$/)?.[1];
+    || text.match(/^(?:y\s+)?(?:cual\s+es\s+)?(?:el\s+|la\s+)?(?:stock\s+minimo|precio|stock|minimo|prediccion|forecast|esta\s+activ[oa])\s+(?:(?:de|del|para)\s+)?(?:el\s+)?(?:producto\s+)?(.+?)\s*$/)?.[1];
   if (!target || canonicalProductSku(message)) return null;
   const cleaned = target.replace(/[.,;:]+$/, '').trim();
-  if (!cleaned || /^(?:ese|este|aquel|su|mismo|misma)\b/.test(cleaned)) return null;
+  if (!cleaned || /^(?:bajo|actual|minimo)$/.test(cleaned) || ordinalSelection(cleaned).matched || /^(?:ese|este|aquel|su|mismo|misma)\b/.test(cleaned)
+    || /\b(?:ayer|hoy|manana|anteayer)\b/.test(cleaned)
+    || /^(?:esta|este|la|el|proxima|proximo|pasada|pasado)\s+(?:semana|mes|ano)\b/.test(cleaned)) return null;
   return cleaned;
 };
 const productReferenceFollowup = (message, memory = {}) => {
@@ -247,18 +250,7 @@ const routeCommercial = (message, memory = {}) => {
   return null;
 };
 const PERIOD_INTENTS = ['sales_summary', 'top_selling_products', 'product_sales_summary', 'recent_transactions'];
-const ordinalReference = text => {
-  if (/\bel de arriba\b/.test(text)) return { matched: true, index: 0 };
-  const ordinalPattern = '(primer(?:o|a)?|segund[oa]|tercer(?:o|a)?|cuart[oa]|quint[oa]|sext[oa]|ultim[oa])';
-  const match = text.match(new RegExp(`\\b(?:el|la|ese|esa)\\s+${ordinalPattern}(?:\\s+(?:producto|de la lista))?\\b`))
-    || text.match(new RegExp(`\\b${ordinalPattern}\\s+(?:producto|de la lista)\\b`));
-  if (!match) return { matched: false };
-  const ordinal = match[1];
-  const indices = { primer: 0, primero: 0, primera: 0, segundo: 1, segunda: 1,
-    tercer: 2, tercero: 2, tercera: 2, cuarto: 3, cuarta: 3, quinto: 4, quinta: 4,
-    sexto: 5, sexta: 5, ultimo: -1, ultima: -1 };
-  return { matched: true, index: indices[ordinal] };
-};
+const ordinalReference = ordinalSelection;
 
 /** High-confidence routing only. Unrecognized language is delegated, never guessed. */
 const routeDeterministically = (message, memory, now, conversationId, scopeBinding, businessId) => {
@@ -317,7 +309,8 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
       ...(productRef ? { productRef } : {}) };
   }
   const explicitProductQuery = explicitProductDetailQuery(message);
-  if (explicitProductQuery) return { intent: 'product_details', agent: 'operations', lookupQuery: explicitProductQuery, limit: 1,
+  if (explicitProductQuery) return { intent: /prediccion|forecast/.test(normalize(message)) ? 'demand_forecast' : 'product_details',
+    agent: /prediccion|forecast/.test(normalize(message)) ? 'analyst' : 'operations', lookupQuery: explicitProductQuery, limit: 1,
     explicitEntity: true };
   const productReference = productReferenceFollowup(message, memory);
   if (productReference) return productReference;
@@ -465,6 +458,7 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   }
   const ordinal = ordinalReference(text);
   if (ordinal.matched) {
+    if (ordinal.index === null) return clarify('No seleccionaré una opción negada. Elige una de las opciones mostradas.');
     const selection = memory.lastProductSelection;
     const index = ordinal.index === -1 ? (selection?.items?.length || 0) - 1 : ordinal.index;
     const selected = selection?.items?.[index];
@@ -577,4 +571,4 @@ const routeCompoundProductList = message => {
 };
 
 module.exports = { routeDeterministically, routeCommercial, routeSupplierProducts, monthPeriod, weekPeriod, clarify,
-  budgetPlanFollowupType, tenantScopeViolation, routeCompoundProductList };
+  budgetPlanFollowupType, tenantScopeViolation, routeCompoundProductList, canonicalProductSku, explicitProductDetailQuery };
