@@ -90,9 +90,9 @@ const explicitProductDetailQuery = message => {
 const productReferenceFollowup = (message, memory = {}) => {
   const text = normalize(message).replace(/[¿?¡!]/g, '').trim();
   if (canonicalProductSku(message) || /\bSKU-[\w.-]{1,100}\b/i.test(message)) return null;
-  const referentialLanguage = /\b(?:reponerlo|reponerla|comprarlo|comprarla|venderlo|venderla|ese producto|este producto|este sku|ese sku|el mismo producto|la misma producto|su proveedor|su prediccion|su stock)\b/.test(text)
+  const referentialLanguage = /\b(?:reponerlo|reponerla|comprarlo|comprarla|venderlo|venderla|ese producto|este producto|este sku|ese sku|el mismo producto|la misma producto|su proveedor|su prediccion|su stock|su precio|su minimo|sus detalles|sus datos)\b/.test(text)
     || /^y\s+(?:cuanto\s+(?:cuesta|costaria)|cual\s+es\s+su\s+proveedor)\b/.test(text)
-    || /^(?:y\s+)?cuanto\s+(?:stock|inventario)\s+tiene\b/.test(text);
+    || /^(?:y\s+)?(?:cuanto\s+(?:stock|inventario)\s+tiene|(?:el\s+)?precio|(?:el\s+)?minimo|(?:el\s+)?stock\s+minimo|esta\s+activ[oa]?|sus\s+detalles|sus\s+datos)\b/.test(text);
   if (!referentialLanguage) return null;
 
   const selected = memory.selectedProductReference?.type === 'product' ? memory.selectedProductReference : null;
@@ -106,13 +106,20 @@ const productReferenceFollowup = (message, memory = {}) => {
     && ['demand_forecast', 'explain_replenishment', 'replenishment_candidates', 'replenishment_commercial'].includes(memory.lastIntent);
   const asksStock = /\bstock\b|\binventario\b/.test(text);
   const asksForecast = /prediccion|forecast|demanda/.test(text);
-  const asksDetails = /explicame|explica|muestrame|mostrar|detalle/.test(text) && /producto|ese|este/.test(text);
-  if (!asksCheapestSupplier && !asksSupplier && !asksCost && !asksImplicitCost && !asksStock && !asksForecast && !asksDetails) return null;
+  const asksPrice = /\bprecio\b/.test(text);
+  const asksMinimum = /\bminimo\b/.test(text);
+  const asksActive = /\bactiv[oa]?\b/.test(text);
+  const asksDetails = /explicame|explica|muestrame|mostrar|detalle|datos|informacion/.test(text)
+    && /producto|ese|este|sus/.test(text) || /\bsus\s+(?:detalles|datos)\b/.test(text);
+  if (!asksCheapestSupplier && !asksSupplier && !asksCost && !asksImplicitCost && !asksStock
+    && !asksForecast && !asksPrice && !asksMinimum && !asksActive && !asksDetails) return null;
 
   if (!selected) return clarify(listHasSeveral
     ? 'Vimos varios productos y no hay uno seleccionado. ¿Cuál quieres consultar? Indica su SKU o selecciónalo de la lista.'
     : '¿A qué producto te refieres? Indica su SKU o elígelo de la lista anterior.');
   const selector = productId ? { productId } : sku ? { sku } : null;
+  const contextProvenance = { sourceType: 'conversation_context', entityType: 'product',
+    label: `Producto ${sku || selected.name || 'seleccionado'} resuelto desde el contexto conversacional.` };
   if (asksCheapestSupplier || asksSupplier) {
     if (!sku) return clarify('No tengo el SKU de ese producto para consultar sus proveedores. Indícalo para continuar.');
     return { intent: asksCheapestSupplier ? 'cheapest_supplier' : 'replenishment_commercial', agent: 'analyst',
@@ -124,8 +131,10 @@ const productReferenceFollowup = (message, memory = {}) => {
       args: { mode: 'single', productRef: sku }, entityContextUsed: true };
   }
   if (!selector) return clarify('No puedo identificar de forma segura el producto de esta referencia. Indica su SKU.');
-  if (asksForecast) return { intent: 'demand_forecast', agent: 'analyst', selector, limit: 1, entityContextUsed: true };
-  return { intent: 'product_details', agent: 'operations', selector, limit: 1, entityContextUsed: true };
+  if (asksForecast) return { intent: 'demand_forecast', agent: 'analyst', selector, limit: 1,
+    entityContextUsed: true, contextProvenance };
+  return { intent: 'product_details', agent: 'operations', selector, limit: 1,
+    entityContextUsed: true, contextProvenance };
 };
 const budgetPlanFollowupType = message => {
   const text = normalize(message);

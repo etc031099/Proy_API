@@ -569,7 +569,9 @@ test('informal product ambiguity clears old entity; stock followup clarifies and
     { ...product(1), sku: 'M5-FOODS_3_511' },
     { ...product(2), sku: 'M5-FOODS_2_210', name: 'Alimentos M5 · FOODS_2 · Ítem 210' },
     { ...product(4), sku: 'M5-FOODS_3_210', name: 'Alimentos M5 · FOODS_3 · Ítem 210', stock: 1 }
-  ] });
+  ], forecastService: { getDemandForecast: async () => ({ ...structuredClone(forecast), products: [
+    { ...forecast.products[0], productId: id(4), sku: 'M5-FOODS_3_210', name: 'Alimentos M5 · FOODS_3 · Ítem 210' }
+  ] }) } });
   const conversationId = randomUUID();
   await f.run('¿Cuánto stock tiene M5-FOODS_3_511?', conversationId);
   const ambiguous = await f.run('¿Cuánto stock tiene el food 210?', conversationId);
@@ -601,14 +603,48 @@ test('informal product ambiguity clears old entity; stock followup clarifies and
   assert.equal(selected.code, null); assert.match(selected.answer, /M5-FOODS_3_210/);
   assert.deepEqual(selected.actions.map(action => action.skillId), ['get_product_details']);
   assert.equal(selected.pendingAction, undefined);
+  const remembered = await f.orchestrator.getContextSnapshot(req(), conversationId);
+  assert.equal(remembered.selectedProductReference?.sku, 'M5-FOODS_3_210');
+  for (const query of ['¿Y el precio?', '¿Y su precio?', '¿Y cuánto stock tiene?', '¿Y el mínimo?', '¿Y su mínimo?', '¿Y está activo?', '¿Y sus detalles?']) {
+    const result = await f.run(query, conversationId);
+    assert.equal(result.code, null, query);
+    assert.ok(result.actions.some(action => action.skillId === 'get_product_details'), query);
+    assert.match(result.answer, /M5-FOODS_3_210/, query);
+    assert.equal(result.usage.totalLlmCalls, 0, query); assert.equal(result.usage.totalTokens, 0, query);
+    assert.deepEqual(result.contextProvenance, { sourceType: 'conversation_context', entityType: 'product',
+      label: 'Producto M5-FOODS_3_210 resuelto desde el contexto conversacional.' }, query);
+  }
+  const forecastFollowup = await f.run('¿Y su predicción?', conversationId);
+  assert.equal(forecastFollowup.code, null);
+  assert.ok(forecastFollowup.actions.some(action => action.skillId === 'get_demand_forecast'));
+  assert.match(forecastFollowup.answer, /M5-FOODS_3_210/);
+  assert.equal(forecastFollowup.usage.totalLlmCalls, 0); assert.equal(forecastFollowup.usage.totalTokens, 0);
+  assert.equal(forecastFollowup.contextProvenance.sourceType, 'conversation_context');
   const followup = await f.run('¿Y cuánto stock tiene?', conversationId);
   assert.equal(followup.code, null); assert.match(followup.answer, /M5-FOODS_3_210.*1 unidad disponible/);
+  const explicitDifferentProduct = await f.run('¿Y el precio del food 511?', conversationId);
+  assert.ok(explicitDifferentProduct.actions.some(action => action.skillId === 'search_products'));
+  assert.match(explicitDifferentProduct.answer, /Producto 1/);
+  assert.doesNotMatch(explicitDifferentProduct.answer, /M5-FOODS_3_210/);
+  assert.equal(explicitDifferentProduct.usage.totalLlmCalls, 0); assert.equal(explicitDifferentProduct.usage.totalTokens, 0);
+  const superseded = await f.orchestrator.getContextSnapshot(req(), conversationId);
+  assert.equal(superseded.selectedProductReference?.sku, 'M5-FOODS_3_511');
   for (const result of [ambiguous, temporal, unresolved, selected, followup]) {
     assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
   }
   const newConversation = await f.run('¿Y cuánto stock tiene?', randomUUID());
   assert.equal(newConversation.requiresClarification, true); assert.equal(newConversation.usage.totalSkillCalls, 0);
   assert.equal(newConversation.usage.totalLlmCalls, 0); assert.equal(f.calls.length, 0);
+});
+
+test('product detail follow-ups without selected context clarify without LLM or skills', async () => {
+  for (const query of ['¿Y el precio?', '¿Y el mínimo?', '¿Está activo?', '¿Y sus detalles?', '¿Y su predicción?']) {
+    const f = fixture(); const result = await f.run(query, randomUUID());
+    assert.equal(result.requiresClarification, true, query);
+    assert.equal(result.usage.totalSkillCalls, 0, query); assert.equal(result.usage.totalLlmCalls, 0, query);
+    assert.equal(result.usage.totalTokens, 0, query); assert.deepEqual(result.actions, [], query);
+    assert.match(result.clarificationQuestion, /producto/i, query);
+  }
 });
 
 test('product disambiguation accepts numeric, option, ordinal and exact SKU through the same read-only continuation', async () => {
