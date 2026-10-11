@@ -1,6 +1,7 @@
 'use client';
+import { RemoteEntitySelect } from '@/components/RemoteEntitySelect';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -42,13 +43,6 @@ const purchaseFormSchema = z.object({
 
 type PurchaseFormValues = z.infer<typeof purchaseFormSchema>;
 
-interface Vendor {
-  _id: string;
-  name: string;
-  email: string;
-  phone: string;
-}
-
 interface Product {
   _id: string;
   name: string;
@@ -70,7 +64,6 @@ const getSupplierPurchasePrice = (product: Product | undefined, vendorId: string
 
 export default function AddPurchasePage() {
   const router = useRouter();
-  const [vendors, setVendors] = useState<Vendor[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -101,31 +94,6 @@ export default function AddPurchasePage() {
   const unavailableProductCount = selectedVendorId
     ? products.length - availableProducts.length
     : 0;
-
-  // Fetch vendors and products
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const [vendorsResponse, productsResponse] = await Promise.all([
-          api.getVendors({ limit: 100 }),
-          api.getProducts()
-        ]);
-
-        if (vendorsResponse.success) {
-          setVendors(vendorsResponse.data?.vendors || vendorsResponse.data?.contacts || []);
-        }
-
-        if (productsResponse.success) {
-          setProducts(productsResponse.data.products);
-        }
-      } catch (err) {
-        console.error('Error fetching data:', err);
-        setError('Failed to load data');
-      }
-    };
-
-    fetchData();
-  }, []);
 
   const handleVendorChange = (vendorId: string) => {
     form.setValue('vendorId', vendorId);
@@ -249,20 +217,7 @@ export default function AddPurchasePage() {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>{t('transactions.vendor')} *</FormLabel>
-                        <Select onValueChange={handleVendorChange} value={field.value}>
-                          <FormControl>
-                            <SelectTrigger>
-                              <SelectValue placeholder={t('transactions.selectVendorPlaceholder')} />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent>
-                            {vendors.map((vendor) => (
-                              <SelectItem key={vendor._id} value={vendor._id}>
-                                {vendor.name} - {vendor.phone}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        <RemoteEntitySelect kind="vendor" label="proveedor" value={field.value || ''} onChange={handleVendorChange} />
                         <FormMessage />
                       </FormItem>
                     )}
@@ -382,28 +337,9 @@ export default function AddPurchasePage() {
                         render={({ field }) => (
                           <FormItem>
                             <FormLabel>{t('transactions.product')} *</FormLabel>
-                            <Select 
-                              onValueChange={field.onChange}
-                              value={field.value}
-                            >
-                              <FormControl>
-                                <SelectTrigger>
-                                  <SelectValue placeholder={t('transactions.selectProduct')} />
-                                </SelectTrigger>
-                              </FormControl>
-                              <SelectContent>
-                                {availableProducts.map((product) => (
-                                  <SelectItem key={product._id} value={product._id}>
-                                    {product.name} - Current Stock: {product.stock}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
+                            <RemoteEntitySelect kind="product" label="producto" supplierId={selectedVendorId || undefined} disabled={!selectedVendorId} value={field.value || ''} onChange={field.onChange} onSelect={entity => setProducts(rows => [...rows.filter(row => row._id !== entity._id), entity as Product])} />
                             {!selectedVendorId && (
                               <p className="text-xs text-muted-foreground">{t('transactions.selectVendorFirst')}</p>
-                            )}
-                            {selectedVendorId && availableProducts.length === 0 && (
-                              <p className="text-xs text-muted-foreground">{t('transactions.noProductsForVendor')}</p>
                             )}
                             <FormMessage />
                           </FormItem>

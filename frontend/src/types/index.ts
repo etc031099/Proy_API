@@ -200,6 +200,7 @@ export interface DashboardSummary {
 }
 
 export interface InventoryReport {
+  pagination?: { current: number; pages: number; total: number; limit: number };
   products: Product[];
   statistics: {
     totalProducts: number;

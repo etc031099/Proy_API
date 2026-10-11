@@ -167,6 +167,7 @@ class ApiClient {
   async getProducts(params?: {
     search?: string;
     category?: string;
+    supplierId?: string;
     page?: number;
     limit?: number;
   }): Promise<ApiResponse> {

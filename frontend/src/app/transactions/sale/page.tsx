@@ -1,4 +1,5 @@
 'use client';
+import { RemoteEntitySelect } from '@/components/RemoteEntitySelect';
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
@@ -19,8 +20,7 @@ import {
   Minus, 
   Save, 
   ArrowLeft,
-  ShoppingCart 
-  , UserPlus, Search
+  UserPlus
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useLanguage } from '@/contexts/LanguageContext';
@@ -84,8 +84,6 @@ export default function AddSalePage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [showNewCustomer, setShowNewCustomer] = useState(false);
-  const [customerSearch, setCustomerSearch] = useState('');
-  const [productSearch, setProductSearch] = useState('');
   const { t } = useLanguage();
 
   const form = useForm<SaleFormValues>({
@@ -107,31 +105,6 @@ export default function AddSalePage() {
     control: form.control,
     name: 'products',
   });
-
-  // Fetch customers and products
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const [customersResponse, productsResponse] = await Promise.all([
-          api.getContacts({ type: 'customer' }),
-          api.getProducts()
-        ]);
-
-        if (customersResponse.success) {
-          setCustomers(customersResponse.data.contacts);
-        }
-
-        if (productsResponse.success) {
-          setProducts(productsResponse.data.products);
-        }
-      } catch (err) {
-        console.error('Error fetching data:', err);
-        setError('Failed to load data');
-      }
-    };
-
-    fetchData();
-  }, []);
 
   useEffect(() => {
     const savedSale = window.sessionStorage.getItem('repeat-sale');
@@ -298,29 +271,7 @@ export default function AddSalePage() {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>{t('transactions.customer')}</FormLabel>
-                        <Input
-                          value={customerSearch}
-                          onChange={(event) => setCustomerSearch(event.target.value)}
-                          placeholder={t('transactions.searchCustomers')}
-                          className="mb-2"
-                        />
-                        <Select onValueChange={(value) => field.onChange(value === 'none' ? '' : value)} value={field.value || 'none'}>
-                          <FormControl>
-                            <SelectTrigger>
-                              <SelectValue placeholder={t('transactions.selectCustomerPlaceholder')} />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent>
-                            <SelectItem value="none">{t('transactions.finalConsumer')}</SelectItem>
-                            {customers
-                              .filter((customer) => `${customer.name} ${customer.phone}`.toLowerCase().includes(customerSearch.toLowerCase()))
-                              .map((customer) => (
-                              <SelectItem key={customer._id} value={customer._id}>
-                                {customer.name} - {customer.phone}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        <RemoteEntitySelect kind="customer" label="cliente" emptyLabel={t('transactions.finalConsumer')} value={field.value || ''} onChange={field.onChange} onSelect={entity => setCustomers(rows => [...rows.filter(row => row._id !== entity._id), entity as Customer])} />
                         <FormMessage />
                         {form.watch('paymentMethod') === 'credit' && form.watch('customerId') && (() => {
                           const customer = customers.find((item) => item._id === form.watch('customerId'));
@@ -506,33 +457,7 @@ export default function AddSalePage() {
                         render={({ field }) => (
                           <FormItem>
                             <FormLabel>{t('transactions.product')} *</FormLabel>
-                            <Input
-                              value={productSearch}
-                              onChange={(event) => setProductSearch(event.target.value)}
-                              placeholder={t('transactions.searchProducts')}
-                              className="mb-2"
-                            />
-                            <Select 
-                              onValueChange={(value) => {
-                                field.onChange(value);
-                              }} 
-                              defaultValue={field.value}
-                            >
-                              <FormControl>
-                                <SelectTrigger>
-                                  <SelectValue placeholder={t('transactions.selectProduct')} />
-                                </SelectTrigger>
-                              </FormControl>
-                              <SelectContent>
-                                {products
-                                  .filter((product) => `${product.name} ${product.sku} ${product.category}`.toLowerCase().includes(productSearch.toLowerCase()))
-                                  .map((product) => (
-                                  <SelectItem key={product._id} value={product._id}>
-                                    {product.name} - Stock: {product.stock}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
+                            <RemoteEntitySelect kind="product" label="producto" value={field.value || ''} onChange={field.onChange} onSelect={entity => setProducts(rows => [...rows.filter(row => row._id !== entity._id), entity as Product])} />
                             <FormMessage />
                           </FormItem>
                         )}

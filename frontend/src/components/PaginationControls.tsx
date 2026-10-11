@@ -6,7 +6,7 @@ interface PaginationControlsProps {
   page: number;
   pageSize: number;
   total: number;
-  entity: 'productos' | 'transacciones';
+  entity: 'productos' | 'transacciones' | 'contactos';
   language?: string;
   onPageChange: (page: number) => void;
   onPageSizeChange?: (pageSize: number) => void;
@@ -26,7 +26,7 @@ export function PaginationControls({
   const start = total === 0 ? 0 : ((safePage - 1) * pageSize) + 1;
   const end = Math.min(safePage * pageSize, total);
   const isSpanish = language === 'es';
-  const entityLabel = isSpanish ? entity : entity === 'productos' ? 'products' : 'transactions';
+  const entityLabel = isSpanish ? entity : entity === 'productos' ? 'products' : entity === 'contactos' ? 'contacts' : 'transactions';
 
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

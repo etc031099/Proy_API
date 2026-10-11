@@ -21,18 +21,19 @@ const {
 } = require('../utils/validations');
 
 const router = express.Router();
+const searchValidation = require('express-validator').query('search').optional().isString().trim().isLength({ max: 100 });
 
 // Apply authentication and business access middleware to all routes
 router.use(authenticate);
 router.use(checkBusinessAccess);
 
 // Contact CRUD routes
-router.get('/', paginationValidation, validateRequest, getContacts);
+router.get('/', paginationValidation, searchValidation, require('express-validator').query('type').optional().isIn(['customer', 'vendor']), validateRequest, getContacts);
 router.post('/', createContactValidation, validateRequest, createContact);
 
 // Special routes (must come before :id routes)
-router.get('/customers', paginationValidation, validateRequest, getCustomers);
-router.get('/vendors', paginationValidation, validateRequest, getVendors);
+router.get('/customers', paginationValidation, searchValidation, validateRequest, getCustomers);
+router.get('/vendors', paginationValidation, searchValidation, validateRequest, getVendors);
 router.get('/search/:term', limitValidation, validateRequest, searchContacts);
 
 // Individual contact routes

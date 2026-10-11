@@ -1,6 +1,7 @@
 const { Contact } = require('../models');
 const { asyncHandler } = require('../middleware/validation');
 const { toFiniteNumber } = require('../utils/numbers');
+const { escapeSearch, listPagination } = require('../utils/listPagination');
 const { assertAllowedFields, pickAllowedFields } = require('../utils/allowedFields');
 
 const CONTACT_CREATE_FIELDS = [
@@ -24,7 +25,7 @@ const buildContactData = (body, allowedFields) => {
  * @access  Private
  */
 const getContacts = asyncHandler(async (req, res) => {
-  const { search, type, page = 1, limit = 10 } = req.query;
+  const { search, type } = req.query;
   const businessId = req.businessId;
 
   // Build filter object
@@ -32,9 +33,9 @@ const getContacts = asyncHandler(async (req, res) => {
 
   if (search) {
     filter.$or = [
-      { name: { $regex: search, $options: 'i' } },
-      { phone: { $regex: search, $options: 'i' } },
-      { email: { $regex: search, $options: 'i' } }
+      { name: { $regex: escapeSearch(search), $options: 'i' } },
+      { phone: { $regex: escapeSearch(search), $options: 'i' } },
+      { email: { $regex: escapeSearch(search), $options: 'i' } }
     ];
   }
 
@@ -43,18 +44,13 @@ const getContacts = asyncHandler(async (req, res) => {
   }
 
   // Calculate pagination
-  const pageNum = page;
-  const limitNum = limit;
-  const skip = (pageNum - 1) * limitNum;
+  const { current: pageNum, limit: limitNum, skip, total } = await listPagination(Contact, filter, req.query);
 
   // Get contacts with pagination
   const contacts = await Contact.find(filter)
-    .sort({ name: 1 })
+    .sort({ name: 1, _id: 1 })
     .limit(limitNum)
     .skip(skip);
-
-  // Get total count for pagination
-  const total = await Contact.countDocuments(filter);
 
   res.json({
     success: true,
@@ -237,29 +233,27 @@ const deleteContact = asyncHandler(async (req, res) => {
  * @access  Private
  */
 const getCustomers = asyncHandler(async (req, res) => {
-  const { page = 1, limit = 10, search } = req.query;
+  const { search } = req.query;
   const businessId = req.businessId;
 
   const filter = { businessId, type: 'customer', isActive: true };
 
   if (search) {
     filter.$or = [
-      { name: { $regex: search, $options: 'i' } },
-      { phone: { $regex: search, $options: 'i' } },
-      { email: { $regex: search, $options: 'i' } }
+      { name: { $regex: escapeSearch(search), $options: 'i' } },
+      { phone: { $regex: escapeSearch(search), $options: 'i' } },
+      { email: { $regex: escapeSearch(search), $options: 'i' } }
     ];
   }
 
-  const pageNum = page;
-  const limitNum = limit;
-  const skip = (pageNum - 1) * limitNum;
+  const { current: pageNum, limit: limitNum, skip, total } = await listPagination(Contact, filter, req.query);
 
   const customers = await Contact.find(filter)
-    .sort({ name: 1 })
+    .sort({ name: 1, _id: 1 })
     .limit(limitNum)
     .skip(skip);
 
-  const total = await Contact.countDocuments(filter);
+
 
   res.json({
     success: true,
@@ -281,29 +275,27 @@ const getCustomers = asyncHandler(async (req, res) => {
  * @access  Private
  */
 const getVendors = asyncHandler(async (req, res) => {
-  const { page = 1, limit = 10, search } = req.query;
+  const { search } = req.query;
   const businessId = req.businessId;
 
   const filter = { businessId, type: 'vendor', isActive: true };
 
   if (search) {
     filter.$or = [
-      { name: { $regex: search, $options: 'i' } },
-      { phone: { $regex: search, $options: 'i' } },
-      { email: { $regex: search, $options: 'i' } }
+      { name: { $regex: escapeSearch(search), $options: 'i' } },
+      { phone: { $regex: escapeSearch(search), $options: 'i' } },
+      { email: { $regex: escapeSearch(search), $options: 'i' } }
     ];
   }
 
-  const pageNum = page;
-  const limitNum = limit;
-  const skip = (pageNum - 1) * limitNum;
+  const { current: pageNum, limit: limitNum, skip, total } = await listPagination(Contact, filter, req.query);
 
   const vendors = await Contact.find(filter)
-    .sort({ name: 1 })
+    .sort({ name: 1, _id: 1 })
     .limit(limitNum)
     .skip(skip);
 
-  const total = await Contact.countDocuments(filter);
+
 
   res.json({
     success: true,

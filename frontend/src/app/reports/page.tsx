@@ -1,6 +1,9 @@
 'use client';
+import { RemoteEntitySelect } from '@/components/RemoteEntitySelect';
+import { PaginationControls } from '@/components/PaginationControls';
 
-import { useEffect, useState } from 'react';
+
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { Layout } from '@/components/Layout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -8,7 +11,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { apiClient } from '@/lib/api';
@@ -83,6 +85,11 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(false);
   
   // Inventory Report State
+  const [inventoryPage, setInventoryPage] = useState(1);
+  const [inventorySearch, setInventorySearch] = useState('');
+  const [inventoryError, setInventoryError] = useState('');
+  const inventoryRequest = useRef(0);
+  const contactRequest = useRef(0);
   const [inventoryReport, setInventoryReport] = useState<InventoryReport | null>(null);
   const [inventoryFilters, setInventoryFilters] = useState({
     category: '',
@@ -98,33 +105,27 @@ export default function ReportsPage() {
   });
 
   // Contact Reports State
-  const [customers, setCustomers] = useState<Contact[]>([]);
-  const [vendors, setVendors] = useState<Contact[]>([]);
   const [selectedContact, setSelectedContact] = useState<string>('');
   const [contactReport, setContactReport] = useState<ContactReportData | null>(null);
 
-  useEffect(() => {
-    if (user) {
-      loadInventoryReport();
-      loadContactsForReports();
-    }
-  }, [user]);
-
-  const loadInventoryReport = async () => {
+  const loadInventoryReport = useCallback(async () => {
     if (!user) return;
     
-    setLoading(true);
+    const version = ++inventoryRequest.current;
+    setLoading(true); setInventoryError('');
     try {
-      const response = await apiClient.getInventoryReport(inventoryFilters);
+      const response = await apiClient.getInventoryReport({ ...inventoryFilters, search: inventorySearch, page: inventoryPage, limit: 20 });
+      if (version !== inventoryRequest.current) return;
       if (response.success) {
-        setInventoryReport(response.data);
+        setInventoryReport(response.data); setInventoryPage(response.data.pagination.current);
       }
-    } catch (error) {
-      console.error('Failed to load inventory report:', error);
+    } catch {
+      if (version === inventoryRequest.current) setInventoryError('No fue posible cargar el inventario.');
     } finally {
-      setLoading(false);
+      if (version === inventoryRequest.current) setLoading(false);
     }
-  };
+  }, [user, inventoryPage, inventorySearch, inventoryFilters]);
+  useEffect(() => { void loadInventoryReport(); }, [loadInventoryReport]);
 
   const loadTransactionReport = async () => {
     if (!user) return;
@@ -142,40 +143,10 @@ export default function ReportsPage() {
     }
   };
 
-  const loadContactsForReports = async () => {
-    if (!user) return;
-    
-    try {
-      const [customersResponse, vendorsResponse] = await Promise.all([
-        apiClient.getCustomers(),
-        apiClient.getVendors()
-      ]);
-      
-      if (customersResponse.success) {
-        // Handle different possible response structures
-        const customersData = customersResponse.data?.customers || customersResponse.data || [];
-        setCustomers(Array.isArray(customersData) ? customersData : []);
-      } else {
-        setCustomers([]);
-      }
-      
-      if (vendorsResponse.success) {
-        // Handle different possible response structures
-        const vendorsData = vendorsResponse.data?.vendors || vendorsResponse.data || [];
-        setVendors(Array.isArray(vendorsData) ? vendorsData : []);
-      } else {
-        setVendors([]);
-      }
-    } catch (error) {
-      console.error('Failed to load contacts:', error);
-      // Ensure we always have arrays even on error
-      setCustomers([]);
-      setVendors([]);
-    }
-  };
-
   const loadContactReport = async (contactId: string, type: 'customer' | 'vendor') => {
     if (!user) return;
+    const version = ++contactRequest.current;
+    setContactReport(null);
     
     setLoading(true);
     try {
@@ -183,7 +154,7 @@ export default function ReportsPage() {
         ? await apiClient.getCustomerReport(contactId)
         : await apiClient.getVendorReport(contactId);
       
-      if (response.success) {
+      if (response.success && version === contactRequest.current) {
         setContactReport(response.data);
       }
     } catch (error) {
@@ -204,12 +175,12 @@ export default function ReportsPage() {
     return new Date(dateString).toLocaleDateString(language === 'es' ? 'es-PE' : 'en-US');
   };
 
-  const getExportData = () => {
-    if (activeTab === 'inventory' && inventoryReport) {
+  const getExportData = (inventory = inventoryReport) => {
+    if (activeTab === 'inventory' && inventory) {
       return {
-        title: t('reports.inventoryReport'),
+        title: t('reports.inventory'),
         headers: [t('reports.product'), 'SKU', t('reports.category'), t('reports.price'), t('reports.stock'), t('reports.status')],
-        rows: inventoryReport.products.map((product) => [
+        rows: inventory.products.map((product) => [
           product.name,
           product.sku,
           product.category,
@@ -217,7 +188,7 @@ export default function ReportsPage() {
           product.stock,
           product.stock === 0 ? t('reports.outOfStock') : product.stock <= product.minStockLevel ? t('reports.lowStock') : t('products.inStock')
         ]),
-        summary: `${t('reports.totalProducts')}: ${inventoryReport.statistics.totalProducts} | ${t('reports.totalValue')}: ${formatCurrency(inventoryReport.statistics.totalValue, inventoryReport.statistics.currency || 'PEN')}`
+        summary: `${t('reports.totalProducts')}: ${inventory.statistics.totalProducts} | ${t('reports.totalValue')}: ${formatCurrency(inventory.statistics.totalValue, inventory.statistics.currency || 'PEN')}`
       };
     }
 
@@ -271,8 +242,14 @@ export default function ReportsPage() {
     return `"${text.replace(/"/g, '""')}"`;
   };
 
-  const exportAsExcel = () => {
-    const report = getExportData();
+  const exportData = async () => {
+    if (activeTab !== 'inventory') return getExportData();
+    const response = await apiClient.getInventoryReport({ ...inventoryFilters, search: inventorySearch });
+    if (!response.success) throw new Error('Export unavailable');
+    return getExportData(response.data);
+  };
+  const exportAsExcel = async () => {
+    const report = await exportData().catch(() => null);
     if (!report) {
       window.alert(t('reports.exportUnavailable'));
       return;
@@ -289,9 +266,13 @@ export default function ReportsPage() {
     URL.revokeObjectURL(url);
   };
 
-  const exportAsPdf = () => {
-    const report = getExportData();
+  const exportAsPdf = async () => {
+    const popup = window.open('', '_blank', 'width=1100,height=800');
+    if (!popup) return;
+    popup.opener = null;
+    const report = await exportData().catch(() => null);
     if (!report) {
+      popup.close();
       window.alert(t('reports.exportUnavailable'));
       return;
     }
@@ -300,7 +281,7 @@ export default function ReportsPage() {
       summary: report.summary,
       headers: report.headers,
       rows: report.rows
-    }, 'width=1100,height=800');
+    }, 'width=1100,height=800', () => popup);
   };
 
   const canExport = Boolean(getExportData());
@@ -327,7 +308,7 @@ export default function ReportsPage() {
               </div>
             </div>
 
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+            <Tabs value={activeTab} onValueChange={value => { contactRequest.current++; setActiveTab(value); setSelectedContact(''); setContactReport(null); }} className="space-y-6">
               <TabsList className="grid w-full grid-cols-4">
                 <TabsTrigger value="inventory" className="gap-2">
                   <Package className="h-4 w-4" />
@@ -349,6 +330,9 @@ export default function ReportsPage() {
 
               {/* Inventory Report */}
               <TabsContent value="inventory" className="space-y-6">
+                <Input aria-label="Buscar inventario" placeholder="Buscar producto o SKU" value={inventorySearch} onChange={e => { inventoryRequest.current++; setInventorySearch(e.target.value); setInventoryPage(1); }} />
+                {inventoryError && <p role="alert">{inventoryError}</p>}
+                {inventoryReport?.pagination && <PaginationControls page={inventoryPage} pageSize={20} total={inventoryReport.pagination.total} entity="productos" language={language} onPageChange={setInventoryPage} />}
                 <SlideIn direction="up">
                   <Card>
                     <CardHeader>
@@ -369,7 +353,7 @@ export default function ReportsPage() {
                             id="category"
                             placeholder={t('reports.categoryPlaceholder')}
                             value={inventoryFilters.category}
-                            onChange={(e) => setInventoryFilters(prev => ({ ...prev, category: e.target.value }))}
+                            onChange={(e) => { inventoryRequest.current++; setInventoryPage(1); setInventoryFilters(prev => ({ ...prev, category: e.target.value })); }}
                           />
                         </div>
                         <div className="flex items-end">
@@ -464,7 +448,7 @@ export default function ReportsPage() {
                                   </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                  {inventoryReport.products.slice(0, 10).map((product) => (
+                                  {inventoryReport.products.map((product) => (
                                     <TableRow key={product._id}>
                                       <TableCell>
                                         <div>
@@ -695,24 +679,7 @@ export default function ReportsPage() {
                       <div className="space-y-4">
                         <div className="space-y-2">
                           <Label htmlFor="customer">{t('reports.selectCustomer')}</Label>
-                          <Select
-                            value={selectedContact}
-                            onValueChange={(value) => {
-                              setSelectedContact(value);
-                              if (value) loadContactReport(value, 'customer');
-                            }}
-                          >
-                            <SelectTrigger>
-                              <SelectValue placeholder={t('reports.chooseCustomer')} />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {Array.isArray(customers) && customers.map((customer) => (
-                                <SelectItem key={customer._id} value={customer._id}>
-                                  {customer.name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          <RemoteEntitySelect kind="customer" label="cliente" value={selectedContact} onChange={value => { setSelectedContact(value); if (value) loadContactReport(value, 'customer'); }} />
                         </div>
 
                         {contactReport && contactReport.customer && (
@@ -774,24 +741,7 @@ export default function ReportsPage() {
                       <div className="space-y-4">
                         <div className="space-y-2">
                           <Label htmlFor="vendor">{t('reports.selectVendor')}</Label>
-                          <Select
-                            value={selectedContact}
-                            onValueChange={(value) => {
-                              setSelectedContact(value);
-                              if (value) loadContactReport(value, 'vendor');
-                            }}
-                          >
-                            <SelectTrigger>
-                              <SelectValue placeholder={t('reports.chooseVendor')} />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {Array.isArray(vendors) && vendors.map((vendor) => (
-                                <SelectItem key={vendor._id} value={vendor._id}>
-                                  {vendor.name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          <RemoteEntitySelect kind="vendor" label="proveedor" value={selectedContact} onChange={value => { setSelectedContact(value); if (value) loadContactReport(value, 'vendor'); }} />
                         </div>
 
                         {contactReport && contactReport.vendor && (

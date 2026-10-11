@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { Product, Transaction } = require('../src/models');
+const { Product, Transaction, Contact } = require('../src/models');
+const { getContacts, getCustomers, getVendors } = require('../src/controllers/contactController');
 const { getProducts } = require('../src/controllers/productController');
 const { getTransactions } = require('../src/controllers/transactionController');
 
@@ -11,7 +12,7 @@ const captureModel = (model, records, total) => {
   model.find = (filter) => {
     observed.findFilter = filter;
     const query = {
-      sort() { return this; },
+      sort(value) { observed.sort = value; return this; },
       skip(value) { observed.skip = value; return this; },
       limit(value) { observed.limit = value; return this; },
       populate() { return this; },
@@ -40,6 +41,50 @@ const callController = (handler, query, businessId) => new Promise((resolve, rej
     { json: resolve },
     reject
   );
+});
+
+for (const [handler, key, type] of [[getContacts, 'contacts', null], [getCustomers, 'customers', 'customer'], [getVendors, 'vendors', 'vendor']]) {
+  test(`P2C.1 ${key} pages, counts, filters, clamps and escapes literal search within tenant`, async () => {
+    const mock = captureModel(Contact, [{ name: 'Same name', _id: '2' }], 43);
+    try {
+      const result = await callController(handler, { page: 2, limit: 20, search: 'a.*', ...(type ? {} : { type: 'vendor' }) }, 'tenant-a');
+      assert.deepEqual(result.data.pagination, { current: 2, limit: 20, total: 43, pages: 3 });
+      assert.equal(mock.observed.skip, 20); assert.equal(mock.observed.limit, 20);
+      assert.deepEqual(mock.observed.sort, { name: 1, _id: 1 });
+      assert.deepEqual(mock.observed.findFilter, mock.observed.countFilter);
+      assert.equal(mock.observed.findFilter.businessId, 'tenant-a');
+      assert.equal(mock.observed.findFilter.type, type || 'vendor');
+      assert.equal(mock.observed.findFilter.$or[0].name.$regex, 'a\\.\\*');
+      const clamped = await callController(handler, { page: 10, limit: 20 }, 'tenant-b');
+      assert.equal(clamped.data.pagination.current, 3); assert.equal(mock.observed.findFilter.businessId, 'tenant-b');
+      await assert.rejects(callController(handler, { limit: 101 }, 'tenant-a'), /Invalid pagination/);
+      await assert.rejects(callController(handler, { page: 0 }, 'tenant-a'), /Invalid pagination/);
+    } finally { mock.restore(); }
+  });
+}
+test('P2C.1 product selector supplier offer filter and stable sorting apply before paging', async () => {
+  const mock = captureModel(Product, [], 42);
+  try {
+    await callController(getProducts, { page: 2, limit: 20, search: 'milk(', supplierId: 'a'.repeat(24) }, 'tenant-a');
+    assert.deepEqual(mock.observed.sort, { createdAt: -1, _id: -1 });
+    assert.equal(mock.observed.findFilter.supplierPrices.$elemMatch.supplierId, 'a'.repeat(24));
+    assert.equal(mock.observed.findFilter.$or[0].name.$regex, 'milk\\(');
+    assert.deepEqual(mock.observed.findFilter, mock.observed.countFilter); assert.equal(mock.observed.skip, 20);
+  } finally { mock.restore(); }
+});
+test('P2C.1 inventory page retains complete filtered aggregate statistics without full product download', async () => {
+  const mock = captureModel(Product, [{ sku: 'PAGE-2' }], 43);
+  const original = Product.aggregate; let pipeline;
+  Product.aggregate = async value => { pipeline = value; return [{ _id: { category: 'food', currency: 'PEN' }, count: 43, totalStock: 90, value: 180, low: 3, out: 2 }]; };
+  try {
+    const report = await require('../src/services/paginatedInventoryReport')({ businessId: 'tenant-a', query: { page: 2, limit: 20, search: 'foo.', category: 'food', lowStock: 'true' } }, async () => 1, 'PEN');
+    assert.equal(report.products.length, 1); assert.deepEqual(report.pagination, { current: 2, limit: 20, total: 43, pages: 3 });
+    assert.equal(report.statistics.totalProducts, 43); assert.equal(report.statistics.totalValue, 180);
+    assert.equal(report.statistics.lowStockCount, 3); assert.equal(mock.observed.skip, 20);
+    assert.deepEqual(pipeline[0].$match, mock.observed.countFilter);
+    assert.equal(pipeline[0].$match.businessId, 'tenant-a'); assert.equal(pipeline[0].$match.$or[0].name.$regex, 'foo\\.');
+    assert.deepEqual(mock.observed.sort, { name: 1, _id: 1 });
+  } finally { Product.aggregate = original; mock.restore(); }
 });
 
 test('transaction list paginates and counts the same tenant/filter/search set', async () => {

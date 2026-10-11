@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { Layout } from '@/components/Layout';
 import { Button } from '@/components/ui/button';
@@ -22,24 +22,29 @@ export default function ProductsPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [total, setTotal] = useState(0);
+  const request = useRef(0);
+  const [listError, setListError] = useState('');
   const { t, language } = useLanguage();
 
   const formatPrice = (price: number, currency: Product['currency'] = 'USD') =>
     new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(price);
 
   const loadProducts = useCallback(async () => {
+    const version = ++request.current;
     try {
       setLoading(true);
+      setListError('');
       const response = await apiClient.getProducts({ search, page, limit: pageSize });
+      if (version !== request.current) return;
       if (response.success) {
         setProducts(response.data.products);
         setTotal(response.data.pagination.total);
         setPage(response.data.pagination.current);
       }
-    } catch (error) {
-      console.error('Failed to load products:', error);
+    } catch {
+      if (version === request.current) { setProducts([]); setListError('No fue posible cargar los productos.'); }
     } finally {
-      setLoading(false);
+      if (version === request.current) setLoading(false);
     }
   }, [page, pageSize, search]);
 
@@ -48,6 +53,7 @@ export default function ProductsPage() {
   }, [loadProducts]);
 
   const handleSearchChange = (value: string) => {
+    request.current++;
     setSearch(value);
     setPage(1);
   };
@@ -72,6 +78,7 @@ export default function ProductsPage() {
     <ProtectedRoute>
       <Layout>
         <div className="space-y-6">
+          {listError && <p role="alert" className="text-destructive">{listError}<Button onClick={loadProducts}>Reintentar</Button></p>}
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-3xl font-bold">{t('products.title')}</h1>

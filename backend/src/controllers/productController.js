@@ -1,3 +1,4 @@
+const { escapeSearch, listPagination } = require('../utils/listPagination');
 const mongoose = require('mongoose');
 const { Product, Contact } = require('../models');
 const { asyncHandler } = require('../middleware/validation');
@@ -100,7 +101,7 @@ const validatePreferredSupplier = async (preferredSupplierId, supplierPrices, bu
  * @access  Private
  */
 const getProducts = asyncHandler(async (req, res) => {
-  const { search, category, minStock, maxStock, page = 1, limit = 10 } = req.query;
+  const { search, category, minStock, maxStock } = req.query;
   const businessId = req.businessId;
 
   // Build filter object
@@ -108,14 +109,14 @@ const getProducts = asyncHandler(async (req, res) => {
 
   if (search) {
     filter.$or = [
-      { name: { $regex: search, $options: 'i' } },
-      { description: { $regex: search, $options: 'i' } },
-      { sku: { $regex: search, $options: 'i' } }
+      { name: { $regex: escapeSearch(search), $options: 'i' } },
+      { description: { $regex: escapeSearch(search), $options: 'i' } },
+      { sku: { $regex: escapeSearch(search), $options: 'i' } }
     ];
   }
 
   if (category) {
-    filter.category = { $regex: category, $options: 'i' };
+    filter.category = { $regex: escapeSearch(category), $options: 'i' };
   }
 
   if (minStock !== undefined || maxStock !== undefined) {
@@ -124,17 +125,12 @@ const getProducts = asyncHandler(async (req, res) => {
     if (maxStock !== undefined) filter.stock.$lte = maxStock;
   }
 
-  // Calculate pagination
-  const requestedPage = Number(page);
-  const limitNum = Number(limit);
-  const total = await Product.countDocuments(filter);
-  const pages = Math.ceil(total / limitNum);
-  const pageNum = pages === 0 ? 1 : Math.min(requestedPage, pages);
-  const skip = (pageNum - 1) * limitNum;
+  if (req.query.supplierId) filter.supplierPrices = { $elemMatch: { supplierId: req.query.supplierId, purchasePrice: { $gt: 0 } } };
+  const { current: pageNum, limit: limitNum, total, pages, skip } = await listPagination(Product, filter, req.query, 10);
 
   // Get products with pagination
   const products = await Product.find(filter)
-    .sort({ createdAt: -1 })
+    .sort({ createdAt: -1, _id: -1 })
     .limit(limitNum)
     .skip(skip);
 
@@ -348,7 +344,7 @@ const getProductsByCategory = asyncHandler(async (req, res) => {
 
   const filter = {
     businessId: req.businessId,
-    category: { $regex: category, $options: 'i' },
+    category: { $regex: escapeSearch(category), $options: 'i' },
     isActive: true
   };
 

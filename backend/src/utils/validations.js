@@ -625,6 +625,7 @@ const updateTransactionStatusValidation = [
 ];
 
 const productQueryValidation = [
+  query('supplierId').optional().isMongoId().withMessage('Invalid supplier'),
   ...paginationValidation,
   query('minStock')
     .optional()

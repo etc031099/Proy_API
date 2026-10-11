@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { Layout } from '@/components/Layout';
 import { useLanguage } from '@/contexts/LanguageContext';
@@ -15,9 +15,12 @@ import { apiClient } from '@/lib/api';
 import { Contact } from '@/types';
 import { Plus, Search, Edit, Trash2, Phone, Mail, CreditCard } from 'lucide-react';
 import Link from 'next/link';
+import { PaginationControls } from '@/components/PaginationControls';
 
 export default function ContactsPage() {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
+  const [page, setPage] = useState(1), [total, setTotal] = useState(0), [listError, setListError] = useState('');
+  const request = useRef(0);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -29,30 +32,22 @@ export default function ContactsPage() {
   const [paymentHistory, setPaymentHistory] = useState<Array<{ _id: string; amount: number; paymentMethod: string; date: string }>>([]);
   const [paymentCurrency, setPaymentCurrency] = useState<'PEN' | 'USD' | 'EUR'>('PEN');
 
-  useEffect(() => {
-    loadContacts();
-  }, [search, activeTab]);
-
-  const loadContacts = async () => {
+  const loadContacts = useCallback(async () => {
+    const version = ++request.current;
+    setLoading(true); setListError('');
     try {
-      let response;
-      if (activeTab === 'customers') {
-        response = await apiClient.getCustomers({ search });
-      } else if (activeTab === 'vendors') {
-        response = await apiClient.getVendors({ search });
-      } else {
-        response = await apiClient.getContacts({ search });
-      }
-      
-      if (response.success) {
-        setContacts(response.data.contacts || response.data.customers || response.data.vendors);
-      }
-    } catch (error) {
-      console.error('Failed to load contacts:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+      const params = { search, page, limit: 20 };
+      const response = activeTab === 'customers' ? await apiClient.getCustomers(params)
+        : activeTab === 'vendors' ? await apiClient.getVendors(params) : await apiClient.getContacts(params);
+      if (version !== request.current) return;
+      if (!response.success) throw new Error('Unavailable');
+      setContacts(response.data.contacts || response.data.customers || response.data.vendors);
+      setTotal(response.data.pagination.total); setPage(response.data.pagination.current);
+    } catch {
+      if (version === request.current) { setContacts([]); setListError('No fue posible cargar los contactos.'); }
+    } finally { if (version === request.current) setLoading(false); }
+  }, [search, activeTab, page]);
+  useEffect(() => { void loadContacts(); }, [loadContacts]);
 
   const handleDelete = async (id: string) => {
     if (confirm('Are you sure you want to delete this contact?')) {
@@ -226,12 +221,12 @@ export default function ContactsPage() {
                 <Input
                   placeholder={t('contacts.search')}
                   value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  onChange={(e) => { request.current++; setSearch(e.target.value); setPage(1); }}
                   className="max-w-sm"
                 />
               </div>
 
-              <Tabs value={activeTab} onValueChange={setActiveTab}>
+              <Tabs value={activeTab} onValueChange={value => { request.current++; setActiveTab(value); setPage(1); }}>
                 <TabsList>
                   <TabsTrigger value="all">{t('contacts.all')}</TabsTrigger>
                   <TabsTrigger value="customers">{t('contacts.customers')}</TabsTrigger>
@@ -268,6 +263,8 @@ export default function ContactsPage() {
                   )}
                 </TabsContent>
               </Tabs>
+              {listError && <p role="alert" className="text-destructive">{listError}<Button variant="outline" onClick={loadContacts}>Reintentar</Button></p>}
+              <PaginationControls page={page} pageSize={20} total={total} entity="contactos" language={language} onPageChange={setPage} />
             </CardContent>
           </Card>
           {paymentContact && (

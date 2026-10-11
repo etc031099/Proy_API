@@ -1,4 +1,5 @@
 'use client';
+import { RemoteEntitySelect } from '@/components/RemoteEntitySelect';
 
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
@@ -81,11 +82,7 @@ export default function EditProductPage() {
     fetchProduct();
   }, [productId]);
 
-  useEffect(() => {
-    apiClient.getVendors({ limit: 100 }).then(response => {
-      if (response.success) setVendors(response.data?.vendors || response.data?.contacts || []);
-    }).catch(() => undefined);
-  }, []);
+
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -329,14 +326,8 @@ export default function EditProductPage() {
                   <p className="text-xs text-muted-foreground">{t('products.preferredSupplierHelp')}</p>
                   {supplierPrices.map((entry, index) => (
                     <div key={`${entry.supplierId}-${index}`} className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_8rem_auto]">
-                      <select className="h-10 min-w-0 w-full rounded-md border bg-background px-3 text-sm"
-                        value={entry.supplierId}
-                        onChange={e => setSupplierPrices(items => items.map((item, i) =>
-                          i === index ? { ...item, supplierId: e.target.value } : item
-                        ))}>
-                        <option value="">{t('products.selectSupplier')}</option>
-                        {vendors.map(vendor => <option key={vendor._id} value={vendor._id}>{vendor.name}</option>)}
-                      </select>
+                      <RemoteEntitySelect kind="vendor" label="proveedor" value={entry.supplierId} onSelect={entity => setVendors(rows => [...rows.filter(row => row._id !== entity._id), { _id: entity._id, name: entity.name }])}
+                        onChange={supplierId => setSupplierPrices(items => items.map((item, i) => i === index ? { ...item, supplierId } : item))} />
                       <Input className="w-32 shrink-0" type="number" min="0" step="0.01"
                         value={entry.purchasePrice}
                         onChange={e => setSupplierPrices(items => items.map((item, i) =>

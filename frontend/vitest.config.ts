@@ -8,6 +8,8 @@ export default defineConfig({
   },
   test: {
     include: [
+      'test/remoteEntitySelect.test.tsx',
+      'test/contactsPagination.test.tsx',
       'test/telegramRecovery.test.tsx',
       'test/telegramPreferences.test.tsx',
       'test/mlForecast.api.test.ts',

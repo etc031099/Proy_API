@@ -92,18 +92,28 @@ const financialStatsFromAggregation = (rows = []) => {
  * @access  Private
  */
 const getInventoryReport = asyncHandler(async (req, res) => {
+  if (req.query.page !== undefined) {
+    const data = await require('../services/paginatedInventoryReport')(req, async currency => {
+      const response = await getExchangeRate({ base: currency, target: REPORTING_CURRENCY });
+      return toFiniteNumber(response?.rate, { field: 'Inventory exchange rate', min: Number.EPSILON });
+    }, REPORTING_CURRENCY);
+    return res.json({ success: true, data });
+  }
   const { category, lowStock, sortBy = 'name', sortOrder = 'asc' } = req.query;
   const businessId = req.businessId;
 
   // Build filter
   const filter = { businessId, isActive: true };
   if (category) {
-    filter.category = { $regex: category, $options: 'i' };
+    filter.category = { $regex: require('../utils/listPagination').escapeSearch(category), $options: 'i' };
   }
 
   // Build sort object
   const sort = {};
-  sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
+  sort[['name', 'sku', 'category', 'stock', 'price'].includes(sortBy) ? sortBy : 'name'] = sortOrder === 'desc' ? -1 : 1;
+  sort._id = sortOrder === 'desc' ? -1 : 1;
+  if (req.query.search) filter.$or = ['name', 'sku', 'description'].map(field => ({ [field]: {
+    $regex: require('../utils/listPagination').escapeSearch(req.query.search), $options: 'i' } }));
 
   let products = await Product.find(filter).sort(sort);
 
