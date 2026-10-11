@@ -23,6 +23,13 @@ const addDays = (value, amount) => {
 };
 const dateLabel = value => new Intl.DateTimeFormat('es-PE', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })
   .format(new Date(`${value}T00:00:00.000Z`));
+// Classify date-only references; entity resolvers must never search these words.
+const isTemporalOnlyReference = value => {
+  const text = normalize(value).replace(/[¿?¡!.]/g, '').trim();
+  return /^(?:(?:de|del|para|el|la)\s+)*(?:ayer|anteayer|hoy|manana|pasado manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|(?:esta|este|proxima|proximo|pasada|pasado)\s+(?:semana|mes|ano)|ultim[oa]s?\s+(?:\d+|siete|treinta)\s+dias(?:\s+hasta hoy)?)$/.test(text)
+    || /^(?:20\d{2}-\d{2}-\d{2}|\d{1,2}\s+de\s+(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)(?:\s+de\s+20\d{2})?)$/.test(text)
+    || /^\d{1,2}[/-]\d{1,2}[/-]20\d{2}$/.test(text);
+};
 const routeForecastTemporalQuery = (message, memory, now, businessId) => {
   const text = normalize(message);
   const forecastQuestion = /\b(?:forecast|prediccion|predij\w*|demanda|que pasara)\b/.test(text);
@@ -33,8 +40,12 @@ const routeForecastTemporalQuery = (message, memory, now, businessId) => {
   const relativeFuture = tomorrow || dayAfterTomorrow
     || /\b(?:hoy|actual|actualmente|esta semana|la semana que viene|proxima semana|la proxima semana|el lunes que viene|dentro de \d+ dias?)\b/.test(text);
   const forecastFollowup = relativeFuture
-    && ['demand_forecast', 'ml_analytics', 'forecast_risk_explanation'].includes(memory.lastIntent);
+    && ['demand_forecast', 'ml_analytics', 'forecast_risk_explanation'].includes(memory.lastIntent)
+    && isTemporalOnlyReference(text.replace(/^[¿?\s]*y\s+/, ''));
   const requestedDate = parseRequestedDate(text);
+  if (forecastQuestion && /\b(?:20\d{2}-\d{2}-\d{2}|\d{1,2}\s+de\s+[a-z]+\s+de\s+20\d{2})\b/.test(text) && !requestedDate)
+    return { intent: 'ml_daily_granularity_clarification', agent: 'coordinator',
+      clarificationQuestion: 'No pude validar esa fecha. Indica una fecha completa válida; el forecast disponible es un replay histórico agregado.' };
   if (forecastQuestion && requestedPastDay) {
     const requestedPastDate = addDays(now.toISOString().slice(0, 10), requestedPastDay === 'anteayer' ? -2 : -1);
     const product = message.match(/\bM5-[A-Z]+_\d+_\d+\b/i)?.[0]
@@ -48,7 +59,13 @@ const routeForecastTemporalQuery = (message, memory, now, businessId) => {
       contextProvenance: { sourceType: 'conversation_context', entityType: 'product',
         label: `Producto ${product} y fecha ${dateLabel(requestedPastDate)} resueltos desde el contexto conversacional; no se consultó ML.` } };
   }
-  if (!forecastQuestion && !futureSalesQuestion && !(relativeFuture && ['demand_forecast', 'ml_analytics', 'forecast_risk_explanation'].includes(memory.lastIntent))) return null;
+  if (!forecastQuestion && !futureSalesQuestion && !forecastFollowup) return null;
+  if (/\b\d{1,2}[/-]\d{1,2}[/-]20\d{2}\b/.test(text)) return { intent: 'ml_daily_granularity_clarification', agent: 'coordinator',
+    clarificationQuestion: 'Indica una fecha completa en formato YYYY-MM-DD o con día, mes y año escritos. El forecast disponible es un replay histórico agregado.' };
+  const temporalTarget = text.replace(/[¿?¡!]/g, '').trim().match(/(?:prediccion|forecast|demanda)\s+(?:(?:de|del|para)\s+)?(.+)$/)?.[1];
+  if (temporalTarget && isTemporalOnlyReference(temporalTarget) && !relativeFuture && !requestedDate)
+    return { intent: 'ml_daily_granularity_clarification', agent: 'coordinator',
+      clarificationQuestion: 'Indica el producto y una fecha completa; no puedo inferir la fecha a partir de un día de semana o un mes. El forecast disponible es un replay histórico agregado.' };
 
   const scenario = Object.values(scenarios).find(row => row.businessId === businessId);
   if (requestedDate && scenario) {
@@ -75,6 +92,10 @@ const routeForecastTemporalQuery = (message, memory, now, businessId) => {
     return { intent: 'ml_historical_clarification', agent: 'coordinator',
       clarificationQuestion: `No tengo una predicción válida para ${target}${product ? ` para ${product}` : ''} en la fecha operativa actual. El forecast disponible corresponde a un replay histórico${anchor ? ` con fecha de referencia ${dateLabel(anchor)}` : ''}, no a una predicción vigente. Puedo mostrarte ese forecast histórico agregado de 7 días, pero no sería correcto presentarlo como una predicción actual.` };
   }
+  const historicalAnchorReference = scenario && requestedDate === scenario.anchorOperationalDate
+    && /\b(?:escenario|replay|historico)\b/.test(text);
+  if (requestedDate && forecastQuestion && !historicalAnchorReference) return { intent: 'ml_daily_granularity_clarification', agent: 'coordinator',
+    clarificationQuestion: `El modelo disponible ofrece un forecast histórico agregado de 7 días, no una predicción diaria para el ${dateLabel(requestedDate)}.` };
   return null;
 };
 const routeForecastAnalytics = (message, memory, now = new Date(), businessId) => {
@@ -119,4 +140,4 @@ const routeForecastAnalytics = (message, memory, now = new Date(), businessId) =
   if (!mode) return null;
   return make({ mode, ...(department ? { department } : {}), ...(category ? { category } : {}) });
 };
-module.exports = { routeForecastAnalytics, routeForecastTemporalQuery, parseRequestedDate };
+module.exports = { routeForecastAnalytics, routeForecastTemporalQuery, parseRequestedDate, isTemporalOnlyReference };

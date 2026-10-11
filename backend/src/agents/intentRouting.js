@@ -1,6 +1,6 @@
 const { isDate } = require('./contracts');
 const { productListFollowupType, resolveProductListFollowup } = require('./productListFollowups');
-const { parseRequestedDate } = require('./forecastRouting');
+const { parseRequestedDate, routeForecastTemporalQuery, isTemporalOnlyReference } = require('./forecastRouting');
 const { ordinalSelection } = require('./ordinalSelection');
 
 const normalize = value => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -59,11 +59,28 @@ const rollingPeriod = (now, days) => {
   return { startDate, endDate };
 };
 const relativeSalesPeriod = (text, now) => {
+  // Consume compound expressions before single-day tokens. Residual temporal
+  // expressions indicate a conflict rather than authority to pick one period.
+  const range = /\bdesde\s+(anteayer|ayer|hoy)\s+hasta\s+(anteayer|ayer|hoy)\b/.exec(text);
+  const rolling = /\bultim[oa]s?\s+(\d+|siete|treinta)\s+dias(?:\s+hasta\s+hoy)?\b/.exec(text);
+  const tokens = value => [...value.matchAll(/\bultim[oa]s?\s+(?:\d+|siete|treinta)\s+dias(?:\s+hasta\s+hoy)?\b|\banteayer\b|\bayer\b|\bhoy\b|\b(?:esta semana|semana pasada|semana anterior|este mes|mes actual|mes pasado|mes anterior)\b/g)];
+  const invalid = () => ({ clarificationQuestion: 'Indica un único periodo o un rango completo con inicio y fin claros.' });
+  if (range) {
+    if (tokens(text.replace(range[0], '')).length) return invalid();
+    const days = { hoy: 0, ayer: 1, anteayer: 2 };
+    const startDate = dayPeriod(now, days[range[1]]).startDate, endDate = dayPeriod(now, days[range[2]]).endDate;
+    return startDate <= endDate ? { startDate, endDate } : invalid();
+  }
+  if (rolling) {
+    if (tokens(text.replace(rolling[0], '')).length) return invalid();
+    const days = ({ siete: 7, treinta: 30 })[rolling[1]] || Number(rolling[1]);
+    return Number.isSafeInteger(days) && days >= 1 && days <= 365 ? rollingPeriod(now, days) : invalid();
+  }
+  if (tokens(text).length > 1 || /\b(?:desde|hasta)\s+(?:ayer|hoy|anteayer)\b/.test(text)
+    || /\b(?:del?\s+\d{1,2}\s+al\s+\d{1,2}|entre\s+(?:el\s+)?\d{1,2}\s+y\s+(?:el\s+)?\d{1,2})\b/.test(text)) return invalid();
   if (/\banteayer\b/.test(text)) return dayPeriod(now, 2);
   if (/\bayer\b/.test(text)) return dayPeriod(now, 1);
   if (/\bhoy\b/.test(text)) return dayPeriod(now);
-  if (/\bultimos?\s+7\s+dias\b/.test(text)) return rollingPeriod(now, 7);
-  if (/\bultimos?\s+30\s+dias\b/.test(text)) return rollingPeriod(now, 30);
   if (/\bsemana pasada|semana anterior\b/.test(text)) return weekPeriod(now, 1);
   if (/\besta semana\b/.test(text)) return weekPeriod(now);
   if (/\bmes pasado|mes anterior\b/.test(text)) return monthPeriod(now, true);
@@ -85,7 +102,7 @@ const explicitProductDetailQuery = message => {
     || text.match(/^(?:y\s+)?(?:cual\s+es\s+)?(?:el\s+|la\s+)?(?:stock\s+minimo|precio|stock|minimo|prediccion|forecast|esta\s+activ[oa])\s+(?:(?:de|del|para)\s+)?(?:el\s+)?(?:producto\s+)?(.+?)\s*$/)?.[1];
   if (!target || canonicalProductSku(message)) return null;
   const cleaned = target.replace(/[.,;:]+$/, '').trim();
-  if (!cleaned || /^(?:bajo|actual|minimo)$/.test(cleaned) || ordinalSelection(cleaned).matched || /^(?:ese|este|aquel|su|mismo|misma)\b/.test(cleaned)
+  if (!cleaned || isTemporalOnlyReference(cleaned) || /^(?:bajo|actual|minimo)$/.test(cleaned) || ordinalSelection(cleaned).matched || /^(?:ese|este|aquel|su|mismo|misma)\b/.test(cleaned)
     || /\b(?:ayer|hoy|manana|anteayer)\b/.test(cleaned)
     || /^(?:esta|este|la|el|proxima|proximo|pasada|pasado)\s+(?:semana|mes|ano)\b/.test(cleaned)) return null;
   return cleaned;
@@ -251,12 +268,40 @@ const routeCommercial = (message, memory = {}) => {
 };
 const PERIOD_INTENTS = ['sales_summary', 'top_selling_products', 'product_sales_summary', 'recent_transactions'];
 const ordinalReference = ordinalSelection;
+const routeTemporalGuard = (message, memory = {}, now = new Date(), businessId) => {
+  const text = normalize(message);
+  const relative = relativeSalesPeriod(text, now);
+  if (relative?.clarificationQuestion) return clarify(relative.clarificationQuestion);
+  const isoDates = message.match(/\d{4}-\d{2}-\d{2}/g) || [];
+  const naturalDates = [...text.matchAll(/\b\d{1,2}\s+de\s+[a-z]+\s+de\s+20\d{2}\b/g)];
+  if (relative && (isoDates.length || naturalDates.length))
+    return clarify('Indica un único periodo; la fecha explícita y el periodo relativo son distintos.');
+  const forecast = routeForecastTemporalQuery(message, memory, now, businessId);
+  if (forecast) return forecast;
+  if (/\b\d{1,2}[/-]\d{1,2}[/-]20\d{2}\b/.test(text))
+    return clarify('Indica la fecha con formato YYYY-MM-DD o con día, mes y año escritos completos.');
+  const temporalTarget = text.replace(/[¿?¡!]/g, '').trim()
+    .match(/^(?:y\s+)?(?:(?:cual es|cuanto tiene)\s+)?(?:el\s+|la\s+)?(?:stock|minimo|precio|proveedor)\s+(?:(?:de|del|para)\s+)?(.+)$/)?.[1]
+    || text.replace(/[¿?¡!]/g, '').trim().match(/\b(?:cuanto|cuanta)\s+(?:stock|inventario|precio|minimo)\s+(?:tiene|cuesta|es)\s+(.+)$/)?.[1]
+    || text.replace(/[¿?¡!]/g, '').trim().match(/\bproveedor\s+(.+)$/)?.[1];
+  if (temporalTarget && isTemporalOnlyReference(temporalTarget))
+    return clarify('Indica el producto o proveedor que deseas consultar; esa expresión corresponde a una fecha o periodo.');
+  if (!relative && isTemporalOnlyReference(text.replace(/^[¿?\s]*y\s+/, '')))
+    return clarify('Indica qué información deseas consultar y una fecha completa; no usaré un día o mes como nombre de producto.');
+  if (naturalDates.length > 1 || /\b(?:desde|hasta)\b/.test(text) && !relative && isoDates.length !== 2)
+    return clarify('Indica el rango completo con dos fechas YYYY-MM-DD; no puedo inferir los límites de ese rango.');
+  return null;
+};
 
 /** High-confidence routing only. Unrecognized language is delegated, never guessed. */
-const routeDeterministically = (message, memory, now, conversationId, scopeBinding, businessId) => {
+const routeDeterministically = (message, memory = {}, now = new Date(), conversationId, scopeBinding, businessId) => {
   const tenantGuard = tenantScopeViolation(message);
   if (tenantGuard) return tenantGuard;
   const alertText = normalize(message);
+  const recognizedRelativePeriod = relativeSalesPeriod(alertText, now);
+  // Forecast dates must win before a product/context route can request replay.
+  const temporalGuard = routeTemporalGuard(message, memory, now, businessId);
+  if (temporalGuard) return temporalGuard;
   const alertSku = canonicalProductSku(message) || message.match(/\bSKU-[\w.-]{1,100}\b/i)?.[0];
   if (/\btelegram\b/.test(alertText) && /\b(?:alertas?|notificaciones?|entregas?)\b/.test(alertText)
     && !/\b(?:crea|crear|activa|activar|desactiva|desactivar)\b/.test(alertText)) {
@@ -431,7 +476,8 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   const dates = message.match(/\d{4}-\d{2}-\d{2}/g);
   const parsedNaturalDate = !dates && /\b\d{1,2}\s+de\s+[a-z]+\s+de\s+20\d{2}\b/i.test(text)
     ? parseRequestedDate(text) : null;
-  const explicitRelativePeriod = relativeSalesPeriod(text, now);
+  const explicitRelativePeriod = recognizedRelativePeriod;
+  if ((dates || parsedNaturalDate) && explicitRelativePeriod) return clarify('Indica un único periodo; la fecha explícita y el periodo relativo son distintos.');
   const periodFollowupText = text.replace(/[¿?¡!.]/g, '').trim();
   const periodOnlyFollowup = /^(?:y\s+)?(?:hoy|ayer|anteayer|ultimos?\s+(?:7|30)\s+dias)$/.test(periodFollowupText);
   const contextualPeriodFollowup = periodOnlyFollowup || /^que paso (?:hoy|ayer|anteayer|ultimos?\s+(?:7|30)\s+dias)$/.test(periodFollowupText);
@@ -448,9 +494,9 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
     && /\b(?:venta\w*|vendi\w*)\b/.test(text) && !explicitRelativePeriod) {
     return clarify('Indica un periodo válido, como hoy, ayer, anteayer, últimos 7 días, esta semana o este mes.');
   }
-  if (dates && (dates.length !== 2 || !dates.every(isDate) || dates[0] > dates[1])) return clarify('Indica un periodo válido con dos fechas YYYY-MM-DD.');
+  if (dates && (dates.length > 2 || !dates.every(isDate) || dates.length === 2 && dates[0] > dates[1])) return clarify('Indica un periodo válido con una fecha o dos fechas YYYY-MM-DD ordenadas.');
   if (!dates && /\b\d{1,2}\s+de\s+[a-z]+\s+de\s+20\d{2}\b/i.test(text) && !parsedNaturalDate) return clarify('No pude validar esa fecha. Indícala con día, mes y año.');
-  const explicitPeriod = dates ? { startDate: dates[0], endDate: dates[1] }
+  const explicitPeriod = dates ? { startDate: dates[0], endDate: dates[1] || dates[0] }
     : parsedNaturalDate ? { startDate: parsedNaturalDate, endDate: parsedNaturalDate } : explicitRelativePeriod;
   const period = explicitPeriod || (memory.lastPeriodExplicit === true ? memory.lastPeriod : undefined) || monthPeriod(now);
   if (/\b(crea|crear|compra|comprar|borra|elimina|editar|actualiza|cancelar)\b|shell|ejecuta codigo|mongo query|ignora.*instruccion|api.?key|password|jwt/.test(text)) {
@@ -490,7 +536,9 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
   }
   let plan;
   if (isLowStockQuery(inventoryText)) plan = { intent: 'low_stock', agent: 'operations' };
-  else if (/transacciones.*(ultim|recient)|(ultim|recient).*transacciones/.test(text)) plan = { intent: 'recent_transactions', agent: 'operations' };
+  else if (/transacciones.*(ultim|recient)|(ultim|recient).*transacciones/.test(text)
+    || /\btransacciones\b/.test(text) && explicitPeriod
+    || /\bcompras?\b/.test(text) && explicitPeriod) plan = { intent: 'recent_transactions', agent: 'operations' };
   else if (/mas vendidos|mayores ventas|se venden mas/.test(text)) plan = { intent: 'top_selling_products', agent: 'analyst' };
   else if (/\b(?:vendimos|ventas?|vendi|cuantas? ventas?|cuanto.*vendid[oa])\b/.test(text)
     && (explicitPeriod || /\b(?:vendimos|ventas del mes)\b/.test(text))) plan = { intent: 'sales_summary', agent: 'operations' };
@@ -513,12 +561,14 @@ const routeDeterministically = (message, memory, now, conversationId, scopeBindi
     if (!plan.query) return clarify('¿Qué nombre o SKU deseas buscar?');
   }
   if (plan.intent === 'recent_transactions') {
-    plan.periodRequested = Boolean(dates || /este mes|mes actual|mes pasado|mes anterior/.test(text));
+    plan.periodRequested = Boolean(explicitPeriod);
     plan.type = /\bventas?\b/.test(text) ? 'sale' : /\bcompras?\b/.test(text) ? 'purchase' : undefined;
     plan.status = /completad/.test(text) ? 'completed' : /pendient/.test(text) ? 'pending' : /cancelad/.test(text) ? 'cancelled' : undefined;
   }
   if (sku && plan.intent === 'replenishment_candidates') { plan.intent = 'demand_forecast'; plan.needsProduct = true; }
   const nameTarget = message.match(/(?:demanda\s+(?:tendr[aá]|de|para)|predicci[oó]n\s+(?:de|para))\s+(.+?)[?.!]*$/i)?.[1];
+  if (plan.intent === 'demand_forecast' && nameTarget && isTemporalOnlyReference(nameTarget))
+    return clarify('Indica el producto y una fecha completa. El modelo disponible ofrece un replay histórico agregado, no una predicción diaria.');
   if (!sku && !productId && plan.intent === 'demand_forecast' && nameTarget && !/^(ese|este|su|el) producto/i.test(nameTarget)) {
     return { ...plan, lookupQuery: nameTarget.slice(0, 100).replace(/[?!.]+$/, ''), period, limit: 5 };
   }
@@ -571,4 +621,4 @@ const routeCompoundProductList = message => {
 };
 
 module.exports = { routeDeterministically, routeCommercial, routeSupplierProducts, monthPeriod, weekPeriod, clarify,
-  budgetPlanFollowupType, tenantScopeViolation, routeCompoundProductList, canonicalProductSku, explicitProductDetailQuery };
+  budgetPlanFollowupType, tenantScopeViolation, routeCompoundProductList, canonicalProductSku, explicitProductDetailQuery, routeTemporalGuard };

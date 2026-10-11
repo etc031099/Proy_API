@@ -533,6 +533,97 @@ test('natural week periods use bounded operational dates and causal sales compar
   assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0); assert.equal(f.calls.length, 0);
 });
 
+for (const [expression, startDate, endDate] of [
+  ['desde ayer hasta hoy', '2024-12-31', '2025-01-01'],
+  ['últimos 7 días hasta hoy', '2024-12-26', '2025-01-01'],
+  ['últimos siete días', '2024-12-26', '2025-01-01'],
+  ['últimos 30 días', '2024-12-03', '2025-01-01'],
+  ['ayer', '2024-12-31', '2024-12-31'], ['anteayer', '2024-12-30', '2024-12-30'],
+  ['hoy', '2025-01-01', '2025-01-01'], ['esta semana', '2024-12-30', '2025-01-01'],
+  ['semana pasada', '2024-12-23', '2024-12-29'],
+  ['este mes', '2025-01-01', '2025-01-31'], ['mes pasado', '2024-12-01', '2024-12-31'],
+  ['9 de octubre de 2026', '2026-10-09', '2026-10-09'],
+  ['2026-10-09', '2026-10-09', '2026-10-09'],
+  ['2026-10-01 a 2026-10-05', '2026-10-01', '2026-10-05']
+]) test(`P1B operational period reaches sales executor: ${expression}`, async () => {
+  const now = () => new Date('2025-01-01T00:05:00Z');
+  const f = fixture({ now, businessHistory: [] });
+  const result = await f.run(`¿Cuánto vendí ${expression}?`);
+  assert.equal(result.code, null); assert.equal(result.actions[0].skillId, 'get_sales_summary');
+  assert.deepEqual(result.evidence[0].period, { startDate, endDate });
+  const match = f.reads.find(row => row.model === 'Transaction' && row.pipeline)?.pipeline[0].$match;
+  assert.equal(match.date.$gte.toISOString(), `${startDate}T00:00:00.000Z`);
+  assert.equal(match.date.$lt.toISOString(), new Date(Date.parse(`${endDate}T00:00:00Z`) + 86400000).toISOString());
+  assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
+  if (startDate === endDate) { assert.match(result.answer, /durante el \d+/); assert.doesNotMatch(result.answer, /del .* al/); }
+});
+for (const [message, type, status] of [
+  ['últimas transacciones de ayer', undefined, undefined],
+  ['transacciones de ventas completadas de ayer', 'sale', 'completed'],
+  ['transacciones de compras pendientes desde ayer hasta hoy', 'purchase', 'pending'],
+  ['compras de ayer', 'purchase', undefined]
+]) test(`P1B transaction date/type/status propagation: ${message}`, async () => {
+  const now = () => new Date('2026-10-10T00:05:00Z'), f = fixture({ now });
+  const plan = routeDeterministically(message, {}, now());
+  assert.equal(plan.intent, 'recent_transactions'); assert.equal(plan.periodRequested, true);
+  const result = await f.run(message);
+  assert.equal(result.actions[0].skillId, 'get_recent_transactions');
+  const match = f.reads.find(row => row.model === 'Transaction' && row.pipeline).pipeline[0].$match;
+  assert.equal(match.type, type); assert.equal(match.status, status); assert.equal(match.businessId, 'A');
+  assert.equal(match.date.$gte.toISOString(), '2026-10-09T00:00:00.000Z');
+  assert.equal(match.date.$lt.toISOString(), message.includes('hasta hoy') ? '2026-10-11T00:00:00.000Z' : '2026-10-10T00:00:00.000Z');
+  assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
+});
+test('P1B transaction follow-up preserves type and status along with a new date', async () => {
+  const now = () => new Date('2026-10-10T12:00:00Z'), f = fixture({ now }), conversationId = randomUUID();
+  await f.run('transacciones de compras pendientes de ayer', conversationId);
+  const result = await f.run('¿Y anteayer?', conversationId);
+  const match = f.reads.filter(row => row.model === 'Transaction' && row.pipeline).at(-1).pipeline[0].$match;
+  assert.equal(match.type, 'purchase'); assert.equal(match.status, 'pending');
+  assert.equal(match.date.$gte.toISOString(), '2026-10-08T00:00:00.000Z');
+  assert.equal(result.usage.totalLlmCalls, 0);
+});
+for (const query of ['ventas ayer y hoy', 'ventas esta semana ayer', 'ventas desde hoy hasta ayer',
+  'ventas desde ayer hasta hoy últimos 7 días', 'ventas del 1 al 5', 'ventas entre el 1 y el 5',
+  'ventas desde el 9 de octubre de 2026 hasta el 10 de octubre de 2026',
+  'ventas 09/10/2026', 'ventas 09-10-2026', 'ventas 2026-02-30']) {
+  test(`P1B unresolved/conflicting dates clarify without queries: ${query}`, async () => {
+    const f = fixture(), result = await f.run(query);
+    assert.equal(result.requiresClarification, true); assert.equal(f.reads.length, 0);
+    assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalSkillCalls, 0);
+  });
+}
+for (const query of ['predicción de mañana', 'predicción para mañana', 'forecast del 12 de octubre de 2026',
+  '¿Y su predicción de mañana?', 'predicción de lunes', 'predicción de octubre', 'stock ayer', 'proveedor octubre']) {
+  test(`P1B temporal words never become product references: ${query}`, async () => {
+    const row = { ...product(1), sku: 'M5-FOODS_3_210' };
+    const f = fixture({ products: [row], now: () => new Date('2026-10-10T12:00:00Z') }), conversationId = randomUUID();
+    await f.run('¿Cuánto stock tiene M5-FOODS_3_210?', conversationId);
+    const readsBefore = f.reads.length, result = await f.run(query, conversationId);
+    assert.equal(result.requiresClarification, true); assert.equal(f.reads.length, readsBefore);
+    assert.equal(result.usage.totalSkillCalls, 0); assert.equal(result.usage.totalLlmCalls, 0);
+    assert.equal(result.usage.totalTokens, 0);
+    if (/mañana/.test(query)) assert.match(result.answer, /M5-FOODS_3_210/);
+  });
+}
+test('P1B temporal-only requests without context never query an entity or Gemini', async () => {
+  const f = fixture({ now: () => new Date('2026-10-10T12:00:00Z') });
+  for (const query of ['predicción de mañana', 'ayer', 'lunes', 'octubre', 'predicción del 12 de octubre',
+    '¿Cuánto stock tiene lunes?', 'predicción de ayer para el 12 de octubre de 2026']) {
+    const result = await f.run(query);
+    assert.equal(result.requiresClarification, true, query); assert.equal(f.reads.length, 0, query);
+    assert.equal(result.usage.totalSkillCalls, 0, query); assert.equal(result.usage.totalLlmCalls, 0, query);
+  }
+});
+test('P1B a future forecast guard wins over pending ordinal product selection', async () => {
+  const rows = [2, 3].map((n, i) => ({ ...product(n), sku: `M5-FOODS_${i + 2}_210`, name: `Foods ${i + 2} item 210` }));
+  const f = fixture({ products: rows }), conversationId = randomUUID();
+  await f.run('precio food 210', conversationId);
+  const result = await f.run('la predicción del primero para mañana', conversationId);
+  assert.equal(result.requiresClarification, true); assert.equal(result.usage.totalSkillCalls, 0);
+  assert.equal(result.usage.totalLlmCalls, 0);
+});
+
 test('short relative sales periods are deterministic UTC calendar ranges and distinct from the current week', async () => {
   const now = () => new Date('2025-01-22T12:00:00Z');
   const cases = [

@@ -5,7 +5,7 @@ const { createAgentExecution } = require('./execution');
 const { classifyAgentIntent } = require('./routing');
 const { executeRequestedSkill } = require('./toolCalls');
 const { createConversationMemory } = require('./memory');
-const { routeDeterministically, clarify, budgetPlanFollowupType, tenantScopeViolation, canonicalProductSku, explicitProductDetailQuery } = require('./intentRouting');
+const { routeDeterministically, clarify, budgetPlanFollowupType, tenantScopeViolation, canonicalProductSku, explicitProductDetailQuery, routeTemporalGuard } = require('./intentRouting');
 const { buildSkillAnswer, buildCheapestSupplierAnswer, llmObservation, safeText, replenishmentExplanation,
   buildProductListSupplierComparisonAnswer, budgetPlanExplanation, budgetPlanFollowupAnswer, productCountAnswer, unsupportedClaimAnswer, salesCausalityAnswer } = require('./responses');
 const { buildSynthesisInput, buildNarrativeSynthesisInput, validateNarrativeSynthesis, renderNarrativeSynthesis, renderNarrativeFallback } = require('./synthesis');
@@ -162,10 +162,11 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
       try {
         // Access-scope requests are rejected before consulting conversation snapshots, routing LLM, or skills.
         const securityPlan = tenantScopeViolation(message);
-        const selectedSupplier = securityPlan ? null : supplierSelection(message, state, Date.now());
-        const selectedProduct = securityPlan ? null : productCandidateSelection(message, state);
-        const productPage = securityPlan ? null : supplierProductPage(message, state, Date.now());
-        const deterministicPlan = await execution.runAgent('coordinator', () => securityPlan || (selectedSupplier?.expired
+        const guardedPlan = securityPlan || routeTemporalGuard(message, state, clock(), context.businessId);
+        const selectedSupplier = guardedPlan ? null : supplierSelection(message, state, Date.now());
+        const selectedProduct = guardedPlan ? null : productCandidateSelection(message, state);
+        const productPage = guardedPlan ? null : supplierProductPage(message, state, Date.now());
+        const deterministicPlan = await execution.runAgent('coordinator', () => guardedPlan || (selectedSupplier?.expired
           ? clarify('Estas opciones de proveedor ya expiraron. Repite la consulta indicando el producto y el proveedor.')
           : selectedSupplier?.noMore ? clarify('Ya estás en la última página de proveedores.')
           : selectedSupplier?.noPrevious ? clarify('Ya estás en la primera página de proveedores.')
