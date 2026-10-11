@@ -6,7 +6,7 @@ const { rankEntities, normalize } = require('../src/automations/entityResolution
 const { Product } = require('../src/models');
 const { compactDraft, TTL_MS } = require('../src/automations/operationDraft');
 const { snapshot, publicResponse } = require('../src/services/agentHistoryProjection');
-const { parseAction } = require('../src/automations/actionInput');
+const { parseAction, resolveAction } = require('../src/automations/actionInput');
 const p1 = { _id: 'bbbbbbbbbbbbbbbbbbbbbbbb', name: 'Coca-Cola 500ML', sku: 'COC500', currency: 'PEN', stock: 10, isActive: true };
 const p2 = { ...p1, _id: 'cccccccccccccccccccccccc', name: 'Coca Cola 1.5 litros', sku: 'COC1500' };
 const vendor = { _id: 'dddddddddddddddddddddddd', name: 'Distribuidora Inka SAC' };
@@ -99,6 +99,39 @@ test('P2A write selection retains quantity and only prepares; wrong item prepare
   assert.equal(f.prepared[0].products[0].productId, identityProducts[1]._id); assert.equal(second.usage.totalLlmCalls, 0);
   const missing = fixture({ products: identityProducts }); const result = await missing.send('vende 3 del food 211');
   assert.equal(missing.prepared.length, 0); assert.equal(result.pendingAction, undefined); assert.equal(result.suggestions?.length || 0, 0);
+});
+test('P2A.2 one trusted padded product resolves into a preview without suggestions or confirmation', async () => {
+  for (const action of ['vende 3 del food 96', 'avísame cuando food 96 baje de 3']) {
+    const f = fixture({ products: [paddedProducts[0]] });
+    const result = await f.send(action);
+    assert.equal(result.suggestions, undefined);
+    assert.equal(result.pendingAction.status, 'PENDING');
+    assert.equal(f.prepared.length, 1);
+    if (action.startsWith('vende')) {
+      assert.equal(f.prepared[0].products[0].quantity, 3);
+      assert.equal(f.prepared[0].products[0].productId, paddedProducts[0]._id);
+    } else {
+      assert.equal(f.prepared[0].operator, '<'); assert.equal(f.prepared[0].threshold, 3);
+      assert.equal(f.prepared[0].productId, paddedProducts[0]._id);
+    }
+    assert.equal(result.usage.totalLlmCalls, 0);
+  }
+});
+test('P2A.2 one fuzzy high-confidence product resolves automatically but still requires confirmation', async () => {
+  const f = fixture({ products: [p1] });
+  const result = await f.send('vende 3 coca cola 500m');
+  assert.equal(result.suggestions, undefined);
+  assert.equal(f.prepared.length, 1);
+  assert.equal(f.prepared[0].products[0].productId, p1._id);
+  assert.equal(f.prepared[0].products[0].quantity, 3);
+  assert.equal(result.pendingAction.status, 'PENDING');
+  assert.equal(result.usage.totalLlmCalls, 0);
+});
+test('P2A.2 a weak single candidate asks for a more precise reference and does not render one suggestion', async () => {
+  const result = await resolveAction({ action: 'create_sale', items: [{ ref: 'coc' , quantity: 3 }] }, request(),
+    async () => ({ confidence: 'AMBIGUOUS', candidates: [p1], pagination: { totalMatches: 1 } }));
+  assert.match(result.clarification, /suficiente seguridad/);
+  assert.equal(result.selection, undefined);
 });
 test('P2A alert disambiguation keeps threshold and operator without creating a rule', async () => {
   const f = fixture({ products: identityProducts });
@@ -321,21 +354,22 @@ test('resolved multi-item slots survive an ambiguous later product', async () =>
   assert.equal(f.prepared[0].products.length, 2); assert.equal(f.prepared[0].products[0].productId, p1._id);
   assert.equal(f.prepared[0].products[1].productId, p2._id);
 });
-test('purchase omitted supplier prompts with actual costs then requires selection', async () => {
+test('purchase with one configured supplier resolves it automatically and prepares a preview', async () => {
   const f = fixture({ configured: [{ ...vendor, costs: [{ sku: p1.sku, currency: 'PEN', purchasePrice: 2.8 }] }] });
-  const result = await f.send('Compré 2 COC500'); assert.match(result.suggestions[0].detail, /2.8 PEN/);
-  assert.equal(result.suggestionsEntityType, 'supplier'); assert.equal(f.prepared.length, 0);
-  await f.send('sí'); assert.equal(f.prepared[0].vendorId, vendor._id);
+  const result = await f.send('Compré 2 COC500');
+  assert.equal(result.suggestions, undefined); assert.equal(f.prepared.length, 1);
+  assert.equal(result.pendingAction.status, 'PENDING'); assert.equal(f.prepared[0].vendorId, vendor._id);
+  assert.deepEqual(f.prepared[0].products[0], { productId: p1._id, quantity: 2 });
 });
 test('multiple configured suppliers require a choice', async () => {
   const second = { ...vendor, _id: 'eeeeeeeeeeeeeeeeeeeeeeee', name: 'Proveedor Central' };
   const f = fixture({ suppliers: [vendor, second], configured: [vendor, second] }); await f.send('Compra 2 COC500');
   await f.send('la segunda'); assert.equal(f.prepared[0].vendorId, second._id);
 });
-test('supplier typo becomes a confirmed real candidate, not an invented supplier', async () => {
+test('one high-confidence supplier typo resolves to a real supplier and remains pending confirmation', async () => {
   const f = fixture(); const result = await f.send('Compra 2 COC500 de proveedor distribudora inka');
-  assert.equal(f.prepared.length, 0); assert.equal(result.suggestions.length, 1);
-  await f.send('sí'); assert.equal(f.prepared[0].vendorId, vendor._id);
+  assert.equal(f.prepared.length, 1); assert.equal(result.suggestions, undefined);
+  assert.equal(result.pendingAction.status, 'PENDING'); assert.equal(f.prepared[0].vendorId, vendor._id);
 });
 test('missing supplier association explains manual configuration and no write', async () => {
   const f = fixture({ products: [{ ...p1, supplierPrices: [] }], configured: [] });
@@ -348,7 +382,7 @@ test('product enrichment is optional, asked once, and can be skipped', async () 
   await f.send('Continuar sin proveedor'); assert.equal(f.prepared.length, 1); assert.equal(f.prepared[0].supplierPrices, undefined);
 });
 test('existing vendor selection and purchase price create a real association in args', async () => {
-  const f = fixture(); await f.send(creation); await f.send('Elegir proveedor'); await f.send('1'); await f.send('2.80');
+  const f = fixture(); await f.send(creation); await f.send('Elegir proveedor'); await f.send('2.80');
   assert.deepEqual(f.prepared[0].supplierPrices, [{ supplierId: vendor._id, purchasePrice: 2.8 }]);
 });
 test('pending supplier creation is not enabled and keeps product draft', async () => {
@@ -411,7 +445,9 @@ test('contextual supplier help keeps quantity and does not prepare or cancel', a
   assert.equal(f.prepared.length, 0); await f.send('mejor 8'); assert.equal(f.prepared[0].products[0].quantity, 8);
 });
 test('corrections preserve a multi-item purchase and replace only selected quantity', async () => {
-  const f = fixture(); await f.send('Compra 2 COC500 y 3 COC1500'); await f.send('Cambiar cantidad del producto 2 a 5');
+  const second = { ...vendor, _id: 'eeeeeeeeeeeeeeeeeeeeeeee', name: 'Proveedor Central' };
+  const f = fixture({ suppliers: [vendor, second], configured: [vendor, second] });
+  await f.send('Compra 2 COC500 y 3 COC1500'); await f.send('Cambiar cantidad del producto 2 a 5');
   await f.send('1'); assert.deepEqual(f.prepared[0].products.map(row => row.quantity), [2, 5]);
 });
 test('product change before confirmation cancels old pending and asks about new candidate', async () => {
@@ -428,7 +464,7 @@ test('a new explicit operation is allowed after previous action ended', async ()
   await f.send('Vende 3 COC1500'); assert.equal(f.prepared.length, 2);
 });
 test('purchase cost remains missing until explicitly entered in the product currency', async () => {
-  const f = fixture(); await f.send(creation); await f.send('Elegir proveedor'); await f.send('1');
+  const f = fixture(); await f.send(creation); await f.send('Elegir proveedor');
   await f.send('USD 2.8'); assert.equal(f.prepared.length, 0);
   await f.send('PEN 2.8'); assert.equal(f.prepared[0].supplierPrices[0].purchasePrice, 2.8);
 });

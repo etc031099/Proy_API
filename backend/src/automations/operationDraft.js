@@ -1,7 +1,7 @@
 const { Contact } = require('../models');
 const { schema, string, integer, number, objectId, validateArgs } = require('./contracts');
 const { getActionSkill } = require('./skills');
-const { resolveAction, numericWords, integerToken } = require('./actionInput');
+const { resolveAction, trustedUnique, uncertainSingle, refineSingle, numericWords, integerToken } = require('./actionInput');
 const { normalize, configuredSuppliers, resolveReference } = require('./entityResolution');
 const { ordinalSelection } = require('../agents/ordinalSelection');
 const TTL_MS = 20 * 60 * 1000;
@@ -175,13 +175,18 @@ async function resolveDraft(draft, context, options = {}) {
     if (draft.enrichment === 'price') return { clarification: `¿Cuál es el precio de compra en ${draft.product.currency} para ese proveedor?`, missingFields: ['purchasePrice'] };
     if (draft.enrichment === 'supplier') {
       if (draft.supplierRef) {
-        const result = await resolver(Contact, context, draft.supplierRef, 'vendor');
+        const result = trustedUnique(await resolver(Contact, context, draft.supplierRef, 'vendor'));
         if (result.value) { draft.supplierId = String(result.value._id); draft.enrichment = 'price';
           if (draft.purchasePrice !== undefined) { draft.product.supplierPrices = [{ supplierId: draft.supplierId, purchasePrice: draft.purchasePrice }]; draft.enrichment = 'done'; return { args: draft.product }; }
           return { clarification: `¿Cuál es el precio de compra en ${draft.product.currency} para ${result.value.name}?`, missingFields: ['purchasePrice'] }; }
+        if (uncertainSingle(result)) return refineSingle(result, 'proveedor');
         return { ...result, selection: { slot: 'productSupplier', candidates: result.candidates || [] } };
       }
       const suppliers = await (options.listSuppliers ? options.listSuppliers(context) : Contact.find({ businessId: context.businessId, type: 'vendor', isActive: true }).select('_id name').sort({ name: 1, _id: 1 }).limit(5).lean().maxTimeMS(5000));
+      if (suppliers.length === 1) {
+        draft.supplierId = String(suppliers[0]._id); draft.enrichment = 'price';
+        return { clarification: `¿Cuál es el precio de compra en ${draft.product.currency} para ${suppliers[0].name}?`, missingFields: ['purchasePrice'] };
+      }
       return { clarification: 'Elige un proveedor existente o escribe parte de su nombre.', selection: { slot: 'productSupplier', candidates: suppliers } };
     }
     return { clarification: 'Puedes elegir un proveedor existente o continuar sin proveedor. Crear proveedores desde el asistente todavía no está habilitado.', suggestions: [
@@ -206,7 +211,7 @@ function applyResolution(draft, result, now) {
   const selection = draft.selection;
   const pagination = selection?.slot === 'product' && selection.query ? Object.fromEntries(
     ['query', 'offset', 'limit', 'totalMatches', 'hasMore', 'hasPrevious'].map(key => [key, selection[key]])) : undefined;
-  const intro = pagination ? `Encontré ${pagination.totalMatches} coincidencias para «${pagination.query}». Mostrando ${candidates.length ? pagination.offset + 1 : 0}–${pagination.offset + candidates.length}.\n${selection.refining ? 'Escribe una búsqueda más específica.' : 'Puedes seleccionar un producto, ver más resultados o escribir una búsqueda más específica. Los números y ordinales se refieren a esta lista visible.'}` : result.clarification;
+  const intro = pagination ? `Encontré ${pagination.totalMatches} ${pagination.totalMatches === 1 ? 'coincidencia' : 'coincidencias'} para «${pagination.query}». Mostrando ${candidates.length ? pagination.offset + 1 : 0}–${pagination.offset + candidates.length}.\n${selection.refining ? 'Escribe una búsqueda más específica.' : 'Puedes seleccionar un producto, ver más resultados o escribir una búsqueda más específica. Los números y ordinales se refieren a esta lista visible.'}` : result.clarification;
   return { ...result,
     ...(pagination ? { suggestionsPagination: pagination } : {}),
     ...(candidates.length && result.clarification ? { clarification: `${intro}\n${candidates.map(option => option.label).join('\n')}` } : {}),

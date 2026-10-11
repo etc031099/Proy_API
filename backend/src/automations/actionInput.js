@@ -15,6 +15,14 @@ const integerToken = (token, minimum = 1) => {
 };
 const numericToken = '[^\\s,]+(?:,\\d+)?';
 const itemSchema = schema({ ref: string(100), quantity: { ...integer(1000000), minimum: 1 } });
+const trustedUnique = result => result?.value ? result
+  : result?.confidence === 'HIGH_CONFIDENCE' && result.pagination?.totalMatches === 1 && result.candidates?.length === 1
+    ? { ...result, value: result.candidates[0] } : result;
+const uncertainSingle = result => !result?.value && result?.pagination?.totalMatches === 1 && result?.candidates?.length === 1
+  && result.confidence !== 'HIGH_CONFIDENCE';
+const refineSingle = (result, entity = 'producto') => uncertainSingle(result)
+  ? { clarification: `No pude identificar el ${entity} con suficiente seguridad. Indica ${entity === 'producto' ? 'su SKU o un nombre' : 'un nombre'} más preciso.` }
+  : result;
 const extractionSchema = schema({
   action: { ...string(30), enum: ['create_product', 'create_sale', 'create_purchase'] },
   items: { type: 'array', maxItems: 20, items: itemSchema },
@@ -95,8 +103,8 @@ async function resolveAction(extracted, context, resolver = resolveReference, su
     if (!['<', '<='].includes(extracted.operator) || !Number.isSafeInteger(extracted.threshold)
       || extracted.threshold < 0 || extracted.threshold > 1000000)
       return { missingFields: ['condition'], clarification: 'Indica una condición: stock menor que un entero, o menor o igual a un entero entre 0 y 1000000.' };
-    const result = await resolver(Product, context, extracted.items[0].ref);
-    if (!result.value) return { ...result, selection: { slot: 'product', index: 0, candidates: result.candidates || [], ...(result.pagination || {}) } };
+    const result = trustedUnique(await resolver(Product, context, extracted.items[0].ref));
+    if (!result.value) return { ...refineSingle(result), ...(!uncertainSingle(result) ? { selection: { slot: 'product', index: 0, candidates: result.candidates || [], ...(result.pagination || {}) } } : {}) };
     if (result.value.isActive === false) return { clarification: 'Ese producto está inactivo. Elige otro producto.' };
     extracted.items[0].ref = String(result.value._id);
     return { args: { productId: String(result.value._id), operator: extracted.operator, threshold: extracted.threshold } };
@@ -111,8 +119,8 @@ async function resolveAction(extracted, context, resolver = resolveReference, su
   const args = { products: [], paymentMethod: extracted.paymentMethod || 'cash' }, currencies = new Set();
   const products = [], quantities = new Map();
   for (const [index, item] of extracted.items.entries()) {
-    const result = await resolver(Product, context, item.ref);
-    if (!result.value) return { ...result, selection: { slot: 'product', index, candidates: result.candidates || [], ...(result.pagination || {}) } };
+    const result = trustedUnique(await resolver(Product, context, item.ref));
+    if (!result.value) return { ...refineSingle(result), ...(!uncertainSingle(result) ? { selection: { slot: 'product', index, candidates: result.candidates || [], ...(result.pagination || {}) } } : {}) };
     if (result.value.isActive === false) return { clarification: `Encontré ${result.value.name}, pero está inactivo. Elige otro producto.` };
     // Keep previously resolved slots; later ambiguous items must not discard them.
     item.ref = String(result.value._id);
@@ -127,17 +135,21 @@ async function resolveAction(extracted, context, resolver = resolveReference, su
   }
   args.currency = extracted.currency || (currencies.size === 1 ? [...currencies][0] : undefined);
   if (!args.currency) return { clarification: 'Los productos tienen distintas monedas. Indica PEN, USD o EUR para la operación.' };
-  const contactRef = extracted.action === 'create_purchase' ? extracted.supplierRef : extracted.customerRef;
+  let contactRef = extracted.action === 'create_purchase' ? extracted.supplierRef : extracted.customerRef;
+  let uniquelyConfiguredSupplier;
   if (extracted.action === 'create_purchase' && !contactRef) {
     const candidates = await supplierLookup(products, context);
-    return { clarification: candidates.length ? 'Elige el proveedor configurado y su costo de compra.'
+    if (candidates.length === 1) { uniquelyConfiguredSupplier = candidates[0]; contactRef = String(candidates[0]._id); }
+    else return { clarification: candidates.length ? 'Elige el proveedor configurado y su costo de compra.'
       : 'Estos productos no tienen un proveedor común con precio de compra configurado. Configúralo desde Productos; puedes elegir un proveedor existente, crear uno desde Proveedores o cancelar.',
-      selection: { slot: 'supplier', candidates }, missingFields: ['supplier'] };
+      ...(candidates.length > 1 ? { selection: { slot: 'supplier', candidates } } : {}), missingFields: ['supplier'] };
   }
   if (args.paymentMethod === 'credit' && extracted.action === 'create_sale' && !contactRef) return { missingFields: ['customer'], clarification: 'Para una venta a crédito, indica el cliente registrado.' };
   if (contactRef) {
-    const result = await resolver(Contact, context, contactRef, extracted.action === 'create_purchase' ? 'vendor' : 'customer');
-    if (!result.value) return { ...result, selection: { slot: extracted.action === 'create_purchase' ? 'supplier' : 'customer', candidates: result.candidates || [] } };
+    const result = uniquelyConfiguredSupplier ? { confidence: 'EXACT', value: uniquelyConfiguredSupplier }
+      : trustedUnique(await resolver(Contact, context, contactRef, extracted.action === 'create_purchase' ? 'vendor' : 'customer'));
+    if (!result.value) return { ...refineSingle(result, extracted.action === 'create_purchase' ? 'proveedor' : 'cliente'),
+      ...(!uncertainSingle(result) ? { selection: { slot: extracted.action === 'create_purchase' ? 'supplier' : 'customer', candidates: result.candidates || [] } } : {}) };
     if (result.value.isActive === false) return { clarification: `Encontré ${result.value.name}, pero está inactivo. Elige otro contacto.` };
     if (extracted.action === 'create_purchase' && products.some(product => Array.isArray(product.supplierPrices)
       && !product.supplierPrices.some(row => String(row.supplierId) === String(result.value._id) && Number.isFinite(row.purchasePrice))))
@@ -161,4 +173,4 @@ function parseStockRule(message) {
   return { action: 'create_stock_alert_rule', ...(ref && !/^(?:este|ese|el|este producto|ese producto|el producto)$/.test(ref) ? { items: [{ ref }] } : {}),
     ...(condition ? { operator: inclusive ? '<=' : '<', threshold } : {}) };
 }
-module.exports = { actionIntent, parseAction, resolveAction, resolveReference, numericWords, integerToken, extractionSchema, validateExtraction: value => validateArgs(extractionSchema, value) };
+module.exports = { actionIntent, parseAction, resolveAction, resolveReference, trustedUnique, uncertainSingle, refineSingle, numericWords, integerToken, extractionSchema, validateExtraction: value => validateArgs(extractionSchema, value) };
