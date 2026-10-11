@@ -333,6 +333,113 @@ const fixture = ({ products = [product(1), product(2), product(3, 'B')], contact
   return { calls, reads, orchestrator, run: (message, conversationId, request = req()) => orchestrator.handle(request, { message, ...(conversationId ? { conversationId } : {}) }) };
 };
 
+const p2bSuppliers = () => ['San Martin Norte', 'San Martin Sur'].map((name, index) => ({
+  _id: id(701 + index), businessId: 'A', name, type: 'vendor', isActive: true }));
+const p2bProduct = () => ({ ...product(700), sku: 'M5-FOODS_2_096', name: 'Foods 2 Item 096',
+  supplierPrices: p2bSuppliers().map((supplier, index) => ({ supplierId: supplier._id, purchasePrice: 10 + index })) });
+for (const followup of ['¿Qué productos ofrece ese proveedor?', '¿Qué productos ofrece este proveedor?',
+  '¿Qué productos ofrece el mismo proveedor?', '¿Qué productos ofrece ese mismo proveedor?',
+  '¿Qué productos ofrece el anterior?', '¿Y qué productos ofrece?', '¿Y sus productos?', '¿Y sus ofertas?']) {
+  test(`P2B supplier context handles ${followup} without literal pronoun lookup`, async () => {
+    const f = fixture({ products: [p2bProduct()], contacts: p2bSuppliers() }), conversationId = randomUUID();
+    await f.run('Qué productos ofrece proveedor San Martin Norte?', conversationId);
+    const result = await f.run(followup, conversationId); assertNoLLM(result);
+    assert.equal(result.requiresClarification, false); assert.match(result.answer, /San Martin Norte/);
+    assert.equal(result.actions[0].skillId, 'get_supplier_products');
+    const missing = await fixture().run(followup); assertNoLLM(missing);
+    assert.equal(missing.requiresClarification, true); assert.equal(missing.usage.totalSkillCalls, 0);
+  });
+}
+test('P2B explicit supplier overrides context; unknown new supplier never falls back', async () => {
+  const f = fixture({ products: [p2bProduct()], contacts: p2bSuppliers() }), conversationId = randomUUID();
+  await f.run('Qué productos ofrece proveedor San Martin Norte?', conversationId);
+  const changed = await f.run('¿Y qué productos ofrece Proveedor San Martin Sur?', conversationId);
+  assertNoLLM(changed); assert.match(changed.answer, /San Martin Sur/);
+  const missing = await f.run('Qué productos ofrece Proveedor Zzzzzzz?', conversationId);
+  assertNoLLM(missing); assert.equal(missing.requiresClarification, true);
+});
+for (const choice of ['San Martin Sur', '2', 'el segundo']) test(`P2B supplier click/ordinal ${choice} persists context and preserves product`, async () => {
+  const f = fixture({ products: [p2bProduct()], contacts: p2bSuppliers() }), conversationId = randomUUID();
+  await f.run('Cuánto stock tiene M5-FOODS_2_096?', conversationId);
+  const candidates = await f.run('Qué productos ofrece proveedor San Martin?', conversationId);
+  assertNoLLM(candidates); assert.equal(candidates.suggestions.length, 2);
+  const clicked = await f.run(choice, conversationId); assertNoLLM(clicked);
+  const saved = await f.orchestrator.getContextSnapshot(req(), conversationId);
+  assert.equal(saved.lastSupplier.id, id(702)); assert.equal(saved.selectedProductReference.sku, p2bProduct().sku);
+  assert.equal(saved.lastEntity.sku, p2bProduct().sku);
+  const followup = await f.run('¿Y sus ofertas?', conversationId); assertNoLLM(followup); assert.match(followup.answer, /San Martin Sur/);
+});
+test('P2B supplier price follow-up resolves informal product and maintains both references', async () => {
+  const f = fixture({ products: [p2bProduct()], contacts: p2bSuppliers() }), conversationId = randomUUID();
+  await f.run('Qué productos ofrece proveedor San Martin Norte?', conversationId);
+  const price = await f.run('¿Y cuál es su precio para food 96?', conversationId);
+  assertNoLLM(price); assert.equal(price.requiresClarification, false); assert.match(price.answer, /10.*PEN/);
+  const saved = await f.orchestrator.getContextSnapshot(req(), conversationId);
+  assert.equal(saved.lastSupplier.id, id(701)); assert.equal(saved.selectedProductReference.sku, p2bProduct().sku);
+});
+test('P2B supplier price ambiguous product click resumes supplier offer, not generic product details', async () => {
+  const second = { ...p2bProduct(), _id: id(703), id: id(703), sku: 'M5-FOODS_3_096', name: 'Foods 3 Item 096' };
+  const f = fixture({ products: [p2bProduct(), second], contacts: p2bSuppliers() }), conversationId = randomUUID();
+  await f.run('Qué productos ofrece proveedor San Martin Norte?', conversationId);
+  const question = await f.run('¿Y cuál es su precio para food 96?', conversationId);
+  assertNoLLM(question); assert.equal(question.suggestions.length, 2);
+  const clicked = await f.run(second.sku, conversationId); assertNoLLM(clicked);
+  assert.equal(clicked.intent, 'supplier_products'); assert.equal(clicked.actions[0].skillId, 'get_supplier_products');
+  assert.match(clicked.answer, /M5-FOODS_3_096/);
+});
+test('P2B supplier context stays isolated by conversation, user, tenant and TTL; safe snapshot restores', async () => {
+  let time = Date.now(); const memory = createConversationMemory({ now: () => time });
+  const f = fixture({ memory, products: [p2bProduct()], contacts: p2bSuppliers() }), conversationId = randomUUID();
+  await f.run('Qué productos ofrece proveedor San Martin Norte?', conversationId);
+  const saved = await f.orchestrator.getContextSnapshot(req(), conversationId);
+  for (const [conversation, actor] of [[randomUUID(), req()], [conversationId, req('B')], [conversationId, req('A', 901)]]) {
+    const result = await f.run('Qué productos ofrece ese proveedor?', conversation, actor);
+    assertNoLLM(result); assert.equal(result.usage.totalSkillCalls, 0); assert.equal(result.requiresClarification, true);
+  }
+  const restored = fixture({ products: [p2bProduct()], contacts: p2bSuppliers() });
+  await restored.orchestrator.restoreContext(req(), conversationId, require('../src/services/agentHistoryProjection').snapshot(saved));
+  assertNoLLM(await restored.run('¿Y sus ofertas?', conversationId));
+  time += TTL_MS + 1;
+  const expired = await f.run('Qué productos ofrece ese proveedor?', conversationId);
+  assertNoLLM(expired); assert.equal(expired.usage.totalSkillCalls, 0);
+});
+test('P2B commercial chosen offer sets supplier and product context; follow-up uses the same offer', async () => {
+  const row = p2bProduct(), vendors = p2bSuppliers();
+  const forecastService = { getDemandForecast: async () => ({ ...forecast, products: [
+    { ...forecast.products[0], productId: row.id, sku: row.sku, name: row.name }
+  ] }) };
+  const f = fixture({ products: [row], contacts: vendors, forecastService }), conversationId = randomUUID();
+  const first = await f.run('Cuánto cuesta reponer M5-FOODS_2_096 usando proveedor San Martin Sur?', conversationId);
+  assertNoLLM(first); assert.equal(first.requiresClarification, false);
+  const saved = await f.orchestrator.getContextSnapshot(req(), conversationId);
+  assert.equal(saved.lastSupplier.id, vendors[1]._id); assert.equal(saved.selectedProductReference.sku, row.sku);
+  assertNoLLM(await f.run('¿Y con ese proveedor?', conversationId));
+  assert.match((await f.run('¿Y qué productos ofrece ese proveedor?', conversationId)).answer, /San Martin Sur/);
+});
+test('P2B supplier details remain NOT READY and unsupported details clarify at zero cost', async () => {
+  const result = await fixture().run('Dame el teléfono de ese proveedor');
+  assertNoLLM(result); assert.equal(result.usage.totalSkillCalls, 0);
+  assert.match(result.answer, /todavía no sus detalles/);
+  assert.equal(require('../src/agents/skills').getSkillDefinition('get_supplier_details').executorStatus, 'PENDING_IMPLEMENTATION');
+});
+for (const alias of ['prov 01 san martin', 'proveedro 1 san martn', 'proveedor 001 san martin']) {
+  test(`P2B READ supplier single trusted alias ${alias} auto-resolves at zero LLM`, async () => {
+    const vendor = { ...p2bSuppliers()[0], name: 'Proveedor sintético 001 San Martin' };
+    const row = { ...p2bProduct(), supplierPrices: [{ supplierId: vendor._id, purchasePrice: 10 }] };
+    const f = fixture({ products: [row], contacts: [vendor] });
+    const result = await f.run(`Qué productos ofrece ${alias}?`);
+    assertNoLLM(result); assert.equal(result.requiresClarification, false); assert.equal(result.suggestions, undefined);
+  });
+}
+test('P2B READ zero/weak supplier clarifies and numeric 2 never substitutes 1', async () => {
+  const vendor = { ...p2bSuppliers()[0], name: 'Proveedor 001 San Martin' };
+  const row = { ...p2bProduct(), supplierPrices: [{ supplierId: vendor._id, purchasePrice: 10 }] };
+  for (const reference of ['2 san martin', 'zzzzzzzz', '1 san marxn']) {
+    const result = await fixture({ products: [row], contacts: [vendor] }).run(`Qué productos ofrece proveedor ${reference}?`);
+    assertNoLLM(result); assert.equal(result.requiresClarification, true); assert.equal(result.suggestions, undefined);
+  }
+});
+
 for (const [query, skillId, agent] of [
   ['Muéstrame los productos con stock bajo', 'get_low_stock_products', 'operations'],
   ['Muéstrame las últimas transacciones', 'get_recent_transactions', 'operations'],

@@ -78,7 +78,7 @@ const withActionAssistant = (runtime, service, options = {}) => {
       }
       let extracted;
       try {
-        const ordinalCorrection = !explicit && previous?.selection && ordinalSelection(input.message).matched;
+        const ordinalCorrection = !explicit && (previous?.selection || previous?.supplierChoices && /\bproveedor\b/.test(normalized)) && ordinalSelection(input.message).matched;
         // A selection-only turn cannot silently discard simultaneous numeric
         // changes or bypass the quantity parser. Ask for separate turns instead.
         if (ordinalCorrection && /\d|\b(?:cantidad|unidades?|stock|minimo|umbral)\b/.test(numericWords(normalized)))
@@ -114,6 +114,12 @@ const withActionAssistant = (runtime, service, options = {}) => {
         } finally { execution.finish(); }
       }
       let draft;
+      if (extracted.supplierRef && require('../agents/supplierReference').contextualSupplier(extracted.supplierRef)) {
+        const state = input.conversationId ? await runtime.getContextSnapshot?.(req, input.conversationId) : null;
+        const supplier = previous?.selectedSupplier || state?.lastSupplier;
+        if (!supplier) return response('Indica qué proveedor deseas usar; no tengo uno seleccionado en esta conversación.', undefined, true);
+        extracted.supplierRef = supplier.id;
+      }
       try { draft = updateDraft(explicit ? undefined : previous, extracted, input.message); }
       catch (error) {
         if (error.code !== 'ACTION_VALIDATION_FAILED') throw error;
@@ -121,6 +127,7 @@ const withActionAssistant = (runtime, service, options = {}) => {
       }
       if (extracted.direct && (explicit || !previous)) draft.direct = extracted.direct;
       const resolved = applyResolution(draft, await resolveDraft(draft, context, options), now());
+      if (draft.selectedSupplier) await runtime.rememberSupplier?.(req, conversationId, draft.selectedSupplier, draft.selectedProductReference);
       suggestions = resolved.suggestions || [];
       suggestionsPagination = resolved.suggestionsPagination;
       const candidateSlot = draft.selection?.slot;

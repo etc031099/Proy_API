@@ -1,5 +1,5 @@
 const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
-const normalizeSupplier = value => normalize(value).replace(/\b(?:proveedor|supplier|sintetico)\b/g, ' ')
+const normalizeSupplier = value => normalize(value).replace(/\b(?:proveedor|proveedro|prov|supplier|sintetico)\b/g, ' ')
   .replace(/\b(?:el|la|de|del)\b/g, ' ').replace(/\b0*(\d+)\b/g, (_, digits) => String(Number(digits)))
   .replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
 const MAX_SUPPLIER_CANDIDATES = 100;
@@ -40,10 +40,6 @@ const resolveSupplier = (reference, offers, suppliers = [], candidateLimit = 20)
     return { status: 'MATCH', offer: rankedOffers[0].row, confidence: rankedOffers[0].score === 1 ? 'NORMALIZED' : 'FUZZY_CLEAR' };
   }
   if (rankedOffers.length > 1) {
-    const first = rankedOffers[0], second = rankedOffers[1];
-    if (first.score >= 0.85 && first.score - second.score >= 0.08) {
-      return { status: 'MATCH', offer: first.row, confidence: 'FUZZY_CLEAR' };
-    }
     return { status: 'AMBIGUOUS', candidates: rankedOffers.slice(0, candidateLimit).map(item => item.row), totalMatches: rankedOffers.length };
   }
   const known = rank(suppliers);

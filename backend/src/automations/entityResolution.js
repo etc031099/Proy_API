@@ -19,9 +19,10 @@ const distance = (a, b) => {
 };
 // Conservative suffix handling is matching-only, never a persistent alias.
 const stem = token => token.length > 4 && token.endsWith('s') ? token.slice(0, -1) : token;
-function createRanking(ref, offset = 0) {
+function createRanking(ref, offset = 0, supplier = false) {
   if (!Number.isSafeInteger(offset) || offset < 0 || offset % 5 !== 0) fail('ACTION_VALIDATION_FAILED');
-  const query = compact(ref), words = normalizeProductMatchText(normalize(ref)).split(' ').map(stem);
+  const matchText = supplier ? require('../agents/replenishmentPlanning').normalizeSupplier : value => normalizeProductMatchText(normalize(value));
+  const query = supplier ? matchText(ref).replace(/\s/g, '') : compact(ref), words = matchText(ref).split(' ').map(stem);
   let total = 0, exactCount = 0;
   const ranked = [], exactRows = [];
   const compare = (a, b) => b.score - a.score || String(a.value._id).localeCompare(String(b.value._id));
@@ -33,10 +34,10 @@ function createRanking(ref, offset = 0) {
     add(value) {
       if (!query) return;
       if (!numbersCompatible(normalize(ref), { ...value, name: normalize(value.name), sku: normalize(value.sku || '') }, { product: Boolean(value.sku) })) return;
-      const name = compact(value.name), sku = compact(value.sku || '');
+      const name = supplier ? matchText(value.name).replace(/\s/g, '') : compact(value.name), sku = compact(value.sku || '');
       const literalExact = query === name || query === sku;
-      const exact = literalExact || exactProductComponents(ref, value);
-      const tokens = `${normalizeProductMatchText(normalize(value.name))} ${normalizeProductMatchText(normalize(value.sku || ''))}`.split(' ').map(stem);
+      const exact = literalExact || !supplier && exactProductComponents(ref, value);
+      const tokens = `${matchText(value.name)} ${matchText(value.sku || '')}`.split(' ').map(stem);
       const coverage = words.filter(word => tokens.some(token => token === word || (word.length >= 4 && distance(word, token) <= 1))).length / words.length;
       const similarity = 1 - distance(query, name) / Math.max(query.length, name.length, 1);
       const score = exact ? 1 : name.includes(query) || sku.includes(query) ? 0.9 : Math.max(coverage * 0.85, similarity);
@@ -58,8 +59,8 @@ function createRanking(ref, offset = 0) {
     }
   };
 }
-function rankEntities(rows, ref, offset = 0) {
-  const ranking = createRanking(ref, offset);
+function rankEntities(rows, ref, offset = 0, supplier = false) {
+  const ranking = createRanking(ref, offset, supplier);
   rows.forEach(value => ranking.add(value));
   return ranking.result();
 }
@@ -80,7 +81,7 @@ async function resolveReference(model, context, ref, type, offset = 0) {
   if (/^[a-f\d]{24}$/i.test(ref)) return { confidence: 'NOT_FOUND', candidates: [], clarification: 'No encontré ese identificador en este negocio.' };
   // Fuzzy normalization requires a tenant-scoped cursor. Count matches in one
   // pass and retain only the ranked prefix needed for this page, never all docs.
-  const ranking = createRanking(ref, offset);
+  const ranking = createRanking(ref, offset, model === Contact && type === 'vendor');
   const candidateFields = model === Product ? '_id sku name currency stock isActive' : fields;
   for await (const value of model.find(scope).select(candidateFields).sort({ _id: 1 }).maxTimeMS(5000).cursor()) {
     ranking.add(value.toObject ? value.toObject() : value);

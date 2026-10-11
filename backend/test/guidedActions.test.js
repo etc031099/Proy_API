@@ -19,7 +19,7 @@ function fixture({ products = [p1, p2], suppliers = [vendor], configured = [vend
     const rows = model === Product ? products : suppliers;
     const exact = rows.find(row => row._id === ref || row.sku === ref);
     if (exact) return { value: structuredClone(exact), confidence: 'EXACT' };
-    const result = rankEntities(rows, ref, offset);
+    const result = rankEntities(rows, ref, offset, type === 'vendor');
     return result.value ? result : { ...result, clarification: result.candidates.length ? 'Elige una coincidencia.' : 'No encontré esa entidad.' };
   };
   const service = {
@@ -40,6 +40,109 @@ const pagedProducts = () => Array.from({ length: 28 }, (_, i) => ({ ...p1, _id: 
 const identityProducts = [2, 3].map((group, i) => ({ ...p1, _id: String(i + 2).repeat(24),
   name: `Alimentos M5 · FOODS_${group} · Ítem 210`, sku: `M5-FOODS_${group}_210` }));
 const paddedProducts = identityProducts.map(row => ({ ...row, name: row.name.replace('210', '096'), sku: row.sku.replace('210', '096') }));
+const p2bVendors = () => ['San Martin Norte', 'San Martin Sur'].map((name, index) => ({
+  _id: String(index + 6).repeat(24), name, isActive: true }));
+const p2bPurchaseProduct = () => ({ ...paddedProducts[0], supplierPrices: p2bVendors().map((row, index) => ({ supplierId: row._id, purchasePrice: 10 + index })) });
+for (const choice of ['Opción 2', 'el segundo', 'San Martin Sur']) test(`P2B purchase supplier ${choice} keeps quantity/product and only prepares`, async () => {
+  const f = fixture({ products: [p2bPurchaseProduct()], suppliers: p2bVendors() });
+  const first = await f.send('compra 5 del food 96 al proveedor San Martin');
+  assert.equal(first.suggestionsEntityType, 'supplier'); assert.equal(first.suggestions.length, 2);
+  assert.equal(f.prepared.length, 0); assert.equal(first.usage.totalTokens, 0);
+  const picked = await f.send(choice);
+  assert.equal(picked.pendingAction.status, 'PENDING'); assert.equal(picked.usage.totalLlmCalls, 0);
+  assert.equal(f.prepared[0].vendorId, p2bVendors()[1]._id);
+  assert.deepEqual(f.prepared[0].products, [{ productId: p2bPurchaseProduct()._id, quantity: 5 }]);
+});
+test('P2B supplier correction after preview cancels frozen action and revalidates supplier offer', async () => {
+  const f = fixture({ products: [p2bPurchaseProduct()], suppliers: p2bVendors() });
+  await f.send('compra 5 del food 96 al proveedor San Martin'); await f.send('el primero');
+  const corrected = await f.send('no ese proveedor, el segundo');
+  assert.equal(f.cancelled.length, 1); assert.equal(f.prepared.length, 2);
+  assert.equal(f.prepared[1].vendorId, p2bVendors()[1]._id); assert.equal(corrected.pendingAction.status, 'PENDING');
+  assert.equal(f.prepared[1].products[0].quantity, 5);
+  assert.equal(corrected.usage.totalLlmCalls, 0);
+  const draft = (await f.adapter.getContextSnapshot(request(), f.conversationId)).operationDraft;
+  assert.equal(draft.selectedSupplier.id, p2bVendors()[1]._id);
+  f.options.resolver = async (model, ctx, ref, type, offset) => model === Product
+    ? { value: { ...p2bPurchaseProduct(), supplierPrices: [p2bPurchaseProduct().supplierPrices[0]] } }
+    : { value: p2bVendors()[1] };
+  const invalid = await f.send('proveedor San Martin Sur');
+  assert.equal(invalid.requiresClarification, true); assert.equal(invalid.pendingAction, undefined);
+  assert.equal(f.prepared.length, 2); assert.match(invalid.answer, /no tiene un precio/);
+});
+test('P2B supplier pages and restored visible-page choice preserve purchase draft', async () => {
+  const suppliers = Array.from({ length: 12 }, (_, index) => ({ _id: (index + 20).toString(16).padStart(24, '0'), name: `San Martin ${String.fromCharCode(65 + index)}` }));
+  const row = { ...paddedProducts[0], supplierPrices: suppliers.map((supplier, index) => ({ supplierId: supplier._id, purchasePrice: 10 + index })) };
+  const f = fixture({ products: [row], suppliers });
+  let result = await f.send('compra 5 del food 96 al proveedor San Martin');
+  assert.equal(result.suggestionsPagination.totalMatches, 12);
+  result = await f.send('Ver más'); assert.equal(result.suggestionsPagination.offset, 5); assert.equal(result.suggestionsEntityType, 'supplier');
+  const saved = snapshot(await f.adapter.getContextSnapshot(request(), f.conversationId));
+  const restored = withActionAssistant(f.runtime, f.service, f.options);
+  await restored.restoreContext(request(), f.conversationId, saved);
+  result = await restored.handle(request(), { message: 'Anterior', conversationId: f.conversationId });
+  assert.equal(result.suggestionsPagination.offset, 0);
+  await restored.handle(request(), { message: 'Ver más', conversationId: f.conversationId });
+  result = await restored.handle(request(), { message: 'el primero', conversationId: f.conversationId });
+  assert.equal(result.pendingAction.status, 'PENDING'); assert.equal(f.prepared[0].vendorId, suppliers[5]._id);
+  assert.equal(f.prepared[0].products[0].quantity, 5); assert.equal(result.usage.totalTokens, 0);
+});
+test('P2B supplier WRITE aliases, unique/high confidence, weak and numeric incompatibility', async () => {
+  const supplier = { _id: vendor._id, name: 'Proveedor sintético 001 San Martin' };
+  const row = { ...paddedProducts[0], supplierPrices: [{ supplierId: supplier._id, purchasePrice: 12 }] };
+  for (const alias of ['prov 1 san martin', 'proveedro 01 san martn', 'proveedor 001 san martin']) {
+    const f = fixture({ products: [row], suppliers: [supplier] });
+    const result = await f.send(`compra 5 del food 96 al ${alias}`);
+    assert.equal(result.pendingAction.status, 'PENDING', alias); assert.equal(result.suggestions, undefined);
+    assert.equal(f.prepared[0].vendorId, supplier._id); assert.equal(result.usage.totalLlmCalls, 0);
+  }
+  const missing = fixture({ products: [row], suppliers: [supplier] });
+  assert.equal((await missing.send('compra 5 del food 96 al proveedor 2 san martin')).pendingAction, undefined);
+  assert.equal(missing.prepared.length, 0);
+  const weak = fixture({ products: [row], suppliers: [supplier] });
+  weak.options.resolver = async (model, ctx) => model === Product ? { value: row }
+    : { confidence: 'AMBIGUOUS', candidates: [supplier], pagination: { query: 'san', offset: 0, limit: 5, totalMatches: 1 } };
+  const clarification = await weak.send('compra 5 del food 96 al proveedor san');
+  assert.equal(clarification.requiresClarification, true); assert.equal(clarification.suggestions, undefined);
+  assert.equal(weak.prepared.length, 0);
+});
+test('P2B purchase selected supplier updates runtime context without changing product context', async () => {
+  const f = fixture({ products: [p2bPurchaseProduct()], suppliers: p2bVendors() });
+  const { createAgentOrchestrator, createConversationMemory } = require('../src/agents');
+  const runtime = createAgentOrchestrator({ memory: createConversationMemory() });
+  await runtime.restoreContext(request(), f.conversationId, { selectedProductReference: { id: p2bPurchaseProduct()._id, sku: p2bPurchaseProduct().sku, name: p2bPurchaseProduct().name } });
+  const adapter = withActionAssistant(runtime, f.service, f.options);
+  await adapter.handle(request(), { message: 'compra 5 del food 96 al proveedor San Martin', conversationId: f.conversationId });
+  await adapter.handle(request(), { message: 'Opción 2', conversationId: f.conversationId });
+  const saved = await runtime.getContextSnapshot(request(), f.conversationId);
+  assert.equal(saved.lastSupplier.id, p2bVendors()[1]._id); assert.equal(saved.selectedProductReference.sku, p2bPurchaseProduct().sku);
+  assert.equal(saved.lastEntity.sku, p2bPurchaseProduct().sku);
+  const clarification = await adapter.handle(request('OTHER'), { message: 'compra 5 del food 96 al mismo proveedor', conversationId: f.conversationId });
+  assert.equal(clarification.requiresClarification, true); assert.match(clarification.answer, /no tengo uno/);
+});
+test('P2B product supplier correction drops the previous purchase price and revalidates contact', async () => {
+  const f = fixture({ suppliers: p2bVendors() });
+  await f.send('Agrega un producto Demo, SKU DEMO-1, precio S/ 3.50, stock 20, mínimo 2, categoría DEMO, proveedor San Martin, precio de compra S/ 2');
+  const preview = await f.send('el primero'); assert.equal(preview.pendingAction.status, 'PENDING');
+  assert.equal(f.prepared[0].supplierPrices[0].purchasePrice, 2);
+  const corrected = await f.send('no ese proveedor, el segundo');
+  assert.equal(corrected.requiresClarification, true); assert.equal(corrected.pendingAction, undefined);
+  assert.match(corrected.answer, /precio de compra/); assert.equal(f.cancelled.length, 1);
+  const next = await f.send('S/ 2.50'); assert.equal(next.pendingAction.status, 'PENDING');
+  assert.deepEqual(f.prepared[1].supplierPrices, [{ supplierId: p2bVendors()[1]._id, purchasePrice: 2.5 }]);
+});
+test('P2B supplier refinement and TTL preserve quantity but cannot revive an expired draft', async () => {
+  let time = Date.now(); const f = fixture({ products: [p2bPurchaseProduct()], suppliers: p2bVendors(), clock: () => time });
+  await f.send('compra 5 del food 96 al proveedor San Martin');
+  const refine = await f.send('Refinar búsqueda'); assert.equal(refine.requiresClarification, true);
+  const chosen = await f.send('buscar San Martin Sur'); assert.equal(chosen.pendingAction.status, 'PENDING');
+  assert.equal(f.prepared[0].products[0].quantity, 5); assert.equal(f.prepared[0].vendorId, p2bVendors()[1]._id);
+  const snapshot = await f.adapter.getContextSnapshot(request(), f.conversationId);
+  time += TTL_MS + 1;
+  await f.adapter.restoreContext(request(), f.conversationId, snapshot);
+  const expired = await f.send('Ver más'); assert.equal(expired.requiresClarification, true);
+  assert.equal(expired.pendingAction, undefined); assert.equal(f.prepared.length, 1);
+});
 for (const reference of ['food 96', 'food 096', 'food 0096', 'item 96', 'item 00096']) test(`P2A.1 padded identity ${reference}`, () => {
   const wrong = [196, 960, 97].map(number => ({ ...p1, name: `Foods 2 Item ${number}`, sku: `M5-FOODS_2_${number}` }));
   const result = rankEntities([...paddedProducts, ...wrong], reference);

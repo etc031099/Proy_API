@@ -33,7 +33,7 @@ const compactProductSelection = (value, now) => {
   }).filter(Boolean);
   if (!items.length) return null;
   const continuationIntent = ['product_details', 'demand_forecast', 'product_sales_summary', 'stock_alert_rules',
-    'inventory_alert_events', 'inventory_alert_deliveries', 'inventory_alert_channel_deliveries'].includes(value.continuationIntent)
+    'inventory_alert_events', 'inventory_alert_deliveries', 'inventory_alert_channel_deliveries', 'supplier_products'].includes(value.continuationIntent)
     ? value.continuationIntent : null;
   const continuationPeriod = value.continuationPeriod && isDate(value.continuationPeriod.startDate)
     && isDate(value.continuationPeriod.endDate) && value.continuationPeriod.startDate <= value.continuationPeriod.endDate
@@ -47,6 +47,9 @@ const compactProductSelection = (value, now) => {
     ...(Number.isInteger(filters.limit) && filters.limit > 0 && filters.limit <= 20 ? { limit: filters.limit } : {})
   };
   return deepFreeze({ semanticReference: 'last_product_list', sourceIntent: value.sourceIntent, items, continuationFilters,
+    ...(continuationIntent === 'supplier_products' && typeof value.continuationSupplier === 'string'
+      && value.continuationSupplier.trim() && value.continuationSupplier.length <= 100
+      ? { continuationSupplier: label(value.continuationSupplier, 100) } : {}),
     ...(continuationIntent ? { continuationIntent } : {}), ...(continuationPeriod ? { continuationPeriod } : {}), createdAt: timestamp });
 };
 const compactSelectedProductReference = (value, now = Date.now) => {

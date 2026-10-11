@@ -90,6 +90,7 @@ const productCandidateSelection = (message, state) => {
     agent: selection.continuationIntent === 'demand_forecast' ? 'analyst' : 'operations',
     selector: selection.continuationIntent?.startsWith('inventory_alert_') || selection.continuationIntent === 'stock_alert_rules'
       ? { ...selection.continuationFilters, sku: candidate.sku } : { productId: candidate.id }, selectedProduct: candidate,
+    ...(selection.continuationIntent === 'supplier_products' ? { args: { supplierRef: selection.continuationSupplier, productRef: candidate.sku, limit: 5, offset: 0 } } : {}),
     ...(selection.continuationPeriod ? { period: selection.continuationPeriod, periodExplicit: true } : {}), limit: 1 } };
   return selectionLike ? { invalid: true } : null;
 };
@@ -125,6 +126,13 @@ const errorCode = error => error?.code === 'AGENT_BUDGET_EXCEEDED' || error?.cod
  * .handle(authenticatedReq, {message, conversationId?}) is the future UI boundary.
  */
 const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencies, onEvent = () => {}, clock = () => new Date() } = {}) => Object.freeze({
+  async rememberSupplier(req, conversationId, supplier, product) {
+    const safe = require('./memory').compactSupplier(supplier);
+    const entity = require('./memory').compactEntity(product);
+    if (safe) return memory.withConversation(createAgentRequestContext(req, { conversationId }), (state, commit) => commit({
+      lastSupplier: safe, lastEntity: entity || state.lastEntity,
+      ...(entity ? { selectedProductReference: entity } : {}) }));
+  },
   async restoreContext(req, conversationId, snapshot) {
     const context = createAgentRequestContext(req, { conversationId });
     return memory.withConversation(context, (state, commit) => {
@@ -388,7 +396,8 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
               break;
             }
             case 'supplier_products': {
-              const result = await run('operations', 'get_supplier_products', plan.args);
+              const result = await run('operations', 'get_supplier_products', { ...plan.args,
+                ...(plan.selectedProduct?.sku || selector?.sku ? { productRef: plan.selectedProduct?.sku || selector.sku } : {}) });
               if (result.status === 'CLARIFICATION') plan.clarificationQuestion = result.metadata.clarificationQuestion;
               break;
             }
@@ -559,6 +568,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             lastProductSelection: search.result.data.length ? { sourceIntent: 'search_product', continuationIntent: plan.intent,
               continuationPeriod: plan.period,
               continuationFilters: plan.selector,
+              ...(plan.intent === 'supplier_products' ? { continuationSupplier: plan.args.supplierRef } : {}),
               items: search.result.data, createdAt } : null });
           }
         } else {
@@ -663,6 +673,8 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
           const productListIntents = ['search_product', 'low_stock', 'top_selling_products', 'replenishment_candidates', 'demand_forecast', 'ml_analytics'];
           const supplierProductsResult = [...results].reverse().find(({ skillId }) => skillId === 'get_supplier_products')?.result;
           const supplierProductsData = supplierProductsResult?.data;
+          const commercial = [...results].reverse().find(({ result }) => result.metadata.supplierReference)?.result.metadata;
+          if (commercial?.productReference) plan.selectedProduct = commercial.productReference;
           if (plan.intent !== 'tenant_access_denied') commit({ lastIntent: ['ml_historical_clarification', 'ml_daily_granularity_clarification'].includes(plan.intent)
             ? state.lastIntent : plan.intent, lastAgent: plan.agent, recentEntities: entities,
             ...(['replenishment_commercial', 'replenishment_plan_explanation'].includes(plan.intent) && plan.skillId === 'plan_replenishment_budget'
@@ -676,10 +688,11 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
               })() : {}),
             ...(supplierProductsData?.supplierId && supplierProductsData?.supplierName
               ? { lastSupplier: { id: supplierProductsData.supplierId, name: supplierProductsData.supplierName } } : {}),
+            ...(commercial?.supplierReference ? { lastSupplier: commercial.supplierReference } : {}),
             supplierResolution: null,
             supplierProductListing: null,
             lastForecastAnalytics: plan.intent === 'ml_analytics' ? plan.analyticsArgs : null,
-            lastEntity: plan.selectedProduct || (entities?.length === 1 ? entities[0] : undefined),
+            lastEntity: plan.selectedProduct || (entities?.length === 1 ? entities[0] : plan.intent === 'supplier_products' ? state.lastEntity : undefined),
             ...((plan.selectedProduct || entities?.length === 1) ? { selectedProductReference: {
               id: plan.selectedProduct?.id || entities[0].id || entities[0].productId,
               sku: plan.selectedProduct?.sku || entities[0].sku,

@@ -41,6 +41,7 @@ const actionIntent = message => {
 const commandLength = message => (/^(?:crea(?:r)?|agrega|añade|registra)(?: un)? producto\b|^registra(?:r)?(?: una)? (?:venta|compra)\b/iu.exec(message.trim()) || [''])[0].length;
 const money = text => /(?:USD|d[oó]lares|\$)/i.test(text) ? 'USD' : /(?:EUR|euros|€)/i.test(text) ? 'EUR' : /(?:PEN|S\/|soles)/i.test(text) ? 'PEN' : undefined;
 function parseAction(message, action) {
+  message = require('../agents/supplierReference').supplierLanguage(message);
   if (action === 'create_stock_alert_rule') return parseStockRule(message);
   message = message.replace(/\b(uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|veinte|treinta|cincuenta|cien)\b(?=\s+(?:unidades?\b|de\b))/gi,
     word => String(quantityWords[word.toLowerCase()]));
@@ -66,9 +67,10 @@ function parseAction(message, action) {
   }
   message = message.replace(/^(vende|vender|compre|compré|comprar|compra)\s+(\w+)\b/i,
     (match, command, word) => Object.hasOwn(quantityWords, word.toLowerCase()) ? `${command} ${quantityWords[word.toLowerCase()]}` : match);
-  const supplier = /\bprove(?:edor|edro)\s+(.+?)(?=,|\s+(?:en|a)\s+(?:cr[eé]dito|contado)|$)/i.exec(message);
+  const contextualVendor = /\b(?:al|con|usando)\s+((?:ese|este)(?: mismo)? proveedor|(?:el )?mismo proveedor|el anterior)(?=,|[.!?]|\s+(?:en|a)\s+(?:cr[eé]dito|contado)|$)/i.exec(message);
+  const supplier = contextualVendor || /\bprove(?:edor|edro)\s+(.+?)(?=,|\s+(?:en|a)\s+(?:cr[eé]dito|contado)|$)/i.exec(message);
   const customer = /\b(?:al|para el|para|cliente|a)\s+(?:cliente\s+)?([a-záéíóúñ].+?)(?=,|\s+(?:en|a)\s+(?:cr[eé]dito|contado)|$)/i.exec(message.replace(/(?:al|de)\s+prove(?:edor|edro).*/i, '').replace(/a\s+cr[eé]dito.*/i, ''));
-  const itemText = message.replace(/\s+(?:(?:al|del|de|con el)\s+)?prove(?:edor|edro)\s+.*/i, '').replace(/\s+(?:al|para el|para|a)\s+(?:cliente\s+)?[A-Za-z].*/i, '')
+  const itemText = (contextualVendor ? message.slice(0, contextualVendor.index).trim() : message).replace(/\s+(?:(?:al|del|de|con el)\s+)?prove(?:edor|edro)\s+.*/i, '').replace(/\s+(?:al|para el|para|a)\s+(?:cliente\s+)?[A-Za-z].*/i, '')
     .replace(/\s+(?:fiado|(?:en|a|al)\s+(?:cr[eé]dito|contado)).*/i, '').replace(/\s+(?:moneda|en)\s+(?:PEN|USD|EUR|soles|d[oó]lares|euros).*/i, '');
   const content = itemText.replace(/^(?:vende|vender|compre|compré|comprar|compra|registra(?:r)?(?: una)? (?:venta|compra))\s*(?:de\s+)?/i, '');
   // A comma inside a number stays part of that token. Quantities only occur at
@@ -134,6 +136,8 @@ async function resolveAction(extracted, context, resolver = resolveReference, su
     args.products.push({ productId: String(result.value._id), quantity: item.quantity }); currencies.add(result.value.currency);
   }
   args.currency = extracted.currency || (currencies.size === 1 ? [...currencies][0] : undefined);
+  if (extracted.action === 'create_purchase' && products.length === 1) extracted.selectedProductReference = {
+    id: String(products[0]._id), sku: products[0].sku, name: products[0].name };
   if (!args.currency) return { clarification: 'Los productos tienen distintas monedas. Indica PEN, USD o EUR para la operación.' };
   let contactRef = extracted.action === 'create_purchase' ? extracted.supplierRef : extracted.customerRef;
   let uniquelyConfiguredSupplier;
@@ -149,12 +153,17 @@ async function resolveAction(extracted, context, resolver = resolveReference, su
     const result = uniquelyConfiguredSupplier ? { confidence: 'EXACT', value: uniquelyConfiguredSupplier }
       : trustedUnique(await resolver(Contact, context, contactRef, extracted.action === 'create_purchase' ? 'vendor' : 'customer'));
     if (!result.value) return { ...refineSingle(result, extracted.action === 'create_purchase' ? 'proveedor' : 'cliente'),
-      ...(!uncertainSingle(result) ? { selection: { slot: extracted.action === 'create_purchase' ? 'supplier' : 'customer', candidates: result.candidates || [] } } : {}) };
+      ...(!uncertainSingle(result) ? { selection: { slot: extracted.action === 'create_purchase' ? 'supplier' : 'customer', candidates: result.candidates || [],
+        ...(extracted.action === 'create_purchase' ? result.pagination || {} : {}) } } : {}) };
     if (result.value.isActive === false) return { clarification: `Encontré ${result.value.name}, pero está inactivo. Elige otro contacto.` };
     if (extracted.action === 'create_purchase' && products.some(product => Array.isArray(product.supplierPrices)
       && !product.supplierPrices.some(row => String(row.supplierId) === String(result.value._id) && Number.isFinite(row.purchasePrice))))
       return { clarification: 'Ese proveedor no tiene un precio de compra configurado para todos los productos. Configúralo desde Productos o elige otro proveedor.' };
     args[extracted.action === 'create_purchase' ? 'vendorId' : 'customerId'] = String(result.value._id);
+    if (extracted.action === 'create_purchase') {
+      extracted.supplierRef = String(result.value._id);
+      extracted.selectedSupplier = { id: String(result.value._id), name: result.value.name };
+    }
   }
   return { args };
 }

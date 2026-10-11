@@ -387,6 +387,8 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
             hasOffer: Boolean(offer), ...(offer ? { purchasePrice: offer.purchasePrice, currency: product.currency,
               preferredForProduct: String(product.preferredSupplierId || '') === supplierId } : {}) } },
         metadata: { returnedCount: 1, totalMatches: 1, asOf: asOf(), supplierName,
+          supplierReference: { id: supplierId, name: supplierName },
+          productReference: { id: String(product._id), sku: product.sku, name: product.name },
           evidenceLabel: `Oferta configurada de ${supplierName} para ${product.sku}` } };
       }
 
@@ -607,6 +609,8 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
         const line = mapLine(row);
         return { status: 'READY', data: { scenarioId, anchor: loaded.metadata.anchor, pricingAsOf,
           ...line, currency: line.currency || 'PEN' }, metadata: { ...loaded.metadata, returnedCount: 1,
+          ...(row.selected ? { supplierReference: { id: row.selected.supplierId, name: row.selected.supplierName },
+            productReference: { id: row.productId, sku: row.sku, name: row.name } } : {}),
           evidenceLabel: `Costo de reposición · ${scenarioId || 'escenario histórico'} · ${loaded.metadata.anchor} · ${row.sku} · ${line.selectionRule} · precios consultados ${pricingAsOf}` } };
       }
       const limit = invocation.args.limit || 20, offset = invocation.args.offset || 0;
@@ -686,7 +690,9 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
         preferred: offer.preferred, selected: offer.supplierId === selected.selected?.supplierId })), metadata: { ...loaded.metadata,
         returnedCount: offers.length, totalMatches: selected.offers.length,
         pricingAsOf, evidenceLabel: `Ofertas de ${row.sku} · ${scenarioId || 'escenario histórico'} · ancla ${loaded.metadata.anchor} · PEN · ${pricingAsOf}`,
-        selectedSupplier: selected.selected?.supplierName || null, selectionRule: selected.selectionRule } };
+        selectedSupplier: selected.selected?.supplierName || null, selectionRule: selected.selectionRule,
+        ...(selected.selected ? { supplierReference: { id: selected.selected.supplierId, name: selected.selected.supplierName },
+          productReference: { id: row.productId, sku: row.sku, name: row.name } } : {}) } };
     },
     async get_demand_forecast(invocation) { return forecastResult(await readForecast(invocation), invocation); },
     async get_replenishment_candidates(invocation) { return forecastResult(await readForecast(invocation), invocation, true); }

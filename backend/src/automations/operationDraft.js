@@ -9,16 +9,19 @@ const TTL_MS = 20 * 60 * 1000;
 // description/costPrice are OPTIONAL and do not trigger extra questions.
 const candidateSchema = schema({ _id: objectId, name: string(100), sku: string(100), currency: string(3), stock: integer(1000000), isActive: { type: 'boolean' },
   costs: { type: 'array', maxItems: 20, items: schema({ sku: string(100), currency: string(3), purchasePrice: number() }) } }, ['_id', 'name']);
+const selectionSchema = schema({ slot: { ...string(20), enum: ['product', 'supplier', 'customer', 'productSupplier'] }, index: integer(20),
+  query: string(100), offset: integer(Number.MAX_SAFE_INTEGER), limit: { type: 'integer', enum: [5] },
+  totalMatches: integer(Number.MAX_SAFE_INTEGER), hasMore: { type: 'boolean' }, hasPrevious: { type: 'boolean' }, refining: { type: 'boolean' },
+  candidates: { type: 'array', maxItems: 5, items: candidateSchema } }, ['slot', 'candidates']);
 const draftSchema = schema({ action: { ...string(30), enum: ['create_product', 'create_sale', 'create_purchase', 'create_stock_alert_rule'] },
   operator: { ...string(2), enum: ['<', '<='] }, threshold: integer(1000000),
   product: schema(getActionSkill('create_product').inputSchema.properties, []),
   items: { type: 'array', maxItems: 20, items: schema({ ref: string(100), quantity: { ...integer(1000000), minimum: 1 } }, ['ref']) },
   currency: { ...string(3), enum: ['PEN', 'USD', 'EUR'] }, paymentMethod: { ...string(20), enum: ['cash', 'credit', 'card', 'bank_transfer', 'wallet', 'other'] },
   customerRef: string(100), supplierRef: string(100), supplierId: objectId, purchasePrice: number(), enrichment: string(20),
-  selection: schema({ slot: { ...string(20), enum: ['product', 'supplier', 'customer', 'productSupplier'] }, index: integer(20),
-    query: string(100), offset: integer(Number.MAX_SAFE_INTEGER), limit: { type: 'integer', enum: [5] },
-    totalMatches: integer(Number.MAX_SAFE_INTEGER), hasMore: { type: 'boolean' }, hasPrevious: { type: 'boolean' }, refining: { type: 'boolean' },
-    candidates: { type: 'array', maxItems: 5, items: candidateSchema } }, ['slot', 'candidates']),
+  selection: selectionSchema, supplierChoices: selectionSchema,
+  selectedSupplier: schema({ id: objectId, name: string(100) }, ['id', 'name']),
+  selectedProductReference: schema({ id: objectId, sku: string(100), name: string(100) }, ['id', 'sku', 'name']),
   missingFields: { type: 'array', maxItems: 10, items: string(30) }, itemIndex: integer(20),
   pendingActionId: string(36), updatedAt: number(Number.MAX_SAFE_INTEGER), expiresAt: number(Number.MAX_SAFE_INTEGER) }, ['action', 'updatedAt', 'expiresAt']);
 function compactDraft(value, now = Date.now()) {
@@ -50,11 +53,18 @@ function choose(selection, message) {
 function updateDraft(previous, extracted, message) {
   const draft = previous ? structuredClone(previous) : { action: extracted.action };
   const text = normalize(numericWords(message));
+  if (!draft.selection && draft.supplierChoices && /\bproveedor\b/.test(text) && ordinalSelection(message).matched)
+    draft.selection = structuredClone(draft.supplierChoices);
   if (draft.selection) {
     const ordinal = ordinalSelection(message);
     if (ordinal.matched && (ordinal.index === null || !choose(draft.selection, message))) return draft;
     const selection = draft.selection;
-    if (selection.slot === 'product' && selection.query) {
+    if (['product', 'supplier', 'productSupplier'].includes(selection.slot) && selection.query) {
+      const replaceReference = reference => {
+        if (selection.slot === 'product') draft.items[selection.index].ref = reference;
+        else { draft.supplierRef = reference; delete draft.selectedSupplier; }
+        delete draft.selection;
+      };
       if (/^(?:ver mas|siguiente|anteriores|anterior)$/.test(text)) {
         if (/^(?:ver mas|siguiente)$/.test(text) && selection.hasMore) { selection.offset += 5; selection.refresh = true; }
         if (/^(?:anteriores|anterior)$/.test(text) && selection.hasPrevious) { selection.offset -= 5; selection.refresh = true; }
@@ -63,21 +73,27 @@ function updateDraft(previous, extracted, message) {
       if (/^(?:refinar busqueda|mas especifico)$/.test(text)) { selection.refining = true; return draft; }
       const refinement = /^(?:buscar?|buscar producto)\s+(.+)$/.exec(text);
       if (refinement) {
-        draft.items[selection.index].ref = refinement[1]; delete draft.selection; return draft;
+        replaceReference(refinement[1]); return draft;
       }
       const exactVisible = selection.candidates.some(row => normalize(row.name) === text || normalize(row.sku || '') === text);
       if (!exactVisible && !/^[a-f\d]{24}$|^(?:opcion\s+)?\d+$|^(?:el|la)\s+(?:primer|segund|tercer|cuart|quint)/.test(text)
         && (selection.refining || text.startsWith(`${normalize(selection.query)} `))) {
-        draft.items[selection.index].ref = message.trim(); delete draft.selection; return draft;
+        replaceReference(message.trim()); return draft;
       }
     }
     const selected = choose(draft.selection, message);
     if (selected) {
       const { slot, index } = draft.selection;
+      if (['supplier', 'productSupplier'].includes(slot)) {
+        draft.supplierChoices = structuredClone(draft.selection);
+        delete draft.selectedSupplier;
+      }
       if (slot === 'product') draft.items[index].ref = selected._id;
       else if (slot === 'productSupplier') {
-        draft.supplierId = selected._id; draft.enrichment = 'price';
-        if (draft.purchasePrice !== undefined) { draft.product.supplierPrices = [{ supplierId: selected._id, purchasePrice: draft.purchasePrice }]; draft.enrichment = 'done'; }
+        if (draft.supplierId && draft.supplierId !== selected._id) delete draft.purchasePrice;
+        draft.supplierId = selected._id; draft.enrichment = 'supplier';
+        draft.supplierRef = selected._id;
+        delete draft.product.supplierPrices;
       }
       else draft[slot === 'supplier' ? 'supplierRef' : 'customerRef'] = selected._id;
       delete draft.selection;
@@ -104,7 +120,7 @@ function updateDraft(previous, extracted, message) {
   } else if (draft.action === 'create_product') {
     if (draft.enrichment === 'price' && draft.product?.currency && !/moneda/.test(text)) delete extracted.product.currency;
     draft.product = { ...(draft.product || {}), ...(extracted.product || {}) };
-    if (extracted.supplierRef) { draft.supplierRef = extracted.supplierRef; draft.enrichment = 'supplier'; delete draft.product.supplierPrices; }
+    if (extracted.supplierRef) { draft.supplierRef = extracted.supplierRef; draft.enrichment = 'supplier'; delete draft.product.supplierPrices; delete draft.selectedSupplier; }
     if (extracted.purchasePrice !== undefined) draft.purchasePrice = extracted.purchasePrice;
     const missing = getActionSkill('create_product').inputSchema.required.filter(key => draft.product[key] === undefined);
     if (previous && missing.length === 1 && !Object.keys(extracted.product || {}).length) {
@@ -133,11 +149,11 @@ function updateDraft(previous, extracted, message) {
     const changeProduct = /^(?:no es .+?,? es|cambia (?:el )?producto (?:a|por)|producto|sku)\s+(.+)$/.exec(text);
     if (changeProduct && draft.items?.length === 1) { draft.items[0].ref = changeProduct[1].replace(/^la de /, ''); delete draft.selection; }
     if (previous?.missingFields?.includes('product') && !changeProduct && !/que|datos|falta/.test(text)) draft.items[previous.itemIndex || 0].ref = message.trim();
-    if (extracted.supplierRef) { draft.supplierRef = extracted.supplierRef; delete draft.selection; }
+    if (extracted.supplierRef) { draft.supplierRef = extracted.supplierRef; delete draft.selection; delete draft.selectedSupplier; }
     if (extracted.customerRef && (!previous || /^(?:vende|vender|registra)/.test(text) || /cliente/.test(text))) draft.customerRef = extracted.customerRef;
     if (previous?.missingFields?.includes('customer') && !extracted.customerRef) draft.customerRef = message.trim();
     const changeSupplier = /^(?:cambia (?:el )?proveedor a|proveedor)\s+(.+)$/.exec(text);
-    if (changeSupplier) { draft.supplierRef = changeSupplier[1]; delete draft.selection; }
+    if (changeSupplier) { draft.supplierRef = changeSupplier[1]; delete draft.selection; delete draft.selectedSupplier; }
     else if (previous?.selection?.slot === 'supplier' && !choose(previous.selection, message) && !/que|datos|falta|cantidad|mejor|cambia|en vez/.test(text)) {
       draft.supplierRef = message.trim(); delete draft.selection;
     }
@@ -149,16 +165,20 @@ function updateDraft(previous, extracted, message) {
 }
 async function resolveDraft(draft, context, options = {}) {
   const resolver = options.resolver || resolveReference;
-  if (draft.selection?.slot === 'product' && draft.selection.refresh) {
-    const { query, offset, index } = draft.selection;
-    const result = await resolver(require('../models').Product, context, query, undefined, offset);
+  if (['product', 'supplier', 'productSupplier'].includes(draft.selection?.slot) && draft.selection.refresh) {
+    const { query, offset, index, slot } = draft.selection;
+    const result = trustedUnique(await resolver(slot === 'product' ? require('../models').Product : Contact,
+      context, query, slot === 'product' ? undefined : 'vendor', offset));
     delete draft.selection.refresh;
     if (result.value) {
-      // Even if the catalogue now has one exact match, navigation is not consent.
-      return { clarification: 'La búsqueda ahora tiene una única coincidencia. Selecciónala para continuar.',
-        selection: { slot: 'product', index, query, offset: 0, limit: 5, totalMatches: 1, hasMore: false, hasPrevious: false, candidates: [result.value] } };
+      if (slot === 'product') return { clarification: 'La búsqueda ahora tiene una única coincidencia. Selecciónala para continuar.',
+        selection: { slot, index, query, offset: 0, limit: 5, totalMatches: 1, hasMore: false, hasPrevious: false, candidates: [result.value] } };
+      draft.supplierRef = String(result.value._id);
+      delete draft.selection;
+      return resolveDraft(draft, context, options); // Resolution is not confirmation.
     }
-    return { ...result, selection: { slot: 'product', index, candidates: result.candidates || [], ...(result.pagination || {}) } };
+    if (uncertainSingle(result)) { delete draft.selection; return refineSingle(result, slot === 'product' ? 'producto' : 'proveedor'); }
+    return { ...result, selection: { slot, ...(index !== undefined ? { index } : {}), candidates: result.candidates || [], ...(result.pagination || {}) } };
   }
   if (draft.direct && draft.action !== 'create_product') {
     const missing = getActionSkill(draft.action).inputSchema.required.filter(key => draft.direct[key] === undefined);
@@ -177,14 +197,16 @@ async function resolveDraft(draft, context, options = {}) {
       if (draft.supplierRef) {
         const result = trustedUnique(await resolver(Contact, context, draft.supplierRef, 'vendor'));
         if (result.value) { draft.supplierId = String(result.value._id); draft.enrichment = 'price';
+          draft.selectedSupplier = { id: draft.supplierId, name: result.value.name };
           if (draft.purchasePrice !== undefined) { draft.product.supplierPrices = [{ supplierId: draft.supplierId, purchasePrice: draft.purchasePrice }]; draft.enrichment = 'done'; return { args: draft.product }; }
           return { clarification: `¿Cuál es el precio de compra en ${draft.product.currency} para ${result.value.name}?`, missingFields: ['purchasePrice'] }; }
         if (uncertainSingle(result)) return refineSingle(result, 'proveedor');
-        return { ...result, selection: { slot: 'productSupplier', candidates: result.candidates || [] } };
+        return { ...result, selection: { slot: 'productSupplier', candidates: result.candidates || [], ...(result.pagination || {}) } };
       }
       const suppliers = await (options.listSuppliers ? options.listSuppliers(context) : Contact.find({ businessId: context.businessId, type: 'vendor', isActive: true }).select('_id name').sort({ name: 1, _id: 1 }).limit(5).lean().maxTimeMS(5000));
       if (suppliers.length === 1) {
         draft.supplierId = String(suppliers[0]._id); draft.enrichment = 'price';
+        draft.selectedSupplier = { id: draft.supplierId, name: suppliers[0].name };
         return { clarification: `¿Cuál es el precio de compra en ${draft.product.currency} para ${suppliers[0].name}?`, missingFields: ['purchasePrice'] };
       }
       return { clarification: 'Elige un proveedor existente o escribe parte de su nombre.', selection: { slot: 'productSupplier', candidates: suppliers } };
@@ -209,9 +231,10 @@ function applyResolution(draft, result, now) {
   draft.updatedAt = now; draft.expiresAt = now + TTL_MS;
   const candidates = suggestionsFor(draft.selection);
   const selection = draft.selection;
-  const pagination = selection?.slot === 'product' && selection.query ? Object.fromEntries(
+  const pagination = ['product', 'supplier', 'productSupplier'].includes(selection?.slot) && selection.query ? Object.fromEntries(
     ['query', 'offset', 'limit', 'totalMatches', 'hasMore', 'hasPrevious'].map(key => [key, selection[key]])) : undefined;
-  const intro = pagination ? `Encontré ${pagination.totalMatches} ${pagination.totalMatches === 1 ? 'coincidencia' : 'coincidencias'} para «${pagination.query}». Mostrando ${candidates.length ? pagination.offset + 1 : 0}–${pagination.offset + candidates.length}.\n${selection.refining ? 'Escribe una búsqueda más específica.' : 'Puedes seleccionar un producto, ver más resultados o escribir una búsqueda más específica. Los números y ordinales se refieren a esta lista visible.'}` : result.clarification;
+  const entity = selection?.slot === 'product' ? 'producto' : 'proveedor';
+  const intro = pagination ? `Encontré ${pagination.totalMatches} ${pagination.totalMatches === 1 ? 'coincidencia' : 'coincidencias'} para «${pagination.query}». Mostrando ${candidates.length ? pagination.offset + 1 : 0}–${pagination.offset + candidates.length}.\n${selection.refining ? 'Escribe una búsqueda más específica.' : `Puedes seleccionar un ${entity}, ver más resultados o escribir una búsqueda más específica. Los números y ordinales se refieren a esta lista visible.`}` : result.clarification;
   return { ...result,
     ...(pagination ? { suggestionsPagination: pagination } : {}),
     ...(candidates.length && result.clarification ? { clarification: `${intro}\n${candidates.map(option => option.label).join('\n')}` } : {}),
