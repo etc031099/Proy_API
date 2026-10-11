@@ -1,7 +1,7 @@
 const { Product, Contact } = require('../models');
 const { fail } = require('./contracts');
 const { normalizeSku } = require('../utils/sku');
-const { normalizeProductText, numbersCompatible, exactProductComponents } = require('../utils/entityIdentity');
+const { normalizeProductMatchText, numbersCompatible, exactProductComponents } = require('../utils/entityIdentity');
 const normalize = value => String(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
   .toLowerCase().replace(/litro y medio/g, '1.5 l').replace(/\blitros?\b/g, 'l')
   .replace(/([a-z])(\d)/g, '$1 $2')
@@ -21,7 +21,7 @@ const distance = (a, b) => {
 const stem = token => token.length > 4 && token.endsWith('s') ? token.slice(0, -1) : token;
 function createRanking(ref, offset = 0) {
   if (!Number.isSafeInteger(offset) || offset < 0 || offset % 5 !== 0) fail('ACTION_VALIDATION_FAILED');
-  const query = compact(ref), words = normalizeProductText(normalize(ref)).split(' ').map(stem);
+  const query = compact(ref), words = normalizeProductMatchText(normalize(ref)).split(' ').map(stem);
   let total = 0, exactCount = 0;
   const ranked = [], exactRows = [];
   const compare = (a, b) => b.score - a.score || String(a.value._id).localeCompare(String(b.value._id));
@@ -34,18 +34,19 @@ function createRanking(ref, offset = 0) {
       if (!query) return;
       if (!numbersCompatible(normalize(ref), { ...value, name: normalize(value.name), sku: normalize(value.sku || '') }, { product: Boolean(value.sku) })) return;
       const name = compact(value.name), sku = compact(value.sku || '');
-      const exact = query === name || query === sku || exactProductComponents(ref, value);
-      const tokens = normalizeProductText(`${normalize(value.name)} ${normalize(value.sku || '')}`).split(' ').map(stem);
+      const literalExact = query === name || query === sku;
+      const exact = literalExact || exactProductComponents(ref, value);
+      const tokens = `${normalizeProductMatchText(normalize(value.name))} ${normalizeProductMatchText(normalize(value.sku || ''))}`.split(' ').map(stem);
       const coverage = words.filter(word => tokens.some(token => token === word || (word.length >= 4 && distance(word, token) <= 1))).length / words.length;
       const similarity = 1 - distance(query, name) / Math.max(query.length, name.length, 1);
       const score = exact ? 1 : name.includes(query) || sku.includes(query) ? 0.9 : Math.max(coverage * 0.85, similarity);
       if (score < 0.72) return;
-      const item = { value, exact, score };
+      const item = { value, exact, literalExact, score };
       total++; retain(ranked, item);
       if (exact) { exactCount++; retain(exactRows, item); }
     },
     result() {
-      if (exactCount === 1) return { confidence: 'EXACT', value: exactRows[0].value };
+      if (exactCount === 1) return { confidence: exactRows[0].literalExact ? 'EXACT' : 'NORMALIZED', value: exactRows[0].value };
       const totalMatches = exactCount || total;
       // Clamp a page when products changed since the preceding turn.
       const currentOffset = Math.min(offset, Math.max(0, Math.ceil(totalMatches / 5) - 1) * 5);

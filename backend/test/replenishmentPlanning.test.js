@@ -80,6 +80,16 @@ const makeExecution = ({ businessId = 'V2', forecastRows, products, contacts, re
   return { context, execution, reads };
 };
 
+test('P2A.1 commercial resolution preserves canonical padded product identity and zero tokens', async () => {
+  const row = { ...product(1), sku: 'M5-FOODS_2_096', name: 'Foods 2 Item 096' };
+  const { execution } = makeExecution({ forecastRows: [row], products: [{ ...row, _id: oid(1) }], contacts: vendors, reads: [] });
+  const result = await execution.executeSkill({ agentId: 'analyst', skillId: 'get_replenishment_cost',
+    args: { mode: 'single', productRef: 'food 02 0096' } });
+  assert.equal(result.data.sku, 'M5-FOODS_2_096');
+  assert.equal(result.data.replenishmentCost, 30);
+  assert.equal(execution.finish().totalTokens, 0);
+});
+
 test('plan skill stays tenant-scoped, read-only, paginates after allocation and uses forecast values', async () => {
   const rows = [product(1, { cost: 2.50, recommendedQty: 4 }), product(2, { cost: 3, recommendedQty: 2, supplier: oid(102), preferred: oid(102) })];
   const readLog = [];

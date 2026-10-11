@@ -39,6 +39,38 @@ const pagedProducts = () => Array.from({ length: 28 }, (_, i) => ({ ...p1, _id: 
   name: `Food ${i % 4} variant ${i}`, sku: `PAGE-${i}` }));
 const identityProducts = [2, 3].map((group, i) => ({ ...p1, _id: String(i + 2).repeat(24),
   name: `Alimentos M5 · FOODS_${group} · Ítem 210`, sku: `M5-FOODS_${group}_210` }));
+const paddedProducts = identityProducts.map(row => ({ ...row, name: row.name.replace('210', '096'), sku: row.sku.replace('210', '096') }));
+for (const reference of ['food 96', 'food 096', 'food 0096', 'item 96', 'item 00096']) test(`P2A.1 padded identity ${reference}`, () => {
+  const wrong = [196, 960, 97].map(number => ({ ...p1, name: `Foods 2 Item ${number}`, sku: `M5-FOODS_2_${number}` }));
+  const result = rankEntities([...paddedProducts, ...wrong], reference);
+  assert.equal(result.confidence, 'AMBIGUOUS'); assert.equal(result.pagination.totalMatches, 2);
+  assert.deepEqual(result.candidates.map(row => row.sku).sort(), paddedProducts.map(row => row.sku).sort());
+  for (const row of wrong) assert.equal(rankEntities([row], reference).confidence, 'NOT_FOUND');
+});
+test('P2A.1 structured and exact SKU identities retain canonical display', () => {
+  assert.equal(rankEntities(paddedProducts, 'food 02 0096').value.sku, 'M5-FOODS_2_096');
+  assert.equal(rankEntities(paddedProducts, 'M5-FOODS_2_096').confidence, 'EXACT');
+  const normalized = rankEntities(paddedProducts, 'M5-FOODS_2_96');
+  assert.equal(normalized.confidence, 'NORMALIZED'); assert.equal(normalized.value.sku, 'M5-FOODS_2_096');
+  const { normalizeProductMatchText } = require('../src/utils/entityIdentity');
+  assert.equal(normalizeProductMatchText('CODE0096'), 'code 0096');
+  assert.equal(normalizeProductMatchText('precio 0096'), 'precio 0096');
+  assert.equal(normalizeProductMatchText('cantidad 003'), 'cantidad 003');
+  assert.equal(normalizeProductMatchText('2026-05-09'), '2026 05 09');
+});
+for (const action of ['vende 3 del food 96', 'compra 3 del food 96', 'avísame cuando food 96 baje de 3']) {
+  test(`P2A.1 padded WRITE keeps operation fields: ${action}`, async () => {
+    const f = fixture({ products: paddedProducts }); const first = await f.send(action);
+    assert.equal(first.suggestions.length, 2); assert.equal(f.prepared.length, 0);
+    let result = await f.send(paddedProducts[0].sku);
+    if (action.startsWith('compra') && !result.pendingAction) result = await f.send('1');
+    assert.equal(f.prepared.length, 1); assert.equal(result.pendingAction.status, 'PENDING');
+    if (action.startsWith('avísame')) {
+      assert.equal(f.prepared[0].productId, paddedProducts[0]._id); assert.equal(f.prepared[0].operator, '<'); assert.equal(f.prepared[0].threshold, 3);
+    } else { assert.equal(f.prepared[0].products[0].productId, paddedProducts[0]._id); assert.equal(f.prepared[0].products[0].quantity, 3); }
+    assert.equal(result.usage.totalLlmCalls, 0);
+  });
+}
 for (const reference of ['food 210', 'foods 210', 'food-210', 'item 210', 'ítem 210', 'item210', 'fods 210', 'fooods 210', 'itme 210']) {
   test(`P2A product identity ${reference} preserves both valid candidates`, () => {
     const impostors = [211, 1210, 2100].map(number => ({ ...p1, name: `Alimentos M5 FOODS_3 Item ${number}`, sku: `M5-FOODS_3_${number}` }));

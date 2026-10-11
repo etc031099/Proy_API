@@ -226,6 +226,19 @@ test('P2A READ matches complete numbers, controlled aliases and explicit subgrou
   const numbers = await fixture({ products }).run('search_products', { query: '210' });
   assert.equal(numbers.metadata.totalMatches, 2);
 });
+test('P2A.1 READ resolves padding equivalence with exact numeric boundaries and subgroup', async () => {
+  const products = [2, 3].map((group, index) => product(index + 1, {
+    name: `Alimentos M5 FOODS_${group} Ítem 096`, sku: `M5-FOODS_${group}_096` }));
+  products.push(...[196, 960, 97].map((number, index) => product(index + 10, { name: `Foods 2 Item ${number}`, sku: `M5-FOODS_2_${number}` })));
+  for (const query of ['food 96', 'food 096', 'food 0096', 'item 96', 'item 00096']) {
+    const result = await fixture({ products }).run('search_products', { query });
+    assert.equal(result.metadata.totalMatches, 2, query); assert.ok(result.data.every(row => row.sku.endsWith('_096')));
+  }
+  for (const query of ['food 2 96', 'food 02 0096']) {
+    const result = await fixture({ products }).run('search_products', { query });
+    assert.equal(result.metadata.totalMatches, 1); assert.equal(result.data[0].sku, 'M5-FOODS_2_096');
+  }
+});
 test('search treats regex metacharacters and control input as literal text', async () => {
   const f = fixture({ products: [product(1, { name: 'Literal .* [a] $where\n' }), product(2)] });
   assert.equal((await f.run('search_products', { query: '.* [a] $where\n' })).metadata.totalMatches, 1);

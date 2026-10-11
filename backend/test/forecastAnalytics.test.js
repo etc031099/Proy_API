@@ -34,6 +34,20 @@ function fixture({ products = rows, status = 'READY', memory = createConversatio
 }
 const zero = response => { assert.equal(response.code, null); assert.equal(response.usage.totalLlmCalls, 0);
   assert.equal(response.usage.totalTokens, 0); assert.equal(response.usage.metricsComplete, true); };
+test('P2A.1 forecast comparison normalizes structured padding without changing canonical SKUs', async () => {
+  const products = [2, 3].map((group, index) => ({ ...rows[index], sku: `M5-FOODS_${group}_096`, name: `Foods ${group} Item 096` }));
+  products.push({ ...rows[2], sku: 'M5-FOODS_3_097', name: 'Foods 3 Item 097' });
+  const f = fixture({ products });
+  const ambiguous = await f.send('Compara food 96 con M5-FOODS_3_097');
+  assert.equal(ambiguous.requiresClarification, true);
+  assert.equal(ambiguous.suggestions.length, 2);
+  assert.ok(ambiguous.suggestions.every(row => row.detail.endsWith('_096')));
+  assert.equal(ambiguous.usage.totalLlmCalls, 0);
+  const result = await f.send('Compara food 02 0096 con M5-FOODS_3_097');
+  zero(result);
+  assert.equal(result.evidence[0].recordCount, 2);
+  assert.match(result.answer, /M5-FOODS_2_096/);
+});
 test('P2A forecast comparison never substitutes numerically different products and preserves clickable ambiguity', async () => {
   const products = [2, 3].map((group, index) => ({ ...rows[index], sku: `M5-FOODS_${group}_210`, name: `Foods ${group} Item 210` }));
   products.push({ ...rows[2], sku: 'M5-FOODS_3_211', name: 'Foods 3 Item 211' });

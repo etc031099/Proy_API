@@ -6,6 +6,14 @@ const normalizeProductText = value => normalizeEntityText(value)
   .replace(/\b(?:foods?|fods|fooods)\b/g, 'food').replace(/\b(?:item|itme)\b/g, 'item')
   .replace(/\bprodcto\b/g, 'producto');
 const canonicalNumber = value => value.replace(/^0+(?=\d)/, '');
+// Only recognized product components receive padding equivalence. Arbitrary
+// alphanumeric codes, prices, dates and action quantities are not rewritten.
+const normalizeProductMatchText = value => normalizeProductText(value)
+  .replace(/\bfood (\d+) (item )?(\d+)\b/g, (_, group, itemLabel, item) =>
+    `food ${canonicalNumber(group)} ${itemLabel || ''}${canonicalNumber(item)}`)
+  .replace(/\b(food|item) (\d+)\b/g, (_, kind, number) => `${kind} ${canonicalNumber(number)}`)
+  .replace(/^m 5 ([a-z]+) (\d+) (\d+)$/, (_, family, group, item) =>
+    `m 5 ${family} ${canonicalNumber(group)} ${canonicalNumber(item)}`);
 const extractIdentityNumbers = value => normalizeEntityText(value).split(' ')
   .filter(token => /^\d+$/.test(token)).map(canonicalNumber);
 const productComponents = value => {
@@ -53,4 +61,4 @@ const numericIdentityFilter = reference => {
   ] });
   return clauses.length ? { $and: clauses } : {};
 };
-module.exports = { normalizeEntityText, normalizeProductText, extractIdentityNumbers, numbersCompatible, numericIdentityFilter, exactProductComponents };
+module.exports = { normalizeEntityText, normalizeProductText, normalizeProductMatchText, extractIdentityNumbers, numbersCompatible, numericIdentityFilter, exactProductComponents };

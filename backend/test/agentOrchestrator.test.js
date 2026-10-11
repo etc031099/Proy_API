@@ -23,6 +23,23 @@ const forecast = { status: 'READY', anchorOperationalDate: '2025-07-01', product
 ] };
 
 const scopedProducts = () => [2, 3].map((n, i) => ({ ...product(n), sku: `M5-FOODS_${i + 2}_210`, name: `Foods ${i + 2} item 210` }));
+for (const query of ['¿Cuánto stock tiene food 96?', '¿Cuál es el precio de food 96?', '¿Está activo food 96?',
+  'predicción food 96', '¿Cuánto vendí de food 96 ayer?', 'alertas generadas del food 96',
+  '¿Se entregó la alerta de food 96?', '¿Qué Telegram fueron omitidas para food 96?']) {
+  test(`P2A.1 intent-independent padded identity: ${query}`, async () => {
+    const products = scopedProducts().map(row => ({ ...row, sku: row.sku.replace('210', '096'), name: row.name.replace('210', '096') }));
+    const forecastService = { getDemandForecast: async () => ({ ...forecast, products: [
+      { ...forecast.products[0], productId: products[0].id, sku: products[0].sku, name: products[0].name }
+    ] }) };
+    const f = fixture({ products, forecastService }), conversationId = randomUUID();
+    const ambiguous = await f.run(query, conversationId);
+    assert.equal(ambiguous.suggestions.length, 2); assert.equal(ambiguous.usage.totalLlmCalls, 0);
+    const selected = await f.run(products[0].sku, conversationId);
+    assert.equal(selected.requiresClarification, false); assert.equal(selected.code, null);
+    assert.equal(selected.usage.totalLlmCalls, 0); assert.equal(selected.usage.totalTokens, 0);
+    assert.equal((await f.orchestrator.getContextSnapshot(req(), conversationId)).selectedProductReference.sku, products[0].sku);
+  });
+}
 const assertNoLLM = result => { assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
   assert.ok([null, 'AGENT_CLARIFICATION_REQUIRED'].includes(result.code), result.code); };
 for (const choice of ['2', 'el segundo', 'M5-FOODS_3_210']) {
