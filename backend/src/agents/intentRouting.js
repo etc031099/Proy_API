@@ -187,7 +187,8 @@ const routeSupplierProducts = (message, memory = {}) => {
   const implicit = /^(?:y )?(?:que productos ofrece|sus productos|sus ofertas|que otr[oa]s? (?:productos|ofertas) ofrece)$/.test(text);
   const asksSupplierPrice = /\b(?:precio|cuesta)\b/.test(text) && /\b(?:su precio|proveedor|con ese|con este)\b/.test(text)
     && !/\b(?:reponer|reposicion)\b/.test(text);
-  if (/\b(?:telefono|direccion|correo|detalles)\b/.test(text) && /\bproveedor\b/.test(text))
+  const supplierDetails = /\b(?:telefono|direccion|correo|detalles)\b/.test(text) && /\bproveedor\b/.test(text);
+  if (supplierDetails && contextual && !memory.lastSupplier)
     return clarify('Puedo consultar los productos y ofertas configurados de un proveedor, pero todavía no sus detalles completos.');
   const shortSupplierQuestion = /^\s*q\s+vende\s+(?=.*[a-z]).+$/i.test(text);
   // Transactional sale language belongs to AUTO-R2.5, even if a product name happens to be “food”.
@@ -201,7 +202,7 @@ const routeSupplierProducts = (message, memory = {}) => {
   const productsOf = Boolean(productsOfMatch && (memory.lastSupplier || /\d/.test(productsOfMatch[1])
     || /\b(?:proveedor|supplier|distribuidora|distribuciones|comercial|sac|srl)\b/i.test(productsOfMatch[1])));
   if (/\b(?:compara|comparar)\b/.test(text) || /\bque proveedor deberia usar\b/.test(text)) return null;
-  if (!asksOfferRelationship && !asksSupplierInventory && !productsOf && !shortSupplierQuestion && !implicit && !asksSupplierPrice) return null;
+  if (!supplierDetails && !asksOfferRelationship && !asksSupplierInventory && !productsOf && !shortSupplierQuestion && !implicit && !asksSupplierPrice) return null;
 
   const sku = message.match(/\b(?:M5-[A-Z]+_\d+_\d+|SKU\s+[\w.-]{1,100})\b/i)?.[0]?.replace(/^SKU\s+/i, '');
   const explicitSupplier = message.match(/\bproveedor\s+(.+?)(?=\s+(?:q|que)\s+productos?|\s+(?:producto|productos|provee|proveen|vende|ofrece)\b|[?!.]|$)/i)?.[1]?.trim()
@@ -215,6 +216,7 @@ const routeSupplierProducts = (message, memory = {}) => {
   const supplierRef = explicitName || remembered?.id;
   if (!supplierRef) return clarify('¿Qué proveedor deseas consultar? Indica su nombre o una parte para buscar coincidencias.');
   const plan = { intent: 'supplier_products', agent: 'operations', skillId: 'get_supplier_products',
+    ...(supplierDetails ? { supplierDetails: true } : {}),
     args: { supplierRef, limit: 5, offset: 0, ...(sku ? { productRef: sku } : {}) }, limit: 5 };
   if (asksSupplierPrice) {
     const productRef = sku || message.match(/\bpara\s+(.+?)[?!.]*$/i)?.[1]?.trim()

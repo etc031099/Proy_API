@@ -20,6 +20,7 @@ const draftSchema = schema({ action: { ...string(30), enum: ['create_product', '
   currency: { ...string(3), enum: ['PEN', 'USD', 'EUR'] }, paymentMethod: { ...string(20), enum: ['cash', 'credit', 'card', 'bank_transfer', 'wallet', 'other'] },
   customerRef: string(100), supplierRef: string(100), supplierId: objectId, purchasePrice: number(), enrichment: string(20),
   selection: selectionSchema, supplierChoices: selectionSchema,
+  readSuspended: { type: 'boolean' },
   selectedSupplier: schema({ id: objectId, name: string(100) }, ['id', 'name']),
   selectedProductReference: schema({ id: objectId, sku: string(100), name: string(100) }, ['id', 'sku', 'name']),
   missingFields: { type: 'array', maxItems: 10, items: string(30) }, itemIndex: integer(20),

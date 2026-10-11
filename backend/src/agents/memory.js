@@ -107,6 +107,7 @@ const compactSupplierResolution = (value, now = Date.now()) => {
     .map(row => ({ id: row.id, name: label(row.name, 100), ...(typeof row.detail === 'string' ? { detail: label(row.detail, 80) } : {}) }));
   if (!candidates.length) return null;
   return deepFreeze({ candidateType: 'supplier', pageSize: 5, totalMatches: candidates.length,
+    mode: 'read', origin: ['supplier_details', 'supplier_product_offer', 'supplier_products', 'replenishment_commercial'].includes(value.origin) ? value.origin : 'supplier_products',
     ...(value.truncatedMatches === true ? { truncatedMatches: true } : {}),
     originalIntent: value.originalIntent || value.skillId, skillId: value.skillId, args: { ...(value.skillId === 'get_replenishment_cost' && value.args.mode === 'single' ? { mode: 'single' } : {}),
     ...(typeof value.args.productRef === 'string' ? { productRef: value.args.productRef } : {}),

@@ -43,6 +43,35 @@ const paddedProducts = identityProducts.map(row => ({ ...row, name: row.name.rep
 const p2bVendors = () => ['San Martin Norte', 'San Martin Sur'].map((name, index) => ({
   _id: String(index + 6).repeat(24), name, isActive: true }));
 const p2bPurchaseProduct = () => ({ ...paddedProducts[0], supplierPrices: p2bVendors().map((row, index) => ({ supplierId: row._id, purchasePrice: 10 + index })) });
+for (const choice of ['Opción 1', '1', 'el primero', 'San Martin Norte', 'Ver más']) {
+  test(`P2B.1 newer READ owns ${choice} without mutating pending purchase`, async () => {
+    const f = fixture({ products: [p2bPurchaseProduct()], suppliers: p2bVendors() });
+    const purchase = await f.send('compra 3 del food 96 al proveedor San Martin Norte');
+    assert.equal(purchase.pendingAction.status, 'PENDING');
+    const before = (await f.adapter.getContextSnapshot(request(), f.conversationId)).operationDraft;
+    const reads = [];
+    f.runtime.handle = async (req, input) => { reads.push(input.message); return { answer: 'Lectura', usage: { totalLlmCalls: 0, totalTokens: 0 } }; };
+    await f.send('Dame todos los detalles del proveedor food'); await f.send(choice);
+    assert.deepEqual(reads, ['Dame todos los detalles del proveedor food', choice]);
+    assert.equal(f.prepared.length, 1); assert.equal(f.cancelled.length, 0);
+    assert.equal((await f.service.get(null, purchase.pendingAction.pendingActionId)).status, 'PENDING');
+    const after = (await f.adapter.getContextSnapshot(request(), f.conversationId)).operationDraft;
+    assert.deepEqual(after, { ...before, readSuspended: true });
+    const restored = withActionAssistant(f.runtime, f.service, f.options);
+    await restored.restoreContext(request(), f.conversationId, { operationDraft: after });
+    await restored.handle(request(), { message: choice, conversationId: f.conversationId });
+    assert.equal(f.cancelled.length, 0); assert.equal(f.prepared.length, 1);
+  });
+}
+test('P2B.1 active WRITE supplier selection and correction preserve exactly three units', async () => {
+  const f = fixture({ products: [p2bPurchaseProduct()], suppliers: p2bVendors() });
+  await f.send('compra 3 del food 96 al proveedor San Martin');
+  await f.send('el primero');
+  const result = await f.send('no ese proveedor, el segundo');
+  assert.equal(result.pendingAction.status, 'PENDING'); assert.equal(result.usage.totalLlmCalls, 0);
+  assert.equal(f.prepared.length, 2); assert.equal(f.prepared[1].vendorId, p2bVendors()[1]._id);
+  assert.deepEqual(f.prepared[1].products, [{ productId: p2bPurchaseProduct()._id, quantity: 3 }]);
+});
 for (const choice of ['Opción 2', 'el segundo', 'San Martin Sur']) test(`P2B purchase supplier ${choice} keeps quantity/product and only prepares`, async () => {
   const f = fixture({ products: [p2bPurchaseProduct()], suppliers: p2bVendors() });
   const first = await f.send('compra 5 del food 96 al proveedor San Martin');

@@ -337,6 +337,74 @@ const p2bSuppliers = () => ['San Martin Norte', 'San Martin Sur'].map((name, ind
   _id: id(701 + index), businessId: 'A', name, type: 'vendor', isActive: true }));
 const p2bProduct = () => ({ ...product(700), sku: 'M5-FOODS_2_096', name: 'Foods 2 Item 096',
   supplierPrices: p2bSuppliers().map((supplier, index) => ({ supplierId: supplier._id, purchasePrice: 10 + index })) });
+const continuationVendors = () => Array.from({ length: 25 }, (_, index) => ({
+  _id: id(800 + index), businessId: 'A', type: 'vendor', isActive: true,
+  name: `Proveedor sintético ${String(index + 1).padStart(3, '0')} FOODS` }));
+const continuationProduct = () => ({ ...product(750), sku: 'M5-FOODS_1_212', name: 'Foods 1 Item 212',
+  supplierPrices: continuationVendors().map(row => ({ supplierId: row._id, purchasePrice: 17.61 })) });
+for (const contextual of [false, true]) for (const choice of ['Opción 1', '1', 'el primero', 'Proveedor sintético 001 FOODS']) {
+  test(`P2B.1 offer continuation preserves product, contextual=${contextual}, selection=${choice}`, async () => {
+    const f = fixture({ products: [continuationProduct()], contacts: continuationVendors() }), conversationId = randomUUID();
+    if (contextual) await f.run('cuanto stock tiene food 212?', conversationId);
+    const first = await f.run(contextual ? 'cuanto cuesta con el proveedor food?' : 'cuanto cuesta food 212 con proveedor food?', conversationId);
+    assertNoLLM(first); assert.equal(first.suggestions.length, 5);
+    const saved = await f.orchestrator.getContextSnapshot(req(), conversationId);
+    assert.equal(saved.supplierResolution.args.productRef, 'M5-FOODS_1_212');
+    assert.equal(saved.supplierResolution.mode, 'read');
+    assert.equal(saved.supplierResolution.origin, 'supplier_product_offer');
+    const selected = await f.run(choice, conversationId);
+    assertNoLLM(selected); assert.match(selected.answer, /17\.61/); assert.match(selected.answer, /M5-FOODS_1_212/);
+    assert.equal(selected.requiresClarification, false);
+  });
+}
+test('P2B.1 supplier offer page 2 and restored snapshot retain product and intent', async () => {
+  const f = fixture({ products: [continuationProduct()], contacts: continuationVendors() }), conversationId = randomUUID();
+  await f.run('cuanto cuesta food 212 con proveedor food?', conversationId);
+  const page = await f.run('Ver más', conversationId); assertNoLLM(page); assert.equal(page.suggestionsPagination.offset, 5);
+  const saved = await f.orchestrator.getContextSnapshot(req(), conversationId);
+  const restored = fixture({ products: [continuationProduct()], contacts: continuationVendors() });
+  await restored.orchestrator.restoreContext(req(), conversationId, saved);
+  const selected = await restored.run('el primero', conversationId);
+  assertNoLLM(selected); assert.ok(selected.answer.includes(saved.supplierResolution.candidates[5].name)); assert.match(selected.answer, /17\.61/);
+});
+test('P2B.1 supplier 013 name continues exact offer; explicit new request changes intent', async () => {
+  const f = fixture({ products: [continuationProduct()], contacts: continuationVendors() }), conversationId = randomUUID();
+  await f.run('cuanto cuesta food 212 con proveedor food?', conversationId);
+  await f.run('Ver más', conversationId); await f.run('Ver más', conversationId);
+  const selected = await f.run('Proveedor sintético 013 FOODS', conversationId);
+  assertNoLLM(selected); assert.match(selected.answer, /17\.61/); assert.match(selected.answer, /013 FOODS/);
+  await f.run('cuanto cuesta food 212 con proveedor food?', conversationId);
+  const changed = await f.run('mejor dime qué productos ofrece Proveedor sintético 013 FOODS', conversationId);
+  assertNoLLM(changed); assert.equal(changed.requiresClarification, false);
+  assert.match(changed.answer, /013 FOODS/); assert.equal((await f.orchestrator.getContextSnapshot(req(), conversationId)).supplierProductListing, null);
+});
+test('P2B.1 ambiguous details resolve supplier but remain NOT READY without inventing details', async () => {
+  const f = fixture({ products: [continuationProduct()], contacts: continuationVendors() }), conversationId = randomUUID();
+  const first = await f.run('Dame todos los detalles del proveedor food', conversationId);
+  assertNoLLM(first); assert.equal(first.suggestions.length, 5);
+  assert.equal((await f.orchestrator.getContextSnapshot(req(), conversationId)).supplierResolution.origin, 'supplier_details');
+  const chosen = await f.run('Opción 1', conversationId);
+  assertNoLLM(chosen); assert.match(chosen.answer, /todavía no sus detalles completos/);
+  assert.equal(chosen.usage.totalSkillCalls, 0);
+  assert.doesNotMatch(chosen.answer, /17\.61/);
+});
+test('P2B.1 expired supplier continuation does not select a candidate', () => {
+  const { supplierSelection } = require('../src/agents/orchestrator');
+  const pending = { skillId: 'get_supplier_products', args: { productRef: 'M5-FOODS_1_212' },
+    expiresAt: Date.now() - 1, candidates: [{ id: id(800), name: 'Proveedor 001 Foods' }] };
+  assert.deepEqual(supplierSelection('Opción 1', { supplierResolution: pending }, Date.now()), { expired: true });
+});
+test('P2B.1 newer product READ disambiguation supersedes supplier READ snapshot', async () => {
+  const rows = [continuationProduct(), { ...continuationProduct(), id: undefined, _id: id(751), sku: 'M5-FOODS_2_212', name: 'Foods 2 Item 212' }];
+  const f = fixture({ products: rows, contacts: continuationVendors() }), conversationId = randomUUID();
+  await f.run('qué productos ofrece proveedor food?', conversationId);
+  const newer = await f.run('cuanto stock tiene food 212?', conversationId);
+  assertNoLLM(newer); assert.equal(newer.suggestionsEntityType, 'product');
+  assert.equal((await f.orchestrator.getContextSnapshot(req(), conversationId)).supplierResolution, null);
+  const selected = await f.run('el segundo', conversationId);
+  assertNoLLM(selected); assert.ok(selected.actions.some(action => action.skillId === 'get_product_details'));
+  assert.equal(selected.actions.some(action => action.skillId === 'get_supplier_products'), false);
+});
 for (const followup of ['¿Qué productos ofrece ese proveedor?', '¿Qué productos ofrece este proveedor?',
   '¿Qué productos ofrece el mismo proveedor?', '¿Qué productos ofrece ese mismo proveedor?',
   '¿Qué productos ofrece el anterior?', '¿Y qué productos ofrece?', '¿Y sus productos?', '¿Y sus ofertas?']) {

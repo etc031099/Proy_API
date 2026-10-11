@@ -22,6 +22,17 @@ const withActionAssistant = (runtime, service, options = {}) => {
     const draftKey = keyFor(req, input.conversationId);
     let previous = drafts.get(draftKey);
     const explicit = actionIntent(input.message);
+    // A newer READ owns subsequent selections. Keep the frozen PendingAction
+    // intact; only an explicit new action can re-enter the write flow.
+    const newRead = !explicit && /^(?:mejor\s+)?(?:dame|muestrame|busca|dime|cuanto|que|resume|explica|lista|cuales)\b|[¿?]/.test(normalized)
+      && !/que me falta|que datos|que proveedores/.test(normalized)
+      && !(previous?.selection?.slot === 'product' && /^busca(?:r)?\b/.test(normalized))
+      && !ordinalSelection(input.message).matched;
+    if (previous && newRead) {
+      drafts.set(draftKey, { ...previous, readSuspended: true });
+      return runtime.handle(req, input);
+    }
+    if (previous?.readSuspended && !explicit) return runtime.handle(req, input);
     if (explicit === 'create_stock_alert_rule' && require('../agents/intentRouting').tenantScopeViolation(input.message))
       return runtime.handle(req, input); // Preserve the deterministic F9 denial before resolving any product.
     const contextual = (previous?.selection?.slot === 'product' && /^busca(?:r)?\b/.test(normalized)) || /que me falta|que datos|que proveedores|^(?:mejor|cambia|en vez|no es|opcion|el |la |si\b|no\b|cancel|confirm|hazlo|crear proveedor|elegir proveedor|continuar sin)/.test(normalized)

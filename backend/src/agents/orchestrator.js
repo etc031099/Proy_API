@@ -19,6 +19,8 @@ const supplierSelection = (message, state, now) => {
   if (!pending) return null;
   const text = message.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim().replace(/[?.!¿¡]/g, '');
   const command = text.replace(/\s+/g, ' ');
+  // A new request is not a candidate name/ordinal for the old request.
+  if (/\b(?:cuanto|cuantos|que|dame|dime|muestrame|compara|busca|detalles)\b/.test(command) && !pending.refining) return null;
   if (pending.expiresAt <= now && (/^(?:ver mas|siguiente|anterior|refinar busqueda)$/.test(command) || pending.refining)) return { expired: true };
   if (/^(?:ver mas|siguiente)$/.test(command)) {
     return (pending.offset || 0) + 5 < pending.candidates.length
@@ -35,7 +37,7 @@ const supplierSelection = (message, state, now) => {
       const candidate = candidates[0];
       const supplierProducts = pending.skillId === 'get_supplier_products';
       return { plan: { intent: supplierProducts ? 'supplier_products' : 'replenishment_commercial', agent: supplierProducts ? 'operations' : 'analyst', skillId: pending.skillId,
-        args: { ...pending.args, supplierRef: candidate.id }, supplierSelectedName: candidate.name } };
+        args: { ...pending.args, supplierRef: candidate.id }, supplierDetails: pending.origin === 'supplier_details', supplierSelectedName: candidate.name } };
     }
     if (candidates.length > 1) return { filteredCandidates: candidates, query: message.trim(), totalMatches: candidates.length };
     return { noRefinementMatch: true };
@@ -66,7 +68,7 @@ const supplierSelection = (message, state, now) => {
   const candidate = pending.candidates[index];
   const supplierProducts = pending.skillId === 'get_supplier_products';
   return { plan: { intent: supplierProducts ? 'supplier_products' : 'replenishment_commercial', agent: supplierProducts ? 'operations' : 'analyst', skillId: pending.skillId,
-    args: { ...pending.args, supplierRef: candidate.id }, supplierSelectedName: candidate.name } };
+    args: { ...pending.args, supplierRef: candidate.id }, supplierDetails: pending.origin === 'supplier_details', supplierSelectedName: candidate.name } };
 };
 
 const productCandidateSelection = (message, state) => {
@@ -396,9 +398,18 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
               break;
             }
             case 'supplier_products': {
+              if (plan.supplierDetails && plan.supplierSelectedName) {
+                plan.clarificationQuestion = 'Proveedor identificado. Puedo consultar sus productos y ofertas configurados, pero todavía no sus detalles completos.';
+                commit({ supplierResolution: null, lastSupplier: { id: plan.args.supplierRef, name: plan.supplierSelectedName } });
+                break; // Resolve the directory candidate, never execute NOT READY details.
+              }
               const result = await run('operations', 'get_supplier_products', { ...plan.args,
                 ...(plan.selectedProduct?.sku || selector?.sku ? { productRef: plan.selectedProduct?.sku || selector.sku } : {}) });
               if (result.status === 'CLARIFICATION') plan.clarificationQuestion = result.metadata.clarificationQuestion;
+              else if (plan.supplierDetails) {
+                plan.clarificationQuestion = 'Proveedor identificado. Puedo consultar sus productos y ofertas configurados, pero todavía no sus detalles completos.';
+                commit({ supplierResolution: null, lastSupplier: result.metadata.supplierReference });
+              }
               break;
             }
             case 'search_product': await run(plan.agent, 'search_products', { query: plan.query || state.lastSearchQuery, limit: plan.limit }); break;
@@ -531,7 +542,10 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
           const supplierResult = results.find(({ result }) => result.status === 'CLARIFICATION' && result.metadata.supplierResolution);
           if (supplierResult) {
             supplierResolutionExpiry = Date.now() + SUPPLIER_SELECTION_TTL_MS;
-            const resolution = { ...supplierResult.result.metadata.supplierResolution, expiresAt: supplierResolutionExpiry };
+            const resolution = { ...supplierResult.result.metadata.supplierResolution,
+              mode: 'read', origin: plan.supplierDetails ? 'supplier_details'
+                : plan.intent === 'supplier_products' && supplierResult.result.metadata.supplierResolution.args.productRef ? 'supplier_product_offer' : plan.intent,
+              expiresAt: supplierResolutionExpiry };
             commit({ supplierResolution: resolution });
             supplierPageResponse = supplierPageView(resolution, 0);
             answer = `${supplierResult.result.metadata.clarificationQuestion}\n${supplierPageResponse.answer}`;
@@ -559,10 +573,11 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             commit({ supplierResolution: { ...state.supplierResolution, refining: true } });
           }
           const search = results.find(({ skillId }) => skillId === 'search_products');
-          if (search) {
+          if (search && plan.lookupCandidates) {
             const createdAt = Date.now();
             productSelectionExpiry = search.result.data.length > 1 ? createdAt + require('./memory').TTL_MS : undefined;
             commit({ lastIntent: 'search_product', lastAgent: 'operations',
+            supplierResolution: null, supplierProductListing: null,
             recentEntities: search.result.data, lastSearchQuery: plan.lookupQuery, listLimit: 5,
             lastEntity: null, selectedProductReference: null,
             lastProductSelection: search.result.data.length ? { sourceIntent: 'search_product', continuationIntent: plan.intent,
