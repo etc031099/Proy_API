@@ -1,5 +1,5 @@
 /* Local audit only. No dotenv, database connection, HTTP client or real provider.
- * Usage: node backend/scripts/audit-conversation-p3b.js [--p3c3]
+ * Usage: node backend/scripts/audit-conversation-p3b.js [--p3c3 | --p3c3-1]
  * Generated reports are separate from backend/test/run.js.
  */
 const fs = require('node:fs');
@@ -312,6 +312,17 @@ for (let n = 0; n < 8; n++) {
     return { turns: rows.map(summarize), prepared: safe(f.prepared), executions: f.confirmed.length };
   });
 }
+// Append the exact cloud reproduction without changing any existing case ID,
+// expected result or severity rule.
+readSeq('visible_name_continuation', ['Busca food 96', products[0].name, products[0].name, '¿Y el stock mínimo?'], async (f, rows, conversation) => {
+  check(rows.every(row => !row.code && !row.requiresClarification && row.usage.totalLlmCalls === 0 && row.usage.totalTokens === 0),
+    'Product visible-name continuation or retry failed');
+  check(rows.slice(1).every(row => row.answer.includes(products[0].sku)), 'Product visible-name context lost');
+  const state = await f.orchestrator.getContextSnapshot(read.req(), conversation);
+  check(state.selectedProductReference?.sku === products[0].sku && state.lastEntity?.sku === products[0].sku,
+    'Selected product context was not committed');
+  check(f.calls.length === 0 && rows.every(row => !row.pendingAction), 'Product continuation attempted LLM or write');
+});
 async function main() {
   const cases = []; let index = 0;
   for (const family of families) for (const input of family.inputs) cases.push(await individual(family, input, ++index));
@@ -382,10 +393,14 @@ async function main() {
   // One case per line keeps the machine-readable corpus reviewable in Git.
   const header = JSON.stringify({ ...report, cases: undefined }, null, 2);
   const serialized = `${header.slice(0, -2)},\n  "cases": [\n    ${cases.map(row => JSON.stringify(row)).join(',\n    ')}\n  ]\n}\n`;
-  if (process.argv.includes('--p3c3')) {
-    const baselinePath = path.join(root, 'docs', 'CONV-HARDENING-P3C.2.json');
+  if (process.argv.includes('--p3c3') || process.argv.includes('--p3c3-1')) {
+    const visibleNamePhase = process.argv.includes('--p3c3-1');
+    const phase = visibleNamePhase ? 'CONV-HARDENING-P3C.3.1' : 'CONV-HARDENING-P3C.3';
+    const baselineFile = visibleNamePhase ? 'CONV-HARDENING-P3C.3.json' : 'CONV-HARDENING-P3C.2.json';
+    const baselinePath = path.join(root, 'docs', baselineFile);
     const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
     const targetIds = new Set(['U-0034', 'U-0037', 'U-0432', 'U-0439', 'U-0440', 'S-076']);
+    if (visibleNamePhase) targetIds.add('S-121');
     const baselineById = new Map(baseline.cases.map(row => [row.id, row]));
     const affectedCases = cases.filter(row => targetIds.has(row.id));
     const previousCritical = new Set(baseline.cases.filter(row => row.classification === 'FAIL'
@@ -398,18 +413,19 @@ async function main() {
     const newCriticalFailures = cases.filter(row => row.classification === 'FAIL' && ['P0', 'P1'].includes(row.severity)
       && (!previousCritical.has(row.id) || priorResolved.has(row.id)));
     const missingTargets = [...targetIds].filter(id => !cases.some(row => row.id === id));
-    const comparison = { phase: 'CONV-HARDENING-P3C.3', evaluatedCommit: report.evaluatedCommit,
+    const comparison = { phase, evaluatedCommit: report.evaluatedCommit,
       evaluationBasis: { kind: 'working_tree_before_commit', headBeforeCommit: report.evaluatedCommit,
         implementationFiles: ['backend/src/agents/intentRouting.js', 'backend/test/conversationalP3C3.test.js',
-          'backend/scripts/audit-conversation-p3b.js', 'backend/test/run.js'] },
-      baseline: 'CONV-HARDENING-P3C.2.json', methodology: report.methodology,
+          'backend/scripts/audit-conversation-p3b.js', 'backend/test/run.js',
+          ...(visibleNamePhase ? ['backend/src/agents/orchestrator.js', 'backend/test/visibleProductContinuations.test.js'] : [])] },
+      baseline: baselineFile, methodology: report.methodology,
       coverage: report.coverage, counts, severity, targetIds: [...targetIds],
       targetBaseline: [...targetIds].map(id => ({ id, classification: baselineById.get(id)?.classification || 'MISSING',
         severity: baselineById.get(id)?.severity || null })),
       affectedCases, missingTargets, newCriticalFailures, cases };
     const comparisonHeader = JSON.stringify({ ...comparison, cases: undefined }, null, 2);
     const comparisonText = `${comparisonHeader.slice(0, -2)},\n  "cases": [\n    ${cases.map(row => JSON.stringify(row)).join(',\n    ')}\n  ]\n}\n`;
-    fs.writeFileSync(path.join(root, 'docs', 'CONV-HARDENING-P3C.3.json'), comparisonText, 'utf8');
+    fs.writeFileSync(path.join(root, 'docs', `${phase}.json`), comparisonText, 'utf8');
     console.log(JSON.stringify({ coverage: report.coverage, affected: affectedCases.length,
       affectedPassed: affectedCases.filter(row => row.classification === 'PASS').length,
       missingTargets: missingTargets.length, counts, severity, newCriticalFailures: newCriticalFailures.length }));

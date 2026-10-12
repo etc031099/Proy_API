@@ -13,6 +13,7 @@ const { normalizeSupplier, resolveSupplier } = require('./replenishmentPlanning'
 const { SUPPLIER_SELECTION_TTL_MS, contextBinding } = require('./memory');
 const { resolveProductListFollowup } = require('./productListFollowups');
 const { ordinalSelection } = require('./ordinalSelection');
+const { normalizeProductMatchText, numbersCompatible } = require('../utils/entityIdentity');
 const { money: currencyMoney } = require('../utils/assistantFormatting');
 
 const supplierSelection = (message, state, now) => {
@@ -74,7 +75,7 @@ const supplierSelection = (message, state, now) => {
 
 const productCandidateSelection = (message, state) => {
   const selection = state.lastProductSelection;
-  if (selection?.sourceIntent !== 'search_product' || selection.items?.length < 2) return null;
+  if (selection?.sourceIntent !== 'search_product' || !selection.items?.length) return null;
   // New queries bypass the old candidate list; bare SKU clicks still resume it.
   if (explicitProductDetailQuery(message) || (canonicalProductSku(message)
     && !/^(?:sku\s+)?M5-[A-Z]+_\d+_\d+$/i.test(message.trim()))) return null;
@@ -83,12 +84,15 @@ const productCandidateSelection = (message, state) => {
   if (ordinal.matched && ordinal.index === null) return { invalid: true };
   const number = /^(?:opcion\s+)?([1-5])$/.exec(text);
   const sku = /^(?:sku\s+)?(M5-[A-Z]+_\d+_\d+)$/i.exec(message.trim())?.[1];
+  const nameKey = normalizeProductMatchText(message);
+  const matchesName = item => normalizeProductMatchText(item.name || item.label) === nameKey;
+  const bareAlias = /^(?:food|item)\s+\d+(?:\s+(?:item\s+)?\d+)?$/.test(nameKey);
+  const aliasMatches = bareAlias ? selection.items.filter(item => numbersCompatible(message, item, { product: true })
+    && (!nameKey.startsWith('food ') || /^M5-FOODS_/i.test(item.sku))) : [];
   let index = ordinal.matched ? (ordinal.index === -1 ? selection.items.length - 1 : ordinal.index) : number ? Number(number[1]) - 1 : -1;
   const candidate = sku ? selection.items.find(item => item.sku?.toLowerCase() === sku.toLowerCase())
-    : index >= 0 ? selection.items[index] : selection.items.find(item => item.name?.normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '').toLowerCase().trim() === text);
-  const selectionLike = Boolean(ordinal.matched || number || sku || selection.items.some(item => item.name?.normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '').toLowerCase().trim() === text));
+    : index >= 0 ? selection.items[index] : selection.items.find(matchesName) || (aliasMatches.length === 1 ? aliasMatches[0] : null);
+  const selectionLike = Boolean(ordinal.matched || number || sku || bareAlias || selection.items.some(matchesName));
   if (candidate) return { plan: { intent: selection.continuationIntent || 'product_details',
     agent: selection.continuationIntent === 'demand_forecast' ? 'analyst' : 'operations',
     selector: selection.continuationIntent?.startsWith('inventory_alert_') || selection.continuationIntent === 'stock_alert_rules'

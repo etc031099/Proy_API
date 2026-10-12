@@ -125,8 +125,8 @@ const canonicalProductSku = message => message.match(/\bM5-[A-Z]+_\d+_\d+\b/i)?.
 // fragment. Resolve that exact catalog identity instead of searching the whole
 // display label as free text.
 const structuredProductDisplaySku = message => {
-  const match = normalize(message).match(/\b(foods|hobbies|household)_(\d+)\s*[·•]\s*(?:item)\s+(\d+)\b/i);
-  return match ? `M5-${match[1].toUpperCase()}_${match[2]}_${match[3].padStart(3, '0')}` : null;
+  const match = normalize(message).match(/\b(foods|hobbies|household)_(\d+)\s+(?:[·•]\s*)?item\s+(\d+)\b/i);
+  return match ? `M5-${match[1].toUpperCase()}_${match[2].replace(/^0+(?=\d)/, '')}_${match[3].replace(/^0+(?=\d)/, '').padStart(3, '0')}` : null;
 };
 const explicitProductDetailQuery = message => {
   const text = normalize(message).replace(/[¿?¡!]/g, '').trim();
@@ -458,11 +458,15 @@ const routeDeterministically = (message, memory = {}, now = new Date(), conversa
   }
   const explicitProductQuery = explicitProductDetailQuery(message);
   const structuredDisplaySku = structuredProductDisplaySku(message);
+  const standaloneSku = /^(?:sku\s+)?M5-[A-Z]+_\d+_\d+$/i.test(message.trim()) ? canonicalProductSku(message) : null;
+  const bareDisplayName = /^(?:[\p{L}]+\s+)*m5\s+(?:foods|hobbies|household)_\d+\s+item\s+\d+$/u
+    .test(alertText.replace(/[·•]/g, ' ').replace(/\s+/g, ' ').trim());
   const asksBasicProductDetail = /\b(?:stock|precio|minimo|activo|estado)\b/.test(alertText)
     && /\b(?:cuanto|cuanta|cual|dime|muestrame|esta|tiene)\b/.test(alertText)
     && !/\b(?:reponer|reposicion|proveedor|oferta|compra|costo)\b/.test(alertText);
-  if (structuredDisplaySku && asksBasicProductDetail) return { intent: 'product_details', agent: 'operations',
+  if (structuredDisplaySku && (asksBasicProductDetail || bareDisplayName)) return { intent: 'product_details', agent: 'operations',
     selector: { sku: structuredDisplaySku }, limit: 1 };
+  if (standaloneSku) return { intent: 'product_details', agent: 'operations', selector: { sku: standaloneSku }, limit: 1 };
   const specificForecast = require('./forecastRouting').routeForecastProductQuery(message, memory);
   if (specificForecast) return specificForecast;
   if (explicitProductQuery) return { intent: /prediccion|forecast/.test(normalize(message)) ? 'demand_forecast' : 'product_details',
