@@ -412,6 +412,8 @@ const routeDeterministically = (message, memory = {}, now = new Date(), conversa
       ...(productRef ? { productRef } : {}) };
   }
   const explicitProductQuery = explicitProductDetailQuery(message);
+  const specificForecast = require('./forecastRouting').routeForecastProductQuery(message, memory);
+  if (specificForecast) return specificForecast;
   if (explicitProductQuery) return { intent: /prediccion|forecast/.test(normalize(message)) ? 'demand_forecast' : 'product_details',
     agent: /prediccion|forecast/.test(normalize(message)) ? 'analyst' : 'operations', lookupQuery: explicitProductQuery, limit: 1,
     explicitEntity: true };
@@ -476,6 +478,10 @@ const routeDeterministically = (message, memory = {}, now = new Date(), conversa
   if (explicitProductSku && asksBasicProductDetail) return { intent: 'product_details', agent: 'operations',
     selector: { sku: explicitProductSku }, limit: 1 };
   const inventoryText = normalizeBasicInventory(message);
+  if (/\b(?:forecast|prediccion|demanda|ready|modelo historico)\b/.test(text)) {
+    const analytics = require('./forecastRouting').routeForecastAnalytics(message, memory, now, businessId);
+    if (analytics) return analytics;
+  }
   // Specific inventory questions must win before the broad generic product fallback.
   if (isLowStockQuery(inventoryText)) return { intent: 'low_stock', agent: 'operations', limit: 5 };
   if (isProductCountQuery(inventoryText)) return { intent: 'business_summary', agent: 'analyst', inventoryOnly: true,

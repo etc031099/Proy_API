@@ -1,6 +1,10 @@
 const { compactAnalyticsContext } = require('./forecastAnalytics');
 const scenarios = require('../config/mlScenarios.json');
 const normalize = value => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const futurePeriod = '(?:proximo mes|el mes que viene|mes que viene|mes siguiente|(?:la )?proxima semana|(?:la )?semana que viene|en \\d+ dias?|en un mes|dentro de \\d+ dias?)';
+const forecastTerms = /\b(?:forecast|prediccion|pronostico|predij\w*|demanda|que pasara)\b/;
+const productReference = message => message.match(/\bM5-[A-Z]+_\d+_\d+\b/i)?.[0]
+  || message.match(/\b(?:foods?|fods|fooods|[ií]tem|itme)\s+(?:\d+\s+)?\d+\b/i)?.[0];
 const parseRequestedDate = text => {
   const iso = text.match(/\b(20\d{2})-(\d{2})-(\d{2})\b/);
   if (iso) {
@@ -26,21 +30,23 @@ const dateLabel = value => new Intl.DateTimeFormat('es-PE', { day: 'numeric', mo
 // Classify date-only references; entity resolvers must never search these words.
 const isTemporalOnlyReference = value => {
   const text = normalize(value).replace(/[¿?¡!.]/g, '').trim();
-  return /^(?:(?:de|del|para|el|la)\s+)*(?:ayer|anteayer|hoy|manana|pasado manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|(?:esta|este|proxima|proximo|pasada|pasado)\s+(?:semana|mes|ano)|ultim[oa]s?\s+(?:\d+|siete|treinta)\s+dias(?:\s+hasta hoy)?)$/.test(text)
+  return new RegExp(`^(?:(?:de|del|para|el|la)\\s+)*${futurePeriod}$`).test(text)
+    || /^(?:(?:de|del|para|el|la)\s+)*(?:ayer|anteayer|hoy|manana|pasado manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|(?:esta|este|proxima|proximo|pasada|pasado)\s+(?:semana|mes|ano)|ultim[oa]s?\s+(?:\d+|siete|treinta)\s+dias(?:\s+hasta hoy)?)$/.test(text)
     || /^(?:20\d{2}-\d{2}-\d{2}|\d{1,2}\s+de\s+(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)(?:\s+de\s+20\d{2})?)$/.test(text)
     || /^\d{1,2}[/-]\d{1,2}[/-]20\d{2}$/.test(text);
 };
 const routeForecastTemporalQuery = (message, memory, now, businessId) => {
   const text = normalize(message);
-  const forecastQuestion = /\b(?:forecast|prediccion|predij\w*|demanda|que pasara)\b/.test(text);
+  const forecastQuestion = forecastTerms.test(text);
   const futureSalesQuestion = /\b(?:vendere|venderas|vendera|venderemos|venderan)\b/.test(text);
   const requestedPastDay = /\b(ayer|anteayer)\b/.exec(text)?.[1];
   const tomorrow = /mañana|man\u0303ana|manana/i.test(message);
   const dayAfterTomorrow = /pasado\s+(?:mañana|man\u0303ana|manana)/i.test(message);
-  const relativeFuture = tomorrow || dayAfterTomorrow
-    || /\b(?:hoy|actual|actualmente|esta semana|la semana que viene|proxima semana|la proxima semana|el lunes que viene|dentro de \d+ dias?)\b/.test(text);
+  const futureMatch = text.match(new RegExp(`\\b${futurePeriod}\\b`));
+  const relativeFuture = tomorrow || dayAfterTomorrow || futureMatch
+    || /\b(?:hoy|actual|actualmente|vigente|esta semana|el lunes que viene)\b/.test(text);
   const forecastFollowup = relativeFuture
-    && ['demand_forecast', 'ml_analytics', 'forecast_risk_explanation'].includes(memory.lastIntent)
+    && ['demand_forecast', 'ml_analytics', 'forecast_risk_explanation', 'ml_historical_clarification', 'ml_daily_granularity_clarification'].includes(memory.lastIntent)
     && isTemporalOnlyReference(text.replace(/^[¿?\s]*y\s+/, ''));
   const requestedDate = parseRequestedDate(text);
   if (forecastQuestion && /\b(?:20\d{2}-\d{2}-\d{2}|\d{1,2}\s+de\s+[a-z]+\s+de\s+20\d{2})\b/.test(text) && !requestedDate)
@@ -48,7 +54,7 @@ const routeForecastTemporalQuery = (message, memory, now, businessId) => {
       clarificationQuestion: 'No pude validar esa fecha. Indica una fecha completa válida; el forecast disponible es un replay histórico agregado.' };
   if (forecastQuestion && requestedPastDay) {
     const requestedPastDate = addDays(now.toISOString().slice(0, 10), requestedPastDay === 'anteayer' ? -2 : -1);
-    const product = message.match(/\bM5-[A-Z]+_\d+_\d+\b/i)?.[0]
+    const product = productReference(message)
       || memory.selectedProductReference?.sku || memory.lastEntity?.sku;
     if (!product) return { intent: 'ml_daily_granularity_clarification', agent: 'coordinator',
       clarificationQuestion: `¿De qué producto deseas consultar la predicción de ${requestedPastDay} (${dateLabel(requestedPastDate)})?`,
@@ -84,11 +90,11 @@ const routeForecastTemporalQuery = (message, memory, now, businessId) => {
     const anchor = scenario?.anchorOperationalDate;
     const target = requestedDate ? dateLabel(requestedDate)
       : dayAfterTomorrow ? 'pasado mañana' : tomorrow ? 'mañana'
-        : /actual/.test(text) ? 'actualmente'
+        : futureMatch ? futureMatch[0] : /actual|vigente/.test(text) ? 'actualmente'
         : /hoy/.test(text) ? 'hoy' : /proxima semana|semana que viene/.test(text) ? 'la próxima semana'
           : /esta semana/.test(text) ? 'esta semana' : /lunes que viene/.test(text) ? 'el lunes que viene'
             : (text.match(/dentro de \d+ dias?/) || ['un periodo futuro'])[0];
-    const product = message.match(/\bM5-[A-Z]+_\d+_\d+\b/i)?.[0] || memory.selectedProductReference?.sku || memory.lastEntity?.sku;
+    const product = productReference(message) || memory.selectedProductReference?.sku || memory.lastEntity?.sku;
     return { intent: 'ml_historical_clarification', agent: 'coordinator',
       clarificationQuestion: `No tengo una predicción válida para ${target}${product ? ` para ${product}` : ''} en la fecha operativa actual. El forecast disponible corresponde a un replay histórico${anchor ? ` con fecha de referencia ${dateLabel(anchor)}` : ''}, no a una predicción vigente. Puedo mostrarte ese forecast histórico agregado de 7 días, pero no sería correcto presentarlo como una predicción actual.` };
   }
@@ -96,6 +102,33 @@ const routeForecastTemporalQuery = (message, memory, now, businessId) => {
     && /\b(?:escenario|replay|historico)\b/.test(text);
   if (requestedDate && forecastQuestion && !historicalAnchorReference) return { intent: 'ml_daily_granularity_clarification', agent: 'coordinator',
     clarificationQuestion: `El modelo disponible ofrece un forecast histórico agregado de 7 días, no una predicción diaria para el ${dateLabel(requestedDate)}.` };
+  return null;
+};
+// Product references must be resolved before a generic forecast can select batch.
+const routeForecastProductQuery = (message, memory = {}) => {
+  const text = normalize(message).replace(/[¿?!.]/g, '').trim();
+  const contextual = /^(?:y\s+)?(?:para\s+)?(?:ese|este|el mismo) producto$/.test(text)
+    && ['demand_forecast', 'ml_analytics'].includes(memory.lastIntent);
+  if (!forecastTerms.test(text) && !contextual) return null;
+  const explicit = productReference(message);
+  if (!explicit && /\b(?:general|todos los productos)\b/.test(text) && !/resum|total|agregad/.test(text))
+    return { intent: 'demand_forecast', agent: 'analyst', limit: 5 };
+  if (/\b(?:compara|comparar|top|mayor|mas|resumen|resume|total|agregad\w*|todos)\b/.test(text)
+    || !explicit && /\bgeneral\b/.test(text)
+    || /\b(?:costo|cuesta|proveedor|reposicion|reponer|riesgo|confianza)\b/.test(text)) return null;
+  if (explicit?.toUpperCase().startsWith('M5-')) return { intent: 'demand_forecast', agent: 'analyst', selector: { sku: explicit }, limit: 1 };
+  const target = explicit || text.match(/(?:forecast|prediccion|pronostico|demanda)(?:\s+(?:prevista|historico))?\s+(?:de|del|para)\s+(?:el\s+)?(?:producto\s+)?(.+)$/)?.[1];
+  const selected = memory.selectedProductReference || memory.lastEntity;
+  const selectedPlan = selected ? { intent: 'demand_forecast', agent: 'analyst',
+    selector: selected.id ? { productId: selected.id } : { sku: selected.sku }, limit: 1,
+    contextProvenance: { sourceType: 'conversation_context', entityType: 'product', label: `Producto ${selected.sku || selected.label || 'seleccionado'} resuelto desde el contexto conversacional.` } } : null;
+  if (contextual || target && /^(?:ese|este|el mismo) producto$/.test(target)) return selected
+    ? selectedPlan
+    : { intent: 'ambiguous_query', agent: 'coordinator', clarificationQuestion: '¿De qué producto deseas consultar el forecast histórico? Indica su SKU.' };
+  if (target && !isTemporalOnlyReference(target)) return { intent: 'demand_forecast', agent: 'analyst', lookupQuery: target, explicitEntity: true, limit: 1 };
+  if (/\b(?:ese|este|su)\b/.test(text) && !selected) return null;
+  if (selected && /^(?:y\s+)?(?:(?:cual es|muestrame)\s+)?(?:su |la |el )?(?:prediccion|forecast|pronostico|demanda)(?: historico)?$/.test(text))
+    return selectedPlan;
   return null;
 };
 const routeForecastAnalytics = (message, memory, now = new Date(), businessId) => {
@@ -134,10 +167,10 @@ const routeForecastAnalytics = (message, memory, now = new Date(), businessId) =
   let mode;
   if (/sin (prediccion|forecast)|no tienen prediccion|fallo el ml|no ready/.test(text)) mode = 'not_ready';
   else if (/(mas|mayor) demanda.*stock|demanda.*(mas.*stock|supera.*(inventario|stock)|mayor.*stock)|no alcanza el stock/.test(text)) mode = 'exceeding_stock';
-  else if (/resum.*(forecast|prediccion|reposicion|ml)|inventario.*segun.*ml/.test(text)) mode = 'summary';
+  else if (/resum.*(forecast|prediccion|reposicion|ml|demanda|modelo historico)|inventario.*segun.*ml|demanda.*(?:total|agregada)|cuantos.*(?:prediccion|ready)|cuantos.*(?:ok|vigilar|reponer).*forecast/.test(text)) mode = 'summary';
   else if (/mayor (demanda|prediccion)|top.*demanda/.test(text)
     || (department || category) && /demanda|prediccion|top|forecast/.test(text)) mode = 'top';
   if (!mode) return null;
   return make({ mode, ...(department ? { department } : {}), ...(category ? { category } : {}) });
 };
-module.exports = { routeForecastAnalytics, routeForecastTemporalQuery, parseRequestedDate, isTemporalOnlyReference };
+module.exports = { routeForecastAnalytics, routeForecastTemporalQuery, routeForecastProductQuery, parseRequestedDate, isTemporalOnlyReference };

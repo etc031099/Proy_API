@@ -1,0 +1,2338 @@
+{
+  "phase": "CONV-HARDENING-P3C.1",
+  "evaluatedCommit": "6c74b1bff8ce6fb66b01c6cf3aba923adcf17571",
+  "baseline": "CONV-AUDIT-P3B.json",
+  "methodology": {
+    "noNetwork": true,
+    "realProductionRoutingAndOrchestrator": true,
+    "mockDatabase": true,
+    "mockWriteService": true,
+    "paidLlmCalls": 0,
+    "noDatabaseWrites": true,
+    "realSynthesisQuality": "NEEDS_MANUAL",
+    "limitations": [
+      "In-memory driver fixtures do not prove production aggregation results or Mongo transactions/indexes.",
+      "Action gateway read delegation uses a simple mock; its provider metrics are not measured on unknown write phrases.",
+      "UI layout and Telegram/dispatcher delivery are not exercised; existing production suites provide regression coverage."
+    ]
+  },
+  "counts": {
+    "PASS": 628,
+    "FAIL": 145,
+    "PARTIAL": 12,
+    "NOT_SUPPORTED": 28,
+    "NEEDS_MANUAL": 14
+  },
+  "severity": {
+    "P0": 0,
+    "P1": 15,
+    "P2": 129,
+    "P3": 1
+  },
+  "affectedCases": [
+    {
+      "id": "U-0242",
+      "family": "forecast_historical",
+      "area": "forecast",
+      "input": "demanda prevista de food 2 96",
+      "expected": {
+        "level": "route",
+        "intents": [
+          "demand_forecast"
+        ],
+        "deterministic": true
+      },
+      "actual": {
+        "level": "orchestrator_mock_db",
+        "plan": {
+          "intent": "demand_forecast",
+          "agent": "analyst",
+          "lookupQuery": "food 2 96",
+          "explicitEntity": true,
+          "limit": 1
+        },
+        "intent": "demand_forecast",
+        "answer": "Esta es la demanda estimada para el horizonte histórico agregado de 7 días del escenario consultado:\n• Alimentos M5 · FOODS_2 · Ítem 096 (M5-FOODS_2_096): el modelo estimó 10 unidades en el horizonte histórico agregado de 7 días. En la fecha de referencia había 12 unidades disponibles y se habían vendido 3 en los 7 días anteriores. Considerando 5 unidades de stock de seguridad, se recomienda reponer 3 unidades.\nEstas estimaciones y recomendaciones corresponden al escenario histórico con fecha de referencia 17 de mayo de 2026.",
+        "clarification": false,
+        "code": null,
+        "skills": [
+          "search_products",
+          "get_demand_forecast"
+        ],
+        "llmCalls": 0,
+        "tokens": 0,
+        "participants": [
+          {
+            "agentId": "coordinator",
+            "llmCalls": 0,
+            "skillCalls": 0
+          },
+          {
+            "agentId": "operations",
+            "llmCalls": 0,
+            "skillCalls": 1
+          },
+          {
+            "agentId": "analyst",
+            "llmCalls": 0,
+            "skillCalls": 1
+          }
+        ],
+        "evidence": [
+          {
+            "skillId": "search_products",
+            "label": "Busca productos activos por texto.",
+            "recordCount": 1
+          },
+          {
+            "skillId": "get_demand_forecast",
+            "label": "Consulta el forecast histórico existente sin modificarlo.",
+            "recordCount": 1
+          }
+        ],
+        "suggestions": [],
+        "pagination": null,
+        "pending": null,
+        "physicalMockProviderAttempts": 0,
+        "databaseFilters": [
+          {
+            "model": "Product",
+            "pipeline": [
+              {
+                "$match": {
+                  "businessId": "A",
+                  "isActive": true,
+                  "$or": [
+                    {
+                      "name": {
+                        "pattern": "food 2 96",
+                        "flags": "i"
+                      }
+                    },
+                    {
+                      "sku": {
+                        "pattern": "food 2 96",
+                        "flags": "i"
+                      }
+                    }
+                  ],
+                  "$and": [
+                    {
+                      "$or": [
+                        {
+                          "name": {
+                            "pattern": "(?:^|[^0-9])0*2(?=$|[^0-9])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "(?:^|[^0-9])0*2(?=$|[^0-9])",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "$or": [
+                        {
+                          "name": {
+                            "pattern": "(?:^|[^0-9])0*96(?=$|[^0-9])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "(?:^|[^0-9])0*96(?=$|[^0-9])",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "$or": [
+                        {
+                          "name": {
+                            "pattern": "(?:^|[^a-z0-9])foods?[^a-z0-9]+0*2[^a-z0-9]+(?:[ií]tem[^a-z0-9]+)?0*96(?=$|[^0-9])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "(?:^|[^a-z0-9])foods?[^a-z0-9]+0*2[^a-z0-9]+(?:[ií]tem[^a-z0-9]+)?0*96(?=$|[^0-9])",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "$facet": {
+                  "data": [
+                    {
+                      "$sort": {
+                        "name": 1,
+                        "_id": 1
+                      }
+                    },
+                    {
+                      "$limit": 5
+                    },
+                    {
+                      "$project": {
+                        "_id": 1,
+                        "sku": 1,
+                        "name": 1,
+                        "category": 1,
+                        "stock": 1,
+                        "minStockLevel": 1
+                      }
+                    }
+                  ],
+                  "count": [
+                    {
+                      "$count": "total"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "model": "Product",
+            "pipeline": [
+              {
+                "$match": {
+                  "businessId": "A",
+                  "isActive": true,
+                  "$and": [
+                    {
+                      "$or": [
+                        {
+                          "name": {
+                            "pattern": "(?:^|[^a-z0-9áéíóúñ])f[oóòöô][oóòöô]ds?(?=$|[^a-z0-9áéíóúñ])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "(?:^|[^a-z0-9áéíóúñ])f[oóòöô][oóòöô]ds?(?=$|[^a-z0-9áéíóúñ])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "category": {
+                            "pattern": "(?:^|[^a-z0-9áéíóúñ])f[oóòöô][oóòöô]ds?(?=$|[^a-z0-9áéíóúñ])",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "$or": [
+                        {
+                          "name": {
+                            "pattern": "(?:^|[^a-z0-9áéíóúñ])0*2(?=$|[^a-z0-9áéíóúñ])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "(?:^|[^a-z0-9áéíóúñ])0*2(?=$|[^a-z0-9áéíóúñ])",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "$or": [
+                        {
+                          "name": {
+                            "pattern": "(?:^|[^a-z0-9áéíóúñ])0*96(?=$|[^a-z0-9áéíóúñ])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "(?:^|[^a-z0-9áéíóúñ])0*96(?=$|[^a-z0-9áéíóúñ])",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "$or": [
+                        {
+                          "name": {
+                            "pattern": "(?:^|[^0-9])0*2(?=$|[^0-9])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "(?:^|[^0-9])0*2(?=$|[^0-9])",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "$or": [
+                        {
+                          "name": {
+                            "pattern": "(?:^|[^0-9])0*96(?=$|[^0-9])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "(?:^|[^0-9])0*96(?=$|[^0-9])",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "$or": [
+                        {
+                          "name": {
+                            "pattern": "(?:^|[^a-z0-9])foods?[^a-z0-9]+0*2[^a-z0-9]+(?:[ií]tem[^a-z0-9]+)?0*96(?=$|[^0-9])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "(?:^|[^a-z0-9])foods?[^a-z0-9]+0*2[^a-z0-9]+(?:[ií]tem[^a-z0-9]+)?0*96(?=$|[^0-9])",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "$facet": {
+                  "data": [
+                    {
+                      "$sort": {
+                        "name": 1,
+                        "_id": 1
+                      }
+                    },
+                    {
+                      "$limit": 5
+                    },
+                    {
+                      "$project": {
+                        "_id": 1,
+                        "sku": 1,
+                        "name": 1,
+                        "category": 1,
+                        "stock": 1,
+                        "minStockLevel": 1
+                      }
+                    }
+                  ],
+                  "count": [
+                    {
+                      "$count": "total"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "trace": [
+          {
+            "type": "request_started",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "coordinator",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "coordinator",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "operations",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "skill_called",
+            "agentId": "operations",
+            "skillId": "search_products",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "skill_finished",
+            "agentId": "operations",
+            "skillId": "search_products",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "operations",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "analyst",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "skill_called",
+            "agentId": "analyst",
+            "skillId": "get_demand_forecast",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "skill_finished",
+            "agentId": "analyst",
+            "skillId": "get_demand_forecast",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "analyst",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "request_finished",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          }
+        ]
+      },
+      "classification": "PASS",
+      "severity": null,
+      "notes": ""
+    },
+    {
+      "id": "U-0243",
+      "family": "forecast_historical",
+      "area": "forecast",
+      "input": "muéstrame el forecast de item 96",
+      "expected": {
+        "level": "route",
+        "intents": [
+          "demand_forecast"
+        ],
+        "deterministic": true
+      },
+      "actual": {
+        "level": "orchestrator_mock_db",
+        "plan": {
+          "intent": "demand_forecast",
+          "agent": "analyst",
+          "lookupQuery": "item 96",
+          "explicitEntity": true,
+          "limit": 1
+        },
+        "intent": "demand_forecast",
+        "answer": "Esta es la demanda estimada para el horizonte histórico agregado de 7 días del escenario consultado:\n• Alimentos M5 · FOODS_2 · Ítem 096 (M5-FOODS_2_096): el modelo estimó 10 unidades en el horizonte histórico agregado de 7 días. En la fecha de referencia había 12 unidades disponibles y se habían vendido 3 en los 7 días anteriores. Considerando 5 unidades de stock de seguridad, se recomienda reponer 3 unidades.\nEstas estimaciones y recomendaciones corresponden al escenario histórico con fecha de referencia 17 de mayo de 2026.",
+        "clarification": false,
+        "code": null,
+        "skills": [
+          "search_products",
+          "get_demand_forecast"
+        ],
+        "llmCalls": 0,
+        "tokens": 0,
+        "participants": [
+          {
+            "agentId": "coordinator",
+            "llmCalls": 0,
+            "skillCalls": 0
+          },
+          {
+            "agentId": "operations",
+            "llmCalls": 0,
+            "skillCalls": 1
+          },
+          {
+            "agentId": "analyst",
+            "llmCalls": 0,
+            "skillCalls": 1
+          }
+        ],
+        "evidence": [
+          {
+            "skillId": "search_products",
+            "label": "Busca productos activos por texto.",
+            "recordCount": 1
+          },
+          {
+            "skillId": "get_demand_forecast",
+            "label": "Consulta el forecast histórico existente sin modificarlo.",
+            "recordCount": 1
+          }
+        ],
+        "suggestions": [],
+        "pagination": null,
+        "pending": null,
+        "physicalMockProviderAttempts": 0,
+        "databaseFilters": [
+          {
+            "model": "Product",
+            "pipeline": [
+              {
+                "$match": {
+                  "businessId": "A",
+                  "isActive": true,
+                  "$or": [
+                    {
+                      "name": {
+                        "pattern": "item 96",
+                        "flags": "i"
+                      }
+                    },
+                    {
+                      "sku": {
+                        "pattern": "item 96",
+                        "flags": "i"
+                      }
+                    }
+                  ],
+                  "$and": [
+                    {
+                      "$or": [
+                        {
+                          "name": {
+                            "pattern": "(?:^|[^0-9])0*96(?=$|[^0-9])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "(?:^|[^0-9])0*96(?=$|[^0-9])",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "$or": [
+                        {
+                          "sku": {
+                            "pattern": "^M5-[A-Z]+_\\d+_0*96$",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "^(?!M5-[A-Z]+_\\d+_)",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "$facet": {
+                  "data": [
+                    {
+                      "$sort": {
+                        "name": 1,
+                        "_id": 1
+                      }
+                    },
+                    {
+                      "$limit": 5
+                    },
+                    {
+                      "$project": {
+                        "_id": 1,
+                        "sku": 1,
+                        "name": 1,
+                        "category": 1,
+                        "stock": 1,
+                        "minStockLevel": 1
+                      }
+                    }
+                  ],
+                  "count": [
+                    {
+                      "$count": "total"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "model": "Product",
+            "pipeline": [
+              {
+                "$match": {
+                  "businessId": "A",
+                  "isActive": true,
+                  "$and": [
+                    {
+                      "$or": [
+                        {
+                          "name": {
+                            "pattern": "(?:^|[^a-z0-9áéíóúñ])[iíìïî]t[eéèëê]ms?(?=$|[^a-z0-9áéíóúñ])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "(?:^|[^a-z0-9áéíóúñ])[iíìïî]t[eéèëê]ms?(?=$|[^a-z0-9áéíóúñ])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "category": {
+                            "pattern": "(?:^|[^a-z0-9áéíóúñ])[iíìïî]t[eéèëê]ms?(?=$|[^a-z0-9áéíóúñ])",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "$or": [
+                        {
+                          "name": {
+                            "pattern": "(?:^|[^a-z0-9áéíóúñ])0*96(?=$|[^a-z0-9áéíóúñ])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "(?:^|[^a-z0-9áéíóúñ])0*96(?=$|[^a-z0-9áéíóúñ])",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "$or": [
+                        {
+                          "name": {
+                            "pattern": "(?:^|[^0-9])0*96(?=$|[^0-9])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "(?:^|[^0-9])0*96(?=$|[^0-9])",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "$or": [
+                        {
+                          "sku": {
+                            "pattern": "^M5-[A-Z]+_\\d+_0*96$",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "^(?!M5-[A-Z]+_\\d+_)",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "$facet": {
+                  "data": [
+                    {
+                      "$sort": {
+                        "name": 1,
+                        "_id": 1
+                      }
+                    },
+                    {
+                      "$limit": 5
+                    },
+                    {
+                      "$project": {
+                        "_id": 1,
+                        "sku": 1,
+                        "name": 1,
+                        "category": 1,
+                        "stock": 1,
+                        "minStockLevel": 1
+                      }
+                    }
+                  ],
+                  "count": [
+                    {
+                      "$count": "total"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "trace": [
+          {
+            "type": "request_started",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "coordinator",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "coordinator",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "operations",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "skill_called",
+            "agentId": "operations",
+            "skillId": "search_products",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "skill_finished",
+            "agentId": "operations",
+            "skillId": "search_products",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "operations",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "analyst",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "skill_called",
+            "agentId": "analyst",
+            "skillId": "get_demand_forecast",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "skill_finished",
+            "agentId": "analyst",
+            "skillId": "get_demand_forecast",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "analyst",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "request_finished",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          }
+        ]
+      },
+      "classification": "PASS",
+      "severity": null,
+      "notes": ""
+    },
+    {
+      "id": "U-0250",
+      "family": "forecast_historical",
+      "area": "forecast",
+      "input": "cuál era la demanda prevista de food 96",
+      "expected": {
+        "level": "route",
+        "intents": [
+          "demand_forecast"
+        ],
+        "deterministic": true
+      },
+      "actual": {
+        "level": "orchestrator_mock_db",
+        "plan": {
+          "intent": "demand_forecast",
+          "agent": "analyst",
+          "lookupQuery": "food 96",
+          "explicitEntity": true,
+          "limit": 1
+        },
+        "intent": "demand_forecast",
+        "answer": "Esta es la demanda estimada para el horizonte histórico agregado de 7 días del escenario consultado:\n• Alimentos M5 · FOODS_2 · Ítem 096 (M5-FOODS_2_096): el modelo estimó 10 unidades en el horizonte histórico agregado de 7 días. En la fecha de referencia había 12 unidades disponibles y se habían vendido 3 en los 7 días anteriores. Considerando 5 unidades de stock de seguridad, se recomienda reponer 3 unidades.\nEstas estimaciones y recomendaciones corresponden al escenario histórico con fecha de referencia 17 de mayo de 2026.",
+        "clarification": false,
+        "code": null,
+        "skills": [
+          "search_products",
+          "get_demand_forecast"
+        ],
+        "llmCalls": 0,
+        "tokens": 0,
+        "participants": [
+          {
+            "agentId": "coordinator",
+            "llmCalls": 0,
+            "skillCalls": 0
+          },
+          {
+            "agentId": "operations",
+            "llmCalls": 0,
+            "skillCalls": 1
+          },
+          {
+            "agentId": "analyst",
+            "llmCalls": 0,
+            "skillCalls": 1
+          }
+        ],
+        "evidence": [
+          {
+            "skillId": "search_products",
+            "label": "Busca productos activos por texto.",
+            "recordCount": 1
+          },
+          {
+            "skillId": "get_demand_forecast",
+            "label": "Consulta el forecast histórico existente sin modificarlo.",
+            "recordCount": 1
+          }
+        ],
+        "suggestions": [],
+        "pagination": null,
+        "pending": null,
+        "physicalMockProviderAttempts": 0,
+        "databaseFilters": [
+          {
+            "model": "Product",
+            "pipeline": [
+              {
+                "$match": {
+                  "businessId": "A",
+                  "isActive": true,
+                  "$or": [
+                    {
+                      "name": {
+                        "pattern": "food 96",
+                        "flags": "i"
+                      }
+                    },
+                    {
+                      "sku": {
+                        "pattern": "food 96",
+                        "flags": "i"
+                      }
+                    }
+                  ],
+                  "$and": [
+                    {
+                      "$or": [
+                        {
+                          "name": {
+                            "pattern": "(?:^|[^0-9])0*96(?=$|[^0-9])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "(?:^|[^0-9])0*96(?=$|[^0-9])",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "$or": [
+                        {
+                          "sku": {
+                            "pattern": "^M5-[A-Z]+_\\d+_0*96$",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "^(?!M5-[A-Z]+_\\d+_)",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "$facet": {
+                  "data": [
+                    {
+                      "$sort": {
+                        "name": 1,
+                        "_id": 1
+                      }
+                    },
+                    {
+                      "$limit": 5
+                    },
+                    {
+                      "$project": {
+                        "_id": 1,
+                        "sku": 1,
+                        "name": 1,
+                        "category": 1,
+                        "stock": 1,
+                        "minStockLevel": 1
+                      }
+                    }
+                  ],
+                  "count": [
+                    {
+                      "$count": "total"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "model": "Product",
+            "pipeline": [
+              {
+                "$match": {
+                  "businessId": "A",
+                  "isActive": true,
+                  "$and": [
+                    {
+                      "$or": [
+                        {
+                          "name": {
+                            "pattern": "(?:^|[^a-z0-9áéíóúñ])f[oóòöô][oóòöô]ds?(?=$|[^a-z0-9áéíóúñ])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "(?:^|[^a-z0-9áéíóúñ])f[oóòöô][oóòöô]ds?(?=$|[^a-z0-9áéíóúñ])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "category": {
+                            "pattern": "(?:^|[^a-z0-9áéíóúñ])f[oóòöô][oóòöô]ds?(?=$|[^a-z0-9áéíóúñ])",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "$or": [
+                        {
+                          "name": {
+                            "pattern": "(?:^|[^a-z0-9áéíóúñ])0*96(?=$|[^a-z0-9áéíóúñ])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "(?:^|[^a-z0-9áéíóúñ])0*96(?=$|[^a-z0-9áéíóúñ])",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "$or": [
+                        {
+                          "name": {
+                            "pattern": "(?:^|[^0-9])0*96(?=$|[^0-9])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "(?:^|[^0-9])0*96(?=$|[^0-9])",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "$or": [
+                        {
+                          "sku": {
+                            "pattern": "^M5-[A-Z]+_\\d+_0*96$",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "^(?!M5-[A-Z]+_\\d+_)",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "$facet": {
+                  "data": [
+                    {
+                      "$sort": {
+                        "name": 1,
+                        "_id": 1
+                      }
+                    },
+                    {
+                      "$limit": 5
+                    },
+                    {
+                      "$project": {
+                        "_id": 1,
+                        "sku": 1,
+                        "name": 1,
+                        "category": 1,
+                        "stock": 1,
+                        "minStockLevel": 1
+                      }
+                    }
+                  ],
+                  "count": [
+                    {
+                      "$count": "total"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "trace": [
+          {
+            "type": "request_started",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "coordinator",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "coordinator",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "operations",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "skill_called",
+            "agentId": "operations",
+            "skillId": "search_products",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "skill_finished",
+            "agentId": "operations",
+            "skillId": "search_products",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "operations",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "analyst",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "skill_called",
+            "agentId": "analyst",
+            "skillId": "get_demand_forecast",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "skill_finished",
+            "agentId": "analyst",
+            "skillId": "get_demand_forecast",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "analyst",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "request_finished",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          }
+        ]
+      },
+      "classification": "PASS",
+      "severity": null,
+      "notes": ""
+    },
+    {
+      "id": "U-0252",
+      "family": "forecast_historical",
+      "area": "forecast",
+      "input": "estimación de demanda food 96",
+      "expected": {
+        "level": "route",
+        "intents": [
+          "demand_forecast"
+        ],
+        "deterministic": true
+      },
+      "actual": {
+        "level": "orchestrator_mock_db",
+        "plan": {
+          "intent": "demand_forecast",
+          "agent": "analyst",
+          "lookupQuery": "food 96",
+          "explicitEntity": true,
+          "limit": 1
+        },
+        "intent": "demand_forecast",
+        "answer": "Esta es la demanda estimada para el horizonte histórico agregado de 7 días del escenario consultado:\n• Alimentos M5 · FOODS_2 · Ítem 096 (M5-FOODS_2_096): el modelo estimó 10 unidades en el horizonte histórico agregado de 7 días. En la fecha de referencia había 12 unidades disponibles y se habían vendido 3 en los 7 días anteriores. Considerando 5 unidades de stock de seguridad, se recomienda reponer 3 unidades.\nEstas estimaciones y recomendaciones corresponden al escenario histórico con fecha de referencia 17 de mayo de 2026.",
+        "clarification": false,
+        "code": null,
+        "skills": [
+          "search_products",
+          "get_demand_forecast"
+        ],
+        "llmCalls": 0,
+        "tokens": 0,
+        "participants": [
+          {
+            "agentId": "coordinator",
+            "llmCalls": 0,
+            "skillCalls": 0
+          },
+          {
+            "agentId": "operations",
+            "llmCalls": 0,
+            "skillCalls": 1
+          },
+          {
+            "agentId": "analyst",
+            "llmCalls": 0,
+            "skillCalls": 1
+          }
+        ],
+        "evidence": [
+          {
+            "skillId": "search_products",
+            "label": "Busca productos activos por texto.",
+            "recordCount": 1
+          },
+          {
+            "skillId": "get_demand_forecast",
+            "label": "Consulta el forecast histórico existente sin modificarlo.",
+            "recordCount": 1
+          }
+        ],
+        "suggestions": [],
+        "pagination": null,
+        "pending": null,
+        "physicalMockProviderAttempts": 0,
+        "databaseFilters": [
+          {
+            "model": "Product",
+            "pipeline": [
+              {
+                "$match": {
+                  "businessId": "A",
+                  "isActive": true,
+                  "$or": [
+                    {
+                      "name": {
+                        "pattern": "food 96",
+                        "flags": "i"
+                      }
+                    },
+                    {
+                      "sku": {
+                        "pattern": "food 96",
+                        "flags": "i"
+                      }
+                    }
+                  ],
+                  "$and": [
+                    {
+                      "$or": [
+                        {
+                          "name": {
+                            "pattern": "(?:^|[^0-9])0*96(?=$|[^0-9])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "(?:^|[^0-9])0*96(?=$|[^0-9])",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "$or": [
+                        {
+                          "sku": {
+                            "pattern": "^M5-[A-Z]+_\\d+_0*96$",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "^(?!M5-[A-Z]+_\\d+_)",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "$facet": {
+                  "data": [
+                    {
+                      "$sort": {
+                        "name": 1,
+                        "_id": 1
+                      }
+                    },
+                    {
+                      "$limit": 5
+                    },
+                    {
+                      "$project": {
+                        "_id": 1,
+                        "sku": 1,
+                        "name": 1,
+                        "category": 1,
+                        "stock": 1,
+                        "minStockLevel": 1
+                      }
+                    }
+                  ],
+                  "count": [
+                    {
+                      "$count": "total"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "model": "Product",
+            "pipeline": [
+              {
+                "$match": {
+                  "businessId": "A",
+                  "isActive": true,
+                  "$and": [
+                    {
+                      "$or": [
+                        {
+                          "name": {
+                            "pattern": "(?:^|[^a-z0-9áéíóúñ])f[oóòöô][oóòöô]ds?(?=$|[^a-z0-9áéíóúñ])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "(?:^|[^a-z0-9áéíóúñ])f[oóòöô][oóòöô]ds?(?=$|[^a-z0-9áéíóúñ])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "category": {
+                            "pattern": "(?:^|[^a-z0-9áéíóúñ])f[oóòöô][oóòöô]ds?(?=$|[^a-z0-9áéíóúñ])",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "$or": [
+                        {
+                          "name": {
+                            "pattern": "(?:^|[^a-z0-9áéíóúñ])0*96(?=$|[^a-z0-9áéíóúñ])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "(?:^|[^a-z0-9áéíóúñ])0*96(?=$|[^a-z0-9áéíóúñ])",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "$or": [
+                        {
+                          "name": {
+                            "pattern": "(?:^|[^0-9])0*96(?=$|[^0-9])",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "(?:^|[^0-9])0*96(?=$|[^0-9])",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "$or": [
+                        {
+                          "sku": {
+                            "pattern": "^M5-[A-Z]+_\\d+_0*96$",
+                            "flags": "i"
+                          }
+                        },
+                        {
+                          "sku": {
+                            "pattern": "^(?!M5-[A-Z]+_\\d+_)",
+                            "flags": "i"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "$facet": {
+                  "data": [
+                    {
+                      "$sort": {
+                        "name": 1,
+                        "_id": 1
+                      }
+                    },
+                    {
+                      "$limit": 5
+                    },
+                    {
+                      "$project": {
+                        "_id": 1,
+                        "sku": 1,
+                        "name": 1,
+                        "category": 1,
+                        "stock": 1,
+                        "minStockLevel": 1
+                      }
+                    }
+                  ],
+                  "count": [
+                    {
+                      "$count": "total"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "trace": [
+          {
+            "type": "request_started",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "coordinator",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "coordinator",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "operations",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "skill_called",
+            "agentId": "operations",
+            "skillId": "search_products",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "skill_finished",
+            "agentId": "operations",
+            "skillId": "search_products",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "operations",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "analyst",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "skill_called",
+            "agentId": "analyst",
+            "skillId": "get_demand_forecast",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "skill_finished",
+            "agentId": "analyst",
+            "skillId": "get_demand_forecast",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "analyst",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "request_finished",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          }
+        ]
+      },
+      "classification": "PASS",
+      "severity": null,
+      "notes": ""
+    },
+    {
+      "id": "U-0262",
+      "family": "forecast_temporal_guard",
+      "area": "forecast",
+      "input": "predicción del próximo mes de food 96",
+      "expected": {
+        "level": "route",
+        "intents": [
+          "forecast_temporal_limitation",
+          "clarification"
+        ],
+        "deterministic": true,
+        "temporal": true
+      },
+      "actual": {
+        "level": "orchestrator_mock_db",
+        "plan": {
+          "intent": "ml_historical_clarification",
+          "agent": "coordinator",
+          "clarificationQuestion": "No tengo una predicción válida para proximo mes para food 96 en la fecha operativa actual. El forecast disponible corresponde a un replay histórico, no a una predicción vigente. Puedo mostrarte ese forecast histórico agregado de 7 días, pero no sería correcto presentarlo como una predicción actual."
+        },
+        "intent": "ml_historical_clarification",
+        "answer": "No tengo una predicción válida para proximo mes para food 96 en la fecha operativa actual. El forecast disponible corresponde a un replay histórico, no a una predicción vigente. Puedo mostrarte ese forecast histórico agregado de 7 días, pero no sería correcto presentarlo como una predicción actual.",
+        "clarification": true,
+        "code": "AGENT_CLARIFICATION_REQUIRED",
+        "skills": [],
+        "llmCalls": 0,
+        "tokens": 0,
+        "participants": [
+          {
+            "agentId": "coordinator",
+            "llmCalls": 0,
+            "skillCalls": 0
+          }
+        ],
+        "evidence": [],
+        "suggestions": [],
+        "pagination": null,
+        "pending": null,
+        "physicalMockProviderAttempts": 0,
+        "databaseFilters": [],
+        "trace": [
+          {
+            "type": "request_started",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "coordinator",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "coordinator",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "error",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "request_finished",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          }
+        ]
+      },
+      "classification": "PASS",
+      "severity": null,
+      "notes": ""
+    },
+    {
+      "id": "U-0282",
+      "family": "forecast_summary_compare",
+      "area": "forecast",
+      "input": "resumen de la demanda prevista",
+      "expected": {
+        "level": "route",
+        "intents": [
+          "forecast_analytics"
+        ],
+        "deterministic": true
+      },
+      "actual": {
+        "level": "orchestrator_mock_db",
+        "plan": {
+          "intent": "ml_analytics",
+          "agent": "analyst",
+          "limit": 5,
+          "analyticsArgs": {
+            "limit": 5,
+            "offset": 0,
+            "mode": "summary"
+          }
+        },
+        "intent": "ml_analytics",
+        "answer": "Para el escenario histórico con fecha de corte 17 de mayo de 2026, horizonte 7 días:\n6 productos; 6 READY; 0 sin predicción.\nOK: 0; VIGILAR: 0; REPONER: 6.\nStock al corte: 46. Demanda prevista: 134.13. Reposición recomendada: 114. Los totales de predicción y reposición incluyen solo productos READY.",
+        "clarification": false,
+        "code": null,
+        "skills": [
+          "analyze_demand_forecast"
+        ],
+        "llmCalls": 0,
+        "tokens": 0,
+        "participants": [
+          {
+            "agentId": "coordinator",
+            "llmCalls": 0,
+            "skillCalls": 0
+          },
+          {
+            "agentId": "analyst",
+            "llmCalls": 0,
+            "skillCalls": 1
+          }
+        ],
+        "evidence": [
+          {
+            "skillId": "analyze_demand_forecast",
+            "label": "Forecast histórico · escenario del tenant · 2026-05-17 · summary",
+            "recordCount": 1
+          }
+        ],
+        "suggestions": [],
+        "pagination": null,
+        "pending": null,
+        "physicalMockProviderAttempts": 0,
+        "databaseFilters": [],
+        "trace": [
+          {
+            "type": "request_started",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "coordinator",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "coordinator",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "analyst",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "skill_called",
+            "agentId": "analyst",
+            "skillId": "analyze_demand_forecast",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "skill_finished",
+            "agentId": "analyst",
+            "skillId": "analyze_demand_forecast",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "analyst",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "request_finished",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          }
+        ]
+      },
+      "classification": "PASS",
+      "severity": null,
+      "notes": ""
+    },
+    {
+      "id": "U-0283",
+      "family": "forecast_summary_compare",
+      "area": "forecast",
+      "input": "cuántos productos tienen predicción",
+      "expected": {
+        "level": "route",
+        "intents": [
+          "forecast_analytics"
+        ],
+        "deterministic": true
+      },
+      "actual": {
+        "level": "orchestrator_mock_db",
+        "plan": {
+          "intent": "ml_analytics",
+          "agent": "analyst",
+          "limit": 5,
+          "analyticsArgs": {
+            "limit": 5,
+            "offset": 0,
+            "mode": "summary"
+          }
+        },
+        "intent": "ml_analytics",
+        "answer": "Para el escenario histórico con fecha de corte 17 de mayo de 2026, horizonte 7 días:\n6 productos; 6 READY; 0 sin predicción.\nOK: 0; VIGILAR: 0; REPONER: 6.\nStock al corte: 46. Demanda prevista: 134.13. Reposición recomendada: 114. Los totales de predicción y reposición incluyen solo productos READY.",
+        "clarification": false,
+        "code": null,
+        "skills": [
+          "analyze_demand_forecast"
+        ],
+        "llmCalls": 0,
+        "tokens": 0,
+        "participants": [
+          {
+            "agentId": "coordinator",
+            "llmCalls": 0,
+            "skillCalls": 0
+          },
+          {
+            "agentId": "analyst",
+            "llmCalls": 0,
+            "skillCalls": 1
+          }
+        ],
+        "evidence": [
+          {
+            "skillId": "analyze_demand_forecast",
+            "label": "Forecast histórico · escenario del tenant · 2026-05-17 · summary",
+            "recordCount": 1
+          }
+        ],
+        "suggestions": [],
+        "pagination": null,
+        "pending": null,
+        "physicalMockProviderAttempts": 0,
+        "databaseFilters": [],
+        "trace": [
+          {
+            "type": "request_started",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "coordinator",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "coordinator",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "analyst",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "skill_called",
+            "agentId": "analyst",
+            "skillId": "analyze_demand_forecast",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "skill_finished",
+            "agentId": "analyst",
+            "skillId": "analyze_demand_forecast",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "analyst",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "request_finished",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          }
+        ]
+      },
+      "classification": "PASS",
+      "severity": null,
+      "notes": ""
+    },
+    {
+      "id": "U-0285",
+      "family": "forecast_summary_compare",
+      "area": "forecast",
+      "input": "cuántos están OK según forecast",
+      "expected": {
+        "level": "route",
+        "intents": [
+          "forecast_analytics"
+        ],
+        "deterministic": true
+      },
+      "actual": {
+        "level": "orchestrator_mock_db",
+        "plan": {
+          "intent": "ml_analytics",
+          "agent": "analyst",
+          "limit": 5,
+          "analyticsArgs": {
+            "limit": 5,
+            "offset": 0,
+            "mode": "summary"
+          }
+        },
+        "intent": "ml_analytics",
+        "answer": "Para el escenario histórico con fecha de corte 17 de mayo de 2026, horizonte 7 días:\n6 productos; 6 READY; 0 sin predicción.\nOK: 0; VIGILAR: 0; REPONER: 6.\nStock al corte: 46. Demanda prevista: 134.13. Reposición recomendada: 114. Los totales de predicción y reposición incluyen solo productos READY.",
+        "clarification": false,
+        "code": null,
+        "skills": [
+          "analyze_demand_forecast"
+        ],
+        "llmCalls": 0,
+        "tokens": 0,
+        "participants": [
+          {
+            "agentId": "coordinator",
+            "llmCalls": 0,
+            "skillCalls": 0
+          },
+          {
+            "agentId": "analyst",
+            "llmCalls": 0,
+            "skillCalls": 1
+          }
+        ],
+        "evidence": [
+          {
+            "skillId": "analyze_demand_forecast",
+            "label": "Forecast histórico · escenario del tenant · 2026-05-17 · summary",
+            "recordCount": 1
+          }
+        ],
+        "suggestions": [],
+        "pagination": null,
+        "pending": null,
+        "physicalMockProviderAttempts": 0,
+        "databaseFilters": [],
+        "trace": [
+          {
+            "type": "request_started",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "coordinator",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "coordinator",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "analyst",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "skill_called",
+            "agentId": "analyst",
+            "skillId": "analyze_demand_forecast",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "skill_finished",
+            "agentId": "analyst",
+            "skillId": "analyze_demand_forecast",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "analyst",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "request_finished",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          }
+        ]
+      },
+      "classification": "PASS",
+      "severity": null,
+      "notes": ""
+    },
+    {
+      "id": "U-0287",
+      "family": "forecast_summary_compare",
+      "area": "forecast",
+      "input": "resumen del modelo histórico",
+      "expected": {
+        "level": "route",
+        "intents": [
+          "forecast_analytics"
+        ],
+        "deterministic": true
+      },
+      "actual": {
+        "level": "orchestrator_mock_db",
+        "plan": {
+          "intent": "ml_analytics",
+          "agent": "analyst",
+          "limit": 5,
+          "analyticsArgs": {
+            "limit": 5,
+            "offset": 0,
+            "mode": "summary"
+          }
+        },
+        "intent": "ml_analytics",
+        "answer": "Para el escenario histórico con fecha de corte 17 de mayo de 2026, horizonte 7 días:\n6 productos; 6 READY; 0 sin predicción.\nOK: 0; VIGILAR: 0; REPONER: 6.\nStock al corte: 46. Demanda prevista: 134.13. Reposición recomendada: 114. Los totales de predicción y reposición incluyen solo productos READY.",
+        "clarification": false,
+        "code": null,
+        "skills": [
+          "analyze_demand_forecast"
+        ],
+        "llmCalls": 0,
+        "tokens": 0,
+        "participants": [
+          {
+            "agentId": "coordinator",
+            "llmCalls": 0,
+            "skillCalls": 0
+          },
+          {
+            "agentId": "analyst",
+            "llmCalls": 0,
+            "skillCalls": 1
+          }
+        ],
+        "evidence": [
+          {
+            "skillId": "analyze_demand_forecast",
+            "label": "Forecast histórico · escenario del tenant · 2026-05-17 · summary",
+            "recordCount": 1
+          }
+        ],
+        "suggestions": [],
+        "pagination": null,
+        "pending": null,
+        "physicalMockProviderAttempts": 0,
+        "databaseFilters": [],
+        "trace": [
+          {
+            "type": "request_started",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "coordinator",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "coordinator",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "analyst",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "skill_called",
+            "agentId": "analyst",
+            "skillId": "analyze_demand_forecast",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "skill_finished",
+            "agentId": "analyst",
+            "skillId": "analyze_demand_forecast",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "analyst",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "request_finished",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          }
+        ]
+      },
+      "classification": "PASS",
+      "severity": null,
+      "notes": ""
+    },
+    {
+      "id": "U-0290",
+      "family": "forecast_summary_compare",
+      "area": "forecast",
+      "input": "qué demanda total se predice",
+      "expected": {
+        "level": "route",
+        "intents": [
+          "forecast_analytics"
+        ],
+        "deterministic": true
+      },
+      "actual": {
+        "level": "orchestrator_mock_db",
+        "plan": {
+          "intent": "ml_analytics",
+          "agent": "analyst",
+          "limit": 5,
+          "analyticsArgs": {
+            "limit": 5,
+            "offset": 0,
+            "mode": "summary"
+          }
+        },
+        "intent": "ml_analytics",
+        "answer": "Para el escenario histórico con fecha de corte 17 de mayo de 2026, horizonte 7 días:\n6 productos; 6 READY; 0 sin predicción.\nOK: 0; VIGILAR: 0; REPONER: 6.\nStock al corte: 46. Demanda prevista: 134.13. Reposición recomendada: 114. Los totales de predicción y reposición incluyen solo productos READY.",
+        "clarification": false,
+        "code": null,
+        "skills": [
+          "analyze_demand_forecast"
+        ],
+        "llmCalls": 0,
+        "tokens": 0,
+        "participants": [
+          {
+            "agentId": "coordinator",
+            "llmCalls": 0,
+            "skillCalls": 0
+          },
+          {
+            "agentId": "analyst",
+            "llmCalls": 0,
+            "skillCalls": 1
+          }
+        ],
+        "evidence": [
+          {
+            "skillId": "analyze_demand_forecast",
+            "label": "Forecast histórico · escenario del tenant · 2026-05-17 · summary",
+            "recordCount": 1
+          }
+        ],
+        "suggestions": [],
+        "pagination": null,
+        "pending": null,
+        "physicalMockProviderAttempts": 0,
+        "databaseFilters": [],
+        "trace": [
+          {
+            "type": "request_started",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "coordinator",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "coordinator",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "analyst",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "skill_called",
+            "agentId": "analyst",
+            "skillId": "analyze_demand_forecast",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "skill_finished",
+            "agentId": "analyst",
+            "skillId": "analyze_demand_forecast",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "analyst",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "request_finished",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          }
+        ]
+      },
+      "classification": "PASS",
+      "severity": null,
+      "notes": ""
+    },
+    {
+      "id": "U-0291",
+      "family": "forecast_summary_compare",
+      "area": "forecast",
+      "input": "cuántos productos READY hay",
+      "expected": {
+        "level": "route",
+        "intents": [
+          "forecast_analytics"
+        ],
+        "deterministic": true
+      },
+      "actual": {
+        "level": "orchestrator_mock_db",
+        "plan": {
+          "intent": "ml_analytics",
+          "agent": "analyst",
+          "limit": 5,
+          "analyticsArgs": {
+            "limit": 5,
+            "offset": 0,
+            "mode": "summary"
+          }
+        },
+        "intent": "ml_analytics",
+        "answer": "Para el escenario histórico con fecha de corte 17 de mayo de 2026, horizonte 7 días:\n6 productos; 6 READY; 0 sin predicción.\nOK: 0; VIGILAR: 0; REPONER: 6.\nStock al corte: 46. Demanda prevista: 134.13. Reposición recomendada: 114. Los totales de predicción y reposición incluyen solo productos READY.",
+        "clarification": false,
+        "code": null,
+        "skills": [
+          "analyze_demand_forecast"
+        ],
+        "llmCalls": 0,
+        "tokens": 0,
+        "participants": [
+          {
+            "agentId": "coordinator",
+            "llmCalls": 0,
+            "skillCalls": 0
+          },
+          {
+            "agentId": "analyst",
+            "llmCalls": 0,
+            "skillCalls": 1
+          }
+        ],
+        "evidence": [
+          {
+            "skillId": "analyze_demand_forecast",
+            "label": "Forecast histórico · escenario del tenant · 2026-05-17 · summary",
+            "recordCount": 1
+          }
+        ],
+        "suggestions": [],
+        "pagination": null,
+        "pending": null,
+        "physicalMockProviderAttempts": 0,
+        "databaseFilters": [],
+        "trace": [
+          {
+            "type": "request_started",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "coordinator",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "coordinator",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "analyst",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "skill_called",
+            "agentId": "analyst",
+            "skillId": "analyze_demand_forecast",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "skill_finished",
+            "agentId": "analyst",
+            "skillId": "analyze_demand_forecast",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "analyst",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "request_finished",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          }
+        ]
+      },
+      "classification": "PASS",
+      "severity": null,
+      "notes": ""
+    },
+    {
+      "id": "U-0292",
+      "family": "forecast_summary_compare",
+      "area": "forecast",
+      "input": "demanda agregada histórica",
+      "expected": {
+        "level": "route",
+        "intents": [
+          "forecast_analytics"
+        ],
+        "deterministic": true
+      },
+      "actual": {
+        "level": "orchestrator_mock_db",
+        "plan": {
+          "intent": "ml_analytics",
+          "agent": "analyst",
+          "limit": 5,
+          "analyticsArgs": {
+            "limit": 5,
+            "offset": 0,
+            "mode": "summary"
+          }
+        },
+        "intent": "ml_analytics",
+        "answer": "Para el escenario histórico con fecha de corte 17 de mayo de 2026, horizonte 7 días:\n6 productos; 6 READY; 0 sin predicción.\nOK: 0; VIGILAR: 0; REPONER: 6.\nStock al corte: 46. Demanda prevista: 134.13. Reposición recomendada: 114. Los totales de predicción y reposición incluyen solo productos READY.",
+        "clarification": false,
+        "code": null,
+        "skills": [
+          "analyze_demand_forecast"
+        ],
+        "llmCalls": 0,
+        "tokens": 0,
+        "participants": [
+          {
+            "agentId": "coordinator",
+            "llmCalls": 0,
+            "skillCalls": 0
+          },
+          {
+            "agentId": "analyst",
+            "llmCalls": 0,
+            "skillCalls": 1
+          }
+        ],
+        "evidence": [
+          {
+            "skillId": "analyze_demand_forecast",
+            "label": "Forecast histórico · escenario del tenant · 2026-05-17 · summary",
+            "recordCount": 1
+          }
+        ],
+        "suggestions": [],
+        "pagination": null,
+        "pending": null,
+        "physicalMockProviderAttempts": 0,
+        "databaseFilters": [],
+        "trace": [
+          {
+            "type": "request_started",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "coordinator",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "coordinator",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "agent_started",
+            "agentId": "analyst",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "skill_called",
+            "agentId": "analyst",
+            "skillId": "analyze_demand_forecast",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "skill_finished",
+            "agentId": "analyst",
+            "skillId": "analyze_demand_forecast",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": true
+          },
+          {
+            "type": "agent_finished",
+            "agentId": "analyst",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          },
+          {
+            "type": "request_finished",
+            "hasRequestCorrelation": true,
+            "hasSkillCorrelation": null
+          }
+        ]
+      },
+      "classification": "PASS",
+      "severity": null,
+      "notes": ""
+    }
+  ],
+  "newCriticalFailures": []
+}

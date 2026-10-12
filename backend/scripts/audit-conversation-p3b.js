@@ -382,7 +382,21 @@ async function main() {
   // One case per line keeps the machine-readable corpus reviewable in Git.
   const header = JSON.stringify({ ...report, cases: undefined }, null, 2);
   const serialized = `${header.slice(0, -2)},\n  "cases": [\n    ${cases.map(row => JSON.stringify(row)).join(',\n    ')}\n  ]\n}\n`;
-  fs.writeFileSync(path.join(root, 'docs', 'CONV-AUDIT-P3B.json'), serialized, 'utf8');
+  if (process.argv.includes('--forecast-p3c1')) {
+    const baseline = JSON.parse(fs.readFileSync(path.join(root, 'docs', 'CONV-AUDIT-P3B.json'), 'utf8'));
+    const affected = baseline.cases.filter(row => row.severity === 'P1' && row.area === 'forecast');
+    const previous = new Map(baseline.cases.map(row => [row.id, row]));
+    const newCriticalFailures = cases.filter(row => row.classification === 'FAIL' && ['P0', 'P1'].includes(row.severity)
+      && !(previous.get(row.id)?.classification === 'FAIL' && ['P0', 'P1'].includes(previous.get(row.id)?.severity)));
+    const affectedCases = cases.filter(row => affected.some(original => original.id === row.id));
+    const comparison = { phase: 'CONV-HARDENING-P3C.1', evaluatedCommit: report.evaluatedCommit,
+      baseline: 'CONV-AUDIT-P3B.json', methodology: report.methodology, counts, severity,
+      affectedCases, newCriticalFailures };
+    fs.writeFileSync(path.join(root, 'docs', 'CONV-HARDENING-P3C.1.json'), JSON.stringify(comparison, null, 2) + '\n', 'utf8');
+    console.log(JSON.stringify({ affected: affectedCases.length, passed: affectedCases.filter(row => row.classification === 'PASS').length,
+      newCriticalFailures: newCriticalFailures.length }));
+    if (affectedCases.some(row => row.classification !== 'PASS') || newCriticalFailures.length) process.exitCode = 1;
+  } else fs.writeFileSync(path.join(root, 'docs', 'CONV-AUDIT-P3B.json'), serialized, 'utf8');
   console.log(JSON.stringify({ coverage: report.coverage, counts, severity }));
   if (process.argv.includes('--strict') && counts.FAIL) process.exitCode = 1;
 }
