@@ -1,5 +1,5 @@
 /* Local audit only. No dotenv, database connection, HTTP client or real provider.
- * Usage: node backend/scripts/audit-conversation-p3b.js
+ * Usage: node backend/scripts/audit-conversation-p3b.js [--p3c3]
  * Generated reports are separate from backend/test/run.js.
  */
 const fs = require('node:fs');
@@ -382,7 +382,40 @@ async function main() {
   // One case per line keeps the machine-readable corpus reviewable in Git.
   const header = JSON.stringify({ ...report, cases: undefined }, null, 2);
   const serialized = `${header.slice(0, -2)},\n  "cases": [\n    ${cases.map(row => JSON.stringify(row)).join(',\n    ')}\n  ]\n}\n`;
-  if (process.argv.includes('--forecast-p3c1') || process.argv.includes('--sales-p3c2')) {
+  if (process.argv.includes('--p3c3')) {
+    const baselinePath = path.join(root, 'docs', 'CONV-HARDENING-P3C.2.json');
+    const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
+    const targetIds = new Set(['U-0034', 'U-0037', 'U-0432', 'U-0439', 'U-0440', 'S-076']);
+    const baselineById = new Map(baseline.cases.map(row => [row.id, row]));
+    const affectedCases = cases.filter(row => targetIds.has(row.id));
+    const previousCritical = new Set(baseline.cases.filter(row => row.classification === 'FAIL'
+      && ['P0', 'P1'].includes(row.severity)).map(row => row.id));
+    const priorResolved = new Set();
+    for (const phaseFile of ['CONV-HARDENING-P3C.1.json', 'CONV-HARDENING-P3C.2.json']) {
+      const prior = JSON.parse(fs.readFileSync(path.join(root, 'docs', phaseFile), 'utf8'));
+      for (const row of prior.affectedCases || []) if (row.classification === 'PASS') priorResolved.add(row.id);
+    }
+    const newCriticalFailures = cases.filter(row => row.classification === 'FAIL' && ['P0', 'P1'].includes(row.severity)
+      && (!previousCritical.has(row.id) || priorResolved.has(row.id)));
+    const missingTargets = [...targetIds].filter(id => !cases.some(row => row.id === id));
+    const comparison = { phase: 'CONV-HARDENING-P3C.3', evaluatedCommit: report.evaluatedCommit,
+      evaluationBasis: { kind: 'working_tree_before_commit', headBeforeCommit: report.evaluatedCommit,
+        implementationFiles: ['backend/src/agents/intentRouting.js', 'backend/test/conversationalP3C3.test.js',
+          'backend/scripts/audit-conversation-p3b.js', 'backend/test/run.js'] },
+      baseline: 'CONV-HARDENING-P3C.2.json', methodology: report.methodology,
+      coverage: report.coverage, counts, severity, targetIds: [...targetIds],
+      targetBaseline: [...targetIds].map(id => ({ id, classification: baselineById.get(id)?.classification || 'MISSING',
+        severity: baselineById.get(id)?.severity || null })),
+      affectedCases, missingTargets, newCriticalFailures, cases };
+    const comparisonHeader = JSON.stringify({ ...comparison, cases: undefined }, null, 2);
+    const comparisonText = `${comparisonHeader.slice(0, -2)},\n  "cases": [\n    ${cases.map(row => JSON.stringify(row)).join(',\n    ')}\n  ]\n}\n`;
+    fs.writeFileSync(path.join(root, 'docs', 'CONV-HARDENING-P3C.3.json'), comparisonText, 'utf8');
+    console.log(JSON.stringify({ coverage: report.coverage, affected: affectedCases.length,
+      affectedPassed: affectedCases.filter(row => row.classification === 'PASS').length,
+      missingTargets: missingTargets.length, counts, severity, newCriticalFailures: newCriticalFailures.length }));
+    if (affectedCases.length !== targetIds.size || missingTargets.length || affectedCases.some(row => row.classification !== 'PASS')
+      || newCriticalFailures.length || severity.P0 || severity.P1) process.exitCode = 1;
+  } else if (process.argv.includes('--forecast-p3c1') || process.argv.includes('--sales-p3c2')) {
     const salesPhase = process.argv.includes('--sales-p3c2');
     const baseline = JSON.parse(fs.readFileSync(path.join(root, 'docs', 'CONV-AUDIT-P3B.json'), 'utf8'));
     const affected = baseline.cases.filter(row => row.severity === 'P1'

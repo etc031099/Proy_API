@@ -121,9 +121,20 @@ const salesEntityReference = (text, calendar) => {
 const clarify = question => ({ intent: 'ambiguous_query', agent: 'coordinator', clarificationQuestion: question });
 const canonicalProductSku = message => message.match(/\bM5-[A-Z]+_\d+_\d+\b/i)?.[0]
   || message.match(/\bSKU\s+([\w.-]{1,100})\b/i)?.[1];
+// Product names shown in assistant choices contain a stable structured SKU
+// fragment. Resolve that exact catalog identity instead of searching the whole
+// display label as free text.
+const structuredProductDisplaySku = message => {
+  const match = normalize(message).match(/\b(foods|hobbies|household)_(\d+)\s*[·•]\s*(?:item)\s+(\d+)\b/i);
+  return match ? `M5-${match[1].toUpperCase()}_${match[2]}_${match[3].padStart(3, '0')}` : null;
+};
 const explicitProductDetailQuery = message => {
   const text = normalize(message).replace(/[¿?¡!]/g, '').trim();
+  if (structuredProductDisplaySku(message)) return null;
+  const minimumSuffix = text.match(/^(.+?)\s+stock\s+minimo\s*$/)?.[1];
   const target = text.match(/\b(?:cuanto|cuanta)\s+(?:stock|inventario|precio|minimo)\s+(?:tiene|cuesta|es)\s+(?:el\s+)?(?:producto\s+)?(.+?)\s*$/)?.[1]
+    || text.match(/\b(?:cuanto|cual)\s+(?:es\s+)?(?:el\s+)?stock\s+minimo\s+(?:de|del|para)\s+(.+?)\s*$/)?.[1]
+    || (minimumSuffix && /\d/.test(minimumSuffix) ? minimumSuffix : null)
     || text.match(/^(?:y\s+)?(?:cual\s+es\s+)?(?:el\s+|la\s+)?(?:stock\s+minimo|precio|stock|minimo|prediccion|forecast|esta\s+activ[oa])\s+(?:(?:de|del|para)\s+)?(?:el\s+)?(?:producto\s+)?(.+?)\s*$/)?.[1];
   if (!target || canonicalProductSku(message)) return null;
   const cleaned = target.replace(/[.,;:]+$/, '').trim();
@@ -356,10 +367,16 @@ const routeAlertRead = (message, memory, now) => {
         : /\b(?:fallid[oa]s?|fallaron)\b/.test(text) ? { status: 'FAILED' }
           : /\b(?:en proceso|procesando)\b/.test(text) ? { status: 'IN_FLIGHT' }
             : /\bpendientes?\b/.test(text) ? { status: 'PENDING' } : {}) } };
-  } else if (alerts && /\b(?:generad[oa]s?|generaron|produjeron|producid[oa]s?|ocurrid[oa]s?|abiertas?|resueltas?|resolvieron)\b/.test(text)) {
+  } else if ((alerts || /\boutbox\b/.test(text))
+    && /\b(?:outbox|reintentos?|reintentar|reintento|pendientes?\s+de\s+reintento|entregas?|entrega)\b/.test(text)) {
+    plan = { intent: 'inventory_alert_deliveries', agent: 'operations', selector: { limit: 20,
+      ...(/\b(?:pendientes?|reintentos?|reintentar)\b/.test(text) ? { status: 'PENDING' }
+        : /\b(?:fallaron|fallidas?)\b/.test(text) ? { status: 'FAILED' }
+          : /\b(?:completad[oa]s?|entregad[oa]s?)\b/.test(text) ? { status: 'DELIVERED' } : {}) } };
+  } else if (alerts && /\b(?:generad[oa]s?|generaron|produjeron|producid[oa]s?|ocurrid[oa]s?|abiertas?|open|resueltas?|resolvieron)\b/.test(text)) {
     plan = { intent: 'inventory_alert_events', agent: 'operations', selector: {
       ...(/\breglas?\s+de\s+stock\b/.test(text) ? { source: 'stock_alert_rule' } : {}),
-      ...(/\babiertas?\b/.test(text) ? { status: 'OPEN' } : /\b(?:resueltas?|resolvieron)\b/.test(text) ? { status: 'RESOLVED' } : {}) } };
+      ...(/\b(?:abiertas?|open)\b/.test(text) ? { status: 'OPEN' } : /\b(?:resueltas?|resolvieron)\b/.test(text) ? { status: 'RESOLVED' } : {}) } };
   } else if ((alerts && /\b(?:reglas?|configuradas?|configurados?|tengo|stock)\b/.test(text))
     || (memory.lastIntent === 'stock_alert_rules' && /^[¿?\s]*y\s+para\b/.test(text))) {
     plan = { intent: 'stock_alert_rules', agent: 'operations' };
@@ -374,7 +391,7 @@ const routeAlertRead = (message, memory, now) => {
   const targetText = text.replace(/[¿?¡!]/g, '').trim();
   const target = targetText.match(/\bproducto\s+(.+)$/)?.[1]
     || targetText.match(/\b(?:del|para|de)\s+(?:el\s+)?((?:(?!\b(?:de|del|para)\b).)+)$/)?.[1];
-  const reference = sku || (target && !/^(?:inventario|stock|entrega|alertas?|mis\s+alertas?|reglas?\s+de\s+stock)\b/.test(target)
+  const reference = sku || (target && !/^(?:inventario|stock|entrega|entregas|outbox|reintentos?|reintentar|reintento|alertas?|mis\s+alertas?|reglas?\s+de\s+stock)\b/.test(target)
     ? target.replace(/\s+(?:abiertas?|resueltas?|pendientes?|entregadas?|enviadas?|omitidas?|fallidas?)$/, '').trim() : undefined);
   const contextual = /\b(?:sus|su|ese producto|este producto)\b/.test(text);
   return scopeReadProduct(plan, reference, memory, contextual);
@@ -440,6 +457,12 @@ const routeDeterministically = (message, memory = {}, now = new Date(), conversa
       ...(productRef ? { productRef } : {}) };
   }
   const explicitProductQuery = explicitProductDetailQuery(message);
+  const structuredDisplaySku = structuredProductDisplaySku(message);
+  const asksBasicProductDetail = /\b(?:stock|precio|minimo|activo|estado)\b/.test(alertText)
+    && /\b(?:cuanto|cuanta|cual|dime|muestrame|esta|tiene)\b/.test(alertText)
+    && !/\b(?:reponer|reposicion|proveedor|oferta|compra|costo)\b/.test(alertText);
+  if (structuredDisplaySku && asksBasicProductDetail) return { intent: 'product_details', agent: 'operations',
+    selector: { sku: structuredDisplaySku }, limit: 1 };
   const specificForecast = require('./forecastRouting').routeForecastProductQuery(message, memory);
   if (specificForecast) return specificForecast;
   if (explicitProductQuery) return { intent: /prediccion|forecast/.test(normalize(message)) ? 'demand_forecast' : 'product_details',
@@ -500,9 +523,6 @@ const routeDeterministically = (message, memory = {}, now = new Date(), conversa
   const supplierProducts = routeSupplierProducts(message, memory);
   if (supplierProducts) return supplierProducts;
   const explicitProductSku = canonicalProductSku(message);
-  const asksBasicProductDetail = /\b(?:stock|precio|minimo|activo|estado)\b/.test(text)
-    && /\b(?:cuanto|cuanta|cual|dime|muestrame|esta|tiene)\b/.test(text)
-    && !/\b(?:reponer|reposicion|proveedor|oferta|compra|costo)\b/.test(text);
   if (explicitProductSku && asksBasicProductDetail) return { intent: 'product_details', agent: 'operations',
     selector: { sku: explicitProductSku }, limit: 1 };
   const inventoryText = normalizeBasicInventory(message);
