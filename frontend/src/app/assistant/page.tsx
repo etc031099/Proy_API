@@ -8,6 +8,7 @@ import { AgentActivity } from '@/components/assistant/AgentActivity';
 import { ConversationHistory } from '@/components/assistant/ConversationHistory';
 import { PendingActionCard } from '@/components/assistant/PendingActionCard';
 import { ActionSuggestions } from '@/components/assistant/ActionSuggestions';
+import { assistantDisplayText } from '@/lib/assistantPresentation';
 import { useAuth } from '@/contexts/AuthContext';
 import { activeConversationKey, readActiveConversation, writeActiveConversation } from '@/lib/agentHistory';
 import { apiClient, AgentApiError } from '@/lib/api';
@@ -163,7 +164,7 @@ export default function AssistantPage() {
           </div>}
           {messages.map(m => <article key={m.id} className={`rounded-lg p-4 min-w-0 ${m.role === 'user' ? 'bg-muted' : 'border'}`}>
             <p className="text-xs font-medium mb-2">{m.role === 'user' ? 'Tú' : 'Asistente'}</p>
-            <p className="whitespace-pre-wrap break-words text-sm">{m.text}</p>
+            <p className="whitespace-pre-wrap break-words text-sm">{assistantDisplayText(m.text, m.response)}</p>
             {m.response && <ActionSuggestions response={m.response} disabled={loading || historyBusy || m !== messages[messages.length - 1]}
               onSelect={message => void send(message)} />}
             {m.response?.pendingAction && <PendingActionCard action={m.response.pendingAction} conversationId={m.response.conversationId} />}

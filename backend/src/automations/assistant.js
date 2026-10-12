@@ -8,10 +8,35 @@ const { resolveReference, configuredSuppliers } = require('./entityResolution');
 const { Product } = require('../models');
 const { ordinalSelection } = require('../agents/ordinalSelection');
 const { actionDecision } = require('./actionDecision');
+const { units, money, ruleNote } = require('../utils/assistantFormatting');
 const resultAnswer = pending => pending.status !== 'EXECUTED' ? 'Acción cancelada. No se ejecutó ninguna operación.' : pending.result?.ruleConfigured
-  ? `${pending.result.alreadyExists ? 'Ya existe una regla activa' : 'Regla configurada'} para ${pending.result.sku}: stock ${pending.result.operator} ${pending.result.threshold} unidades. Se evaluará en los cambios futuros de stock; todavía no envía avisos automáticos.` : pending.result?.type
-  ? `${pending.result.type === 'sale' ? 'Venta' : 'Compra'} registrada correctamente. ${pending.result.items.map(item => `${item.quantity} unidades de ${item.sku}; stock resultante: ${item.stock}`).join('. ')}. Total: ${pending.result.total} ${pending.result.currency}. Operación: ${pending.result.id}.`
-  : `Producto registrado correctamente. SKU: ${pending.result?.sku || '—'}. Stock: ${pending.result?.stock ?? '—'}.${pending.result?.needsSupplierSetup ? ' Todavía no tiene proveedor con precio de compra; configúralo desde Productos antes de registrar compras.' : ''}`;
+  ? `${pending.result.alreadyExists ? 'Ya existe una regla activa' : 'Regla configurada'} para ${pending.result.name || pending.result.sku}: stock ${pending.result.operator} ${units(pending.result.threshold)}. ${ruleNote}` : ['sale', 'purchase'].includes(pending.result?.type)
+  ? `${pending.result.type === 'sale' ? 'Venta' : 'Compra'} registrada correctamente. ${pending.result.items.map(item => `${units(item.quantity)} de ${item.name || item.sku}; stock resultante: ${units(item.stock)}`).join('. ')}. Total: ${money(pending.result.total, pending.result.currency)}.`
+  : `Producto registrado correctamente. SKU: ${pending.result?.sku || '—'}. Stock: ${Number.isFinite(pending.result?.stock) ? units(pending.result.stock) : '—'}.${pending.result?.needsSupplierSetup ? ' Todavía no tiene proveedor con precio de compra; configúralo desde Productos antes de registrar compras.' : ''}`;
+// Only bounded questions about the displayed operation use its frozen preview.
+const pendingQuestionType = message => {
+  const text = message.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[¿?!.]/g, '').trim();
+  if (/^(?:esta bien el precio|cual es el precio|y el precio|que precio tiene)$/.test(text)) return 'price';
+  if (/^cuanto (?:quedara|quedara de stock|stock quedara)$/.test(text)) return 'stock';
+  if (/^cuanto (?:pagare|es el total|cuesta en total)$/.test(text)) return 'total';
+  if (/^que proveedor (?:elegi|seleccione)$/.test(text)) return 'supplier';
+  if (/^cuantas unidades (?:son|hay)$/.test(text)) return 'quantity';
+  return null;
+};
+const pendingQuestionAnswer = (pending, type) => {
+  if (!pending || pending.status !== 'PENDING') return null;
+  const items = pending.items || [], fields = pending.fields || {};
+  let answer;
+  if (type === 'price' && items.length && items.every(item => Number.isFinite(item.price)))
+    answer = items.map(item => `${item.name || item.sku}: precio configurado de ${money(item.price, fields.currency)} por unidad; ${units(item.quantity)} por ${money(item.total, fields.currency)}.`).join('\n');
+  if (type === 'stock' && items.length && items.every(item => Number.isFinite(item.resultingStock)))
+    answer = items.map(item => `${item.name || item.sku}: el stock quedaría en ${units(item.resultingStock)}.`).join('\n');
+  if (type === 'total' && Number.isFinite(fields.total)) answer = `El total de la operación sería ${money(fields.total, fields.currency)}.`;
+  if (type === 'supplier' && pending.action === 'create_purchase' && fields.contact) answer = `El proveedor elegido es ${fields.contact}.`;
+  if (type === 'quantity' && items.length && items.every(item => Number.isSafeInteger(item.quantity)))
+    answer = items.map(item => `${item.name || item.sku}: ${units(item.quantity)}.`).join('\n');
+  return answer ? `${answer}\nLa operación sigue pendiente y no se ha ejecutado.` : null;
+};
 // Bounded draft slots never authorize writes. Restored candidate IDs are looked up
 // again before preparation. A separate per-conversation queue serialises updates.
 const withActionAssistant = (runtime, service, options = {}) => {
@@ -25,22 +50,24 @@ const withActionAssistant = (runtime, service, options = {}) => {
     const draftKey = keyFor(req, input.conversationId);
     let previous = drafts.get(draftKey);
     const explicit = actionIntent(input.message);
+    const pendingQuestion = previous?.pendingActionId && !previous.readSuspended && !previous.selection && !previous.missingFields?.length && !explicit
+      ? pendingQuestionType(input.message) : null;
     // A newer READ owns subsequent selections. Keep the frozen PendingAction
     // intact; only an explicit new action can re-enter the write flow.
     const newRead = !explicit && (/^(?:mejor\s+)?(?:dame|muestrame|busca|dime|cuanto|que|resume|explica|lista|cuales)\b/.test(normalized) || /[¿?]/.test(input.message))
       && !/que me falta|que datos|que proveedores/.test(normalized)
       && !(previous?.selection?.slot === 'product' && /^busca(?:r)?\b/.test(normalized))
       && !ordinalSelection(input.message).matched;
-    if (previous && newRead && !decision) {
+    if (previous && newRead && !decision && !pendingQuestion) {
       drafts.set(draftKey, { ...previous, readSuspended: true });
       return runtime.handle(req, input);
     }
-    if (previous?.readSuspended && !explicit && !decision) return runtime.handle(req, input);
+    if (previous?.readSuspended && !explicit && !decision && !pendingQuestion) return runtime.handle(req, input);
     if (explicit === 'create_stock_alert_rule' && require('../agents/intentRouting').tenantScopeViolation(input.message))
       return runtime.handle(req, input); // Preserve the deterministic F9 denial before resolving any product.
     const contextual = (previous?.selection?.slot === 'product' && /^busca(?:r)?\b/.test(normalized)) || /que me falta|que datos|que proveedores|^(?:mejor|cambia|en vez|no es|opcion|el |la |si\b|no\b|cancel|confirm|hazlo|crear proveedor|elegir proveedor|continuar sin)/.test(normalized)
       || /^(?:\d+|sku\b|proveedor\b|precio de compra\b|categoria\b)/.test(normalized);
-    if (previous && !explicit && !decision && !contextual && /^(?:muestrame|busca|dime|cuanto|que|resume|explica|lista|cuales)\b|[¿?]/.test(normalized)) previous = undefined;
+    if (previous && !explicit && !decision && !contextual && !pendingQuestion && /^(?:muestrame|busca|dime|cuanto|que|resume|explica|lista|cuales)\b|[¿?]/.test(normalized)) previous = undefined;
     const skillId = explicit || previous?.action;
     const candidateCommand = /^(?:ver mas|siguiente|anterior|anteriores|refinar busqueda|mas especifico)$/.test(normalized);
     // Read-only ML paging is not an operation-draft command. Active drafts keep
@@ -54,6 +81,14 @@ const withActionAssistant = (runtime, service, options = {}) => {
     const context = createActionContext(req, { conversationId }), key = keyFor(req, conversationId);
     let pendingAction, answer, clarification = false, previewShown = false, execution, suggestions = [], suggestionsExpiresAt, suggestionsPagination, suggestionsEntityType;
     if (!previous && candidateCommand) return response('No hay una lista de opciones vigente. Inicia nuevamente la búsqueda.', undefined, true);
+    if (pendingQuestion) {
+      const pending = await service.get(context, previous.pendingActionId);
+      const text = !pending?.expiresAt || Date.parse(pending.expiresAt) > now() ? pendingQuestionAnswer(pending, pendingQuestion) : null;
+      if (text) return response(text, pending, false);
+      if (pending?.status === 'PENDING' && Date.parse(pending.expiresAt) > now())
+        return response('No tengo ese dato verificable en el preview. La operación sigue pendiente y no se ha ejecutado.', pending, true);
+      return response('La operación ya terminó o expiró. No puedo responder desde un preview vigente.', undefined, true);
+    }
     if (previous?.items && /que proveedores/.test(normalized)) {
       const products = [];
       for (const item of previous.items) {
@@ -62,7 +97,7 @@ const withActionAssistant = (runtime, service, options = {}) => {
         products.push(result.value);
       }
       const suppliers = await (options.supplierLookup || configuredSuppliers)(products, context);
-      const labels = suppliers.map(row => `${row.name}${row.costs ? `: ${row.costs.map(cost => `${cost.purchasePrice} ${cost.currency}`).join(', ')}` : ''}`);
+      const labels = suppliers.map(row => `${row.name}${row.costs ? `: ${row.costs.map(cost => money(cost.purchasePrice, cost.currency)).join(', ')}` : ''}`);
       return response(labels.length ? `Proveedores configurados: ${labels.join('; ')}. Tu borrador sigue disponible.`
         : 'No hay proveedor común con precio de compra configurado. Tu borrador sigue disponible; configúralo desde Productos o cancela.', undefined, true);
     }
@@ -228,4 +263,4 @@ const withActionAssistant = (runtime, service, options = {}) => {
     }
   };
 };
-module.exports = { withActionAssistant, resultAnswer };
+module.exports = { withActionAssistant, resultAnswer, pendingQuestionAnswer };

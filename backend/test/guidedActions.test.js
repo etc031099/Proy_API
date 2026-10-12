@@ -9,6 +9,52 @@ const { snapshot, publicResponse } = require('../src/services/agentHistoryProjec
 const { parseAction, resolveAction } = require('../src/automations/actionInput');
 const p1 = { _id: 'bbbbbbbbbbbbbbbbbbbbbbbb', name: 'Coca-Cola 500ML', sku: 'COC500', currency: 'PEN', stock: 10, isActive: true };
 const p2 = { ...p1, _id: 'cccccccccccccccccccccccc', name: 'Coca Cola 1.5 litros', sku: 'COC1500' };
+for (const [question, expected] of [
+  ['¿cuál es el precio?', /S\/ 29\.45.*2 unidades.*S\/ 58\.90/],
+  ['¿está bien el precio?', /precio configurado.*S\/ 29\.45/],
+  ['¿cuánto quedará?', /quedaría en 8 unidades/],
+  ['¿cuánto pagaré?', /S\/ 58\.90/],
+  ['¿cuántas unidades son?', /2 unidades/]
+]) test(`P3A pending question ${question} answers frozen preview and never confirms`, async () => {
+  const f = fixture(); const original = f.service.prepare;
+  f.service.prepare = async input => {
+    const row = await original(input);
+    row.fields = { currency: 'PEN', total: 58.9 };
+    row.items = [{ name: 'Coca-Cola 500ML', sku: p1.sku, quantity: 2, stock: 10, resultingStock: 8, price: 29.45, total: 58.9 }];
+    return row;
+  };
+  const preview = await f.send('Vende 2 COC500'); const result = await f.send(question);
+  assert.match(result.answer, expected); assert.match(result.answer, /pendiente.*no se ha ejecutado/);
+  assert.equal(result.pendingAction.pendingActionId, preview.pendingAction.pendingActionId);
+  assert.equal(f.confirmed.length, 0); assert.equal(f.cancelled.length, 0); assert.equal(f.prepared.length, 1);
+  assert.equal(result.usage.totalTokens, 0); assert.equal(result.usage.totalLlmCalls, 0);
+  await f.send('sí'); assert.equal(f.confirmed.length, 0);
+});
+test('P3A insufficient stock keeps requested three until explicit alternative', async () => {
+  const f = fixture({ products: [{ ...p1, stock: 1 }] });
+  const result = await f.send('vende 3 COC500');
+  assert.match(result.answer, /Solicitaste 3 unidades.*solo hay 1 unidad disponible/);
+  assert.equal(f.prepared.length, 0); assert.equal(f.confirmed.length, 0);
+  assert.equal(result.suggestions[0].label, 'Preparar venta de 1 unidad');
+  await f.send(result.suggestions[0].message);
+  assert.equal(f.prepared[0].products[0].quantity, 1); assert.equal(f.confirmed.length, 0);
+});
+test('P3A purchase supplier question uses preview without another skill or confirmation', async () => {
+  const f = fixture({ products: [p2bPurchaseProduct()], suppliers: p2bVendors() });
+  const original = f.service.prepare;
+  f.service.prepare = async input => { const row = await original(input); row.fields = { contact: 'San Martin Norte' }; return row; };
+  await f.send('compra 3 del food 96 al proveedor San Martin Norte');
+  const result = await f.send('¿Qué proveedor elegí?');
+  assert.match(result.answer, /San Martin Norte.*\n.*pendiente/);
+  assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0); assert.equal(f.confirmed.length, 0);
+});
+test('P3A a newer READ keeps ownership of price questions despite an older preview', async () => {
+  const f = fixture(); const readMessages = [];
+  f.runtime.handle = async (req, input) => { readMessages.push(input.message); return { answer: 'Lectura' }; };
+  await f.send('vende 2 COC500'); await f.send('¿Cuánto stock tiene COC1500?'); await f.send('¿Y el precio?');
+  assert.deepEqual(readMessages, ['¿Cuánto stock tiene COC1500?', '¿Y el precio?']);
+  assert.equal(f.confirmed.length, 0); assert.equal(f.cancelled.length, 0); assert.equal(f.prepared.length, 1);
+});
 const vendor = { _id: 'dddddddddddddddddddddddd', name: 'Distribuidora Inka SAC' };
 const request = (businessId = 'SYNTHETIC', userId = 'aaaaaaaaaaaaaaaaaaaaaaaa') => ({ businessId,
   user: { _id: userId, businessId, role: 'user', isActive: true } });

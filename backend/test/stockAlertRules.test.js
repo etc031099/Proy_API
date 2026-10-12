@@ -108,6 +108,8 @@ test('real executor is tenant scoped, session bound and semantically deduplicate
   try {
     const executor = createActionExecutors().create_stock_alert_rule, args = { productId: id, operator: '<=', threshold: 3 }, context = createActionContext(req);
     const preview = await executor.preview(args, context); assert.equal(rows.size, 0); assert.ok(!JSON.stringify(preview).includes(id));
+    assert.match(preview.fields.description, /automáticamente.*Telegram requiere/);
+    assert.doesNotMatch(preview.fields.description, /no envía avisos automáticos todavía/);
     const first = await executor.execute(args, context, session);
     assert.equal((await executor.execute(args, context, session)).alreadyExists, true); assert.equal(rows.size, 1);
     await executor.execute({ ...args, operator: '<' }, context, session); assert.equal(rows.size, 2);
@@ -115,6 +117,6 @@ test('real executor is tenant scoped, session bound and semantically deduplicate
     await assert.rejects(executor.preview({ ...args, productId: 'cccccccccccccccccccccccc' }, context), { code: 'ACTION_VALIDATION_FAILED' });
     assert.ok(filters.every(filter => filter.businessId === 'A' && filter.isActive === true));
     const projected = publicResponse({ pendingAction: { result: first } }); assert.equal(projected.pendingAction.result.operator, '<=');
-    assert.match(resultAnswer({ status: 'EXECUTED', result: first }), /todavía no envía/);
+    assert.match(resultAnswer({ status: 'EXECUTED', result: first }), /automáticamente.*Telegram requiere/);
   } finally { Product.findOne = originalProduct; Rule.findOne = originalFind; Rule.findOneAndUpdate = originalUpdate; }
 });

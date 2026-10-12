@@ -5,6 +5,7 @@ const { normalizeSku } = require('../utils/sku');
 const { createProductRecord } = require('../services/productCreationService');
 const { fail } = require('./contracts');
 const { redact } = require('../services/agentHistoryProjection');
+const { countLabel, units, money, ruleNote } = require('../utils/assistantFormatting');
 const { writeTransaction } = require('../services/transactionWriteService');
 const ActionDomainEvent = require('../models/ActionDomainEvent');
 const recordEvents = (context, actionId, entityId, types, session) => ActionDomainEvent.create(types.map(type => ({
@@ -14,7 +15,7 @@ const transactionExecutor = type => ({
   async preview(args, context) {
     try {
       const { snapshot } = await writeTransaction({ input: { ...args, type }, businessId: context.businessId, preview: true });
-      return { snapshot, summary: `Registrar ${type === 'sale' ? 'venta' : 'compra'} de ${snapshot.items.length} producto(s).`,
+      return { snapshot, summary: `Registrar ${type === 'sale' ? 'venta' : 'compra'} de ${countLabel(snapshot.items.length, 'producto')}.`,
         fields: { currency: snapshot.currency, total: snapshot.totalAmount, paymentMethod: snapshot.paymentMethod,
           contact: redact(snapshot.contactName || 'Consumidor final') },
         items: snapshot.items.map(item => ({ sku: item.sku, name: redact(item.name), quantity: item.quantity,
@@ -42,9 +43,9 @@ const createActionExecutors = () => ({
   create_stock_alert_rule: {
     async preview(args, context) {
       const product = await ruleProduct(args, context);
-      return { summary: `Configurar regla para ${redact(product.sku)}: stock ${args.operator} ${args.threshold} unidades.`,
+      return { summary: `Configurar regla para ${redact(product.sku)}: stock ${args.operator} ${units(args.threshold)}.`,
         fields: { sku: redact(product.sku), name: redact(product.name),
-          description: `Condición: stock ${args.operator} ${args.threshold} unidades. Tras confirmar se evaluará en los cambios futuros de stock; no envía avisos automáticos todavía.` } };
+          description: `Condición: stock ${args.operator} ${units(args.threshold)}. Tras confirmar, ${ruleNote.charAt(0).toLowerCase()}${ruleNote.slice(1)}` } };
     },
     async execute(args, context, session) {
       const product = await ruleProduct(args, context, session);
@@ -72,7 +73,7 @@ const createActionExecutors = () => ({
         stock: args.stock, resultingStock: args.stock, minStockLevel: args.minStockLevel, category: args.category,
         ...(args.costPrice !== undefined ? { costPrice: args.costPrice } : {}),
         ...(args.description ? { description: args.description } : {}),
-        ...(args.supplierPrices?.length ? { supplierCosts: args.supplierPrices.map(row => `${redact(suppliers.find(supplier => String(supplier._id) === row.supplierId).name)}: ${row.purchasePrice} ${args.currency}`).join(', ') } : {}) } };
+        ...(args.supplierPrices?.length ? { supplierCosts: args.supplierPrices.map(row => `${redact(suppliers.find(supplier => String(supplier._id) === row.supplierId).name)}: ${money(row.purchasePrice, args.currency)}`).join(', ') } : {}) } };
     },
     async execute(args, context, session, actionId) {
       await validateSuppliers(args, context, session);

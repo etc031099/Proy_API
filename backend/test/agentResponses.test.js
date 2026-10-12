@@ -4,6 +4,53 @@ const { buildSkillAnswer, buildProductListSupplierComparisonAnswer, llmObservati
 
 const period = { startDate: '2026-10-01', endDate: '2026-10-31' };
 const product = { sku: 'SKU-001', name: 'Producto 1', stock: 8, minStockLevel: 18 };
+for (const count of [0, 1, 2]) test(`P3A visible count grammar for ${count}`, () => {
+  const { countLabel, units } = require('../src/utils/assistantFormatting');
+  assert.equal(units(count), `${count} ${count === 1 ? 'unidad' : 'unidades'}`);
+  for (const singular of ['producto', 'registro', 'coincidencia'])
+    assert.equal(countLabel(count, singular), `${count} ${singular}${count === 1 ? '' : 's'}`);
+});
+for (const [value, expected] of [[29.45, 'S/ 29.45'], [58.9, 'S/ 58.90'], [9, 'S/ 9.00']])
+  test(`P3A money ${value} has two decimal places`, () => assert.equal(require('../src/utils/assistantFormatting').money(value), expected));
+for (const [query, expected, absent] of [
+  ['precio food 96', /S\/ 29\.45/, /stock|activo|mínimo/i],
+  ['stock food 96', /1 unidad disponible/, /precio|activo/i],
+  ['mínimo food 96', /mínimo.*2 unidades/, /precio|activo|disponible/i],
+  ['¿está activo food 96?', /está activo/, /precio|stock|mínimo/i],
+  ['dame detalles food 96', /precio.*S\/ 29\.45.*activo/, /producto\(s\)/],
+  ['¿y el precio?', /S\/ 29\.45/, /stock|activo|mínimo/i]
+]) test(`P3A attribute response: ${query}`, () => {
+  const answer = buildSkillAnswer('get_product_details', { status: 'READY', metadata: {},
+    data: { ...product, sku: 'M5-FOODS_2_096', name: 'Alimentos 096', stock: 1, minStockLevel: 2, price: 29.45, currency: 'PEN', isActive: true } }, query);
+  assert.match(answer, /Alimentos 096/); assert.match(answer, expected); assert.doesNotMatch(answer, absent);
+});
+for (const type of ['sale', 'purchase']) test(`P3A successful ${type} omits internal ID and formats units/money`, () => {
+  const { resultAnswer } = require('../src/automations/assistant');
+  const answer = resultAnswer({ status: 'EXECUTED', result: { id: 'bbbbbbbbbbbbbbbbbbbbbbbb', type, total: 58.9, currency: 'PEN',
+    items: [{ name: 'Agua', sku: 'SKU-001', quantity: 1, stock: 2 }] } });
+  assert.match(answer, /1 unidad de Agua/); assert.match(answer, /2 unidades/); assert.match(answer, /S\/ 58\.90/);
+  assert.doesNotMatch(answer, /bbbbbbbbbbbbbbbbbbbbbbbb|Operación:|1 unidades/);
+});
+test('P3A successful rule describes conditional notifications and hides ID', () => {
+  const answer = require('../src/automations/assistant').resultAnswer({ status: 'EXECUTED', result: {
+    id: 'bbbbbbbbbbbbbbbbbbbbbbbb', ruleConfigured: true, name: 'Agua', operator: '<', threshold: 1 } });
+  assert.match(answer, /1 unidad/); assert.match(answer, /automáticamente/); assert.match(answer, /Telegram requiere/);
+  assert.doesNotMatch(answer, /todavía no|bbbbbbbbbbbbbbbbbbbbbbbb/);
+});
+test('P3A one-unit list followup stays singular without changing selected product', () => {
+  const { resolveProductListFollowup } = require('../src/agents/productListFollowups');
+  const selected = { sku: 'SKU-001', name: 'Agua', stock: 1, predictedDemand: 1, recommendedQty: 1 };
+  for (const type of ['min_stock', 'max_demand', 'max_replenishment']) {
+    const result = resolveProductListFollowup(type, { semanticReference: 'last_product_list', items: [selected] });
+    assert.deepEqual(result.selectedProduct, selected); assert.match(result.answer, /1 unidad/); assert.doesNotMatch(result.answer, /1 unidades/);
+  }
+});
+test('P3A forecast summary labels a single product without changing numeric forecast', () => {
+  const answer = buildSkillAnswer('analyze_demand_forecast', { status: 'READY',
+    metadata: { mode: 'summary', anchor: '2026-05-17' }, data: { products: 1, ready: 1, notReady: 0,
+      states: { OK: 0, VIGILAR: 0, REPONER: 1 }, stockTotal: 1, predictedDemandTotal: 2, recommendedTotal: 3 } });
+  assert.match(answer, /1 producto;/); assert.match(answer, /Reposición recomendada: 3/);
+});
 const list = (data, metadata = {}) => ({ status: data.length ? 'READY' : 'NO_DATA', data,
   metadata: { totalMatches: data.length, returnedCount: data.length, truncated: false, ...metadata } });
 const finance = (count = 0, amountsByCurrency = []) => ({ completedTransactionsCount: count, amountsByCurrency });
@@ -57,7 +104,7 @@ test('sales wording keeps native currencies separate and never claims profit', (
       { amount: 63, currency: 'PEN' }, { amount: 7, currency: 'USD' }
     ] }, metadata: { period } });
   assert.match(answer, /2 ventas completadas.*7 unidades/);
-  assert.match(answer, /63\.00 PEN; 7\.00 USD/);
+  assert.match(answer, /S\/ 63\.00; 7\.00 USD/);
   assert.doesNotMatch(answer, /70|utilidad|ganancia|profit/i);
 });
 
@@ -68,7 +115,7 @@ test('product sales with no records and product details with zero stock stay cle
   const details = buildSkillAnswer('get_product_details', { status: 'READY',
     data: { ...product, stock: 0, price: 9, currency: 'PEN', isActive: true }, metadata: {} });
   assert.match(details, /0 unidades disponibles/);
-  assert.match(details, /precio es 9\.00 PEN/);
+  assert.match(details, /precio es S\/ 9\.00/);
   assert.match(details, /está activo/);
 });
 
@@ -105,14 +152,14 @@ test('supplier cost and comparison responses humanize selection rules and hide i
   metadata: { anchor: '2026-05-17', pricingAsOf: '2026-10-09T00:00:00.000Z', interpretation: 'historical_replay' } });
   assert.match(cost, /Tomé «55 foods» como Proveedor 055 Foods/);
   assert.match(cost, /Se utilizó el proveedor que indicaste/);
-  assert.match(cost, /15\.67 PEN = 31\.34 PEN/);
+  assert.match(cost, /S\/ 15\.67 = S\/ 31\.34/);
   assert.doesNotMatch(cost, /USER_SPECIFIED|USER_SPECIFIED_UNAVAILABLE|PREFERRED_SUPPLIER|LOWEST_VALID_PRICE/);
   const comparison = buildSkillAnswer('compare_supplier_costs', { status: 'READY', data: [
     { sku: 'SKU-001', productName: 'Producto', supplier: 'Proveedor 055 Foods', unitCost: 15.67, currency: 'PEN', preferred: true, selected: true },
     { sku: 'SKU-001', productName: 'Producto', supplier: 'Proveedor 058 Foods', unitCost: 15.99, currency: 'PEN', preferred: false, selected: false }
   ], metadata: { selectionRule: 'PREFERRED_SUPPLIER', selectedSupplier: 'Proveedor 055 Foods', pricingAsOf: '2026-10-09' } });
   assert.match(comparison, /2 proveedores con ofertas válidas/);
-  assert.match(comparison, /Proveedor 055 Foods: 15\.67 PEN por unidad/);
+  assert.match(comparison, /Proveedor 055 Foods: S\/ 15\.67 por unidad/);
   assert.match(comparison, /porque es el proveedor preferido configurado/);
   assert.doesNotMatch(comparison, /PREFERRED_SUPPLIER|USER_SPECIFIED/);
 });
@@ -130,13 +177,13 @@ test('list supplier comparison keeps unit prices distinct from replenishment tot
   ], metadata: { pricingAsOf: '2026-10-09T12:00:00.000Z' } };
   const unit = buildProductListSupplierComparisonAnswer(result, 'unit_price');
   assert.match(unit, /monedas son distintas/);
-  assert.match(unit, /SKU-PEN.*Proveedor B.*3\.00 PEN por unidad/);
+  assert.match(unit, /SKU-PEN.*Proveedor B.*S\/ 3\.00 por unidad/);
   assert.match(unit, /SKU-USD.*Proveedor C.*1\.00 USD por unidad/);
   assert.match(unit, /Sin oferta válida: SKU-SIN/);
   assert.match(unit, /no establezco un único ganador/);
   const total = buildProductListSupplierComparisonAnswer(result, 'replenishment_total_cost');
   assert.match(total, /costo total de reposición sugerida/);
-  assert.match(total, /SKU-PEN.*12\.00 PEN por 4 unidades/);
+  assert.match(total, /SKU-PEN.*S\/ 12\.00 por 4 unidades/);
   assert.match(total, /SKU-USD.*2\.00 USD por 2 unidades/);
   assert.match(total, /monedas son distintas/);
   assert.match(buildProductListSupplierComparisonAnswer({ status: 'ML_NOT_READY', data: [] }, 'unit_price'),
@@ -171,7 +218,7 @@ test('recent transactions show readable dates and Spanish status labels', () => 
   const answer = buildSkillAnswer('get_recent_transactions', list([
     { type: 'sale', status: 'completed', date: '2025-07-01T23:00:00Z', total: 21, currency: 'PEN', itemCount: 2 }
   ]));
-  assert.match(answer, /1 de julio de 2025.*venta completada por 21\.00 PEN/);
+  assert.match(answer, /1 de julio de 2025.*venta completada por S\/ 21\.00/);
   assert.match(answer, /2 líneas de productos/);
   assert.doesNotMatch(answer, /completed|2025-07-01/);
 });
@@ -186,7 +233,7 @@ test('business summary distinguishes current inventory, no current activity and 
   const answer = buildSkillAnswer('get_business_summary', historical);
   assert.match(answer, /datos de ventas y compras completadas disponibles son históricos/);
   assert.match(answer, /último periodo con actividad completada registrada es julio de 2025/);
-  assert.match(answer, /1 venta completada por 80\.00 PEN/);
+  assert.match(answer, /1 venta completada por S\/ 80\.00/);
   assert.doesNotMatch(answer, /60 productos|este mes/);
   const empty = buildSkillAnswer('get_business_summary', business({}, { periodMode: 'latest' }));
   assert.match(empty, /No encontré ventas ni compras completadas en el historial/);

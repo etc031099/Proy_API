@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { apiClient } from '@/lib/api';
 import type { PendingActionPreview } from '@/types/agent';
+import { assistantMoney, unitLabel } from '@/lib/assistantPresentation';
 const labels: Record<string, string> = { name: 'Nombre', sku: 'SKU', price: 'Precio', currency: 'Moneda', stock: 'Stock inicial',
   resultingStock: 'Stock resultante', minStockLevel: 'Stock mínimo', category: 'Categoría', costPrice: 'Costo', description: 'Descripción',
   total: 'Total', paymentMethod: 'Pago', contact: 'Cliente / Proveedor', supplierCosts: 'Proveedor y precio de compra' };
@@ -36,21 +37,20 @@ export function PendingActionCard({ action, conversationId }: { action: PendingA
   }
   return <section aria-label="Acción pendiente" className="mt-3 rounded-lg border p-3 space-y-2 text-sm">
     <p className="font-medium">{current.summary}</p>
-    <dl>{Object.entries(current.fields).map(([key, value]) => <div key={key} className="flex flex-wrap gap-2"><dt>{labels[key] || key}:</dt><dd className="break-all">{value}</dd></div>)}</dl>
-    {current.items?.map((item, index) => <div key={index} className="rounded border p-2">
-      <p>{item.name} · {item.sku}</p><p>{item.quantity} unidades · Precio unitario: {item.price} {current.fields.currency} · Total: {item.total} {current.fields.currency}</p>
+    {!current.result && <dl>{Object.entries(current.fields).filter(([key]) => !/^(?:id|productId|pendingActionId|eventId|outboxId)$/.test(key)).map(([key, value]) => <div key={key} className="flex flex-wrap gap-2"><dt>{labels[key] || key}:</dt><dd className="break-all">{typeof value === 'number' && ['price', 'costPrice', 'total'].includes(key) ? assistantMoney(value, String(current.fields.currency || 'PEN')) : value}</dd></div>)}</dl>}
+    {!current.result && current.items?.map((item, index) => <div key={index} className="rounded border p-2">
+      <p>{item.name} · {item.sku}</p><p>{unitLabel(item.quantity)} · Precio unitario: {assistantMoney(item.price, String(current.fields.currency || 'PEN'))} · Total: {assistantMoney(item.total, String(current.fields.currency || 'PEN'))}</p>
       <p>Stock actual: {item.stock} · Stock después: {item.resultingStock}</p>
     </div>)}
     <p>Estado: {statuses[expired && current.status === 'PENDING' ? 'EXPIRED' : current.status]} · Confirmación sin IA</p>
     {expired && current.status === 'PENDING' && <p>Esta acción expiró.</p>}
     {current.status === 'EXPIRED' && <p>Esta acción expiró.</p>}
     {current.result && <div role="status"><p>Operación registrada correctamente.</p>
-      {current.result.ruleConfigured ? <p>{current.result.alreadyExists ? 'Regla activa existente' : 'Regla configurada'}: {current.result.sku} · Stock {current.result.operator} {current.result.threshold} unidades. Todavía no envía avisos automáticos.</p>
+      {current.result.ruleConfigured ? <p>{current.result.alreadyExists ? 'Regla activa existente' : 'Regla configurada'}: {current.result.name || current.result.sku} · Stock {current.result.operator} {typeof current.result.threshold === 'number' ? unitLabel(current.result.threshold) : 'no disponible'}. Se evalúa automáticamente al cambiar el stock. Telegram requiere conexión y preferencias habilitadas.</p>
         : current.result.sku && <p>{current.result.sku} · Stock: {current.result.stock}</p>}
       {current.result.needsSupplierSetup && <p>Todavía no tiene proveedor con precio de compra. Configúralo desde Productos antes de registrar compras.</p>}
-      {current.result.items?.map((item, index) => <p key={index}>{item.quantity} unidades de {item.sku} · Stock resultante: {item.stock}</p>)}
-      {current.result.total !== undefined && <p>Total: {current.result.total} {current.result.currency}</p>}
-      {!current.result.ruleConfigured && <p className="break-all">Identificador: {current.result.id}</p>}
+      {current.result.items?.map((item, index) => <p key={index}>{unitLabel(item.quantity)} de {item.name || item.sku} · Stock resultante: {unitLabel(item.stock)}</p>)}
+      {current.result.total !== undefined && <p>Total: {assistantMoney(current.result.total, current.result.currency)}</p>}
     </div>}
     {current.status === 'PENDING' && !expired && current.requiresConfirmation && <div className="flex flex-wrap gap-2">
       <Button disabled={busy} onClick={() => void decide('confirm')}>Confirmar</Button>

@@ -123,7 +123,7 @@ it('product disambiguation shows names/SKUs and click continues the same query w
   render(<AssistantPage />); submit('¿Cuánto stock tiene food 210?');
   const button = await screen.findByRole('button', { name: /Foods B/ });
   expect(screen.getByText('FOOD-B')).toBeTruthy();
-  expect(screen.getByText(/Elige una o indícame su SKU/).textContent).toContain('2. Foods B — FOOD-B');
+  expect(screen.getByText(/Elige una o indícame su SKU/).textContent).not.toContain('2. Foods B — FOOD-B');
   fireEvent.click(button); await screen.findByText(response.answer);
   expect(send.mock.calls[1][0]).toEqual({ message: 'el segundo', conversationId: response.conversationId });
 });

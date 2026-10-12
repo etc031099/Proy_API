@@ -1,4 +1,5 @@
 const { Product, Contact } = require('../models');
+const { units } = require('../utils/assistantFormatting');
 const { schema, string, integer, validateArgs, fail } = require('./contracts');
 const { resolveReference, configuredSuppliers } = require('./entityResolution');
 const normalize = value => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -130,8 +131,8 @@ async function resolveAction(extracted, context, resolver = resolveReference, su
     const id = String(result.value._id), previousQuantity = quantities.get(id) || 0, requested = previousQuantity + item.quantity;
     quantities.set(id, requested);
     if (extracted.action === 'create_sale' && Number.isFinite(result.value.stock) && requested > result.value.stock)
-      return { clarification: `Solo hay ${result.value.stock} unidades disponibles de ${result.value.name}. Puedes cambiar la cantidad o cancelar.`,
-        suggestions: result.value.stock > previousQuantity ? [{ label: `Vender ${result.value.stock - previousQuantity} de este ítem`, message: `Cambiar cantidad del producto ${index + 1} a ${result.value.stock - previousQuantity}` }] : [] };
+      return { clarification: `Solicitaste ${units(requested)} de ${result.value.name}, pero solo hay ${units(result.value.stock)} ${result.value.stock === 1 ? 'disponible' : 'disponibles'}. Puedes cambiar la cantidad o cancelar.`,
+        suggestions: result.value.stock > previousQuantity ? [{ label: `Preparar venta de ${units(result.value.stock - previousQuantity)}`, message: `Cambiar cantidad del producto ${index + 1} a ${result.value.stock - previousQuantity}` }] : [] };
     products.push(result.value);
     args.products.push({ productId: String(result.value._id), quantity: item.quantity }); currencies.add(result.value.currency);
   }

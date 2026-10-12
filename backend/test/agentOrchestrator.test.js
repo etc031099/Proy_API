@@ -21,6 +21,23 @@ const forecast = { status: 'READY', anchorOperationalDate: '2025-07-01', product
   { productId: id(1), sku: 'SKU-001', name: 'Producto 1', mlStatus: 'READY', predictedDemand7d: 8.25,
     stockAtAnchor: 2, salesLast7Days: 3, safetyStock: 5, recommendedQty: 12, inventoryStatus: 'REPONER' }
 ] };
+test('P3A single product lookup answers once and attribute follow-ups stay zero LLM', async () => {
+  const f = fixture({ products: [{ ...product(1), sku: 'M5-FOODS_2_096', name: 'Alimentos M5 · FOODS_2 · Ítem 096' }] });
+  const conversationId = randomUUID();
+  const first = await f.run('¿Cuál es el precio de food 96?', conversationId);
+  assertNoLLM(first); assert.match(first.answer, /S\/ 9\.00/);
+  assert.doesNotMatch(first.answer, /Encontré 1|stock|activo/i);
+  assert.equal(first.answer.split('M5-FOODS_2_096').length - 1, 1);
+  for (const [question, expected, absent] of [
+    ['¿Y el precio?', /S\/ 9\.00/, /stock|activo/i],
+    ['¿Y el stock mínimo?', /mínimo.*5 unidades/, /precio|activo/i],
+    ['¿Está activo?', /está activo/, /precio|stock/i]
+  ]) {
+    const response = await f.run(question, conversationId);
+    assertNoLLM(response); assert.match(response.answer, /M5-FOODS_2_096/);
+    assert.match(response.answer, expected); assert.doesNotMatch(response.answer, absent);
+  }
+});
 
 const scopedProducts = () => [2, 3].map((n, i) => ({ ...product(n), sku: `M5-FOODS_${i + 2}_210`, name: `Foods ${i + 2} item 210` }));
 for (const query of ['¿Cuánto stock tiene food 96?', '¿Cuál es el precio de food 96?', '¿Está activo food 96?',
@@ -441,7 +458,7 @@ test('P2B supplier price follow-up resolves informal product and maintains both 
   const f = fixture({ products: [p2bProduct()], contacts: p2bSuppliers() }), conversationId = randomUUID();
   await f.run('Qué productos ofrece proveedor San Martin Norte?', conversationId);
   const price = await f.run('¿Y cuál es su precio para food 96?', conversationId);
-  assertNoLLM(price); assert.equal(price.requiresClarification, false); assert.match(price.answer, /10.*PEN/);
+  assertNoLLM(price); assert.equal(price.requiresClarification, false); assert.match(price.answer, /S\/ 10\.00/);
   const saved = await f.orchestrator.getContextSnapshot(req(), conversationId);
   assert.equal(saved.lastSupplier.id, id(701)); assert.equal(saved.selectedProductReference.sku, p2bProduct().sku);
 });
@@ -770,7 +787,7 @@ test('compound replenishment list ranks highest total configured replenishment c
   const result = await f.run('Muéstrame los productos a reponer y cuál es el más caro de reponer.');
   assert.equal(result.code, null);
   assert.deepEqual(result.actions.map(action => action.skillId), ['get_replenishment_candidates', 'compare_supplier_costs']);
-  assert.match(result.answer, /SKU-002/); assert.match(result.answer, /80\.00 PEN/); assert.match(result.answer, /Proveedor B/);
+  assert.match(result.answer, /SKU-002/); assert.match(result.answer, /S\/ 80\.00/); assert.match(result.answer, /Proveedor B/);
   assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
 });
 
@@ -1009,9 +1026,8 @@ test('basic product detail questions use get_product_details deterministically w
   assert.equal(result.usage.totalLlmCalls, 0);
   assert.equal(result.usage.totalTokens, 0);
   assert.match(result.answer, /2 unidades disponibles/);
-  assert.match(result.answer, /precio es 9[.,]00 PEN/);
-  assert.match(result.answer, /mínimo configurado de 5 unidades/);
-  assert.match(result.answer, /producto está activo/);
+  assert.match(result.answer, /2 unidades disponibles/); assert.doesNotMatch(result.answer, /precio|activo/);
+  assert.match(result.answer, /Stock mínimo: 5 unidades/);
 });
 
 test('explicitly named product detail overrides remembered product; ambiguous or missing names never fall back to memory', async () => {
@@ -1023,7 +1039,7 @@ test('explicitly named product detail overrides remembered product; ambiguous or
   const named = await f.run('¿Cuánto stock tiene el foods 210?', conversationId);
   assert.equal(named.code, null);
   assert.deepEqual(named.actions.map(action => action.skillId), ['search_products', 'get_product_details']);
-  assert.match(named.answer, /Foods 210\) tiene 20 unidades disponibles/);
+  assert.match(named.answer, /Foods 210.*tiene 20 unidades disponibles/);
   assert.doesNotMatch(named.answer, /Producto anterior|M5-FOODS_3_511/);
   assert.equal(named.usage.totalLlmCalls, 0); assert.equal(named.usage.totalTokens, 0);
 
@@ -1312,7 +1328,7 @@ test('product-to-supplier routes use offers for the SKU and explicitly cheapest 
   assert.equal(cheapest.actions[0].skillId, 'compare_supplier_costs');
   assert.equal(cheapest.usage.totalLlmCalls, 0);
   assert.equal(cheapest.usage.totalTokens, 0);
-  assert.match(cheapest.answer, /Proveedor Económico: 5[.,]25 PEN por unidad/);
+  assert.match(cheapest.answer, /Proveedor Económico: S\/ 5[.,]25 por unidad/);
   assert.doesNotMatch(cheapest.answer, /Proveedor Preferido es el proveedor más barato/);
 });
 
@@ -1345,7 +1361,7 @@ test('product-list cheapest supplier follow-up compares valid unit offers across
   assert.equal(compared.usage.totalSkillCalls, 1);
   assert.deepEqual(compared.actions.map(action => action.skillId), ['compare_supplier_costs']);
   assert.match(compared.answer, /precio unitario de compra/i);
-  assert.match(compared.answer, /M5-FOODS_3_511.*Proveedor Más Económico.*S\/\s*2[.,]00 PEN por unidad/);
+  assert.match(compared.answer, /M5-FOODS_3_511.*Proveedor Más Económico.*S\/\s*2[.,]00 por unidad/);
   assert.doesNotMatch(compared.answer, /Proveedor Preferido.*S\/\s*2,00/);
   assert.ok(compared.evidence.some(row => /Ofertas configuradas para 5 productos/.test(row.label)));
   assert.equal(compared.participants.find(row => row.agentId === 'analyst')?.skillCalls, 1);
@@ -1370,7 +1386,7 @@ test('product-list follow-up distinguishes unit-price comparison from total repl
   assert.equal(result.code, null); assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
   assert.equal(result.usage.totalSkillCalls, 1); assert.deepEqual(result.actions.map(action => action.skillId), ['compare_supplier_costs']);
   assert.match(result.answer, /costo total de reposición sugerida/i);
-  assert.match(result.answer, /M5-FOODS_3_491.*S\/\s*8[.,]00 PEN por 2 unidades.*Proveedor Base/);
+  assert.match(result.answer, /M5-FOODS_3_491.*S\/\s*8[.,]00 por 2 unidades.*Proveedor Base/);
   assert.doesNotMatch(result.answer, /M5-FOODS_3_511.*ganador/i);
 });
 
@@ -1946,7 +1962,7 @@ test('generic business summary separates empty current activity from tenant-scop
   assert.match(result.answer, /No se registran ventas o compras completadas durante octubre de 2026/);
   assert.match(result.answer, /datos de ventas y compras completadas disponibles son históricos/);
   assert.match(result.answer, /último periodo con actividad completada registrada es julio de 2025/);
-  assert.match(result.answer, /80\.00 PEN/); assert.doesNotMatch(result.answer, /999|777|2027/);
+  assert.match(result.answer, /S\/ 80\.00/); assert.doesNotMatch(result.answer, /999|777|2027/);
   assert.deepEqual(result.evidence.map(row => row.period), [
     { startDate: '2026-10-01', endDate: '2026-10-31' }, { startDate: '2025-07-01', endDate: '2025-07-31' }
   ]);
@@ -2081,7 +2097,7 @@ test('supplier candidate choice resumes the frozen cost request by number with t
   assert.equal(second.requiresClarification, false); assert.equal(second.conversationId, conversationId);
   assert.equal(second.actions[0].skillId, 'get_replenishment_cost');
   assert.match(second.answer, /M5-FOODS_3_511/); assert.match(second.answer, /Proveedor sintético 055 FOOD/);
-  assert.match(second.answer, /1,378\.96 PEN/);
+  assert.match(second.answer, /S\/ 1,378\.96/);
   assert.doesNotMatch(second.answer, new RegExp(supplierA._id));
   assert.equal(second.usage.totalLlmCalls, 0); assert.equal(second.usage.totalTokens, 0);
   assert.equal(f.calls.length, 0);
@@ -2190,7 +2206,7 @@ test('ambiguous supplier query offers safe candidates; number and ordinal resume
   const chosen = await f.run('1', conversationId);
   assert.equal(chosen.requiresClarification, false); assert.equal(chosen.actions[0].skillId, 'get_supplier_products');
   assert.match(chosen.answer, /Seleccionaste Proveedor sintético 055 FOODS/);
-  assert.match(chosen.answer, /M5-FOODS_3_511/); assert.match(chosen.answer, /S\/ 15\.67 PEN/);
+  assert.match(chosen.answer, /M5-FOODS_3_511/); assert.match(chosen.answer, /S\/ 15\.67/);
   assert.match(chosen.answer, /oferta configurada/); assert.doesNotMatch(chosen.answer, /disponible en stock|SUPPLIER_NOT_FOUND|NO_PRODUCT_OFFER/);
   assert.equal(chosen.usage.totalLlmCalls, 0); assert.equal(chosen.usage.totalTokens, 0); assert.equal(f.calls.length, 0);
   assert.ok(f.reads.filter(read => ['Product', 'Contact', 'Product.count'].includes(read.model)).every(read => read.match.businessId === 'A'));
@@ -2260,7 +2276,7 @@ test('current-month wording overrides a historical forecast anchor and no-data s
   await f.run('¿Qué productos debería reponer?', conversationId);
   const result = await f.run('¿Y cuánto vendió el primer producto este mes?', conversationId);
   assert.equal(result.evidence[0].period.startDate, '2025-01-01');
-  assert.match(result.answer, /SKU-001 .*no registra ventas completadas durante/);
+  assert.match(result.answer, /SKU-001.*no registra ventas completadas durante/);
   assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
 });
 
@@ -2389,7 +2405,7 @@ test('bounded ReAct performs search then details with exactly three LLM calls an
   assert.equal(result.usage.totalSkillCalls, 2); assert.equal(result.usage.totalTokens, 51);
   assert.equal(result.usage.toolSelectionCycles, 2);
   assert.equal(result.usage.totalProviderLatencyMs, 6);
-  assert.match(result.answer, /precio es 9\.00 PEN/);
+  assert.match(result.answer, /precio es S\/ 9\.00/);
 });
 
 for (const [name, args] of [['get_demand_forecast', {}], ['get_inventory_summary', {}], ['get_low_stock_products', { businessId: 'B' }], ['executeShell', {}]]) {

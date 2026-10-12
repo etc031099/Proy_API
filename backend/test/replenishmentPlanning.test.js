@@ -203,7 +203,7 @@ test('explicit supplier alias resolves one tenant offer, preserves the requested
   assert.equal(result.data.selectionRule, 'USER_SPECIFIED');
   const answer = buildSkillAnswer('get_replenishment_cost', result);
   assert.match(answer, /Tomé «55 foods» como Proveedor sintético 055 FOODS/);
-  assert.match(answer, /1,378\.96 PEN/); assert.doesNotMatch(answer, /USER_SPECIFIED|PREFERRED_SUPPLIER/);
+  assert.match(answer, /S\/ 1,378\.96/); assert.doesNotMatch(answer, /USER_SPECIFIED|PREFERRED_SUPPLIER/);
   assert.equal(execution.finish().totalTokens, 0);
   assert.equal(reads.every(query => query.businessId === 'V2'), true);
 });

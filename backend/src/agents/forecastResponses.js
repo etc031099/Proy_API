@@ -7,9 +7,9 @@ const buildForecastAnalysisAnswer = ({ data, metadata, status }) => {
   const anchor = Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat('es-PE', {
     day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(date) : 'fecha no disponible';
   const heading = `Para el escenario histórico con fecha de corte ${anchor}, horizonte ${metadata.model?.horizonDays || 7} días${metadata.department ? ` · departamento ${metadata.department}` : ''}${metadata.category ? ` · categoría ${metadata.category}` : ''}:`;
-  if (metadata.mode === 'summary') return `${heading}\n${data.products} productos; ${data.ready} READY; ${data.notReady} sin predicción.\nOK: ${data.states.OK}; VIGILAR: ${data.states.VIGILAR}; REPONER: ${data.states.REPONER}.\nStock al corte: ${format(data.stockTotal)}. Demanda prevista: ${format(data.predictedDemandTotal)}. Reposición recomendada: ${format(data.recommendedTotal)}. Los totales de predicción y reposición incluyen solo productos READY.`;
+  if (metadata.mode === 'summary') return `${heading}\n${data.products} ${data.products === 1 ? 'producto' : 'productos'}; ${data.ready} READY; ${data.notReady} sin predicción.\nOK: ${data.states.OK}; VIGILAR: ${data.states.VIGILAR}; REPONER: ${data.states.REPONER}.\nStock al corte: ${format(data.stockTotal)}. Demanda prevista: ${format(data.predictedDemandTotal)}. Reposición recomendada: ${format(data.recommendedTotal)}. Los totales de predicción y reposición incluyen solo productos READY.`;
   if (!data.length) return `${heading}\n${metadata.mode === 'not_ready'
-    ? `${metadata.totalProducts} productos analizados, ${metadata.readyProducts} READY; no encontré productos sin predicción${metadata.department || metadata.category ? ' en el filtro consultado' : ''}.`
+    ? `${metadata.totalProducts} ${metadata.totalProducts === 1 ? 'producto analizado' : 'productos analizados'}, ${metadata.readyProducts} READY; no encontré productos sin predicción${metadata.department || metadata.category ? ' en el filtro consultado' : ''}.`
     : 'No encontré productos que cumplan el filtro consultado.'}`;
   const lines = data.map(row => row.mlStatus !== 'READY'
     ? `• ${label(row)}: sin predicción (${row.mlStatus}). Stock: ${format(row.stockAtAnchor)}.`

@@ -3,16 +3,34 @@ import { expect, it, vi } from 'vitest';
 import { PendingActionCard } from '@/components/assistant/PendingActionCard';
 import { apiClient } from '@/lib/api';
 import type { PendingActionPreview } from '@/types/agent';
+import { assistantDisplayText } from '@/lib/assistantPresentation';
+import type { AgentResponse } from '@/types/agent';
 vi.mock('@/lib/api', () => ({ apiClient: { decideAgentAction: vi.fn() } }));
 const pending: PendingActionPreview = { pendingActionId: '11111111-1111-4111-8111-111111111111', action: 'create_product',
   summary: 'Crear producto demo', fields: { stock: 5, sku: 'SKU-001', price: 10 }, expiresAt: '2099-01-01T00:00:00Z',
   requiresConfirmation: true, status: 'PENDING' };
+it('candidate text fallback remains in API while cards avoid duplicate visible lists', () => {
+  const response = { suggestions: [{ label: '1. Agua', message: 'SKU-001', detail: 'SKU-001' }] } as AgentResponse;
+  const text = 'Encontré 2 coincidencias.\n1. Agua — SKU-001\nMostrando 1–1.';
+  expect(assistantDisplayText(text, response)).toBe('Encontré 2 coincidencias.\nMostrando 1–1.');
+  expect(assistantDisplayText(text)).toBe(text);
+});
+for (const quantity of [0, 1, 2]) it(`card quantity ${quantity} uses natural grammar and money`, () => {
+  const { container } = render(<PendingActionCard action={{ ...pending, action: 'create_sale',
+    fields: { currency: 'PEN', total: 58.9, productId: 'bbbbbbbbbbbbbbbbbbbbbbbb' },
+    items: [{ name: 'Agua', sku: 'SKU-001', quantity, price: 29.45, total: 58.9, stock: 3, resultingStock: 2 }]
+  }} conversationId="conversation" />);
+  expect(container.textContent).toContain(`${quantity} ${quantity === 1 ? 'unidad ·' : 'unidades ·'}`);
+  expect(container.textContent).toContain('S/ 29.45'); expect(container.textContent).toContain('S/ 58.90');
+  expect(container.textContent).not.toContain('bbbbbbbbbbbbbbbbbbbbbbbb');
+  expect(apiClient.decideAgentAction).not.toHaveBeenCalled();
+});
 it('stock rule card displays configured condition without fake stock, Mongo ID or notification promise', () => {
   render(<PendingActionCard action={{ ...pending, action: 'create_stock_alert_rule', summary: 'Configurar regla de stock',
     fields: { sku: 'SKU-001', name: 'Demo', description: 'Stock <= 3 unidades' }, status: 'EXECUTED',
     result: { id: 'bbbbbbbbbbbbbbbbbbbbbbbb', sku: 'SKU-001', operator: '<=', threshold: 3, ruleConfigured: true, alreadyExists: true } }} conversationId="conversation" />);
   expect(screen.getByText(/Regla activa existente: SKU-001/)).toBeTruthy();
-  expect(screen.getByText(/Todavía no envía avisos automáticos/)).toBeTruthy();
+  expect(screen.getByText(/Se evalúa automáticamente al cambiar el stock/)).toBeTruthy();
   expect(screen.queryByText(/Stock: undefined/)).toBeNull(); expect(screen.queryByText(/bbbbbbbbbbbbbbbbbbbbbbbb/)).toBeNull();
   expect(screen.queryByRole('button', { name: 'Confirmar' })).toBeNull();
   expect(apiClient.decideAgentAction).not.toHaveBeenCalled();
@@ -52,14 +70,14 @@ for (const type of ['sale', 'purchase'] as const) it(`restored ${type} preview s
     fields: { currency: 'PEN', total: 30, paymentMethod: type === 'sale' ? 'credit' : 'cash', contact: 'Contacto demo' },
     items: [{ sku: 'SKU-002', name: 'Agua', quantity: 3, stock: 20, resultingStock: type === 'sale' ? 17 : 23, price: 10, total: 30 }] }} conversationId="conversation" />);
   expect(screen.getByText(/Agua · SKU-002/)).toBeTruthy();
-  expect(screen.getByText(/Stock actual: 20/)).toBeTruthy(); expect(screen.getByText(/Precio unitario: 10 PEN/)).toBeTruthy();
+  expect(screen.getByText(/Stock actual: 20/)).toBeTruthy(); expect(screen.getByText(/Precio unitario: S\/ 10.00/)).toBeTruthy();
   expect(apiClient.decideAgentAction).not.toHaveBeenCalled();
 });
 it('restored executed action displays persisted result and never offers confirmation', () => {
   render(<PendingActionCard action={{ ...pending, status: 'EXECUTED', result: { id: 'op-synthetic', type: 'sale', currency: 'PEN', total: 30,
     items: [{ sku: 'SKU-002', name: 'Agua', quantity: 3, stock: 17 }] } }} conversationId="conversation" />);
-  expect(screen.getByText(/3 unidades de SKU-002 · Stock resultante: 17/)).toBeTruthy();
-  expect(screen.getByText('Total: 30 PEN')).toBeTruthy(); expect(screen.queryByRole('button', { name: 'Confirmar' })).toBeNull();
+  expect(screen.getByText(/3 unidades de Agua · Stock resultante: 17 unidades/)).toBeTruthy();
+  expect(screen.getByText('Total: S/ 30.00')).toBeTruthy(); expect(screen.queryByRole('button', { name: 'Confirmar' })).toBeNull();
   expect(apiClient.decideAgentAction).not.toHaveBeenCalled();
 });
 it('restored expired action stays expired even with future expiresAt', () => {
@@ -70,6 +88,6 @@ it('restored expired action stays expired even with future expiresAt', () => {
 it('refreshed authoritative history replaces an existing pending card with its executed result', () => {
   const view = render(<PendingActionCard action={pending} conversationId="conversation" />);
   view.rerender(<PendingActionCard action={{ ...pending, status: 'EXECUTED', result: { id: 'op-refreshed', sku: 'SKU-001', stock: 5 } }} conversationId="conversation" />);
-  expect(screen.getByText(/Estado: Ejecutada/)).toBeTruthy(); expect(screen.getByText(/op-refreshed/)).toBeTruthy();
+  expect(screen.getByText(/Estado: Ejecutada/)).toBeTruthy(); expect(screen.queryByText(/op-refreshed/)).toBeNull();
   expect(screen.queryByRole('button', { name: 'Confirmar' })).toBeNull(); expect(apiClient.decideAgentAction).not.toHaveBeenCalled();
 });

@@ -13,6 +13,7 @@ const { normalizeSupplier, resolveSupplier } = require('./replenishmentPlanning'
 const { SUPPLIER_SELECTION_TTL_MS, contextBinding } = require('./memory');
 const { resolveProductListFollowup } = require('./productListFollowups');
 const { ordinalSelection } = require('./ordinalSelection');
+const { money: currencyMoney } = require('../utils/assistantFormatting');
 
 const supplierSelection = (message, state, now) => {
   const pending = state.supplierResolution;
@@ -485,8 +486,8 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
                 if (!priced.length) { answer = 'No hay ofertas válidas suficientes en la lista para comparar el costo de reposición.'; plan.compoundAnswer = answer; break; }
                 const top = Math.max(...priced.map(row => row.total));
                 const winners = priced.filter(row => row.total === top);
-                answer = winners.length > 1 ? `Hay empate en el mayor costo de reposición de esa lista: ${winners.map(row => `${row.sku} (${row.supplier})`).join(', ')}, ${top.toFixed(2)} ${currencies[0]}.`
-                  : `${winners[0].sku} (${winners[0].name}) tiene el mayor costo de reposición dentro de esa lista: ${top.toFixed(2)} ${currencies[0]}, con ${winners[0].supplier}.`;
+                answer = winners.length > 1 ? `Hay empate en el mayor costo de reposición de esa lista: ${winners.map(row => `${row.sku} (${row.supplier})`).join(', ')}, ${currencyMoney(top, currencies[0])}.`
+                  : `${winners[0].sku} (${winners[0].name}) tiene el mayor costo de reposición dentro de esa lista: ${currencyMoney(top, currencies[0])}, con ${winners[0].supplier}.`;
                 if (plan.historicalAnchor) answer += ` Las cantidades recomendadas proceden del replay histórico con ancla ${plan.historicalAnchor}.`;
                 plan.compoundAnswer = answer;
                 break;
@@ -656,7 +657,11 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             }
             sections = [];
           }
-          if (sections.length) answer = sections.map(index => buildSkillAnswer(results[index].skillId, results[index].result)).join('\n\n');
+          if (sections.length) {
+            const hasFinalResult = sections.some(index => results[index].skillId !== 'search_products' && results[index].result.status === 'READY');
+            answer = sections.filter(index => !(hasFinalResult && results[index].skillId === 'search_products' && results[index].result.data?.length === 1))
+              .map(index => buildSkillAnswer(results[index].skillId, results[index].result, input.message)).join('\n\n');
+          }
           if (plan.intent === 'compound_product_list') { answer = plan.compoundAnswer || answer; sections = []; }
           if (['unsupported_supplier_causality', 'forecast_confidence', 'unsupported_financial_impact'].includes(plan.intent)) {
             answer = unsupportedClaimAnswer(plan.intent); sections = [];

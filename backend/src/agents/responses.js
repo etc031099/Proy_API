@@ -2,7 +2,8 @@ const format = value => typeof value === 'number' && Number.isFinite(value)
   ? new Intl.NumberFormat('es-PE', { maximumFractionDigits: 2 }).format(value) : 'no disponible';
 const money = value => typeof value === 'number' && Number.isFinite(value)
   ? new Intl.NumberFormat('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value) : 'no disponible';
-const name = row => `${row.sku || row.name || 'Producto'}${row.sku && row.name ? ` (${row.name})` : ''}`;
+const { money: currencyMoney } = require('../utils/assistantFormatting');
+const name = row => `${row.name || row.productName || row.sku || 'Producto'}${row.sku && (row.name || row.productName) ? ` (${row.sku})` : ''}`;
 const countLabel = (count, singular, plural) => `${format(count)} ${count === 1 ? singular : plural}`;
 const units = value => countLabel(value, 'unidad', 'unidades');
 const availableUnits = value => countLabel(value, 'unidad disponible', 'unidades disponibles');
@@ -49,7 +50,7 @@ const periodLabel = metadata => {
   if (startDate === endDate) return `el ${dateLabel(startDate)}`;
   return `el periodo del ${dateLabel(startDate)} al ${dateLabel(endDate)}`;
 };
-const amounts = rows => (rows || []).map(row => `${money(row.amount)} ${row.currency}`).join('; ');
+const amounts = rows => (rows || []).map(row => currencyMoney(row.amount, row.currency)).join('; ');
 const dateTimeLabel = value => {
   const date = new Date(value);
   return Number.isFinite(date.getTime())
@@ -89,15 +90,15 @@ const budgetPlanFollowupAnswer = (plan, followupType, productRef) => {
     case 'remaining': return `Quedan ${amount(plan.remaining)} sin asignar.`;
     case 'spent': return `El plan propuso asignar ${amount(plan.spent)} de ${amount(plan.budget)}; esta propuesta no registra una compra.`;
     case 'budget': return `El presupuesto de la propuesta fue ${amount(plan.budget)}.`;
-    case 'planned_units': return `Se planificaron ${countLabel(plan.plannedUnits, 'unidad', 'unidades')} de compra.`;
+    case 'planned_units': return `Se ${plan.plannedUnits === 1 ? 'planificó' : 'planificaron'} ${units(plan.plannedUnits)} de compra.`;
     case 'pending_units': return plan.pendingUnits === null
       ? 'El snapshot de esta propuesta no conserva un total verificable de unidades pendientes.'
-      : `Quedaron ${countLabel(plan.pendingUnits, 'unidad', 'unidades')} recomendadas pendientes de cubrir.`;
+      : `Qued${plan.pendingUnits === 1 ? 'ó' : 'aron'} ${units(plan.pendingUnits)} ${plan.pendingUnits === 1 ? 'recomendada pendiente' : 'recomendadas pendientes'} de cubrir.`;
     case 'pending_items': {
       const pendingItems = plan.items.filter(item => item.pendingQty !== null && item.pendingQty > 0);
       const total = plan.pendingUnits === null ? ''
-        : `Quedaron ${countLabel(plan.pendingUnits, 'unidad', 'unidades')} recomendadas pendientes de cubrir. `;
-      const details = pendingItems.map(item => `${item.sku}: ${countLabel(item.pendingQty, 'unidad', 'unidades')} pendientes`).join('; ');
+        : `Qued${plan.pendingUnits === 1 ? 'ó' : 'aron'} ${units(plan.pendingUnits)} ${plan.pendingUnits === 1 ? 'recomendada pendiente' : 'recomendadas pendientes'} de cubrir. `;
+      const details = pendingItems.map(item => `${item.sku}: ${units(item.pendingQty)} ${item.pendingQty === 1 ? 'pendiente' : 'pendientes'}`).join('; ');
       if (!details) return `${total}El detalle guardado no permite enumerar productos que no entraron en la propuesta sin recalcularla.`.trim();
       return `${total}Entre los productos que la propuesta cubrió parcialmente: ${details}.`;
     }
@@ -115,7 +116,7 @@ const replenishmentExplanation = result => {
   const row = result.data?.[0];
   if (!row) return buildSkillAnswer('get_demand_forecast', result);
   if (row.mlStatus !== 'READY') return `${name(row)} ${readinessLabel(row.mlStatus)}; no se puede justificar una cantidad numérica de reposición.`;
-  return `${name(row)}: el modelo estimó ${format(row.predictedDemand7d)} unidades en el horizonte histórico agregado de 7 días. En la fecha de referencia había ${format(row.stockAtAnchor)} unidades; el stock de seguridad es ${format(row.safetyStock)} y se recomienda reponer ${format(row.recommendedQty)} unidades. La recomendación combina demanda prevista, stock disponible y stock de seguridad. ${historicalNote([row], result.metadata)}`;
+  return `${name(row)}: el modelo estimó ${units(row.predictedDemand7d)} en el horizonte histórico agregado de 7 días. En la fecha de referencia había ${units(row.stockAtAnchor)}; el stock de seguridad es ${format(row.safetyStock)} y se recomienda reponer ${units(row.recommendedQty)}. La recomendación combina demanda prevista, stock disponible y stock de seguridad. ${historicalNote([row], result.metadata)}`;
 };
 const readinessLabel = status => ({
   INSUFFICIENT_HISTORY: 'todavía no tiene suficiente historial para generar una predicción',
@@ -153,7 +154,7 @@ const businessAnswer = (data, metadata) => {
 const productCountAnswer = data => `Tienes ${countLabel(data.activeProducts, 'producto activo', 'productos activos')}.`;
 
 /** Every displayed number is taken from a verified skill DTO; no ML recalculation. */
-const buildSkillAnswer = (skillId, result) => {
+const buildSkillAnswer = (skillId, result, question = '') => {
   if (skillId === 'analyze_demand_forecast') return require('./forecastResponses').buildForecastAnalysisAnswer(result);
   const { data, metadata, status } = result;
   if (skillId === 'list_stock_alert_rules') {
@@ -215,7 +216,7 @@ const buildSkillAnswer = (skillId, result) => {
       return `• ${row.sku || 'Producto no disponible'} — ${eventType} — ${state}. ${attempts}${created}${delivered}${error}${retry}`;
     });
     const count = metadata.totalMatches;
-    const heading = `Se encontraron ${count} ${count === 1 ? 'evento' : 'eventos'} de entrega de alertas${metadata.truncated ? ` (mostrando ${metadata.returnedCount})` : ''}:`;
+    const heading = `Se ${count === 1 ? 'encontró' : 'encontraron'} ${count} ${count === 1 ? 'evento' : 'eventos'} de entrega de alertas${metadata.truncated ? ` (mostrando ${metadata.returnedCount})` : ''}:`;
     return `${heading}\n${lines.join('\n')}`;
   }
   if (status === 'ML_NOT_READY') return 'Este negocio aún no cuenta con historial o configuración suficiente para generar predicciones.';
@@ -227,10 +228,10 @@ const buildSkillAnswer = (skillId, result) => {
         USER_SPECIFIED_UNAVAILABLE: 'El proveedor indicado no tiene una oferta válida para este producto. ' }[data.selectionRule] || '';
       const match = data.supplierMatch && data.supplierMatch.requested !== data.selectedSupplier
         ? `Tomé «${data.supplierMatch.requested}» como ${data.selectedSupplier}. ` : '';
-      return `${match}${data.sku} (${data.productName}): ${format(data.recommendedQty)} ${data.recommendedQty === 1 ? 'unidad' : 'unidades'} recomendadas × ${money(data.unitCost)} ${data.currency} = ${data.replenishmentCost === null ? 'costo no disponible' : `${money(data.replenishmentCost)} ${data.currency}`}.\n${rule}Proveedor: ${data.selectedSupplier || 'sin oferta utilizable'}. Stock al ancla: ${format(data.stockAtAnchor)}; demanda prevista: ${format(data.predictedDemand7d)}; estado: ${data.inventoryStatus || data.mlStatus}.\n${historicalPriceNote(metadata)}`;
+      return `${match}${data.sku} (${data.productName}): ${format(data.recommendedQty)} ${data.recommendedQty === 1 ? 'unidad recomendada' : 'unidades recomendadas'} × ${currencyMoney(data.unitCost, data.currency)} = ${data.replenishmentCost === null ? 'costo no disponible' : `${currencyMoney(data.replenishmentCost, data.currency)}`}.\n${rule}Proveedor: ${data.selectedSupplier || 'sin oferta utilizable'}. Stock al ancla: ${format(data.stockAtAnchor)}; demanda prevista: ${format(data.predictedDemand7d)}; estado: ${data.inventoryStatus || data.mlStatus}.\n${historicalPriceNote(metadata)}`;
     }
     const coverage = data.coverageProducts;
-    return `Costo conocido para la reposición recomendada: ${money(data.knownCostSubtotal)} ${data.currency}. Productos considerados: ${data.consideredProducts}; con costo válido: ${data.costedProducts}; excluidos: ${data.excludedProducts}; unidades recomendadas: ${data.recommendedUnits}.${data.excludedProducts > 0 || coverage?.eligible > coverage?.costed ? ' El subtotal es incompleto porque hay productos sin costo utilizable o sin forecast READY.' : ''}\n${historicalPriceNote(metadata)}`;
+    return `Costo conocido para la reposición recomendada: ${currencyMoney(data.knownCostSubtotal, data.currency)}. Productos considerados: ${data.consideredProducts}; con costo válido: ${data.costedProducts}; excluidos: ${data.excludedProducts}; unidades recomendadas: ${data.recommendedUnits}.${data.excludedProducts > 0 || coverage?.eligible > coverage?.costed ? ' El subtotal es incompleto porque hay productos sin costo utilizable o sin forecast READY.' : ''}\n${historicalPriceNote(metadata)}`;
   }
   if (skillId === 'compare_supplier_costs') {
     const offers = Array.isArray(data) ? data : [];
@@ -238,19 +239,18 @@ const buildSkillAnswer = (skillId, result) => {
     const selected = offers.find(row => row.selected);
     const selectedNote = selected ? `Para una reposición normal, se utilizaría ${selected.supplier} porque ${selected.preferred
       ? 'es el proveedor preferido configurado' : 'es la oferta válida de menor costo'}.` : 'No hay un proveedor seleccionado.';
-    return `Para ${offers[0].sku} (${offers[0].productName}) hay ${offers.length} proveedor${offers.length === 1 ? '' : 'es'} con ofertas válidas:\n${offers.map(row => `• ${row.supplier}: ${money(row.unitCost)} ${row.currency} por unidad${row.preferred ? '. Es el proveedor preferido configurado' : ''}${row.selected && !row.preferred ? '. Oferta seleccionada' : ''}.`).join('\n')}\n${selectedNote} Precios consultados: ${metadata.pricingAsOf ? dateTimeLabel(metadata.pricingAsOf) : 'fecha no disponible'}.`;
+    return `Para ${offers[0].sku} (${offers[0].productName}) hay ${offers.length} proveedor${offers.length === 1 ? '' : 'es'} con ofertas válidas:\n${offers.map(row => `• ${row.supplier}: ${currencyMoney(row.unitCost, row.currency)} por unidad${row.preferred ? '. Es el proveedor preferido configurado' : ''}${row.selected && !row.preferred ? '. Oferta seleccionada' : ''}.`).join('\n')}\n${selectedNote} Precios consultados: ${metadata.pricingAsOf ? dateTimeLabel(metadata.pricingAsOf) : 'fecha no disponible'}. Los precios configurados no son cotizaciones confirmadas.`;
   }
   if (skillId === 'get_supplier_products') {
     if (Object.hasOwn(data, 'product')) {
       if (!data.product) return `No encontré el producto ${data.productRef} en el catálogo de este negocio.`;
       if (!data.product.hasOffer) return `El proveedor ${data.supplierName} existe, pero no tiene una oferta configurada para ${data.product.sku} (${data.product.productName}).`;
-      const currency = data.product.currency === 'PEN' ? 'S/ ' : '';
-      return `Sí. ${data.supplierName} tiene una oferta configurada para ${data.product.sku} (${data.product.productName}) por ${currency}${money(data.product.purchasePrice)} ${data.product.currency}${data.product.preferredForProduct ? '. Es el proveedor preferido configurado para este producto' : ''}. Este precio está configurado en el sistema y no es una cotización confirmada.`;
+      return `Sí. ${data.supplierName} tiene una oferta configurada para ${data.product.sku} (${data.product.productName}) por ${currencyMoney(data.product.purchasePrice, data.product.currency)}${data.product.preferredForProduct ? '. Es el proveedor preferido configurado para este producto' : ''}. Este precio está configurado en el sistema y no es una cotización confirmada.`;
     }
     const items = data.items || [];
     if (!items.length) return `${data.supplierName} no tiene productos con ofertas configuradas en el catálogo de este negocio.`;
     const first = metadata.offset + 1, last = metadata.offset + items.length;
-    const price = row => `${row.currency === 'PEN' ? 'S/ ' : ''}${money(row.purchasePrice)} ${row.currency}`;
+    const price = row => `${currencyMoney(row.purchasePrice, row.currency)}`;
     const lines = items.map(row => `• ${row.sku || 'Sin SKU'} — ${row.productName} — ${price(row)}${row.preferredForProduct ? ' (proveedor preferido configurado)' : ''}${row.active ? '' : ' (producto inactivo)'}`);
     return [`${data.supplierName} tiene ${countLabel(data.totalProducts, 'producto con oferta configurada', 'productos con ofertas configuradas')} en el sistema:`,
       ...lines, `Mostrando ${first}–${last} de ${data.totalProducts}. Los precios configurados no son cotizaciones confirmadas.${data.pagination?.hasMore ? ' Puedes decir «ver más» para continuar.' : ''}`].join('\n');
@@ -264,7 +264,7 @@ const buildSkillAnswer = (skillId, result) => {
     const excluded = Object.entries(data.exclusionsByReason || {}).map(([reason, count]) =>
       `${count} ${exclusionLabels[reason.replace(/^FORECAST_/, '')] || (reason.startsWith('FORECAST_') ? 'forecast no listo' : 'sin oferta utilizable')}`);
     return [`Con S/ ${money(data.budget)}, la propuesta asigna S/ ${money(data.spent)} y deja S/ ${money(data.remaining)}.`,
-      `${data.plannedUnits === 1 ? '1 unidad' : `${format(data.plannedUnits)} unidades`} planificadas; ${format(data.unplannedUnits)} quedan pendientes.`, ...lines,
+      `${data.plannedUnits === 1 ? '1 unidad planificada' : `${format(data.plannedUnits)} unidades planificadas`}; ${format(data.unplannedUnits)} ${data.unplannedUnits === 1 ? 'queda pendiente' : 'quedan pendientes'}.`, ...lines,
       data.excludedProducts ? `No se pudieron costear ${data.excludedProducts} productos recomendados${excluded.length ? `: ${excluded.join('; ')}` : '.'}.` : '',
       historicalPriceNote(metadata)].filter(Boolean).join('\n');
   }
@@ -273,8 +273,17 @@ const buildSkillAnswer = (skillId, result) => {
     : `Durante ${periodLabel(metadata)} registraste ${countLabel(data.completedSalesCount, 'venta completada', 'ventas completadas')}, con ${countLabel(data.totalUnitsSold, 'unidad vendida', 'unidades vendidas')}. El importe de ventas es ${amounts(data.amountsByCurrency)}.`;
   if (skillId === 'get_product_sales_summary') return status === 'NO_DATA'
     ? `${name(data.product)} no registra ventas completadas durante ${periodLabel(metadata)}.`
-    : `${name(data.product)} vendió ${format(data.totalUnitsSold)} unidades durante ${periodLabel(metadata)}. El importe correspondiente a ese producto es ${amounts(data.amountsByCurrency)}.`;
-  if (skillId === 'get_product_details') return `${name(data)} tiene ${availableUnits(data.stock)} y un mínimo configurado de ${units(data.minStockLevel)}. Su precio es ${money(data.price)} ${data.currency}. El producto está ${data.isActive ? 'activo' : 'inactivo'}.`;
+    : `${name(data.product)} vendió ${units(data.totalUnitsSold)} durante ${periodLabel(metadata)}. El importe correspondiente a ese producto es ${amounts(data.amountsByCurrency)}.`;
+  if (skillId === 'get_product_details') {
+    const text = question.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    if (!/detalles|informacion|todo/.test(text)) {
+      if (/minimo|\bmin\b/.test(text)) return `El stock mínimo de ${name(data)} es ${units(data.minStockLevel)}.`;
+      if (/precio/.test(text)) return `El precio de ${name(data)} es ${currencyMoney(data.price, data.currency)}.`;
+      if (/activ[oa]|estado/.test(text)) return `${name(data)} está ${data.isActive ? 'activo' : 'inactivo'}.`;
+      if (/stock|disponib/.test(text)) return `${name(data)} tiene ${availableUnits(data.stock)}. Stock mínimo: ${units(data.minStockLevel)}.`;
+    }
+    return `${name(data)} tiene ${availableUnits(data.stock)} y un mínimo configurado de ${units(data.minStockLevel)}. Su precio es ${currencyMoney(data.price, data.currency)}. El producto está ${data.isActive ? 'activo' : 'inactivo'}.`;
+  }
   if (skillId === 'get_business_summary') return businessAnswer(data, metadata);
   const rankingPeriod = metadata.period ? periodLabel(metadata) : 'todo el historial disponible';
   if (!Array.isArray(data) || !data.length) return ({
@@ -299,7 +308,7 @@ const buildSkillAnswer = (skillId, result) => {
       ? ` y necesita ${quantityWithoutRepeatedUnit(row.shortage)} más para alcanzar su mínimo de ${format(row.minStockLevel)}`
       : ` y está justo en su mínimo de ${format(row.minStockLevel)}`}.`;
     if (skillId === 'get_top_selling_products') return `• ${name(row)} — ${countLabel(row.unitsSold, 'unidad vendida', 'unidades vendidas')}.`;
-    if (skillId === 'get_recent_transactions') return `• ${dateLabel(row.date)}: ${row.type === 'sale' ? 'venta' : 'compra'} ${{ completed: 'completada', pending: 'pendiente', cancelled: 'cancelada' }[row.status] || 'con estado no disponible'} por ${money(row.total)} ${row.currency}, con ${row.itemCount} líneas de productos.`;
+    if (skillId === 'get_recent_transactions') return `• ${dateLabel(row.date)}: ${row.type === 'sale' ? 'venta' : 'compra'} ${{ completed: 'completada', pending: 'pendiente', cancelled: 'cancelada' }[row.status] || 'con estado no disponible'} por ${currencyMoney(row.total, row.currency)}, con ${countLabel(row.itemCount, 'línea de productos', 'líneas de productos')}.`;
     if (skillId === 'get_demand_forecast' || skillId === 'get_replenishment_candidates') {
       if (row.mlStatus !== 'READY') return `• ${name(row)} ${readinessLabel(row.mlStatus)}; no hay predicción disponible.`;
       if (skillId === 'get_replenishment_candidates') return `• ${name(row)} — reponer ${units(row.recommendedQty)}; demanda estimada de ${units(row.predictedDemand7d)} y stock disponible de ${units(row.stockAtAnchor)} en la fecha de referencia.`;
@@ -320,7 +329,7 @@ const buildCheapestSupplierAnswer = result => {
   if (!offers.length) return 'No encontré ofertas activas y válidas en PEN para ese producto.';
   const cheapest = lowestUnitOffer(offers);
   const row = offers[0];
-  return `La oferta válida de menor costo para ${row.sku} (${row.productName}) es ${cheapest.supplier}: ${money(cheapest.unitCost)} ${cheapest.currency} por unidad.${cheapest.preferred ? ' También es el proveedor preferido configurado.' : ''} Precio configurado consultado: ${result.metadata.pricingAsOf ? dateTimeLabel(result.metadata.pricingAsOf) : 'fecha no disponible'}; no es una cotización confirmada.`;
+  return `La oferta válida de menor costo para ${row.sku} (${row.productName}) es ${cheapest.supplier}: ${currencyMoney(cheapest.unitCost, cheapest.currency)} por unidad.${cheapest.preferred ? ' También es el proveedor preferido configurado.' : ''} Precio configurado consultado: ${result.metadata.pricingAsOf ? dateTimeLabel(result.metadata.pricingAsOf) : 'fecha no disponible'}; no es una cotización confirmada.`;
 };
 
 const buildProductListSupplierComparisonAnswer = (result, comparisonType) => {
@@ -346,12 +355,12 @@ const buildProductListSupplierComparisonAnswer = (result, comparisonType) => {
     if (!currencyGroups.has(row.cheapest.currency)) currencyGroups.set(row.cheapest.currency, []);
     currencyGroups.get(row.cheapest.currency).push(row);
   }
-  const formatMoney = (cents, currency) => `${currency === 'PEN' ? 'S/ ' : ''}${money(cents / 100)} ${currency}`;
+  const formatMoney = (cents, currency) => currencyMoney(cents / 100, currency);
   const winnerText = (currency, group) => {
     const minimum = Math.min(...group.map(row => row.comparisonCents));
     const winners = group.filter(row => row.comparisonCents === minimum);
     return winners.map(row => canCompareTotal
-      ? `• ${row.sku} (${row.productName}): ${formatMoney(row.comparisonCents, currency)} por ${row.recommendedQty} unidades con ${row.cheapest.supplier} (${formatMoney(Math.round(row.cheapest.unitCost * 100), currency)} por unidad).`
+      ? `• ${row.sku} (${row.productName}): ${formatMoney(row.comparisonCents, currency)} por ${units(row.recommendedQty)} con ${row.cheapest.supplier} (${formatMoney(Math.round(row.cheapest.unitCost * 100), currency)} por unidad).`
       : `• ${row.sku} (${row.productName}): ${row.cheapest.supplier}, ${formatMoney(row.comparisonCents, currency)} por unidad${row.cheapest.preferred ? ' (también es el proveedor preferido configurado)' : ''}.`);
   };
   const lines = [...currencyGroups].sort(([a], [b]) => a.localeCompare(b)).flatMap(([currency, group]) => winnerText(currency, group));

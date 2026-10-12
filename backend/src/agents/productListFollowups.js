@@ -37,7 +37,7 @@ const resolveProductListFollowup = (type, selection) => {
   if (type === 'count_replenish' || type === 'filter_replenish') {
     if (rows.some(row => !row.status)) return { needsLookup: 'status' };
     const matches = rows.filter(row => row.status === 'REPONER');
-    if (type === 'count_replenish') return { answer: `${matches.length} de ${rows.length} productos de esa lista están en estado REPONER.` };
+    if (type === 'count_replenish') return { answer: `${matches.length} de ${rows.length} ${rows.length === 1 ? 'producto' : 'productos'} de esa lista ${matches.length === 1 ? 'está' : 'están'} en estado REPONER.` };
     if (!matches.length) return { answer: 'Ninguno de los productos de esa lista está en estado REPONER.' };
     return { answer: `De esa lista están en REPONER: ${matches.map(row => `${labelOf(row)} (${row.name || row.label || 'sin nombre'})`).join(', ')}.` };
   }
@@ -45,9 +45,10 @@ const resolveProductListFollowup = (type, selection) => {
   if (!field || rows.some(row => !Number.isFinite(row[field]))) return { needsLookup: field || null };
   const targetValue = (type === 'min_stock' ? Math.min : Math.max)(...rows.map(row => row[field]));
   const winners = rows.filter(row => row[field] === targetValue);
-  if (winners.length > 1) return { answer: `Hay un empate: ${winners.map(labelOf).join(', ')} tienen ${format(targetValue)}${field === 'stock' ? ' unidades de stock' : field === 'predictedDemand' ? ' unidades de demanda prevista' : ' unidades de reposición sugerida'}.` };
+  const unit = targetValue === 1 ? 'unidad' : 'unidades';
+  if (winners.length > 1) return { answer: `Hay un empate: ${winners.map(labelOf).join(', ')} tienen ${format(targetValue)} ${unit}${field === 'stock' ? ' de stock' : field === 'predictedDemand' ? ' de demanda prevista' : ' de reposición sugerida'}.` };
   const selectedProduct = winners[0];
-  const metric = field === 'stock' ? 'unidades disponibles' : field === 'predictedDemand' ? 'unidades de demanda prevista' : 'unidades de reposición sugerida';
+  const metric = field === 'stock' ? `${unit} ${targetValue === 1 ? 'disponible' : 'disponibles'}` : field === 'predictedDemand' ? `${unit} de demanda prevista` : `${unit} de reposición sugerida`;
   return { selectedProduct, answer: `${labelOf(selectedProduct)} (${selectedProduct.name || selectedProduct.label || 'producto'}) es el que ${type === 'min_stock' ? 'tiene menos stock' : type === 'max_stock' ? 'tiene más stock' : type === 'max_demand' ? 'tiene mayor demanda prevista' : 'necesita más reposición'}, con ${format(targetValue)} ${metric}.` };
 };
 
