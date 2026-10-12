@@ -19,8 +19,9 @@ const draftSchema = schema({ action: { ...string(30), enum: ['create_product', '
   items: { type: 'array', maxItems: 20, items: schema({ ref: string(100), quantity: { ...integer(1000000), minimum: 1 } }, ['ref']) },
   currency: { ...string(3), enum: ['PEN', 'USD', 'EUR'] }, paymentMethod: { ...string(20), enum: ['cash', 'credit', 'card', 'bank_transfer', 'wallet', 'other'] },
   customerRef: string(100), supplierRef: string(100), supplierId: objectId, purchasePrice: number(), enrichment: string(20),
-  selection: selectionSchema, supplierChoices: selectionSchema,
+  selection: selectionSchema, supplierChoices: selectionSchema, productChoices: selectionSchema,
   readSuspended: { type: 'boolean' },
+  confirmationReady: { type: 'boolean' },
   selectedSupplier: schema({ id: objectId, name: string(100) }, ['id', 'name']),
   selectedProductReference: schema({ id: objectId, sku: string(100), name: string(100) }, ['id', 'sku', 'name']),
   missingFields: { type: 'array', maxItems: 10, items: string(30) }, itemIndex: integer(20),
@@ -56,6 +57,8 @@ function updateDraft(previous, extracted, message) {
   const text = normalize(numericWords(message));
   if (!draft.selection && draft.supplierChoices && /\bproveedor\b/.test(text) && ordinalSelection(message).matched)
     draft.selection = structuredClone(draft.supplierChoices);
+  if (!draft.selection && draft.productChoices && /\bproducto\b/.test(text) && ordinalSelection(message).matched)
+    draft.selection = structuredClone(draft.productChoices);
   if (draft.selection) {
     const ordinal = ordinalSelection(message);
     if (ordinal.matched && (ordinal.index === null || !choose(draft.selection, message))) return draft;
@@ -89,7 +92,7 @@ function updateDraft(previous, extracted, message) {
         draft.supplierChoices = structuredClone(draft.selection);
         delete draft.selectedSupplier;
       }
-      if (slot === 'product') draft.items[index].ref = selected._id;
+      if (slot === 'product') { draft.productChoices = structuredClone(draft.selection); draft.items[index].ref = selected._id; }
       else if (slot === 'productSupplier') {
         if (draft.supplierId && draft.supplierId !== selected._id) delete draft.purchasePrice;
         draft.supplierId = selected._id; draft.enrichment = 'supplier';
@@ -116,6 +119,8 @@ function updateDraft(previous, extracted, message) {
       if (Number.isSafeInteger(extracted.threshold) && extracted.threshold >= 0 && extracted.threshold <= 1000000) draft.threshold = extracted.threshold;
       else delete draft.threshold;
     }
+    const thresholdCorrection = /^(?:mejor|cambia)(?: el)? (?:umbral|limite)(?: a)? (\S+)$/.exec(numericWords(message).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim());
+    if (thresholdCorrection) draft.threshold = integerToken(thresholdCorrection[1], 0);
     if (previous?.missingFields?.includes('product') && !extracted.items?.length && !extracted.operator)
       draft.items = [{ ref: message.trim().replace(/^SKU\s+/i, '') }];
   } else if (draft.action === 'create_product') {
@@ -141,14 +146,14 @@ function updateDraft(previous, extracted, message) {
   } else {
     // Entity normalization removes punctuation; numeric corrections must not use it.
     const numericText = numericWords(message).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
-    const correction = /(?:mejor(?: que)?(?: sean)?|pon|cantidad(?: del producto (\d+))? a|cantidad)\s+(\S+)/.exec(numericText);
+    const correction = /(?:mejor(?: que)?(?: sean)?(?: vende| compra)?|pon|cantidad(?: del producto (\d+))? a|cantidad)\s+(?=[+\-−\d.,])(\S+)/.exec(numericText);
     if (correction && draft.items?.length) {
       const index = correction[1] ? Number(correction[1]) - 1 : draft.items.length === 1 ? 0 : -1;
       if (draft.items[index]) draft.items[index].quantity = integerToken(correction[2]);
     } else if (previous?.missingFields?.includes('quantity') && /^\S+(?: unidades?)?$/.test(numericText)) draft.items[previous.itemIndex || 0].quantity = integerToken(numericText.split(' ')[0]);
     else if (!previous || /^(?:vende|vender|compre|compra|comprar|registra)/.test(text)) draft.items = extracted.items;
     const changeProduct = /^(?:no es .+?,? es|cambia (?:el )?producto (?:a|por)|producto|sku)\s+(.+)$/.exec(text);
-    if (changeProduct && draft.items?.length === 1) { draft.items[0].ref = changeProduct[1].replace(/^la de /, ''); delete draft.selection; }
+    if (changeProduct && draft.items?.length === 1) { draft.items[0].ref = changeProduct[1].replace(/^la de /, ''); delete draft.selection; delete draft.productChoices; }
     if (previous?.missingFields?.includes('product') && !changeProduct && !/que|datos|falta/.test(text)) draft.items[previous.itemIndex || 0].ref = message.trim();
     if (extracted.supplierRef) { draft.supplierRef = extracted.supplierRef; delete draft.selection; delete draft.selectedSupplier; }
     if (extracted.customerRef && (!previous || /^(?:vende|vender|registra)/.test(text) || /cliente/.test(text))) draft.customerRef = extracted.customerRef;

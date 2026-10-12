@@ -13,7 +13,7 @@ const vendor = { _id: 'dddddddddddddddddddddddd', name: 'Distribuidora Inka SAC'
 const request = (businessId = 'SYNTHETIC', userId = 'aaaaaaaaaaaaaaaaaaaaaaaa') => ({ businessId,
   user: { _id: userId, businessId, role: 'user', isActive: true } });
 function fixture({ products = [p1, p2], suppliers = [vendor], configured = [vendor], clock = Date.now } = {}) {
-  const prepared = [], cancelled = [], pending = new Map();
+  const prepared = [], cancelled = [], confirmed = [], pending = new Map(), argsById = new Map();
   const resolver = async (model, context, ref, type, offset = 0) => {
     assert.equal(context.businessId, 'SYNTHETIC');
     const rows = model === Product ? products : suppliers;
@@ -24,16 +24,26 @@ function fixture({ products = [p1, p2], suppliers = [vendor], configured = [vend
   };
   const service = {
     async prepare(value) { prepared.push(structuredClone(value.args));
-      const row = { summary: 'Revisa la operación', status: 'PENDING', pendingActionId: randomUUID() }; pending.set(row.pendingActionId, row); return row; },
-    async get(ctx, id) { return pending.get(id); },
+      const row = { action: value.skillId, summary: 'Revisa la operación', status: 'PENDING', pendingActionId: randomUUID(), expiresAt: new Date(clock() + 600000).toISOString() };
+      argsById.set(row.pendingActionId, structuredClone(value.args)); pending.set(row.pendingActionId, row); return row; },
+    async get(ctx, id) { const row = pending.get(id); return row?.status === 'PENDING' && Date.parse(row.expiresAt) <= clock() ? { ...row, status: 'EXPIRED' } : row; },
     async cancelPendingAction(ctx, id) { cancelled.push(id); const row = pending.get(id); row.status = 'CANCELLED'; return row; },
-    async resolvePending() { return [...pending.values()].find(row => row.status === 'PENDING'); }
+    async confirmPendingAction(ctx, id) {
+      const row = pending.get(id);
+      if (row.status === 'EXECUTED') return row;
+      assert.equal(row.status, 'PENDING'); assert.ok(Date.parse(row.expiresAt) > clock());
+      confirmed.push(structuredClone(argsById.get(id))); row.status = 'EXECUTED';
+      row.result = row.action === 'create_stock_alert_rule'
+        ? { ruleConfigured: true, sku: 'COC500', ...argsById.get(id) } : { sku: 'COC500', stock: 10 };
+      return row;
+    },
+    async resolvePending() { const rows = [...pending.values()].filter(row => row.status === 'PENDING' && Date.parse(row.expiresAt) > clock()); return rows.length === 1 ? rows[0] : null; }
   };
   const options = { resolver, supplierLookup: async () => configured, listSuppliers: async () => suppliers, clock };
   const runtime = { handle: async () => ({ answer: 'Lectura', usage: { totalTokens: 0 } }), getContextSnapshot: async () => ({}) };
   const adapter = withActionAssistant(runtime, service, options), conversationId = randomUUID();
   const send = message => adapter.handle(request(), { message, conversationId });
-  return { adapter, runtime, service, options, conversationId, send, prepared, cancelled };
+  return { adapter, runtime, service, options, conversationId, send, prepared, cancelled, confirmed };
 }
 const pagedProducts = () => Array.from({ length: 28 }, (_, i) => ({ ...p1, _id: (i + 1).toString(16).padStart(24, '0'),
   name: `Food ${i % 4} variant ${i}`, sku: `PAGE-${i}` }));
@@ -603,6 +613,141 @@ test('purchase cost remains missing until explicitly entered in the product curr
 test('fully supplied product vendor and cost avoid redundant enrichment questions', async () => {
   const f = fixture(); await f.send(`${creation}, proveedor Distribuidora Inka SAC, precio de compra 2.80`);
   assert.equal(f.prepared.length, 1); assert.equal(f.prepared[0].supplierPrices[0].supplierId, vendor._id);
+});
+
+for (const phrase of ['confirmar', 'confirma', 'confirmalo', 'confírmalo', 'sí, confirmar', 'sí, confirma', 'sí, hazlo', 'sí, procede',
+  'hazlo', 'procede', 'adelante', 'acepto', 'de acuerdo', 'ok, confirma', 'correcto, confirma', 'sí', 'ok', 'vale', 'correcto', 'dale',
+  'confimra', 'ok confirm', 'confirm', 'yes, confirm']) {
+  test(`P2D sale preview accepts exact affirmative ${phrase} with zero LLM and one execution`, async () => {
+    const f = fixture(); await f.send('Vende 3 COC500');
+    const result = await f.send(phrase);
+    assert.equal(result.pendingAction.status, 'EXECUTED'); assert.equal(f.confirmed.length, 1);
+    assert.equal(f.confirmed[0].products[0].quantity, 3);
+    assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
+  });
+}
+for (const phrase of ['cancelar', 'cancela', 'cancélalo', 'cancelalo', 'no lo hagas', 'mejor no', 'déjalo', 'olvídalo',
+  'descarta', 'descártalo', 'anula', 'no quiero hacerlo', 'cansela', 'cancel', 'no, cancel']) {
+  test(`P2D cancellation ${phrase} cancels only the pending draft`, async () => {
+    const f = fixture(); await f.send('Vende 3 COC500');
+    const result = await f.send(phrase);
+    assert.equal(result.pendingAction.status, 'CANCELLED'); assert.equal(f.confirmed.length, 0);
+    assert.equal(f.cancelled.length, 1); assert.match(result.answer, /No se ejecutó/);
+    assert.equal((await f.adapter.getContextSnapshot(request(), f.conversationId)).operationDraft, null);
+    assert.equal((await f.send('confirmar')).pendingAction, undefined);
+    assert.equal(result.usage.totalLlmCalls, 0);
+  });
+}
+for (const phrase of ['¿sí se descontarán 3 unidades?', '¿está bien el precio?', '¿qué pasa si confirmo?', '¿puedo cambiar el cliente?',
+  'no', 'no todavía', 'no confirmes', 'no, espera', 'todavía no', 'no quiero', 'no procede', 'no, sí quiero revisar primero',
+  'confirma y vende 4 COC500', 'sí, no lo hagas', 'confirmar no']) {
+  test(`P2D ambiguous/negative/question ${phrase} never executes or rebuilds`, async () => {
+    const f = fixture(); const preview = await f.send('Vende 3 COC500');
+    const result = await f.send(phrase);
+    assert.equal(f.confirmed.length, 0); assert.equal(f.cancelled.length, 0); assert.equal(f.prepared.length, 1);
+    assert.equal(result.pendingAction.pendingActionId, preview.pendingAction.pendingActionId);
+    assert.equal(result.requiresClarification, true); assert.equal(result.usage.totalLlmCalls, 0);
+    await f.send('sí'); assert.equal(f.confirmed.length, 0);
+    await f.send('confirmar'); assert.equal(f.confirmed.length, 1);
+  });
+}
+for (const phrase of ['confirmar', 'sí', 'dale', 'cancelar', 'procede', 'no lo hagas']) {
+  test(`P2D ${phrase} without pending is deterministic and preserves read context`, async () => {
+    const f = fixture(); f.runtime.handle = async () => { throw new Error('LLM/read routing not allowed'); };
+    f.runtime.getContextSnapshot = async () => ({ lastEntity: { id: p1._id, sku: p1.sku } });
+    const result = await f.send(phrase);
+    assert.match(result.answer, /No hay una operación pendiente/); assert.equal(f.prepared.length, 0); assert.equal(f.confirmed.length, 0);
+    assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
+    assert.equal((await f.adapter.getContextSnapshot(request(), f.conversationId)).lastEntity.sku, p1.sku);
+  });
+}
+test('P2D quantity correction replaces the frozen sale preview and confirms only the latest quantity', async () => {
+  const f = fixture(); const old = await f.send('Vende 3 COC500');
+  const updated = await f.send('mejor vende 2');
+  assert.notEqual(updated.pendingAction.pendingActionId, old.pendingAction.pendingActionId);
+  assert.deepEqual(f.prepared.map(args => args.products[0].quantity), [3, 2]); assert.equal(f.confirmed.length, 0);
+  await f.send('sí'); assert.equal(f.confirmed.length, 1); assert.equal(f.confirmed[0].products[0].quantity, 2);
+});
+test('P2D concurrent text confirmations execute once and cancellation after success never rolls back', async () => {
+  const f = fixture(); await f.send('Vende 3 COC500');
+  await Promise.all([f.send('confirmar'), f.send('confirmar')]);
+  assert.equal(f.confirmed.length, 1);
+  assert.match((await f.send('cancelar')).answer, /No hay una operación pendiente/);
+  assert.equal(f.cancelled.length, 0);
+});
+test('P2D expired pending and expired draft cannot execute', async () => {
+  for (const elapsed of [600001, TTL_MS + 1]) {
+    let time = Date.now(); const f = fixture({ clock: () => time }); await f.send('Vende 3 COC500');
+    time += elapsed; const result = await f.send('confirmar');
+    assert.match(result.answer, /expiró/); assert.equal(f.confirmed.length, 0); assert.equal(result.usage.totalLlmCalls, 0);
+  }
+});
+test('P2D a newer READ requires re-showing the preview before any textual confirmation', async () => {
+  const f = fixture(); await f.send('Vende 3 COC500'); await f.send('¿Cuánto stock tiene COC1500?');
+  const review = await f.send('confirmar'); assert.equal(f.confirmed.length, 0); assert.equal(review.pendingAction.status, 'PENDING');
+  await f.send('sí, hazlo'); assert.equal(f.confirmed.length, 1);
+});
+test('P2D an explicit price READ stays a READ and does not mutate the pending sale', async () => {
+  const f = fixture(); await f.send('Vende 3 COC500');
+  const result = await f.send('¿Cuál es el precio de COC1500?');
+  assert.equal(result.answer, 'Lectura'); assert.equal(f.prepared.length, 1); assert.equal(f.cancelled.length, 0);
+  assert.equal(f.confirmed.length, 0); await f.send('dale'); assert.equal(f.confirmed.length, 0);
+});
+test('P2D draft help interrupts short approval until a fresh preview or explicit confirmation', async () => {
+  const f = fixture(); await f.send('Vende 3 COC500'); await f.send('¿qué datos faltan?');
+  await f.send('sí'); assert.equal(f.confirmed.length, 0);
+  await f.send('confirmar'); assert.equal(f.confirmed.length, 1);
+});
+test('P2D active READ supplier disambiguation prevents confirmation of an older write', async () => {
+  const f = fixture(); await f.send('Vende 3 COC500'); await f.send('Dame los proveedores');
+  f.runtime.getContextSnapshot = async () => ({ supplierResolution: { candidates: [{ id: vendor._id, name: vendor.name }] } });
+  const result = await f.send('confirmar'); assert.match(result.answer, /selección de lectura activa/);
+  assert.equal(f.confirmed.length, 0); assert.equal(f.cancelled.length, 0);
+});
+test('P2D product selection is required before confirmation and remembered choices can correct the preview', async () => {
+  const f = fixture(); await f.send('Vende 3 coca');
+  await f.send('sí'); assert.equal(f.prepared.length, 0); assert.equal(f.confirmed.length, 0);
+  await f.send('Opción 2'); await f.send('no ese producto, el primero');
+  assert.equal(f.prepared.length, 2); assert.equal(f.prepared[1].products[0].quantity, 3);
+  assert.equal(f.prepared[0].products[0].productId, p2._id); assert.equal(f.prepared[1].products[0].productId, p1._id);
+  assert.equal(f.confirmed.length, 0); await f.send('confirmar'); assert.equal(f.confirmed[0].products[0].productId, p1._id);
+});
+test('P2D purchase supplier correction preserves product/quantity and proceeds only after latest preview', async () => {
+  const f = fixture({ products: [p2bPurchaseProduct()], suppliers: p2bVendors() });
+  await f.send('compra 3 del food 96 al proveedor San Martin');
+  await f.send('sí'); assert.equal(f.prepared.length, 0);
+  await f.send('Opción 1'); await f.send('mejor con proveedor San Martin Sur');
+  assert.equal(f.prepared.length, 2); assert.equal(f.confirmed.length, 0);
+  const result = await f.send('procede'); assert.equal(result.pendingAction.status, 'EXECUTED');
+  assert.equal(f.confirmed[0].vendorId, p2bVendors()[1]._id); assert.equal(f.confirmed[0].products[0].quantity, 3);
+});
+test('P2D purchase cancel followed by confirm cannot execute', async () => {
+  const f = fixture({ products: [p2bPurchaseProduct()], suppliers: p2bVendors() });
+  await f.send('compra 3 del food 96 al proveedor San Martin Norte'); await f.send('cancelar'); await f.send('confirmar');
+  assert.equal(f.cancelled.length, 1); assert.equal(f.confirmed.length, 0);
+});
+test('P2D stock rule hold, threshold correction and short confirmation use only the new condition', async () => {
+  const f = fixture(); await f.send('Crea una alerta de stock para COC500 cuando el stock sea menor o igual a 3');
+  await f.send('no todavía'); assert.equal(f.confirmed.length, 0);
+  await f.send('mejor umbral 2'); assert.deepEqual(f.prepared.map(args => args.threshold), [3, 2]);
+  assert.equal(f.confirmed.length, 0); await f.send('dale');
+  assert.equal(f.confirmed.length, 1); assert.equal(f.confirmed[0].threshold, 2);
+});
+test('P2D invalid threshold correction never produces a replacement executable preview', async () => {
+  const f = fixture(); await f.send('Crea una alerta de stock para COC500 cuando el stock sea menor o igual a 3');
+  const result = await f.send('mejor umbral 2.5'); assert.equal(result.requiresClarification, true);
+  assert.equal(f.prepared.length, 1); assert.equal(f.confirmed.length, 0);
+});
+test('P2D product creation also requires the preview before natural confirmation', async () => {
+  const f = fixture(); await f.send(creation); await f.send('Continuar sin proveedor');
+  assert.equal(f.confirmed.length, 0); await f.send('de acuerdo');
+  assert.equal(f.confirmed.length, 1); assert.equal(f.confirmed[0].sku, 'AGUA');
+});
+test('P2D generic confirmation refuses multiple pending actions in the same conversation', async () => {
+  const f = fixture(); await f.send('Vende 3 COC500');
+  f.service.resolvePending = async () => null;
+  const result = await f.send('confirmar'); assert.match(result.answer, /única operación pendiente/);
+  assert.equal(f.confirmed.length, 0);
 });
 test('literal punctuation is not a wildcard for candidate matching', () => {
   assert.equal(rankEntities([p1, p2], '.*').confidence, 'NOT_FOUND');

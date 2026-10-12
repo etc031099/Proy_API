@@ -156,17 +156,18 @@ test('closed extraction and action schemas forbid tenant, prices and Mongo input
   assert.throws(() => validateArgs(getActionSkill('create_sale').inputSchema, { products: [{ productId: 'bbbbbbbbbbbbbbbbbbbbbbbb', quantity: 1, price: 0.01 }], currency: 'PEN' }));
 });
 test('assistant sale preparation and hazlo/no lo hagas are zero LLM', async () => {
-  let calls = 0, confirmed = 0, cancelled = 0;
-  const service = { async prepare(value) { calls++; assert.equal(value.skillId, 'create_sale'); return { summary: 'Venta', pendingActionId: randomUUID(), status: 'PENDING' }; },
-    async resolvePending() { return { pendingActionId: randomUUID() }; },
-    async confirmPendingAction() { confirmed++; return { status: 'EXECUTED', result: { type: 'sale', id: 'op', total: 10, currency: 'PEN', items: [{ sku: 'SKU-001', quantity: 1, stock: 4 }] } }; },
-    async cancelPendingAction() { cancelled++; return { status: 'CANCELLED' }; } };
+  let calls = 0, confirmed = 0, cancelled = 0, pending;
+  const service = { async prepare(value) { calls++; assert.equal(value.skillId, 'create_sale'); pending = { summary: 'Venta', pendingActionId: randomUUID(), status: 'PENDING' }; return pending; },
+    async get() { return pending; },
+    async resolvePending() { return pending?.status === 'PENDING' ? pending : null; },
+    async confirmPendingAction() { confirmed++; pending.status = 'EXECUTED'; return { ...pending, result: { type: 'sale', id: 'op', total: 10, currency: 'PEN', items: [{ sku: 'SKU-001', quantity: 1, stock: 4 }] } }; },
+    async cancelPendingAction() { cancelled++; pending.status = 'CANCELLED'; return pending; } };
   const adapter = withActionAssistant({ handle() { throw Error('unexpected LLM'); } }, service, { resolver });
   const conversationId = randomUUID();
   for (const message of ['Vende 1 unidad de SKU-001', 'hazlo', 'no lo hagas']) {
     const result = await adapter.handle(req(), { message, conversationId }); assert.equal(result.usage.totalTokens, 0); assert.equal(result.usage.totalLlmCalls, 0);
   }
-  assert.deepEqual([calls, confirmed, cancelled], [1, 1, 1]);
+  assert.deepEqual([calls, confirmed, cancelled], [1, 1, 0]);
 });
 test('missing product category is requested, never inferred; bounded draft accepts follow-up', async () => {
   let prepared;

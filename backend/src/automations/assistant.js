@@ -7,7 +7,8 @@ const { compactDraft, updateDraft, resolveDraft, applyResolution, TTL_MS } = req
 const { resolveReference, configuredSuppliers } = require('./entityResolution');
 const { Product } = require('../models');
 const { ordinalSelection } = require('../agents/ordinalSelection');
-const resultAnswer = pending => pending.status !== 'EXECUTED' ? 'Acción cancelada.' : pending.result?.ruleConfigured
+const { actionDecision } = require('./actionDecision');
+const resultAnswer = pending => pending.status !== 'EXECUTED' ? 'Acción cancelada. No se ejecutó ninguna operación.' : pending.result?.ruleConfigured
   ? `${pending.result.alreadyExists ? 'Ya existe una regla activa' : 'Regla configurada'} para ${pending.result.sku}: stock ${pending.result.operator} ${pending.result.threshold} unidades. Se evaluará en los cambios futuros de stock; todavía no envía avisos automáticos.` : pending.result?.type
   ? `${pending.result.type === 'sale' ? 'Venta' : 'Compra'} registrada correctamente. ${pending.result.items.map(item => `${item.quantity} unidades de ${item.sku}; stock resultante: ${item.stock}`).join('. ')}. Total: ${pending.result.total} ${pending.result.currency}. Operación: ${pending.result.id}.`
   : `Producto registrado correctamente. SKU: ${pending.result?.sku || '—'}. Stock: ${pending.result?.stock ?? '—'}.${pending.result?.needsSupplierSetup ? ' Todavía no tiene proveedor con precio de compra; configúralo desde Productos antes de registrar compras.' : ''}`;
@@ -18,28 +19,29 @@ const withActionAssistant = (runtime, service, options = {}) => {
   const keyFor = (req, id) => JSON.stringify([String(req.user?._id), req.businessId, id]);
   async function handle(req, input) {
     const normalized = input.message.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/^[¿¡]/, '').replace(/[?!.]$/, '');
+    const decision = actionDecision(input.message);
+    const expiredDraft = drafts.get(keyFor(req, input.conversationId));
     for (const [key, draft] of drafts) if (draft.expiresAt <= now()) drafts.delete(key);
     const draftKey = keyFor(req, input.conversationId);
     let previous = drafts.get(draftKey);
     const explicit = actionIntent(input.message);
     // A newer READ owns subsequent selections. Keep the frozen PendingAction
     // intact; only an explicit new action can re-enter the write flow.
-    const newRead = !explicit && /^(?:mejor\s+)?(?:dame|muestrame|busca|dime|cuanto|que|resume|explica|lista|cuales)\b|[¿?]/.test(normalized)
+    const newRead = !explicit && (/^(?:mejor\s+)?(?:dame|muestrame|busca|dime|cuanto|que|resume|explica|lista|cuales)\b/.test(normalized) || /[¿?]/.test(input.message))
       && !/que me falta|que datos|que proveedores/.test(normalized)
       && !(previous?.selection?.slot === 'product' && /^busca(?:r)?\b/.test(normalized))
       && !ordinalSelection(input.message).matched;
-    if (previous && newRead) {
+    if (previous && newRead && !decision) {
       drafts.set(draftKey, { ...previous, readSuspended: true });
       return runtime.handle(req, input);
     }
-    if (previous?.readSuspended && !explicit) return runtime.handle(req, input);
+    if (previous?.readSuspended && !explicit && !decision) return runtime.handle(req, input);
     if (explicit === 'create_stock_alert_rule' && require('../agents/intentRouting').tenantScopeViolation(input.message))
       return runtime.handle(req, input); // Preserve the deterministic F9 denial before resolving any product.
     const contextual = (previous?.selection?.slot === 'product' && /^busca(?:r)?\b/.test(normalized)) || /que me falta|que datos|que proveedores|^(?:mejor|cambia|en vez|no es|opcion|el |la |si\b|no\b|cancel|confirm|hazlo|crear proveedor|elegir proveedor|continuar sin)/.test(normalized)
       || /^(?:\d+|sku\b|proveedor\b|precio de compra\b|categoria\b)/.test(normalized);
-    if (previous && !explicit && !contextual && /^(?:muestrame|busca|dime|cuanto|que|resume|explica|lista|cuales)\b|[¿?]/.test(normalized)) previous = undefined;
+    if (previous && !explicit && !decision && !contextual && /^(?:muestrame|busca|dime|cuanto|que|resume|explica|lista|cuales)\b|[¿?]/.test(normalized)) previous = undefined;
     const skillId = explicit || previous?.action;
-    const decision = /^(?:si|confirmar|confirmo|hazlo|no|cancelar|cancelo|no lo hagas|mejor cancela eso)[.!?]*$/.test(normalized);
     const candidateCommand = /^(?:ver mas|siguiente|anterior|anteriores|refinar busqueda|mas especifico)$/.test(normalized);
     // Read-only ML paging is not an operation-draft command. Active drafts keep
     // their existing selection flow; do not prepare/cancel a write for analytics.
@@ -50,7 +52,7 @@ const withActionAssistant = (runtime, service, options = {}) => {
     if (!skillId && !decision && !candidateCommand) return runtime.handle(req, input);
     const started = performance.now(), conversationId = input.conversationId || randomUUID();
     const context = createActionContext(req, { conversationId }), key = keyFor(req, conversationId);
-    let pendingAction, answer, clarification = false, execution, suggestions = [], suggestionsExpiresAt, suggestionsPagination, suggestionsEntityType;
+    let pendingAction, answer, clarification = false, previewShown = false, execution, suggestions = [], suggestionsExpiresAt, suggestionsPagination, suggestionsEntityType;
     if (!previous && candidateCommand) return response('No hay una lista de opciones vigente. Inicia nuevamente la búsqueda.', undefined, true);
     if (previous?.items && /que proveedores/.test(normalized)) {
       const products = [];
@@ -64,17 +66,52 @@ const withActionAssistant = (runtime, service, options = {}) => {
       return response(labels.length ? `Proveedores configurados: ${labels.join('; ')}. Tu borrador sigue disponible.`
         : 'No hay proveedor común con precio de compra configurado. Tu borrador sigue disponible; configúralo desde Productos o cancela.', undefined, true);
     }
-    if (decision && (!previous || previous.pendingActionId || /^(no|cancel|mejor cancela)/.test(normalized))) {
-      if (previous && !previous.pendingActionId) { drafts.delete(key); answer = 'Borrador cancelado. No se guardó ninguna operación.'; }
-      else {
-        const pending = await service.resolvePending(context);
-        if (!pending) { answer = 'No hay una única acción pendiente. Selecciona Confirmar o Cancelar en su tarjeta.'; clarification = true; }
-        else {
-          pendingAction = await (/^(si|confirm|hazlo)/.test(normalized) ? service.confirmPendingAction : service.cancelPendingAction)(context, pending.pendingActionId);
-          answer = resultAnswer(pendingAction); drafts.delete(key);
+    if (decision) {
+      if (expiredDraft && expiredDraft.expiresAt <= now())
+        return response('La operación pendiente expiró. Indica nuevamente los datos para preparar un preview nuevo.', undefined, true);
+      if (previous?.selection || previous?.missingFields?.length || previous && !previous.pendingActionId) {
+        if (decision === 'cancel') { drafts.delete(key); return response('Borrador cancelado. No se guardó ninguna operación.', undefined, false); }
+        return response('Todavía faltan datos o una selección. Elige la entidad solicitada antes de confirmar; no se ejecutó ninguna operación.', undefined, true);
+      }
+      const pending = previous?.pendingActionId ? await service.get(context, previous.pendingActionId) : await service.resolvePending(context);
+      if (!pending) return response('No hay una operación pendiente identificable para confirmar o cancelar. Si hay varias, usa la tarjeta correspondiente.', undefined, true);
+      if (pending.status === 'EXPIRED' || pending.expiresAt && Date.parse(pending.expiresAt) <= now()) {
+        drafts.delete(key);
+        return response('La operación pendiente expiró. Indica nuevamente los datos para preparar un preview nuevo.', undefined, true);
+      }
+      if (pending.status !== 'PENDING') {
+        drafts.delete(key);
+        return response('No hay una operación pendiente para confirmar o cancelar; esa acción ya terminó.', undefined, false);
+      }
+      if (decision === 'hold') {
+        if (previous) previous.confirmationReady = false;
+        return response('La operación sigue pendiente y no se ejecutó. Puedes revisar o corregir sus datos y después indicar «confirmar», o cancelarla.', pending, true);
+      }
+      if (decision === 'cancel') {
+        pendingAction = await service.cancelPendingAction(context, pending.pendingActionId);
+        answer = resultAnswer(pendingAction); drafts.delete(key);
+      } else {
+        const unique = await service.resolvePending(context);
+        if (!unique || unique.pendingActionId !== pending.pendingActionId)
+          return response('No puedo elegir una única operación pendiente. Usa Confirmar en la tarjeta de la acción que deseas ejecutar.', undefined, true);
+        if (previous?.readSuspended) {
+          const state = await runtime.getContextSnapshot?.(req, conversationId);
+          if (state?.supplierResolution?.candidates?.length || state?.lastProductSelection?.sourceIntent === 'search_product' && state.lastProductSelection.continuationIntent)
+            return response('Hay una selección de lectura activa. Elige una opción o usa la tarjeta de la operación pendiente para confirmarla explícitamente.', undefined, true);
+          previous.readSuspended = false; previous.confirmationReady = true;
+          previewShown = true;
+          return response('Esta es la operación que sigue pendiente. Revisa nuevamente su tarjeta y confirma para ejecutarla.', pending, true);
         }
+        if (!previous || decision === 'short' && previous.confirmationReady !== true)
+          return response('Revisa la operación pendiente y escribe «confirmar» o usa Confirmar en su tarjeta.', pending, true);
+        pendingAction = await service.confirmPendingAction(context, pending.pendingActionId);
+        answer = resultAnswer(pendingAction); drafts.delete(key);
       }
     } else {
+      if (previous?.pendingActionId && !explicit && !contextual) {
+        previous.confirmationReady = false;
+        return response('La operación sigue pendiente. Indica «confirmar», «cancelar» o la corrección que deseas hacer.', await service.get(context, previous.pendingActionId), true);
+      }
       if (previous?.pendingActionId) {
         const stored = await service.get(context, previous.pendingActionId);
         if (stored.status !== 'PENDING') {
@@ -85,11 +122,13 @@ const withActionAssistant = (runtime, service, options = {}) => {
           if (/que me falta|que datos/.test(normalized)) return response('La operación está completa. Revisa la tarjeta antes de confirmar.', stored, true);
           await service.cancelPendingAction(context, previous.pendingActionId);
           delete previous.pendingActionId;
+          previous.confirmationReady = false;
         }
       }
       let extracted;
       try {
-        const ordinalCorrection = !explicit && (previous?.selection || previous?.supplierChoices && /\bproveedor\b/.test(normalized)) && ordinalSelection(input.message).matched;
+        const ordinalCorrection = !explicit && (previous?.selection || previous?.supplierChoices && /\bproveedor\b/.test(normalized)
+          || previous?.productChoices && /\bproducto\b/.test(normalized)) && ordinalSelection(input.message).matched;
         // A selection-only turn cannot silently discard simultaneous numeric
         // changes or bypass the quantity parser. Ask for separate turns instead.
         if (ordinalCorrection && /\d|\b(?:cantidad|unidades?|stock|minimo|umbral)\b/.test(numericWords(normalized)))
@@ -148,6 +187,8 @@ const withActionAssistant = (runtime, service, options = {}) => {
       else {
         pendingAction = await service.prepare({ agentId: 'operations', skillId, args: resolved.args, context, externalRequestId: req.agentActionRequestId || randomUUID() });
         draft.pendingActionId = pendingAction.pendingActionId;
+        draft.confirmationReady = true;
+        previewShown = true;
         answer = `${pendingAction.summary} ${skillId === 'create_stock_alert_rule' ? 'La regla todavía no se ha creado. ' : ''}Revisa la tarjeta antes de confirmar. La preparación no modifica el inventario.`;
       }
       draft.updatedAt = now(); draft.expiresAt = now() + TTL_MS;
@@ -157,6 +198,8 @@ const withActionAssistant = (runtime, service, options = {}) => {
     }
     return response(answer, pendingAction, clarification);
     function response(text, pending, needsClarification) {
+      const activeDraft = drafts.get(key);
+      if (activeDraft && !previewShown) activeDraft.confirmationReady = false;
       const realUsage = execution?.getUsage(), latencyMs = performance.now() - started;
       const participant = { agentId: 'operations', model: null, llmCalls: 0, skillCalls: 0, ...zeroUsage(), usageAvailable: true, latencyMs, providerLatencyMs: 0 };
       if (realUsage) Object.assign(participant, realUsage.agents.find(agent => agent.agentId === 'operations'));
