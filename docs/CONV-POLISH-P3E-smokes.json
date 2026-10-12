@@ -1,0 +1,469 @@
+{
+  "phase": "CONV-POLISH-P3E",
+  "noNetwork": true,
+  "noDatabaseWrites": true,
+  "noRealBusinessWrites": true,
+  "paidLlmCalls": 0,
+  "counts": {
+    "PASS": 14,
+    "NEEDS_MANUAL": 4
+  },
+  "results": [
+    {
+      "id": 1,
+      "queries": [
+        "dime el stock de food 096"
+      ],
+      "classification": "PASS",
+      "actual": [
+        {
+          "intent": "product_details",
+          "code": null,
+          "answer": "Alimentos M5 · FOODS_2 · Ítem 096 (M5-FOODS_2_096) tiene 12 unidades disponibles. Stock mínimo: 5 unidades.",
+          "skills": [
+            "search_products",
+            "get_product_details"
+          ],
+          "llmCalls": 0,
+          "totalTokens": 0,
+          "clarification": false
+        }
+      ],
+      "basis": "real runtime with synthetic read-only models"
+    },
+    {
+      "id": 2,
+      "queries": [
+        "cuánto cuesta food 96"
+      ],
+      "classification": "PASS",
+      "actual": [
+        {
+          "intent": "product_details",
+          "code": null,
+          "answer": "El precio de Alimentos M5 · FOODS_2 · Ítem 096 (M5-FOODS_2_096) es S/ 29.45.",
+          "skills": [
+            "search_products",
+            "get_product_details"
+          ],
+          "llmCalls": 0,
+          "totalTokens": 0,
+          "clarification": false
+        }
+      ],
+      "basis": "real runtime with synthetic read-only models"
+    },
+    {
+      "id": 3,
+      "queries": [
+        "Busca food 210",
+        "M5-FOODS_3_210",
+        "¿Y el precio?"
+      ],
+      "classification": "NEEDS_MANUAL",
+      "actual": [
+        {
+          "intent": "search_product",
+          "code": null,
+          "answer": "Encontré 2 productos que coinciden con tu búsqueda:\n• Alimentos M5 · FOODS_2 · Ítem 210 (M5-FOODS_2_210) tiene 1 unidad disponible y un mínimo configurado de 5 unidades.\n• Alimentos M5 · FOODS_3 · Ítem 210 (M5-FOODS_3_210) tiene 8 unidades disponibles y un mínimo configurado de 5 unidades.",
+          "skills": [
+            "search_products"
+          ],
+          "llmCalls": 0,
+          "totalTokens": 0,
+          "clarification": false
+        },
+        {
+          "intent": "product_details",
+          "code": null,
+          "answer": "Alimentos M5 · FOODS_3 · Ítem 210 (M5-FOODS_3_210) tiene 8 unidades disponibles y un mínimo configurado de 5 unidades. Su precio es S/ 29.45. El producto está activo.",
+          "skills": [
+            "get_product_details"
+          ],
+          "llmCalls": 0,
+          "totalTokens": 0,
+          "clarification": false
+        },
+        {
+          "intent": "product_details",
+          "code": null,
+          "answer": "El precio de Alimentos M5 · FOODS_3 · Ítem 210 (M5-FOODS_3_210) es S/ 29.45.",
+          "skills": [
+            "get_product_details"
+          ],
+          "llmCalls": 0,
+          "totalTokens": 0,
+          "clarification": false
+        }
+      ],
+      "uiClickNeedsManual": true,
+      "reason": "Search list and SKU continuation pass locally; the explicit search response has no suggestions cards. The proposed real-click step needs UI verification; no frontend change is in scope."
+    },
+    {
+      "id": 4,
+      "queries": [
+        "¿Cuánto vendí de food 96 ayer?"
+      ],
+      "classification": "PASS",
+      "actual": [
+        {
+          "intent": "product_sales_summary",
+          "code": null,
+          "answer": "Alimentos M5 · FOODS_2 · Ítem 096 (M5-FOODS_2_096) no registra ventas completadas durante el 19 de enero de 2025.",
+          "skills": [
+            "search_products",
+            "get_product_sales_summary"
+          ],
+          "llmCalls": 0,
+          "totalTokens": 0,
+          "clarification": false
+        }
+      ],
+      "basis": "NO_DATA fixture"
+    },
+    {
+      "id": 5,
+      "queries": [
+        "dime el total vendido este mes"
+      ],
+      "classification": "PASS",
+      "actual": [
+        {
+          "intent": "sales_summary",
+          "code": null,
+          "answer": "Durante octubre de 2026 registraste 1 venta completada, con 7 unidades vendidas. El importe de ventas es S/ 63.00.",
+          "skills": [
+            "get_sales_summary"
+          ],
+          "llmCalls": 0,
+          "totalTokens": 0,
+          "clarification": false
+        }
+      ],
+      "basis": "real runtime with synthetic read-only models"
+    },
+    {
+      "id": 6,
+      "queries": [
+        "últimas compras"
+      ],
+      "classification": "PASS",
+      "actual": [
+        {
+          "intent": "recent_transactions",
+          "code": null,
+          "answer": "Estas son las transacciones más recientes que coinciden con tu consulta:\n• 20 de enero de 2025: venta completada por S/ 63.00, con 1 línea de productos.",
+          "skills": [
+            "get_recent_transactions"
+          ],
+          "llmCalls": 0,
+          "totalTokens": 0,
+          "clarification": false
+        }
+      ],
+      "basis": "real runtime with synthetic read-only models"
+    },
+    {
+      "id": 7,
+      "queries": [
+        "¿Cuál es la predicción de food 96?"
+      ],
+      "classification": "PASS",
+      "actual": [
+        {
+          "intent": "demand_forecast",
+          "code": null,
+          "answer": "Esta es la demanda estimada para el horizonte histórico agregado de 7 días del escenario consultado:\n• Alimentos M5 · FOODS_2 · Ítem 096 (M5-FOODS_2_096): el modelo estimó 10 unidades en el horizonte histórico agregado de 7 días. En la fecha de referencia había 12 unidades disponibles y se habían vendido 3 en los 7 días anteriores. Considerando 5 unidades de stock de seguridad, se recomienda reponer 3 unidades.\nEstas estimaciones y recomendaciones corresponden al escenario histórico con fecha de referencia 17 de mayo de 2026.",
+          "skills": [
+            "search_products",
+            "get_demand_forecast"
+          ],
+          "llmCalls": 0,
+          "totalTokens": 0,
+          "clarification": false
+        }
+      ],
+      "basis": "real runtime with synthetic read-only models"
+    },
+    {
+      "id": 8,
+      "queries": [
+        "¿Cuál es la predicción del próximo mes?"
+      ],
+      "classification": "PASS",
+      "actual": [
+        {
+          "intent": "ml_historical_clarification",
+          "code": "AGENT_CLARIFICATION_REQUIRED",
+          "answer": "No tengo una predicción válida para próximo mes en la fecha operativa actual. El forecast disponible corresponde a un replay histórico, no a una predicción vigente. Puedo mostrarte ese forecast histórico agregado de 7 días, pero no sería correcto presentarlo como una predicción actual.",
+          "skills": [],
+          "llmCalls": 0,
+          "totalTokens": 0,
+          "clarification": true
+        }
+      ],
+      "basis": "real runtime with synthetic read-only models"
+    },
+    {
+      "id": 9,
+      "queries": [
+        "¿Cuál es la precisión exacta de la predicción?"
+      ],
+      "classification": "PASS",
+      "actual": [
+        {
+          "intent": "forecast_confidence",
+          "code": null,
+          "answer": "El modelo entrega una predicción puntual, pero no expone una confianza exacta, probabilidad calibrada ni intervalo de predicción para este escenario. Sí puedo mostrar la demanda prevista, el stock de referencia y la recomendación de reposición; esos datos no equivalen a una medida de confianza.",
+          "skills": [],
+          "llmCalls": 0,
+          "totalTokens": 0,
+          "clarification": false
+        }
+      ],
+      "basis": "real runtime with synthetic read-only models"
+    },
+    {
+      "id": 10,
+      "queries": [
+        "quién provee food 96"
+      ],
+      "classification": "NEEDS_MANUAL",
+      "actual": [
+        {
+          "intent": "replenishment_commercial",
+          "code": "AGENT_CLARIFICATION_REQUIRED",
+          "answer": "Encontré varios productos parecidos a «food 96». Indica el SKU exacto.",
+          "skills": [
+            "compare_supplier_costs"
+          ],
+          "llmCalls": 0,
+          "totalTokens": 0,
+          "clarification": true
+        }
+      ],
+      "reason": "The existing commercial matcher requires an exact SKU in this synthetic fixture; supplier values need real-tenant verification. Routing/0LLM checked."
+    },
+    {
+      "id": 11,
+      "queries": [
+        "¿Cuánto cuesta reponer M5-FOODS_3_511 usando el proveedor 55 foods?"
+      ],
+      "classification": "NEEDS_MANUAL",
+      "actual": [
+        {
+          "intent": "replenishment_commercial",
+          "code": "AGENT_CLARIFICATION_REQUIRED",
+          "answer": "No encontré un proveedor suficientemente parecido a «55 foods» para M5-FOODS_3_511. Puedes elegir una oferta disponible:\nOpciones de proveedor 1–5 de 20: elige una opción o refina la búsqueda.",
+          "skills": [
+            "get_replenishment_cost"
+          ],
+          "llmCalls": 0,
+          "totalTokens": 0,
+          "clarification": true
+        }
+      ],
+      "reason": "The local audit fixture has 25 suppliers and does not contain supplier 055. Cloud offer and exact cost require the existing V2 dataset."
+    },
+    {
+      "id": 12,
+      "queries": [
+        "Tengo S/ 500, ¿qué productos debería comprar primero?",
+        "¿Cuánto dinero sobra?"
+      ],
+      "classification": "PASS",
+      "actual": [
+        {
+          "intent": "replenishment_commercial",
+          "code": null,
+          "answer": "Con S/ 500.00, la propuesta asigna S/ 485.77 y deja S/ 14.23.\n31 unidades planificadas; 83 quedan pendientes.\n• M5-FOODS_3_511 (Alimentos M5 · FOODS_3 · Ítem 511): 31 unidades/88 con Proveedor sintético 001 FOODS, S/ 485.77. REPONER; cobertura 5.5%; déficit 69.13.\nPropuesta basada en el forecast histórico con fecha de corte 17 de mayo de 2026 y en los precios configurados consultados actualmente; no es una predicción actual ni una cotización confirmada.",
+          "skills": [
+            "plan_replenishment_budget"
+          ],
+          "llmCalls": 0,
+          "totalTokens": 0,
+          "clarification": false
+        },
+        {
+          "intent": "replenishment_plan_followup",
+          "code": null,
+          "answer": "Quedan S/ 14.23 sin asignar.",
+          "skills": [],
+          "llmCalls": 0,
+          "totalTokens": 0,
+          "clarification": false
+        }
+      ],
+      "basis": "synthetic prices and frozen plan; not cloud S/1.53"
+    },
+    {
+      "id": 13,
+      "queries": [
+        "lista mis reglas de stock"
+      ],
+      "classification": "PASS",
+      "actual": [
+        {
+          "intent": "stock_alert_rules",
+          "code": null,
+          "answer": "No tienes reglas de alerta de stock configuradas.\nEstas reglas se evalúan al cambiar el stock y registran alertas internas cuando se cruza la condición. Los avisos Telegram requieren conexión y preferencias habilitadas en Integraciones.",
+          "skills": [
+            "list_stock_alert_rules"
+          ],
+          "llmCalls": 0,
+          "totalTokens": 0,
+          "clarification": false
+        }
+      ],
+      "basis": "real runtime with synthetic read-only models"
+    },
+    {
+      "id": 14,
+      "queries": [
+        "¿Qué alertas abiertas tengo?"
+      ],
+      "classification": "PASS",
+      "actual": [
+        {
+          "intent": "inventory_alert_events",
+          "code": null,
+          "answer": "No se han generado alertas de inventario abiertas.",
+          "skills": [
+            "list_inventory_alerts"
+          ],
+          "llmCalls": 0,
+          "totalTokens": 0,
+          "clarification": false
+        }
+      ],
+      "basis": "real runtime with synthetic read-only models"
+    },
+    {
+      "id": 15,
+      "queries": [
+        "¿Cuál es el estado de entrega de mis alertas de inventario?"
+      ],
+      "classification": "PASS",
+      "actual": [
+        {
+          "intent": "inventory_alert_deliveries",
+          "code": null,
+          "answer": "No hay eventos de entrega de alertas.",
+          "skills": [
+            "list_inventory_alert_outbox_events"
+          ],
+          "llmCalls": 0,
+          "totalTokens": 0,
+          "clarification": false
+        }
+      ],
+      "basis": "real runtime with synthetic read-only models"
+    },
+    {
+      "id": 16,
+      "queries": [
+        "¿Qué Telegram fueron omitidas para food 210?",
+        "M5-FOODS_3_210"
+      ],
+      "classification": "PASS",
+      "actual": [
+        {
+          "intent": "inventory_alert_channel_deliveries",
+          "code": "AGENT_CLARIFICATION_REQUIRED",
+          "answer": "Encontré varias coincidencias para «food 210». Elige una o indícame su SKU.\n1. Alimentos M5 · FOODS_2 · Ítem 210 — M5-FOODS_2_210\n2. Alimentos M5 · FOODS_3 · Ítem 210 — M5-FOODS_3_210",
+          "skills": [
+            "search_products"
+          ],
+          "llmCalls": 0,
+          "totalTokens": 0,
+          "clarification": true
+        },
+        {
+          "intent": "inventory_alert_channel_deliveries",
+          "code": null,
+          "answer": "Notificaciones Telegram de reglas de stock:\nNo encontré notificaciones que coincidan.\nLa entrega a Node-RED y el envío a Telegram son estados independientes.",
+          "skills": [
+            "list_inventory_alert_channel_deliveries"
+          ],
+          "llmCalls": 0,
+          "totalTokens": 0,
+          "clarification": false
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "queries": [
+        "vende 1 del food 96",
+        "¿cuánto quedaré de stock?",
+        "cancela"
+      ],
+      "classification": "PASS",
+      "actual": [
+        {
+          "intent": "action",
+          "code": null,
+          "answer": "Revisa la operación Revisa la tarjeta antes de confirmar. La preparación no modifica el inventario.",
+          "skills": [],
+          "llmCalls": 0,
+          "totalTokens": 0,
+          "clarification": false
+        },
+        {
+          "intent": "action",
+          "code": null,
+          "answer": "Alimentos M5 · FOODS_2 · Ítem 096: el stock quedaría en 11 unidades.\nLa operación sigue pendiente y no se ha ejecutado.",
+          "skills": [],
+          "llmCalls": 0,
+          "totalTokens": 0,
+          "clarification": false
+        },
+        {
+          "intent": "action",
+          "code": null,
+          "answer": "Acción cancelada. No se ejecutó ninguna operación.",
+          "skills": [],
+          "llmCalls": 0,
+          "totalTokens": 0,
+          "clarification": false
+        }
+      ],
+      "businessWrites": 0,
+      "basis": "in-memory preview and cancellation only"
+    },
+    {
+      "id": 18,
+      "queries": [
+        "Explícame los principales problemas que observas en el inventario y la predicción",
+        "¿Por qué ocurre esto?"
+      ],
+      "classification": "NEEDS_MANUAL",
+      "actual": [
+        {
+          "intent": "inventory_interpretation",
+          "code": null,
+          "answer": "Los principales problemas que veo son:\n1. Inventario operativo actual: 2 de 6 productos en mínimo o por debajo; estas alertas requieren revisar el abastecimiento. Ejemplos: M5-FOODS_2_210: stock 1, mínimo 5; M5-FOODS_3_511: stock 4, mínimo 5. Prioriza revisar los productos frente a sus mínimos configurados. (Evidencia: Obtiene agregados del negocio con periodo explícito.; Consulta productos bajo su stock mínimo.)\n2. En el replay histórico, 6 de 6 productos figuran en REPONER y la reposición recomendada suma 114 unidades. El volumen ayuda a dimensionar el abastecimiento de ese escenario, sin convertirlo en una recomendación actual. (Evidencia: Forecast histórico)\n3. Las brechas históricas destacadas son: M5-FOODS_3_511: demanda 73.13, stock al corte 4, diferencia 69.13, reposición 88; M5-FOODS_2_210: demanda 11, stock al corte 1, diferencia 10, reposición 4. La demanda superior al stock señala presión de abastecimiento dentro del replay; no demuestra causas externas. (Evidencia: Forecast histórico)\nAlcance: el inventario operativo actual y el escenario histórico con fecha de corte 17 de mayo de 2026 (2026-05-17) corresponden a cortes distintos; el replay no es un forecast actual. No hay evidencia para atribuir causas externas.",
+          "skills": [
+            "get_business_summary",
+            "get_low_stock_products",
+            "analyze_demand_forecast",
+            "analyze_demand_forecast"
+          ],
+          "llmCalls": 1,
+          "totalTokens": null,
+          "clarification": false
+        },
+        {
+          "intent": "inventory_causality",
+          "code": null,
+          "answer": "Los datos consultados muestran alertas y brechas de stock, pero no demuestran por qué ocurren. Para atribuir causas habría que verificar hechos como movimientos, fechas de compras y entregas; no puedo deducir retrasos de proveedores ni falta de compras a partir del forecast.",
+          "skills": [],
+          "llmCalls": 0,
+          "totalTokens": 0,
+          "clarification": false
+        }
+      ],
+      "reason": "Real Gemini groundedness and interpretation cannot be verified by a fake provider; local bounded fallback/context checked, no paid calls."
+    }
+  ]
+}

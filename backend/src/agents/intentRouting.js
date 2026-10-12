@@ -28,7 +28,8 @@ const normalizeBasicInventory = value => normalize(value)
   .replace(/\breposision\b/g, 'reposicion')
   .replace(/\bprodcutos\b/g, 'productos');
 const isLowStockQuery = text => /\b(?:stock\s+bajo|bajo\s+stock|poco\s+stock|stock\s+minimo)\b/.test(text)
-  || /\bproductos?\b.*\b(?:baj[oa]s?\s+(?:de\s+)?stock|por\s+debajo\s+(?:del\s+)?minimo)\b/.test(text);
+  || /\bproductos?\b.*\b(?:baj[oa]s?\s+(?:de\s+)?stock|por\s+debajo\s+(?:del\s+)?minimo)\b/.test(text)
+  || /^que esta bajo de stock[?!.]*$/.test(text.replace(/[¿¡]/g, '').trim());
 const isProductCountQuery = text => {
   if (/\b(?:busca|buscar|muestrame|lista|listar|categoria|sku|foods|hobbies|household)\b/.test(text)) return false;
   return /\b(?:cuantos|cantidad|total)\b.*\bproductos?\b/.test(text)
@@ -105,7 +106,7 @@ const salesCalendarPeriod = (text, now) => {
     return { period: { startDate: dates[0], endDate: dates[1] || dates[0] },
       remainder: days.reduce((value, row) => value.replace(row[0], ''), text) };
   }
-  const month = text.match(new RegExp(`\\b(${months})(?: de (20\\d{2}))?\\b`));
+  const month = text.match(new RegExp(`\\b(${months})(?: (?:de )?(20\\d{2}))?\\b`));
   if (!month) return null;
   const monthIndex = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'].indexOf(month[1] === 'setiembre' ? 'septiembre' : month[1]);
   const year = Number(month[2] || now.getUTCFullYear());
@@ -115,7 +116,7 @@ const salesEntityReference = (text, calendar) => {
   const remainder = (calendar?.remainder || text)
     .replace(/\b(?:(?:desde|hasta|en|el|la|los|del|de)\s+)*(?:anteayer|ayer|hoy|este mes|mes (?:pasado|anterior|actual)|esta semana|semana (?:pasada|anterior)|ultim[oa]s?\s+(?:\d+|siete|treinta)\s+dias(?:\s+hasta hoy)?)\b/g, '')
     .replace(/\b(?:desde|hasta|entre)\s*$/g, '').replace(/\s+/g, ' ').trim();
-  const reference = remainder.match(/\b(?:vendi|vendimos|vendio|vendido|ventas)\s+(?:(?:de|del|tuvo)\s+)(?:el\s+)?(?:producto\s+)?(.+)$/)?.[1];
+  const reference = remainder.match(/\b(?:vendi|vendimos|vendio|vendido|ventas|unidades vendidas)\s+(?:(?:de|del|tuvo)\s+)(?:el\s+)?(?:producto\s+)?(.+)$/)?.[1];
   return reference?.replace(/[¿?¡!.]/g, '').replace(/(?:\s+(?:desde|hasta|entre|en|el|de|y))+\s*$/g, '').trim();
 };
 const clarify = question => ({ intent: 'ambiguous_query', agent: 'coordinator', clarificationQuestion: question });
@@ -131,6 +132,15 @@ const structuredProductDisplaySku = message => {
 const explicitProductDetailQuery = message => {
   const text = normalize(message).replace(/[¿?¡!]/g, '').trim();
   if (structuredProductDisplaySku(message)) return null;
+  // Bounded single-attribute aliases. Commercial/open questions and multiple
+  // references must keep their existing routes rather than becoming details.
+  const commonTarget = text.match(/^(?:dime|muestrame)\s+(?:el\s+)?(?:stock|precio|minimo|estado)\s+(?:(?:de|del)\s+)?(.+)$/)?.[1]
+    || text.match(/^(?:que|q)\s+(?:stock|precio|minimo|estado)\s+tiene\s+(.+)$/)?.[1]
+    || text.match(/^(?:cuanto\s+(?:cuesta|vale)|a cuanto esta)\s+(.+)$/)?.[1]
+    || text.match(/^dime si\s+(.+?)\s+esta\s+activ[oa]$/)?.[1]
+    || text.match(/^(?:dame|dime)\s+(?:los\s+)?(?:detalles|informacion)\s+(?:de|del)\s+(.+)$/)?.[1];
+  if (commonTarget && !/\b(?:y|proveedor|oferta|compra|repon\w*|recomendad\w*|bajo|minimo)\b/.test(commonTarget)
+    && !isTemporalOnlyReference(commonTarget) && !/^(?:ese|este|su)\b/.test(commonTarget)) return commonTarget;
   const minimumSuffix = text.match(/^(.+?)\s+stock\s+minimo\s*$/)?.[1];
   const target = text.match(/\b(?:cuanto|cuanta)\s+(?:stock|inventario|precio|minimo)\s+(?:tiene|cuesta|es)\s+(?:el\s+)?(?:producto\s+)?(.+?)\s*$/)?.[1]
     || text.match(/\b(?:cuanto|cual)\s+(?:es\s+)?(?:el\s+)?stock\s+minimo\s+(?:de|del|para)\s+(.+?)\s*$/)?.[1]
@@ -205,7 +215,8 @@ const budgetPlanFollowupType = message => {
 };
 const routeProductSupplierLookup = (message, memory = {}) => {
   if (/\b(?:productos?|ofertas?)\b.*\b(?:ofrece|proveedor)\b|\b(?:sus productos|sus ofertas)\b/i.test(message)) return null;
-  const sku = canonicalProductSku(message) || memory.selectedProductReference?.sku;
+  const humanProduct = normalize(message).match(/^(?:quien|quienes)\s+provee[n]?\s+((?:foods?|item)\s+(?:\d+\s+)?\d+)[?!.]*$/)?.[1];
+  const sku = canonicalProductSku(message) || humanProduct || memory.selectedProductReference?.sku;
   if (!sku) return null;
   const text = normalize(message);
   // An explicitly named supplier followed by "provee SKU" is supplier -> product.
@@ -273,8 +284,12 @@ const routeCommercial = (message, memory = {}) => {
   }
   if (/shell|ejecuta codigo|mongo query|ignora.*instruccion|api.?key|password|jwt|system prompt/.test(text)) return null;
   const sku = message.match(/\bM5-[A-Z]+_\d+_\d+\b/i)?.[0];
+  const humanProduct = !/\by\b/.test(text) ? text.match(/\b(?:foods?|item)\s+(?:\d+\s+)?\d+\b/)?.[0] : undefined;
+  const offerAlias = text.match(/^(?:costo|oferta) de ((?:foods?|item)\s+(?:\d+\s+)?\d+) con (?:el )?proveedor (.+)$/);
+  if (offerAlias) return { intent: 'replenishment_commercial', agent: 'analyst', skillId: 'compare_supplier_costs',
+    args: { productRef: offerAlias[1], supplierRef: offerAlias[2] } };
   const asksSupplierComparison = /proveedor/.test(text)
-    && /que proveedor|cual proveedor|usar|conviene|barat|compar/.test(text);
+    && /que proveedor|cual proveedor|usar|conviene|barat|compar|mas economico/.test(text);
   const asksCheapestSupplier = asksSupplierComparison && /barat|menor costo|mas economico/.test(text);
   const supplierName = message.match(/\b(?:con|usando)\s+(?:el\s+)?(?:proveedor|supplier)\s+(.+?)(?=\s+(?:para|por)\s+(?:reponer|el producto)|[?!.]|$)/i)?.[1]?.trim()
     || (!asksSupplierComparison ? message.match(/\bproveedor\s+(?!deber[ií]a\b|debe\b|usar\b|conviene\b)(.+?)(?=\s+(?:para|por)\s+(?:reponer|el producto)|[?!.]|$)/i)?.[1]?.trim() : null)
@@ -289,7 +304,7 @@ const routeCommercial = (message, memory = {}) => {
   const make = (skillId, args) => ({ intent: 'replenishment_commercial', agent: 'analyst', skillId, args });
   if (asksSupplierComparison) {
     const hasContextualProductReference = /\b(?:este|ese) producto\b|\beste sku\b|\bsu proveedor\b/.test(text);
-    const productRef = sku || (hasContextualProductReference
+    const productRef = sku || humanProduct || (hasContextualProductReference
       ? memory.selectedProductReference?.sku || memory.lastEntity?.sku : null);
     if (!productRef) return { intent: 'replenishment_budget_required', agent: 'coordinator',
       clarificationQuestion: 'Indica el SKU del producto para comparar sus proveedores configurados.' };
@@ -297,7 +312,7 @@ const routeCommercial = (message, memory = {}) => {
       ...(asksCheapestSupplier ? { intent: 'cheapest_supplier' } : {}) };
   }
   const amountMatch = message.match(/(?:S\s*\/|PEN|USD|EUR|\$|€)\s*([\d.,]+)/i);
-  const hasBudgetIntent = /tengo|presupuesto|que puedo reponer|que productos deberia comprar|que debo comprar/.test(text);
+  const hasBudgetIntent = /tengo|presupuesto|que puedo reponer|que puedo comprar|que productos deberia comprar|que debo comprar/.test(text);
   if (amountMatch && hasBudgetIntent) {
     const raw = amountMatch[1];
     const normalizedAmount = raw.includes(',') && raw.includes('.') && raw.lastIndexOf(',') > raw.lastIndexOf('.')
@@ -354,14 +369,15 @@ const routeAlertRead = (message, memory, now) => {
   const telegram = /\btelegram\b/.test(text);
   const alerts = /\balertas?\b/.test(text);
   let plan;
-  if (telegram && (alerts || /\b(?:envio|enviaron|enviadas?|omitidas?|entregas?|notificaciones?)\b/.test(text))) {
+  if (telegram && (alerts || /\b(?:envio|enviaron|enviadas?|omitidas?|omitio|entregas?|notificaciones?)\b/.test(text))) {
     plan = { intent: 'inventory_alert_channel_deliveries', agent: 'operations', selector: { limit: 20,
       ...(/\bpendientes?\b/.test(text) ? { status: 'PENDING' }
         : /\b(?:fallaron|fallidas?)\b/.test(text) ? { status: 'FAILED' }
-          : /\bomitidas?\b/.test(text) ? { status: 'SKIPPED' }
+          : /\b(?:omitidas?|omitio)\b/.test(text) ? { status: 'SKIPPED' }
             : /\b(?:envio|enviaron|enviadas?|entregadas?)\b/.test(text) ? { status: 'DELIVERED' } : {}) } };
   } else if (/\b(?:entrega|entregas|entrego)\b/.test(text)
-    && (alerts || /\b(?:pendientes?|completad[oa]s?|entregad[oa]s?|fallid[oa]s?|fallaron|en proceso|procesando)\b/.test(text))) {
+    && (alerts || /\b(?:pendientes?|completad[oa]s?|entregad[oa]s?|fallid[oa]s?|fallaron|en proceso|procesando)\b/.test(text)
+      || /^estado de entrega para\b/.test(text.replace(/[¿?¡!]/g, '').trim()))) {
     plan = { intent: 'inventory_alert_deliveries', agent: 'operations', selector: { limit: 20,
       ...(/\b(?:completad[oa]s?|entregad[oa]s?|entrego)\b/.test(text) ? { status: 'DELIVERED' }
         : /\b(?:fallid[oa]s?|fallaron)\b/.test(text) ? { status: 'FAILED' }
@@ -378,6 +394,7 @@ const routeAlertRead = (message, memory, now) => {
       ...(/\breglas?\s+de\s+stock\b/.test(text) ? { source: 'stock_alert_rule' } : {}),
       ...(/\b(?:abiertas?|open)\b/.test(text) ? { status: 'OPEN' } : /\b(?:resueltas?|resolvieron)\b/.test(text) ? { status: 'RESOLVED' } : {}) } };
   } else if ((alerts && /\b(?:reglas?|configuradas?|configurados?|tengo|stock)\b/.test(text))
+    || /^lista mis reglas de stock[?!.]*$/.test(text.trim())
     || (memory.lastIntent === 'stock_alert_rules' && /^[¿?\s]*y\s+para\b/.test(text))) {
     plan = { intent: 'stock_alert_rules', agent: 'operations' };
   } else if (alerts) plan = { intent: 'inventory_alert_events', agent: 'operations', selector: {} };
@@ -416,7 +433,7 @@ const routeTemporalGuard = (message, memory = {}, now = new Date(), businessId) 
     return clarify('Indica el producto o proveedor que deseas consultar; esa expresión corresponde a una fecha o periodo.');
   if (!relative && isTemporalOnlyReference(text.replace(/^[¿?\s]*y\s+/, '')))
     return clarify('Indica qué información deseas consultar y una fecha completa; no usaré un día o mes como nombre de producto.');
-  const salesCalendar = /\b(?:ventas|vendi|vendimos|vendio|vendido)\b/.test(text) ? salesCalendarPeriod(text, now) : null;
+  const salesCalendar = /\b(?:ventas?|vendi|vendimos|vendio|vendido)\b/.test(text) ? salesCalendarPeriod(text, now) : null;
   if (salesCalendar?.clarificationQuestion) return clarify(salesCalendar.clarificationQuestion);
   if (salesCalendar && relative) return clarify('Indica un único periodo; el mes o fecha explícita y el periodo relativo son distintos.');
   if (!salesCalendar && (naturalDates.length > 1 || /\b(?:desde|hasta)\b/.test(text) && !relative && isoDates.length !== 2))
@@ -424,6 +441,20 @@ const routeTemporalGuard = (message, memory = {}, now = new Date(), businessId) 
   return null;
 };
 
+const routeUnsupportedClaim = message => {
+  const text = normalize(message);
+  const sku = canonicalProductSku(message);
+  if (/\bproveedor(?:es)?\b/.test(text) && /\b(?:retras|atras|demor|incumpl|llego tarde|llegaron tarde)\w*\b/.test(text)
+    && /\b(?:por que|que proveedor|caus|motivo|incumpl)\w*\b/.test(text))
+    return { intent: 'unsupported_supplier_causality', agent: 'coordinator' };
+  if (/\b(?:confianza|confidence|precision|seguridad|segur[oa]|intervalo de confianza|probabilidad de acertar|incertidumbre)\b/.test(text)
+    && /\b(?:prediccion|forecast|demanda|modelo)\b/.test(text))
+    return { intent: 'forecast_confidence', agent: 'coordinator', ...(sku ? { sku } : {}) };
+  if (/\b(?:perder|perdere|perderia|perdido|perdida|perdidas|costar\w*|costo de quedarme sin stock|ventas perdidas)\b/.test(text)
+    && /\b(?:si no|sin|no compro|no repongo|no repon|quedarme sin stock)\b/.test(text))
+    return { intent: 'unsupported_financial_impact', agent: 'coordinator', ...(sku ? { sku } : {}) };
+  return null;
+};
 /** High-confidence routing only. Unrecognized language is delegated, never guessed. */
 const routeDeterministically = (message, memory = {}, now = new Date(), conversationId, scopeBinding, businessId) => {
   const tenantGuard = tenantScopeViolation(message);
@@ -467,11 +498,13 @@ const routeDeterministically = (message, memory = {}, now = new Date(), conversa
   if (structuredDisplaySku && (asksBasicProductDetail || bareDisplayName)) return { intent: 'product_details', agent: 'operations',
     selector: { sku: structuredDisplaySku }, limit: 1 };
   if (standaloneSku) return { intent: 'product_details', agent: 'operations', selector: { sku: standaloneSku }, limit: 1 };
+  const unsupportedClaim = routeUnsupportedClaim(message);
+  if (unsupportedClaim) return unsupportedClaim;
   const specificForecast = require('./forecastRouting').routeForecastProductQuery(message, memory);
   if (specificForecast) return specificForecast;
-  if (explicitProductQuery) return { intent: /prediccion|forecast/.test(normalize(message)) ? 'demand_forecast' : 'product_details',
+  if (explicitProductQuery) return scopeReadProduct({ intent: /prediccion|forecast/.test(normalize(message)) ? 'demand_forecast' : 'product_details',
     agent: /prediccion|forecast/.test(normalize(message)) ? 'analyst' : 'operations', lookupQuery: explicitProductQuery, limit: 1,
-    explicitEntity: true };
+    explicitEntity: true }, explicitProductQuery, memory);
   const productReference = productReferenceFollowup(message, memory);
   if (productReference) return productReference;
   const compound = routeCompoundProductList(message);
@@ -494,19 +527,6 @@ const routeDeterministically = (message, memory = {}, now = new Date(), conversa
       ...(resolved.selectedProduct ? { selectedProduct: resolved.selectedProduct } : {}) };
   }
   const text = normalize(message);
-  const hasSku = Boolean(canonicalProductSku(message));
-  if (/\bproveedor(?:es)?\b/.test(text) && /\b(?:retras|atras|demor|incumpl|llego tarde)\w*\b/.test(text)
-    && /\b(?:por que|que proveedor|caus|motivo|incumpl)\w*\b/.test(text)) {
-    return { intent: 'unsupported_supplier_causality', agent: 'coordinator' };
-  }
-  if (/\b(?:confianza|segur[oa]|intervalo de confianza|probabilidad de acertar|incertidumbre)\b/.test(text)
-    && /\b(?:prediccion|forecast|demanda|modelo)\b/.test(text)) {
-    return { intent: 'forecast_confidence', agent: 'coordinator', ...(hasSku ? { sku: canonicalProductSku(message) } : {}) };
-  }
-  if (/\b(?:perder|perderia|perdida|perdidas|costar\w*|costo de quedarme sin stock|ventas perdidas)\b/.test(text)
-    && /\b(?:si no|sin|no compro|no repongo|no repon|quedarme sin stock)\b/.test(text)) {
-    return { intent: 'unsupported_financial_impact', agent: 'coordinator', ...(hasSku ? { sku: canonicalProductSku(message) } : {}) };
-  }
   const asksSalesCausality = /\b(?:por que|caus|motivo)\w*\b/.test(text)
     && /\b(?:baj|disminu|cayer|caid|descend|menor)\w*\b/.test(text) && /\b(?:venta|vend)\w*\b/.test(text);
   if (asksSalesCausality) {
@@ -612,14 +632,14 @@ const routeDeterministically = (message, memory = {}, now = new Date(), conversa
   }
   if (dates && (dates.length > 2 || !dates.every(isDate) || dates.length === 2 && dates[0] > dates[1])) return clarify('Indica un periodo válido con una fecha o dos fechas YYYY-MM-DD ordenadas.');
   if (!dates && /\b\d{1,2}\s+de\s+[a-z]+\s+de\s+20\d{2}\b/i.test(text) && !parsedNaturalDate) return clarify('No pude validar esa fecha. Indícala con día, mes y año.');
-  const salesCalendar = /\b(?:ventas|vendi|vendimos|vendio|vendido)\b/.test(text) ? salesCalendarPeriod(text, now) : null;
+  const salesCalendar = /\b(?:ventas?|vendi|vendimos|vendio|vendido)\b/.test(text) ? salesCalendarPeriod(text, now) : null;
   if (salesCalendar?.clarificationQuestion) return clarify(salesCalendar.clarificationQuestion);
   const explicitPeriod = salesCalendar?.period || (dates ? { startDate: dates[0], endDate: dates[1] || dates[0] }
     : parsedNaturalDate ? { startDate: parsedNaturalDate, endDate: parsedNaturalDate } : explicitRelativePeriod);
   const period = explicitPeriod || (memory.lastPeriodExplicit === true ? memory.lastPeriod : undefined) || monthPeriod(now);
   const newSalesProduct = memory.lastIntent === 'product_sales_summary'
     && text.replace(/[¿?¡!.]/g, '').trim().match(/^y\s+((?:foods?|item|M5-)[\w\s-]+)$/i)?.[1];
-  if ((/\b(?:vendi|vendimos|vendio|vendido|ventas)\b/.test(text) || newSalesProduct) && !/\b(?:compra|compras)\b/.test(text)) {
+  if ((/\b(?:vendi|vendimos|vendio|vendido|ventas|unidades vendidas)\b/.test(text) || newSalesProduct) && !/\b(?:compra|compras)\b/.test(text)) {
     const salesReference = canonicalProductSku(message) || message.match(/\bSKU-[\w.-]{1,100}\b/i)?.[0]
       || salesEntityReference(text.replace(/[¿?¡!]/g, ''), salesCalendar)
       || (newSalesProduct ? salesEntityReference(`ventas de ${newSalesProduct}`, salesCalendar) : undefined);
@@ -669,12 +689,14 @@ const routeDeterministically = (message, memory = {}, now = new Date(), conversa
   }
   let plan;
   if (isLowStockQuery(inventoryText)) plan = { intent: 'low_stock', agent: 'operations' };
-  else if (/transacciones.*(ultim|recient)|(ultim|recient).*transacciones/.test(text)
+  else if (/transacciones.*(ultim|recient|completad|pendient|cancelad)|(ultim|recient).*transacciones/.test(text)
+    || /\b(?:ultimas compras|compras (?:pendientes|canceladas))\b|\bdame \d+ compras recientes\b/.test(text)
+    || /^dame movimientos de ventas y compras[?!.]*$/.test(text.trim())
     || /\btransacciones\b/.test(text) && explicitPeriod
     || /\bcompras?\b/.test(text) && explicitPeriod) plan = { intent: 'recent_transactions', agent: 'operations' };
-  else if (/mas vendidos|mayores ventas|se venden mas|\btop\s+(?:\d+\s+)?productos\s+(?:vendidos|por ventas)\b/.test(text))
+  else if (/mas vendidos|mayores ventas|se venden mas|\branking por unidades vendidas\b|\btop\s+(?:\d+\s+)?productos\s+(?:vendidos|por ventas)\b/.test(text))
     plan = { intent: 'top_selling_products', agent: 'analyst', ...(/\btop\s+(\d+)\b/.test(text) ? { limit: Math.min(20, Number(text.match(/\btop\s+(\d+)\b/)[1])) } : {}) };
-  else if (/\b(?:vendimos|ventas?|vendi|cuantas? ventas?|cuanto.*vendid[oa])\b/.test(text)
+  else if (/\b(?:vendimos|ventas?|vendi|cuantas? ventas?|cuanto.*vendid[oa]|total vendido)\b/.test(text)
     && !/\bcompras?\b/.test(text)
     && (explicitPeriod || /\b(?:vendi|vendimos|ventas)\b/.test(text))) plan = { intent: 'sales_summary', agent: 'operations' };
   else if (/vendio|cuanto.*vendido/.test(text)) plan = { intent: 'product_sales_summary', agent: 'operations', needsProduct: true };
@@ -697,7 +719,8 @@ const routeDeterministically = (message, memory = {}, now = new Date(), conversa
   }
   if (plan.intent === 'recent_transactions') {
     plan.periodRequested = Boolean(explicitPeriod);
-    plan.type = /\bventas?\b/.test(text) ? 'sale' : /\bcompras?\b/.test(text) ? 'purchase' : undefined;
+    plan.type = /\bventas?\b/.test(text) && /\bcompras?\b/.test(text) ? undefined
+      : /\bventas?\b/.test(text) ? 'sale' : /\bcompras?\b/.test(text) ? 'purchase' : undefined;
     plan.status = /completad/.test(text) ? 'completed' : /pendient/.test(text) ? 'pending' : /cancelad/.test(text) ? 'cancelled' : undefined;
   }
   if (sku && plan.intent === 'replenishment_candidates') { plan.intent = 'demand_forecast'; plan.needsProduct = true; }

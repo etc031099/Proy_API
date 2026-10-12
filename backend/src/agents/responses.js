@@ -278,7 +278,7 @@ const buildSkillAnswer = (skillId, result, question = '') => {
     const text = question.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
     if (!/detalles|informacion|todo/.test(text)) {
       if (/minimo|\bmin\b/.test(text)) return `El stock mínimo de ${name(data)} es ${units(data.minStockLevel)}.`;
-      if (/precio/.test(text)) return `El precio de ${name(data)} es ${currencyMoney(data.price, data.currency)}.`;
+      if (/precio|cuanto (?:cuesta|vale)|a cuanto esta/.test(text)) return `El precio de ${name(data)} es ${currencyMoney(data.price, data.currency)}.`;
       if (/activ[oa]|estado/.test(text)) return `${name(data)} está ${data.isActive ? 'activo' : 'inactivo'}.`;
       if (/stock|disponib/.test(text)) return `${name(data)} tiene ${availableUnits(data.stock)}. Stock mínimo: ${units(data.minStockLevel)}.`;
     }
@@ -312,7 +312,7 @@ const buildSkillAnswer = (skillId, result, question = '') => {
     if (skillId === 'get_demand_forecast' || skillId === 'get_replenishment_candidates') {
       if (row.mlStatus !== 'READY') return `• ${name(row)} ${readinessLabel(row.mlStatus)}; no hay predicción disponible.`;
       if (skillId === 'get_replenishment_candidates') return `• ${name(row)} — reponer ${units(row.recommendedQty)}; demanda estimada de ${units(row.predictedDemand7d)} y stock disponible de ${units(row.stockAtAnchor)} en la fecha de referencia.`;
-      return `• ${name(row)}: el modelo estimó ${units(row.predictedDemand7d)} en el horizonte histórico agregado de 7 días. En la fecha de referencia había ${units(row.stockAtAnchor)} disponibles y ${row.salesLast7Days === 1 ? 'se había vendido 1 unidad' : `se habían vendido ${format(row.salesLast7Days)}`} en los 7 días anteriores. Considerando ${units(row.safetyStock)} de stock de seguridad, ${row.recommendedQty > 0 ? `se recomienda reponer ${units(row.recommendedQty)}` : 'no se recomienda reposición para ese escenario'}.`;
+      return `• ${name(row)}: el modelo estimó ${units(row.predictedDemand7d)} en el horizonte histórico agregado de 7 días. En la fecha de referencia había ${availableUnits(row.stockAtAnchor)} y ${row.salesLast7Days === 1 ? 'se había vendido 1 unidad' : `se habían vendido ${format(row.salesLast7Days)}`} en los 7 días anteriores. Considerando ${units(row.safetyStock)} de stock de seguridad, ${row.recommendedQty > 0 ? `se recomienda reponer ${units(row.recommendedQty)}` : 'no se recomienda reposición para ese escenario'}.`;
     }
     return `• ${name(row)} tiene ${availableUnits(row.stock)} y un mínimo configurado de ${units(row.minStockLevel)}.`;
   });

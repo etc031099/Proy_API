@@ -58,12 +58,16 @@ const periodFor = input => {
   if (/\bayer\b/.test(text)) return { startDate: '2026-10-08', endDate: '2026-10-08' };
   if (/\bhoy\b/.test(text)) return { startDate: '2026-10-09', endDate: '2026-10-09' };
   if (/esta semana/.test(text)) return { startDate: '2026-10-05', endDate: '2026-10-09' };
-  if (/9 de octubre de 2026|el 2026-10-09/.test(text)) return { startDate: '2026-10-09', endDate: '2026-10-09' };
+  if (/9 de octubre(?: de 2026)?|el 2026-10-09/.test(text)) return { startDate: '2026-10-09', endDate: '2026-10-09' };
   return null;
 };
 const failed = (row, reason, severity = 'P2') => Object.assign(row, { classification: 'FAIL', severity, notes: reason });
 async function individual(family, input, index) {
-  const expected = family.expected;
+  // P3C.2 approved day/month without a year as the operational UTC year.
+  // Preserve input/ID and historical reports; correct this one stale oracle.
+  const operationalYearCorrection = family.family === 'incomplete_temporals' && input === 'ventas del 9 de octubre';
+  const expected = operationalYearCorrection ? { level: 'route', intents: ['sales_summary'], deterministic: true,
+    period: { startDate: '2026-10-09', endDate: '2026-10-09' } } : family.expected;
   const row = { id: `U-${String(index).padStart(4, '0')}`, family: family.family, area: family.area, input,
     expected: safe(expected), actual: {}, classification: 'PASS', severity: null, notes: '' };
   try {
@@ -132,7 +136,16 @@ async function individual(family, input, index) {
       check(plan?.clarificationQuestion && !f.calls.length && result.usage.totalSkillCalls === 0, 'Temporal forecast must clarify without historical lookup');
       return row;
     }
-    if (family.family === 'incomplete_temporals') {
+    if (operationalYearCorrection) {
+      row.auditorExpectationCorrection = { reason: 'auditor expectation correction based on approved operational-year rule',
+        source: 'docs/CONV-HARDENING-P3C.2.md', originalExpected: safe(family.expected), productionChanged: false };
+      check(plan.intent === 'sales_summary' && plan.period.startDate === expected.period.startDate
+        && plan.period.endDate === expected.period.endDate && !f.calls.length, 'Approved operational-year period lost');
+      const filter = f.reads.find(query => query.model === 'Transaction' && query.pipeline)?.pipeline[0].$match;
+      check(filter?.date?.$gte.toISOString() === '2026-10-09T00:00:00.000Z'
+        && filter.date.$lt.toISOString() === '2026-10-10T00:00:00.000Z', 'Approved operational-year executor filter lost');
+    }
+    if (family.family === 'incomplete_temporals' && !operationalYearCorrection) {
       check(plan?.clarificationQuestion && !f.calls.length, 'Incomplete/invalid date was interpreted without clarification');
       return row;
     }
@@ -151,7 +164,13 @@ async function individual(family, input, index) {
         const inclusiveEnd = new Date(new Date(`${period.endDate}T00:00:00Z`).getTime() + 86400000).toISOString();
         check(transactionFilter.date?.$lt.toISOString() === inclusiveEnd, 'Executor did not apply inclusive period end');
       }
-      if (/compras/.test(normalize(input)) && plan.intent === 'recent_transactions') check(plan.type === 'purchase', 'Purchase filter lost');
+      if (/compras/.test(normalize(input)) && plan.intent === 'recent_transactions') {
+        if (/ventas/.test(normalize(input))) {
+          row.auditorFilterCorrection = { reason: 'A query explicitly requesting sales and purchases must not be narrowed to purchases only',
+            originalCheck: 'any occurrence of compras required type=purchase', expectedType: null };
+          check(plan.type === undefined && !transactionFilter?.type, 'Combined transaction types were narrowed');
+        } else check(plan.type === 'purchase', 'Purchase filter lost');
+      }
     }
     if (expected.attribute && !result.requiresClarification) {
       const text = normalize(result.answer);
@@ -393,7 +412,34 @@ async function main() {
   // One case per line keeps the machine-readable corpus reviewable in Git.
   const header = JSON.stringify({ ...report, cases: undefined }, null, 2);
   const serialized = `${header.slice(0, -2)},\n  "cases": [\n    ${cases.map(row => JSON.stringify(row)).join(',\n    ')}\n  ]\n}\n`;
-  if (process.argv.includes('--p3c3') || process.argv.includes('--p3c3-1')) {
+  if (process.argv.includes('--polish-p3e')) {
+    const baseline = JSON.parse(fs.readFileSync(path.join(root, 'docs', 'CONV-HARDENING-P3C.3.1.json'), 'utf8'));
+    const targets = ["U-0003","U-0007","U-0008","U-0018","U-0021","U-0026","U-0046","U-0058","U-0138","U-0163","U-0168","U-0188","U-0201","U-0202","U-0203","U-0210","U-0213","U-0218","U-0219","U-0223","U-0236","U-0314","U-0339","U-0340","U-0367","U-0327","U-0413","U-0443","U-0458","U-0472","U-0484","U-0485","U-0487","U-0490","U-0498","U-0499","U-0251","S-084"];
+    const affectedCases = cases.filter(row => targets.includes(row.id));
+    const previous = new Map(baseline.cases.map(row => [row.id, row]));
+    const resolved = cases.filter(row => previous.get(row.id)?.severity === 'P2' && row.classification === 'PASS');
+    const actualFixes = resolved.filter(row => !row.auditorExpectationCorrection);
+    const newCriticalFailures = cases.filter(row => row.classification === 'FAIL' && ['P0', 'P1'].includes(row.severity));
+    const regressions = Object.fromEntries(['CONV-HARDENING-P3C.1.json', 'CONV-HARDENING-P3C.2.json', 'CONV-HARDENING-P3C.3.json', 'CONV-HARDENING-P3C.3.1.json']
+      .map(file => { const prior = JSON.parse(fs.readFileSync(path.join(root,'docs',file),'utf8'));
+        const ids = file.endsWith('3.1.json') ? ['S-121'] : prior.affectedCases.map(row => row.id);
+        const rows = cases.filter(row => ids.includes(row.id));
+        return [file,{total:ids.length,passed:rows.filter(row=>row.classification==='PASS').length}]; }));
+    const comparison = { ...report, phase: 'CONV-POLISH-P3E', baseline: 'CONV-HARDENING-P3C.3.1.json',
+      evaluationBasis: { kind:'working_tree_before_commit',headBeforeCommit:report.evaluatedCommit },
+      targetIds:targets, affectedCases, regressions, newCriticalFailures,
+      resolvedP2FunctionalIds:actualFixes.map(row=>row.id),
+      auditorExpectationCorrections:cases.filter(row=>row.auditorExpectationCorrection).map(row=>({id:row.id,...row.auditorExpectationCorrection})),
+      auditorFilterCorrections:cases.filter(row=>row.auditorFilterCorrection).map(row=>({id:row.id,...row.auditorFilterCorrection})),
+      resolvedP3Ids:cases.filter(row=>previous.get(row.id)?.severity==='P3'&&row.classification==='PASS').map(row=>row.id) };
+    const header = JSON.stringify({...comparison,cases:undefined},null,2);
+    fs.writeFileSync(path.join(root,'docs','CONV-POLISH-P3E.json'),
+      `${header.slice(0,-2)},\n  "cases": [\n    ${cases.map(row=>JSON.stringify(row)).join(',\n    ')}\n  ]\n}\n`,'utf8');
+    console.log(JSON.stringify({targets:targets.length,passed:affectedCases.filter(row=>row.classification==='PASS').length,
+      resolvedP2Functional:actualFixes.length,oracleCorrections:comparison.auditorExpectationCorrections.length,regressions}));
+    if (affectedCases.length!==targets.length||affectedCases.some(row=>row.classification!=='PASS')||newCriticalFailures.length
+      ||Object.values(regressions).some(row=>row.total!==row.passed)) process.exitCode=1;
+  } else if (process.argv.includes('--p3c3') || process.argv.includes('--p3c3-1')) {
     const visibleNamePhase = process.argv.includes('--p3c3-1');
     const phase = visibleNamePhase ? 'CONV-HARDENING-P3C.3.1' : 'CONV-HARDENING-P3C.3';
     const baselineFile = visibleNamePhase ? 'CONV-HARDENING-P3C.3.json' : 'CONV-HARDENING-P3C.2.json';

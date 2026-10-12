@@ -17,7 +17,7 @@ const resultAnswer = pending => pending.status !== 'EXECUTED' ? 'Acción cancela
 const pendingQuestionType = message => {
   const text = message.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[¿?!.]/g, '').trim();
   if (/^(?:esta bien el precio|cual es el precio|y el precio|que precio tiene)$/.test(text)) return 'price';
-  if (/^cuanto (?:quedara|quedara de stock|stock quedara)$/.test(text)) return 'stock';
+  if (/^cuanto (?:quedar[ae]|quedar[ae] de stock|stock quedara)$/.test(text)) return 'stock';
   if (/^cuanto (?:pagare|es el total|cuesta en total)$/.test(text)) return 'total';
   if (/^que proveedor (?:elegi|seleccione)$/.test(text)) return 'supplier';
   if (/^cuantas unidades (?:son|hay)$/.test(text)) return 'quantity';

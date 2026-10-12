@@ -90,7 +90,7 @@ const routeForecastTemporalQuery = (message, memory, now, businessId) => {
     const anchor = scenario?.anchorOperationalDate;
     const target = requestedDate ? dateLabel(requestedDate)
       : dayAfterTomorrow ? 'pasado mañana' : tomorrow ? 'mañana'
-        : futureMatch ? futureMatch[0] : /actual|vigente/.test(text) ? 'actualmente'
+        : futureMatch ? futureMatch[0].replace(/\bproximo\b/g, 'próximo').replace(/\bproxima\b/g, 'próxima') : /actual|vigente/.test(text) ? 'actualmente'
         : /hoy/.test(text) ? 'hoy' : /proxima semana|semana que viene/.test(text) ? 'la próxima semana'
           : /esta semana/.test(text) ? 'esta semana' : /lunes que viene/.test(text) ? 'el lunes que viene'
             : (text.match(/dentro de \d+ dias?/) || ['un periodo futuro'])[0];

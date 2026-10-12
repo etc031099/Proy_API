@@ -18,6 +18,7 @@ require('./forecastTemporalHardening.test');
 require('./salesTemporalHardening.test');
 require('./conversationalP3C3.test');
 require('./visibleProductContinuations.test');
+require('./conversationalP3E.test');
 require('./replenishmentPlanning.test');
 require('./agentGemini.test');
 require('./agentFailover.test');

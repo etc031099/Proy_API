@@ -662,7 +662,9 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
             sections = [];
           }
           if (sections.length) {
-            const hasFinalResult = sections.some(index => results[index].skillId !== 'search_products' && results[index].result.status === 'READY');
+            const hasFinalResult = sections.some(index => results[index].skillId !== 'search_products'
+              && (results[index].result.status === 'READY'
+                || results[index].skillId === 'get_product_sales_summary' && results[index].result.status === 'NO_DATA'));
             answer = sections.filter(index => !(hasFinalResult && results[index].skillId === 'search_products' && results[index].result.data?.length === 1))
               .map(index => buildSkillAnswer(results[index].skillId, results[index].result, input.message)).join('\n\n');
           }
