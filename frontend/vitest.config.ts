@@ -10,6 +10,7 @@ export default defineConfig({
     include: [
       'test/remoteEntitySelect.test.tsx',
       'test/contactsPagination.test.tsx',
+      'test/textEncoding.test.ts',
       'test/telegramRecovery.test.tsx',
       'test/telegramPreferences.test.tsx',
       'test/mlForecast.api.test.ts',

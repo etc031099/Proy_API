@@ -22,6 +22,11 @@ class FakeNode {
     this.children = [];
     this.className = '';
     this.ownText = text;
+    this.attributes = {};
+  }
+
+  setAttribute(name, value) {
+    this.attributes[name] = String(value);
   }
 
   appendChild(child) {
@@ -135,6 +140,22 @@ test('report title, summary, headers and cells are emitted as escaped text nodes
   assert.match(serialized, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
   assert.match(serialized, /&lt;img src=x onerror=alert\(1\)&gt;/);
   assert.doesNotMatch(serialized, /<script>|<img|<svg/i);
+});
+
+test('print documents declare UTF-8 and preserve Spanish report text', () => {
+  const document = new FakeDocument();
+  populatePrintDocument(document, {
+    title: 'Información del período',
+    headers: ['Ítem', 'Año'],
+    rows: [['José', 'S/ 17.61']]
+  });
+
+  const charset = document.head.children.find((child) => child.tagName === 'meta');
+  assert.ok(charset);
+  assert.equal(charset.attributes.charset, 'utf-8');
+  assert.match(document.textContent, /Información del período/);
+  assert.match(document.textContent, /Ítem/);
+  assert.match(document.textContent, /José/);
 });
 
 test('printing remains functional and severs the popup opener', () => {

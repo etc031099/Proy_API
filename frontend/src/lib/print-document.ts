@@ -69,6 +69,9 @@ export const populatePrintDocument = (document: Document, data: PrintDocumentDat
   const body = document.body || document.createElement('body');
   head.replaceChildren();
   body.replaceChildren();
+  const charset = document.createElement('meta');
+  charset.setAttribute('charset', 'utf-8');
+  head.appendChild(charset);
   const title = appendTextElement(document, head, 'title', data.title);
   const style = document.createElement('style');
   style.textContent = PRINT_STYLES;

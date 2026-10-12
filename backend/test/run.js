@@ -4,6 +4,7 @@ require('./demoV2Registration.test');
 require('./numbers.test');
 require('./validations.test');
 require('./paginationControllers.test');
+require('./textEncoding.test');
 require('./webhookService.test');
 require('./cors.test');
 require('./inventoryMovement.test');

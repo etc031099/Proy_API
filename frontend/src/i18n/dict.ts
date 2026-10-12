@@ -292,10 +292,10 @@ export const dictionary = {
       noRecentTransactions: 'No hay transacciones recientes',
       sale: 'Venta',
       purchase: 'Compra',
-      periodMode: 'PerÃ­odo del panel',
-      currentPeriod: 'PerÃ­odo calendario actual',
-      latestPeriod: 'Ãšltimo perÃ­odo con datos',
-      periodShown: 'PerÃ­odo mostrado',
+      periodMode: 'Período del panel',
+      currentPeriod: 'Período calendario actual',
+      latestPeriod: 'Último período con datos',
+      periodShown: 'Período mostrado',
     },
     contacts: {
       title: 'Contactos',
@@ -463,7 +463,7 @@ export const dictionary = {
       netProfit: 'Ganancia neta', avgSale: 'Venta promedio', recentTransactions: 'Transacciones recientes', generatePrompt: 'Presiona "Generar reporte" para ver el análisis',
       selectCustomer: 'Seleccionar cliente', selectVendor: 'Seleccionar proveedor', chooseCustomer: 'Elegir un cliente...', chooseVendor: 'Elegir un proveedor...',
       totalTransactions: 'Total de transacciones', averagePurchase: 'Compra promedio', date: 'Fecha', type: 'Tipo', contact: 'Contacto', amount: 'Monto',
-      periodBreakdown: 'Desglose agregado por perÃ­odo', period: 'PerÃ­odo',
+      periodBreakdown: 'Desglose agregado por período', period: 'Período',
     },
     integrations: {
       title: 'Integraciones externas',

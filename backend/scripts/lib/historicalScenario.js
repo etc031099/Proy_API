@@ -210,7 +210,7 @@ const importHistoricalScenario = async ({ filePath, businessId, scenarioId, batc
   let previousOccurredAt = null;
   try {
     const lines = readline.createInterface({
-      input: fs.createReadStream(filePath),
+      input: fs.createReadStream(filePath, { encoding: 'utf8' }),
       crlfDelay: Infinity
     });
     let lineNumber = 0;
