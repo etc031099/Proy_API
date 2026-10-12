@@ -911,7 +911,6 @@ test('P1B transaction follow-up preserves type and status along with a new date'
 });
 for (const query of ['ventas ayer y hoy', 'ventas esta semana ayer', 'ventas desde hoy hasta ayer',
   'ventas desde ayer hasta hoy últimos 7 días', 'ventas del 1 al 5', 'ventas entre el 1 y el 5',
-  'ventas desde el 9 de octubre de 2026 hasta el 10 de octubre de 2026',
   'ventas 09/10/2026', 'ventas 09-10-2026', 'ventas 2026-02-30']) {
   test(`P1B unresolved/conflicting dates clarify without queries: ${query}`, async () => {
     const f = fixture(), result = await f.run(query);

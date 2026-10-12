@@ -15,6 +15,7 @@ require('./agents.test');
 require('./agentSkills.test');
 require('./forecastAnalytics.test');
 require('./forecastTemporalHardening.test');
+require('./salesTemporalHardening.test');
 require('./replenishmentPlanning.test');
 require('./agentGemini.test');
 require('./agentFailover.test');

@@ -71,9 +71,9 @@ function parseAction(message, action) {
   const contextualVendor = /\b(?:al|con|usando)\s+((?:ese|este)(?: mismo)? proveedor|(?:el )?mismo proveedor|el anterior)(?=,|[.!?]|\s+(?:en|a)\s+(?:cr[eé]dito|contado)|$)/i.exec(message);
   const supplier = contextualVendor || /\bprove(?:edor|edro)\s+(.+?)(?=,|\s+(?:en|a)\s+(?:cr[eé]dito|contado)|$)/i.exec(message);
   const customer = /\b(?:al|para el|para|cliente|a)\s+(?:cliente\s+)?([a-záéíóúñ].+?)(?=,|\s+(?:en|a)\s+(?:cr[eé]dito|contado)|$)/i.exec(message.replace(/(?:al|de)\s+prove(?:edor|edro).*/i, '').replace(/a\s+cr[eé]dito.*/i, ''));
-  const itemText = (contextualVendor ? message.slice(0, contextualVendor.index).trim() : message).replace(/\s+(?:(?:al|del|de|con el)\s+)?prove(?:edor|edro)\s+.*/i, '').replace(/\s+(?:al|para el|para|a)\s+(?:cliente\s+)?[A-Za-z].*/i, '')
+  const itemText = (contextualVendor ? message.slice(0, contextualVendor.index).trim() : message).replace(/\s+(?:(?:al|del|de|con(?: el)?)\s+)?prove(?:edor|edro)\s+.*/i, '').replace(/\s+(?:al|para el|para|a)\s+(?:cliente\s+)?[A-Za-z].*/i, '')
     .replace(/\s+(?:fiado|(?:en|a|al)\s+(?:cr[eé]dito|contado)).*/i, '').replace(/\s+(?:moneda|en)\s+(?:PEN|USD|EUR|soles|d[oó]lares|euros).*/i, '');
-  const content = itemText.replace(/^(?:vende|vender|compre|compré|comprar|compra|registra(?:r)?(?: una)? (?:venta|compra))\s*(?:de\s+)?/i, '');
+  const content = itemText.replace(/^(?:vender|vende|compre|compré|comprar|compra|registra(?:r)?(?: una)? (?:venta|compra))(?=\s|$)\s*(?:de\s+)?/i, '');
   // A comma inside a number stays part of that token. Quantities only occur at
   // the beginning of an item, never inside its name, item number or SKU.
   const segments = content.split(/(?<=\S),\s+|(?<=[^\d\s]),|\s+y\s+(?=[+\-−]?\d|uno\b|una\b|dos\b|tres\b|cuatro\b|cinco\b|seis\b|siete\b|ocho\b|nueve\b|diez\b|once\b|doce\b|veinte\b|treinta\b|cincuenta\b|cien\b)/i);
@@ -91,7 +91,7 @@ function parseAction(message, action) {
     } else if (segments.length > 1) fail('ACTION_VALIDATION_FAILED');
   }
   if (!items.length) {
-    const ref = message.replace(/^(?:vende|vender|compre|compré|comprar|compra|registra(?:r)?(?: una)? (?:venta|compra))\s*(?:de\s+)?/i, '').trim();
+    const ref = itemText.replace(/^(?:vender|vende|compre|compré|comprar|compra|registra(?:r)?(?: una)? (?:venta|compra))(?=\s|$)\s*(?:de\s+)?/i, '').trim();
     if (ref) items.push({ ref });
   }
   return { action, items, ...(supplier ? { supplierRef: supplier[1].trim().replace(/[.!?]+$/, '') } : {}),

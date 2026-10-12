@@ -93,6 +93,31 @@ const previousEqualPeriod = period => {
   return { startDate: new Date(end - (days - 1) * 86400000).toISOString().slice(0, 10),
     endDate: new Date(end).toISOString().slice(0, 10) };
 };
+// Remove complete temporal expressions before interpreting the remaining entity.
+// Calendar dates use the same UTC validation as the existing explicit-date parser.
+const salesCalendarPeriod = (text, now) => {
+  const months = 'enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre';
+  const days = [...text.matchAll(new RegExp(`\\b(?:20\\d{2}-\\d{2}-\\d{2}|\\d{1,2} de (?:${months})(?: de 20\\d{2})?)\\b`, 'g'))];
+  if (days.length) {
+    const dates = days.map(row => parseRequestedDate(/20\d{2}/.test(row[0]) ? row[0] : `${row[0]} de ${now.getUTCFullYear()}`));
+    if (dates.some(value => !value) || dates.length > 2 || dates.length === 2 && dates[0] > dates[1])
+      return { clarificationQuestion: 'Indica un periodo válido con fechas completas y ordenadas.' };
+    return { period: { startDate: dates[0], endDate: dates[1] || dates[0] },
+      remainder: days.reduce((value, row) => value.replace(row[0], ''), text) };
+  }
+  const month = text.match(new RegExp(`\\b(${months})(?: de (20\\d{2}))?\\b`));
+  if (!month) return null;
+  const monthIndex = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'].indexOf(month[1] === 'setiembre' ? 'septiembre' : month[1]);
+  const year = Number(month[2] || now.getUTCFullYear());
+  return { period: monthPeriod(new Date(Date.UTC(year, monthIndex, 1))), remainder: text.replace(month[0], '') };
+};
+const salesEntityReference = (text, calendar) => {
+  const remainder = (calendar?.remainder || text)
+    .replace(/\b(?:(?:desde|hasta|en|el|la|los|del|de)\s+)*(?:anteayer|ayer|hoy|este mes|mes (?:pasado|anterior|actual)|esta semana|semana (?:pasada|anterior)|ultim[oa]s?\s+(?:\d+|siete|treinta)\s+dias(?:\s+hasta hoy)?)\b/g, '')
+    .replace(/\b(?:desde|hasta|entre)\s*$/g, '').replace(/\s+/g, ' ').trim();
+  const reference = remainder.match(/\b(?:vendi|vendimos|vendio|vendido|ventas)\s+(?:(?:de|del|tuvo)\s+)(?:el\s+)?(?:producto\s+)?(.+)$/)?.[1];
+  return reference?.replace(/[¿?¡!.]/g, '').replace(/(?:\s+(?:desde|hasta|entre|en|el|de|y))+\s*$/g, '').trim();
+};
 const clarify = question => ({ intent: 'ambiguous_query', agent: 'coordinator', clarificationQuestion: question });
 const canonicalProductSku = message => message.match(/\bM5-[A-Z]+_\d+_\d+\b/i)?.[0]
   || message.match(/\bSKU\s+([\w.-]{1,100})\b/i)?.[1];
@@ -374,7 +399,10 @@ const routeTemporalGuard = (message, memory = {}, now = new Date(), businessId) 
     return clarify('Indica el producto o proveedor que deseas consultar; esa expresión corresponde a una fecha o periodo.');
   if (!relative && isTemporalOnlyReference(text.replace(/^[¿?\s]*y\s+/, '')))
     return clarify('Indica qué información deseas consultar y una fecha completa; no usaré un día o mes como nombre de producto.');
-  if (naturalDates.length > 1 || /\b(?:desde|hasta)\b/.test(text) && !relative && isoDates.length !== 2)
+  const salesCalendar = /\b(?:ventas|vendi|vendimos|vendio|vendido)\b/.test(text) ? salesCalendarPeriod(text, now) : null;
+  if (salesCalendar?.clarificationQuestion) return clarify(salesCalendar.clarificationQuestion);
+  if (salesCalendar && relative) return clarify('Indica un único periodo; el mes o fecha explícita y el periodo relativo son distintos.');
+  if (!salesCalendar && (naturalDates.length > 1 || /\b(?:desde|hasta)\b/.test(text) && !relative && isoDates.length !== 2))
     return clarify('Indica el rango completo con dos fechas YYYY-MM-DD; no puedo inferir los límites de ese rango.');
   return null;
 };
@@ -453,7 +481,7 @@ const routeDeterministically = (message, memory = {}, now = new Date(), conversa
     return { intent: 'unsupported_financial_impact', agent: 'coordinator', ...(hasSku ? { sku: canonicalProductSku(message) } : {}) };
   }
   const asksSalesCausality = /\b(?:por que|caus|motivo)\w*\b/.test(text)
-    && /\b(?:baj|disminu|cayer|caid|descend)\w*\b/.test(text) && /\b(?:venta|vend)\w*\b/.test(text);
+    && /\b(?:baj|disminu|cayer|caid|descend|menor)\w*\b/.test(text) && /\b(?:venta|vend)\w*\b/.test(text);
   if (asksSalesCausality) {
     const requestedPeriod = relativeSalesPeriod(text, now);
     if (!requestedPeriod) {
@@ -543,7 +571,7 @@ const routeDeterministically = (message, memory = {}, now = new Date(), conversa
   const explicitRelativePeriod = recognizedRelativePeriod;
   if ((dates || parsedNaturalDate) && explicitRelativePeriod) return clarify('Indica un único periodo; la fecha explícita y el periodo relativo son distintos.');
   const periodFollowupText = text.replace(/[¿?¡!.]/g, '').trim();
-  const periodOnlyFollowup = /^(?:y\s+)?(?:hoy|ayer|anteayer|ultimos?\s+(?:7|30)\s+dias)$/.test(periodFollowupText);
+  const periodOnlyFollowup = /^(?:y\s+)?(?:en\s+)?(?:los\s+)?(?:hoy|ayer|anteayer|esta semana|ultimos?\s+(?:7|30)\s+dias)$/.test(periodFollowupText);
   const contextualPeriodFollowup = periodOnlyFollowup || /^que paso (?:hoy|ayer|anteayer|ultimos?\s+(?:7|30)\s+dias)$/.test(periodFollowupText);
   if (contextualPeriodFollowup && ['sales_summary', 'sales_causality', 'recent_transactions', 'product_sales_summary'].includes(memory.lastIntent)) {
     if (memory.lastIntent === 'product_sales_summary' && !memory.lastEntity) return clarify('¿Qué producto deseas consultar en ese periodo?');
@@ -560,13 +588,17 @@ const routeDeterministically = (message, memory = {}, now = new Date(), conversa
   }
   if (dates && (dates.length > 2 || !dates.every(isDate) || dates.length === 2 && dates[0] > dates[1])) return clarify('Indica un periodo válido con una fecha o dos fechas YYYY-MM-DD ordenadas.');
   if (!dates && /\b\d{1,2}\s+de\s+[a-z]+\s+de\s+20\d{2}\b/i.test(text) && !parsedNaturalDate) return clarify('No pude validar esa fecha. Indícala con día, mes y año.');
-  const explicitPeriod = dates ? { startDate: dates[0], endDate: dates[1] || dates[0] }
-    : parsedNaturalDate ? { startDate: parsedNaturalDate, endDate: parsedNaturalDate } : explicitRelativePeriod;
+  const salesCalendar = /\b(?:ventas|vendi|vendimos|vendio|vendido)\b/.test(text) ? salesCalendarPeriod(text, now) : null;
+  if (salesCalendar?.clarificationQuestion) return clarify(salesCalendar.clarificationQuestion);
+  const explicitPeriod = salesCalendar?.period || (dates ? { startDate: dates[0], endDate: dates[1] || dates[0] }
+    : parsedNaturalDate ? { startDate: parsedNaturalDate, endDate: parsedNaturalDate } : explicitRelativePeriod);
   const period = explicitPeriod || (memory.lastPeriodExplicit === true ? memory.lastPeriod : undefined) || monthPeriod(now);
-  if (/\b(?:vendi|vendimos|vendio|vendido|ventas)\b/.test(text) && !/\b(?:compra|compras)\b/.test(text)) {
+  const newSalesProduct = memory.lastIntent === 'product_sales_summary'
+    && text.replace(/[¿?¡!.]/g, '').trim().match(/^y\s+((?:foods?|item|M5-)[\w\s-]+)$/i)?.[1];
+  if ((/\b(?:vendi|vendimos|vendio|vendido|ventas)\b/.test(text) || newSalesProduct) && !/\b(?:compra|compras)\b/.test(text)) {
     const salesReference = canonicalProductSku(message) || message.match(/\bSKU-[\w.-]{1,100}\b/i)?.[0]
-      || text.replace(/[¿?¡!]/g, '').match(/\b(?:vendi|vendimos|vendio|vendido|ventas)\s+(?:de|del)\s+(?:el\s+)?(?:producto\s+)?(.+)$/)?.[1]
-        ?.replace(/\s+(?:(?:desde|entre|hasta|en|el)\s+)?(?:hoy|ayer|anteayer|este mes|el mes pasado|mes (?:pasado|anterior|actual)|esta semana|semana (?:pasada|anterior)|ultimos?\s+(?:\d+|siete|treinta)\s+dias|\d{4}-\d{2}-\d{2}|\d{1,2}\s+de\s+\w+\s+de\s+20\d{2}).*$/, '').trim();
+      || salesEntityReference(text.replace(/[¿?¡!]/g, ''), salesCalendar)
+      || (newSalesProduct ? salesEntityReference(`ventas de ${newSalesProduct}`, salesCalendar) : undefined);
     const contextualSales = memory.lastIntent === 'product_sales_summary'
       && /^(?:y\s+)?cuanto\s+(?:vendi|vendio|vendimos)[?.!\s]*$/.test(text.replace(/[¿?]/g, '').trim());
     const explicitProductSales = salesReference && !isTemporalOnlyReference(salesReference)
@@ -616,9 +648,11 @@ const routeDeterministically = (message, memory = {}, now = new Date(), conversa
   else if (/transacciones.*(ultim|recient)|(ultim|recient).*transacciones/.test(text)
     || /\btransacciones\b/.test(text) && explicitPeriod
     || /\bcompras?\b/.test(text) && explicitPeriod) plan = { intent: 'recent_transactions', agent: 'operations' };
-  else if (/mas vendidos|mayores ventas|se venden mas/.test(text)) plan = { intent: 'top_selling_products', agent: 'analyst' };
+  else if (/mas vendidos|mayores ventas|se venden mas|\btop\s+(?:\d+\s+)?productos\s+(?:vendidos|por ventas)\b/.test(text))
+    plan = { intent: 'top_selling_products', agent: 'analyst', ...(/\btop\s+(\d+)\b/.test(text) ? { limit: Math.min(20, Number(text.match(/\btop\s+(\d+)\b/)[1])) } : {}) };
   else if (/\b(?:vendimos|ventas?|vendi|cuantas? ventas?|cuanto.*vendid[oa])\b/.test(text)
-    && (explicitPeriod || /\b(?:vendimos|ventas del mes)\b/.test(text))) plan = { intent: 'sales_summary', agent: 'operations' };
+    && !/\bcompras?\b/.test(text)
+    && (explicitPeriod || /\b(?:vendi|vendimos|ventas)\b/.test(text))) plan = { intent: 'sales_summary', agent: 'operations' };
   else if (/vendio|cuanto.*vendido/.test(text)) plan = { intent: 'product_sales_summary', agent: 'operations', needsProduct: true };
   else if (/explica|por que/.test(text) && /repon|reposicion/.test(text)) plan = { intent: 'explain_replenishment', agent: 'analyst', needsProduct: true };
   else if (/repon|reposicion/.test(text)) plan = { intent: 'replenishment_candidates', agent: 'analyst', limit: /mayor|mas reposicion/.test(text) ? 1 : 5 };
