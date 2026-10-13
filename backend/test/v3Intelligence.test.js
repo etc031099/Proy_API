@@ -8,6 +8,7 @@ const { createAgentOrchestrator } = require('../src/agents/orchestrator');
 const { createConversationMemory, contextBinding } = require('../src/agents/memory');
 const { createAgentRequestContext } = require('../src/agents/contracts');
 const { createMlServiceClient } = require('../src/services/mlServiceClient');
+const { publicResponse } = require('../src/services/agentHistoryProjection');
 const { resolveOperationalPeriod } = require('../src/agents/intentRouting');
 const id = n => n.toString(16).padStart(24, '0');
 const req = (businessId = V3.businessId, user = 999) => ({ businessId, user: { _id: id(user), businessId, isActive: true, role: 'user' } });
@@ -43,7 +44,9 @@ function fixture({ corrupt, failed, record = scenario } = {}) {
       productsSupplied: [{ sku: 'PAN-FRE-001', name: 'Pan francés' }] });
     const kpis = { revenueCents: 50000, unitsSold: 100, ticketCount: 20, averageTicket: 25, grossMarginPct: 21 };
     let data;
-    if (domain === 'business') data = payload.mode === 'rank' ? { items: [{ sku: 'PAN-FRE-001', name: 'Pan francés', metric: 23, metricName: 'units' }], total: 80 } : { kpis, trends: { revenue: { percentChange: 10 } } };
+    if (domain === 'business') data = payload.mode === 'rank' ? payload.entityType === 'category'
+      ? { items: [{ categoryCode: 'BEB', metric: 23, metricName: 'units' }], total: 10 }
+      : { items: [{ sku: 'PAN-FRE-001', name: 'Pan francés', metric: 23, metricName: 'units' }], total: 80 } : { kpis, trends: { revenue: { percentChange: 10 } } };
     if (domain === 'inventory') data = { items: skus.slice(0, payload.limit).map(inventory), total: skus.length };
     if (domain === 'forecast') data = payload.mode === 'summary' ? { totalExpectedUnits: 33, horizonDays: payload.horizonDays } : { items: skus.slice(0, payload.limit).map(sku => ({ sku, expectedUnitsNext1d: 2, expectedUnitsNext7d: 14, expectedUnitsNext14d: 28, status: 'READY' })), total: skus.length };
     if (domain === 'cross-sell') data = { available: true, items: [{ recommendedSku: 'BEB-GAS-003', recommendedProduct: 'Inca Kola 500 ml', ticketCount: 100, confidence: .3, lift: 2, stability: 'STABLE' }] };
@@ -92,7 +95,8 @@ test('V3 operational date ignores server date and preserves period in business-o
 test('V3 temporal-only forecast does not become entity or sales', () => {
   assert.ok(routeV3('Cuál es la predicción de ayer', {}, binding).clarificationQuestion);
   assert.equal(routeV3('Y su predicción de ayer', { selectedProduct: { key: 'PAN-FRE-001' } }, binding).tasks[0].args.asOfDate, '2026-10-11');
-  assert.ok(routeV3('Pronóstico 28 días', {}, binding).clarificationQuestion);
+  const unsupported = routeV3('Pronóstico 28 días', {}, binding);
+  assert.ok(unsupported.clarificationQuestion); assert.deepEqual(unsupported.suggestions.map(row => row.message), ['pronóstico próximos 7 días', 'pronóstico próximos 14 días']);
 });
 test('V3 security binding fails closed before any ML call', async () => {
   for (const record of [null, { ...scenario, status: 'importing' }, { ...scenario, sourceSha256: 'wrong' }, { ...scenario, metadata: {} }]) {
@@ -251,4 +255,55 @@ test('V3 supplier largest/smallest lead-time ranking orders the full aggregate s
   assert.ok(slow.answer.indexOf('SUP-05') < slow.answer.indexOf('SUP-01')); assert.equal(f.calls.at(-1).payload.limit, 20);
   const fast = await f.run('Qué proveedor tiene menor lead time'); zero(fast);
   assert.ok(fast.answer.indexOf('SUP-01') < fast.answer.indexOf('SUP-05'));
+});
+
+test('V3 views project compact selectable inventory, customer, supplier, business and health results', async () => {
+  const inventory = fixture(), inventoryResult = await inventory.run('Productos críticos'); zero(inventoryResult);
+  assert.equal(inventoryResult.v3Views[0].kind, 'inventory'); assert.equal(inventoryResult.v3Views[0].items.length, 5);
+  assert.equal(inventoryResult.v3Views[0].items[0].label, productRows[0].name);
+  assert.equal(inventoryResult.v3Views[0].items[0].metrics.find(row => row.label === 'Riesgo').value, 'CRITICAL');
+  assert.equal(inventoryResult.suggestionsEntityType, 'product'); assert.equal(inventoryResult.suggestions[0].message, inventoryResult.v3Views[0].items[0].key);
+
+  const customersResult = await fixture().run('Quiénes son mis mejores clientes');
+  assert.equal(customersResult.v3Views[0].kind, 'customer'); assert.ok(customers.some(row => row.displayName === customersResult.v3Views[0].items[0].label));
+  assert.equal(JSON.stringify(customersResult.v3Views).includes('@'), false);
+
+  const suppliersResult = await fixture().run('Qué proveedor tarda más');
+  assert.equal(suppliersResult.v3Views[0].kind, 'supplier'); assert.equal(suppliersResult.v3Views[0].items[0].secondaryLabel, 'SUP-05');
+  assert.equal(suppliersResult.suggestionsEntityType, 'supplier');
+
+  const categoryFixture = fixture(), categoryResult = await categoryFixture.run('Ventas por categoría');
+  assert.equal(categoryResult.suggestionsEntityType, 'category'); assert.equal(categoryResult.v3Views[0].items[0].label, 'Bebidas');
+  const categoryDetail = await categoryFixture.run(categoryResult.suggestions[0].message, categoryResult.conversationId);
+  zero(categoryDetail); assert.equal(categoryFixture.calls.at(-1).payload.categoryCode, 'BEB');
+  const healthResult = await fixture().run('Cómo está mi negocio');
+  assert.equal(healthResult.v3Views[0].kind, 'health'); assert.ok(healthResult.v3Views[0].metrics.length <= 8);
+  assert.doesNotMatch(JSON.stringify(healthResult.v3Views), /score|0.?100/i);
+
+  const projected = publicResponse({ v3Views: inventoryResult.v3Views.map(row => ({ ...row, rawDocument: 'private' })) });
+  assert.equal(JSON.stringify(projected).includes('rawDocument'), false);
+  assert.equal(projected.v3Views[0].items.length, 5);
+});
+
+test('V3 forecast and cross-sell cards show approved horizon and observed, selectable recommendations', async () => {
+  const forecast = await fixture().run('Mayor demanda');
+  assert.equal(forecast.v3Views[0].kind, 'forecast');
+  assert.match(forecast.v3Views[0].note, /media móvil de 28 días/);
+  assert.equal(forecast.v3Views[0].items[0].metrics[0].value, 14);
+  assert.equal(forecast.v3Views[0].items[0].selectMessage, forecast.v3Views[0].items[0].key);
+
+  const crossSell = await fixture().run('Qué productos se compran juntos');
+  assert.equal(crossSell.v3Views[0].kind, 'cross_sell');
+  assert.equal(crossSell.v3Views[0].items[0].label, 'Inca Kola 500 ml');
+  assert.equal(crossSell.v3Views[0].items[0].metrics[0].value, 100);
+  assert.match(crossSell.v3Views[0].note, /no demuestran causalidad/);
+  assert.equal(crossSell.v3Views[0].items[0].selectMessage, 'BEB-GAS-003');
+});
+
+test('V3 compound ranked customer remains clickable after its preference continuation', async () => {
+  const f = fixture(), cid = randomUUID(), first = await f.run('Quién es mi mejor cliente y qué suele comprar', cid); zero(first);
+  assert.equal(first.v3Views.length, 2); assert.ok(first.v3Views[0].items[0].selectMessage);
+  assert.equal(first.suggestionsEntityType, 'customer');
+  const selected = await f.run(first.v3Views[0].items[0].selectMessage, cid); zero(selected);
+  assert.equal(f.calls.at(-1).domain, 'customers'); assert.equal(f.calls.at(-1).payload.mode, 'detail');
 });

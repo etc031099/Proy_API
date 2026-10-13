@@ -56,12 +56,13 @@ export interface AgentEvidence {
 }
 export interface AgentResponse {
   suggestions?: { label: string; message: string; detail?: string }[];
-  suggestionsEntityType?: 'product' | 'supplier' | 'customer';
+  suggestionsEntityType?: 'product' | 'supplier' | 'customer' | 'category';
   contextProvenance?:
     | { sourceType: 'candidate_snapshot'; entityType: 'supplier'; query: string; page: number; pageSize: number; totalMatches: number }
     | { sourceType: 'conversation_context' | 'deterministic_system'; entityType: 'product'; label: string };
   suggestionsExpiresAt?: number;
   suggestionsPagination?: { query: string; offset: number; limit: 5; totalMatches: number; hasMore: boolean; hasPrevious: boolean };
+  v3Views?: V3DisplayView[];
   pendingAction?: PendingActionPreview;
   requestId: string;
   conversationId: string;
@@ -75,6 +76,26 @@ export interface AgentResponse {
   requiresClarification: boolean;
   clarificationQuestion: string | null;
   latencyMs: number;
+}
+export type V3DisplayKind = 'business' | 'inventory' | 'forecast' | 'cross_sell' | 'customer' | 'supplier' | 'health';
+export type V3EntityKind = 'product' | 'customer' | 'supplier' | 'category';
+export interface V3DisplayMetric { label: string; value: string | number }
+export interface V3DisplayItem {
+  type: V3EntityKind;
+  key: string;
+  label: string;
+  secondaryLabel?: string;
+  metrics: V3DisplayMetric[];
+  selectMessage?: string;
+}
+/** Explicit, compact presentation projection. It contains no raw domain documents or private contact fields. */
+export interface V3DisplayView {
+  kind: V3DisplayKind;
+  title: string;
+  subtitle?: string;
+  metrics: V3DisplayMetric[];
+  items: V3DisplayItem[];
+  note?: string;
 }
 export interface PendingActionPreview {
   pendingActionId: string; action: string; summary: string; expiresAt: string;

@@ -99,7 +99,8 @@ const routeV3 = (message, state, binding) => {
     const ref = productRef(message) || (/\bsu\b|^y |manana/.test(text) ? memory.selectedProduct?.key : null);
     const horizon = Number(text.match(/\b(\d+) dias?\b/)?.[1] || (/manana/.test(text) ? 1 : /14|dos semanas/.test(text) ? 14 : 7));
     if (/como calcul|metodo|metodologia/.test(text)) return { tasks: [task('get_product_forecast', { mode: 'method' })] };
-    if (![1, 7, 14].includes(horizon) || /proximo mes|28 dias/.test(text)) return { clarificationQuestion: 'Los horizontes aprobados son 1, 7 y 14 días. El horizonte de 28 días no está aprobado.' };
+    if (![1, 7, 14].includes(horizon) || /proximo mes|28 dias/.test(text)) return { clarificationQuestion: 'El horizonte validado para este escenario llega a 14 días.',
+      suggestions: [7, 14].map(days => ({ label: `Consultar ${days} días`, message: ref ? `pronóstico de ${ref} próximos ${days} días` : `pronóstico próximos ${days} días` })) };
     if (/esta semana/.test(text)) return { clarificationQuestion: 'El pronóstico admite horizontes agregados de 1, 7 o 14 días desde el corte del escenario. ¿Cuál deseas?' };
     if (!ref && /ayer/.test(text)) return { clarificationQuestion: '¿De qué producto deseas consultar la predicción de ayer?' };
     const args = { mode: ref ? 'detail' : /mayor|mas|top/.test(text) ? 'rank' : 'summary', horizonDays: horizon, ...(ref ? { productRef: ref } : {}) };
@@ -177,6 +178,138 @@ const units = value => Number.isFinite(value) ? require('../utils/assistantForma
 const label = row => row.productName || row.displayName || row.name || row.sku || row.customerCode || row.supplierCode || row.categoryName || row.categoryCode;
 const segmentLabel = code => ({ AT_RISK: 'en riesgo según actividad observada', INACTIVE: 'sin compras completadas en los últimos 90 días', NEW: 'nuevo', LOYAL: 'frecuente', TOP_HIGH_VALUE: 'alto valor observado', POTENTIAL: 'potencial' })[code] || 'no disponible';
 const reasonLabel = code => ({ LOW_DEMAND: 'ventas observadas bajas', PERISHABLE_CAP: 'cantidad limitada por vida útil', BELOW_REORDER_POINT: 'posición por debajo del punto de reposición', NO_INBOUND: 'sin entradas pendientes', INBOUND_INSUFFICIENT: 'entradas pendientes insuficientes', COVER_BELOW_LEAD_TIME: 'cobertura inferior al plazo observado', LEAD_TIME_EXCEEDS_FORECAST_HORIZON: 'plazo superior al horizonte aprobado', INSUFFICIENT_DEMAND_VARIABILITY_HISTORY: 'historia insuficiente de variabilidad', LOW_STOCK: 'stock bajo', SINGLE_SOURCE: 'un solo proveedor', SLOW_MOVING: 'rotación lenta', DEAD_STOCK: 'sin movimiento observado', OVERSTOCK: 'exceso de stock', STOCKOUT_RISK: 'riesgo de agotamiento' })[code] || 'indicador observado al corte';
+const displayMoney = cents => Number.isFinite(cents) ? `S/ ${(cents / 100).toFixed(2)}` : 'no disponible';
+const displayNumber = value => Number.isFinite(value) ? Number(value.toFixed(2)) : 'no disponible';
+const displayEntityType = (skillId, args) => skillId === 'get_customer_intelligence' ? 'customer'
+  : skillId === 'get_supplier_intelligence' ? (args.mode === 'alternatives' ? 'product' : 'supplier')
+    : skillId === 'get_cross_sell_recommendations' ? 'product'
+    : skillId === 'get_business_analytics' && args.entityType === 'category' ? 'category'
+      : ['get_inventory_intelligence', 'get_product_forecast', 'get_business_analytics'].includes(skillId) ? 'product' : null;
+const createV3View = async (skillId, result, args, service, context, rankedEntities = []) => {
+  const d = result.data || {}, rows = Array.isArray(d.items) ? d.items.slice(0, 5) : [];
+  const entityType = displayEntityType(skillId, args), selected = result.metadata.selected?.[entityType];
+  const metrics = [], items = [];
+  const valueFor = (row, index) => rankedEntities[index] || null;
+  const categoryNames = new Map();
+  for (const row of rows) {
+    const code = row.categoryCode || row.subcategoryCode;
+    if (entityType === 'category' && code && !row.categoryName && !row.name) {
+      const resolved = await service.resolveEntity(row.subcategoryCode ? 'subcategory' : 'category', code, context);
+      if (resolved.entity) categoryNames.set(code, resolved.entity.label);
+    }
+  }
+  const itemFor = (row, index, itemMetrics = []) => {
+    const resolved = valueFor(row, index), key = resolved?.key || row.sku || row.customerCode || row.supplierCode || row.categoryCode || row.subcategoryCode
+      || row.consequentSkus?.[0] || row.recommendedSku;
+    const type = resolved?.type || (entityType === 'category' ? 'category' : entityType);
+    if (!key || !type) return null;
+    const labelText = resolved?.label || row.productName || row.displayName || row.name || row.categoryName || categoryNames.get(key);
+    if (!labelText) return null;
+    const title = result.metadata.selected?.[type]?.label || labelText;
+    return { type, key, label: title, secondaryLabel: type === 'product' ? key : type === 'category' ? undefined : key,
+      metrics: itemMetrics, ...((args.mode === 'rank' || skillId === 'get_cross_sell_recommendations' || skillId === 'get_supplier_intelligence' && args.mode === 'alternatives') ? { selectMessage: key } : {}) };
+  };
+  let kind = 'business', title = 'Resumen del negocio', subtitle, note;
+  if (skillId === 'get_business_analytics') {
+    if (d.kpis) {
+      const k = d.kpis;
+      metrics.push({ label: 'Ventas', value: displayMoney(k.revenueCents) }, { label: 'Unidades', value: Number.isFinite(k.unitsSold) ? k.unitsSold : 'no disponible' },
+        { label: 'Tickets', value: Number.isFinite(k.ticketCount) ? k.ticketCount : 'no disponible' },
+        { label: 'Ticket promedio', value: Number.isFinite(k.averageTicket) ? displayMoney(k.averageTicket * 100) : 'no disponible' },
+        { label: 'Margen bruto', value: Number.isFinite(k.grossMarginPct) ? `${displayNumber(k.grossMarginPct)}%` : 'no disponible' });
+      if (args.mode === 'compare' && Number.isFinite(d.trends?.revenue?.percentChange)) metrics.push({ label: 'Variación frente al periodo comparable', value: `${displayNumber(d.trends.revenue.percentChange)}%` });
+    }
+    if (rows.length) for (let i = 0; i < rows.length; i++) {
+      const row = rows[i], metricValue = row.metric ?? row.units ?? row.unitsSold ?? row.revenueCents ?? row.grossMarginCents;
+      const metricLabel = args.metric === 'units' ? 'Unidades' : args.metric === 'tickets' ? 'Tickets' : args.metric === 'gross_margin' ? 'Margen' : 'Ventas';
+      const metricDisplay = args.metric === 'revenue' || args.metric === 'gross_margin' ? displayMoney(metricValue) : displayNumber(metricValue);
+      const item = itemFor(row, i, [{ label: metricLabel, value: metricDisplay }]); if (item) items.push(item);
+    }
+    subtitle = result.metadata.period ? `${result.metadata.period.startDate} – ${result.metadata.period.endDate}` : undefined;
+    note = args.mode === 'compare' ? 'La comparación describe variaciones observadas y no demuestra causalidad.' : undefined;
+  } else if (skillId === 'get_inventory_intelligence') {
+    kind = 'inventory'; title = selected?.label ? `Inventario · ${selected.label}` : 'Inteligencia de inventario';
+    if (d.summary) {
+      metrics.push({ label: 'Productos', value: d.summary.products }, { label: 'Críticos', value: d.summary.critical },
+        { label: 'Stock bajo', value: d.summary.lowStock }, { label: 'Requieren reposición', value: d.summary.shouldReorder });
+      if (d.abcCounts) metrics.push({ label: 'Clasificación ABC', value: Object.entries(d.abcCounts).map(([key, value]) => `${key}: ${value}`).join(' · ') });
+      if (d.xyzCounts) metrics.push({ label: 'Variabilidad XYZ', value: Object.entries(d.xyzCounts).map(([key, value]) => `${key}: ${value}`).join(' · ') });
+    }
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i], item = itemFor(row, i, [
+        { label: 'Stock', value: displayNumber(row.stock?.onHand) }, { label: 'Entradas', value: displayNumber(row.stock?.incoming) },
+        { label: 'Cobertura', value: Number.isFinite(row.coverage?.daysCover) ? `${displayNumber(row.coverage.daysCover)} días` : 'no disponible' },
+        { label: 'Riesgo', value: row.risk?.level || 'no disponible' }, { label: 'Reponer', value: row.recommendation?.shouldReorder ? 'Sí' : 'No' },
+        { label: 'Cantidad sugerida', value: displayNumber(row.recommendation?.recommendedQty) },
+        { label: 'Motivo', value: (row.risk?.reasonCodes || []).slice(0, 3).map(reasonLabel).join(', ') || 'sin indicador adicional' }
+      ]); if (item) items.push(item);
+    }
+  } else if (skillId === 'get_product_forecast') {
+    kind = 'forecast'; title = selected?.label ? `Pronóstico · ${selected.label}` : 'Pronóstico de demanda';
+    const horizon = args.horizonDays || d.horizonDays || 7;
+    subtitle = d.method ? 'Método validado: media móvil de 28 días · horizontes aprobados: 1, 7 y 14 días.'
+      : `${horizon} ${horizon === 1 ? 'día' : 'días'} desde el corte operativo del escenario.`;
+    if (d.totalExpectedUnits !== undefined) metrics.push({ label: `Unidades esperadas · ${horizon} ${horizon === 1 ? 'día' : 'días'}`, value: displayNumber(d.totalExpectedUnits) });
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i], item = itemFor(row, i, [{ label: `Unidades esperadas · ${horizon} ${horizon === 1 ? 'día' : 'días'}`, value: displayNumber(row[`expectedUnitsNext${horizon}d`]) }]);
+      if (item) items.push(item);
+    }
+    note = d.method ? 'El pronóstico no representa una predicción diaria ni expone una confianza individual.' : 'Fuente: media móvil de 28 días. No es una garantía de ventas.';
+  } else if (skillId === 'get_cross_sell_recommendations') {
+    kind = 'cross_sell'; title = selected?.label ? `Compras observadas junto con ${selected.label}` : 'Productos que suelen aparecer juntos';
+    const sourceRows = rows.slice(0, 5);
+    for (let i = 0; i < sourceRows.length; i++) {
+      const row = sourceRows[i], names = row.consequentProducts || [row.recommendedProduct], keys = row.consequentSkus || [row.recommendedSku || row.sku];
+      const detail = args.mode === 'rules' ? [{ label: 'Frecuencia condicional observada', value: `${displayNumber(row.confidence * 100)}%` },
+        { label: 'Lift', value: displayNumber(row.lift) }, { label: 'Estabilidad', value: row.stability?.status || row.stability || 'según artefacto' }]
+        : [];
+      for (let j = 0; j < Math.min((keys || []).length, 5 - items.length); j++) {
+        const key = keys[j], name = names?.[j]; if (!key || !name) continue;
+        items.push({ type: 'product', key, label: name, secondaryLabel: key,
+          metrics: [{ label: 'Tickets observados', value: row.ticketCount ?? 'no disponible' }, ...detail], selectMessage: key });
+      }
+    }
+    note = d.available === false ? 'No hay asociaciones validadas para este corte.' : 'Son compras conjuntas observadas; no demuestran causalidad ni garantizan ventas futuras.';
+  } else if (skillId === 'get_customer_intelligence') {
+    kind = 'customer'; title = selected?.label ? `Cliente · ${selected.label}` : 'Inteligencia de clientes';
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i], prefs = row.preferences || {}, item = itemFor(row, i, [
+        { label: 'Segmento', value: segmentLabel(row.segment) }, { label: 'Última compra', value: row.lastPurchaseDate || 'sin compras' },
+        { label: 'Tickets', value: row.ticketCount ?? 'no disponible' }, { label: 'Gasto', value: displayMoney(row.totalSpentCents) },
+        { label: 'Ticket promedio', value: displayMoney(row.averageTicketCents) },
+        ...(args.mode === 'preferences' ? [{ label: 'Categoría preferida', value: prefs.favoriteCategoryName || prefs.categories?.[0]?.name || 'no disponible' },
+          { label: 'Productos habituales', value: (prefs.topProducts || []).slice(0, 3).map(p => p.name || p.sku).join(', ') || 'sin datos' }] : [])
+      ]); if (item) items.push(item);
+    }
+    if (d.periodMetrics) metrics.push({ label: 'Gasto del periodo solicitado', value: Object.values(d.periodMetrics).map(row => displayMoney(row.revenueCents)).join(' · ') });
+  } else if (skillId === 'get_supplier_intelligence') {
+    kind = 'supplier'; title = selected?.label ? `Proveedor · ${selected.label}` : 'Inteligencia de proveedores';
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i], item = itemFor(row, i, [
+        { label: 'Compras', value: row.purchaseOrderCount ?? 'no disponible' }, { label: 'Gasto recibido', value: displayMoney(row.receivedSpendCents) },
+        { label: 'Lead time observado', value: Number.isFinite(row.leadTime?.averageDays) ? `${displayNumber(row.leadTime.averageDays)} días` : 'no disponible' },
+        { label: 'Puntualidad', value: Number.isFinite(row.punctuality?.onTimeRatePct) ? `${displayNumber(row.punctuality.onTimeRatePct)}%` : 'no disponible' },
+        { label: 'Productos', value: (row.productsSupplied || []).slice(0, 3).map(p => p.name || p.productName || p.sku).join(', ') || `${row.exclusiveOfferedSkuCount ?? 0} exclusivos` }
+      ]); if (item) items.push(item);
+    }
+    if (d.singleSourceCriticalOrHigh) metrics.push({ label: 'Productos de alto riesgo con una sola fuente', value: d.singleSourceCriticalOrHigh.singleSourceCriticalOrHighSkuCount });
+    note = 'Métricas descriptivas observadas; no constituyen una calificación de proveedor.';
+  } else if (skillId === 'get_business_health') {
+    kind = 'health'; title = 'Resumen de salud del negocio';
+    const h = d.businessHealth || {};
+    metrics.push({ label: 'Ventas', value: displayMoney(h.sales?.kpis?.revenueCents) },
+      { label: 'Margen bruto', value: Number.isFinite(h.sales?.kpis?.grossMarginPct) ? `${displayNumber(h.sales.kpis.grossMarginPct)}%` : 'no disponible' },
+      { label: 'Clientes en riesgo observado', value: h.customers?.atRiskCount ?? 'no disponible' },
+      { label: 'Inventario crítico', value: h.inventory?.critical ?? 'no disponible' },
+      { label: 'Proveedores', value: h.suppliers?.summary?.suppliers ?? 'no disponible' },
+      { label: 'Asociaciones estables', value: h.marketBasket?.stableCrossSellRuleCount ?? 'no disponible' });
+    for (const insight of (d.alerts || []).slice(0, 1)) items.push({ type: 'category', key: String(insight.code || insight.summary || items.length),
+      label: insight.summary || insight.code || 'Hallazgo', metrics: [], secondaryLabel: undefined });
+    note = 'Indicadores descriptivos del corte V3; el resumen no asigna un puntaje global.';
+  }
+  return { kind, title, ...(subtitle ? { subtitle } : {}), metrics: metrics.slice(0, 8), items: items.slice(0, skillId === 'get_business_health' ? 5 : 5),
+    ...(note ? { note } : {}) };
+};
 const renderV3 = (skillId, result, args) => {
   const d = result.data, date = result.metadata.asOf;
   const items = d.items || [];
@@ -259,7 +392,9 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
       if (memory.pending.field === 'productRefs') { const refs = item.args.productRefs.split('|'); refs[memory.pending.selectionIndex] = selected.key; reference = refs.join('|'); }
       return { ...item, args: { ...item.args, [memory.pending.field]: reference } };
     }) };
-    else plan = { tasks: [task(selected.type === 'product' ? 'get_inventory_intelligence' : selected.type === 'customer' ? 'get_customer_intelligence' : 'get_supplier_intelligence', { mode: 'detail', [`${selected.type}Ref`]: selected.key })] };
+    else plan = selected.type === 'category'
+      ? { tasks: [task('get_business_analytics', { mode: 'rank', entityType: 'category', categoryRef: selected.key })] }
+      : { tasks: [task(selected.type === 'product' ? 'get_inventory_intelligence' : selected.type === 'customer' ? 'get_customer_intelligence' : 'get_supplier_intelligence', { mode: 'detail', [`${selected.type}Ref`]: selected.key })] };
     scope.pending = null; save();
   } else if (choiceLike) return { answer: 'Elige una entidad de la lista vigente o indica su nombre/código.', clarification: true, intent: 'v3_selection', agent: 'coordinator' };
   if (!plan) return null;
@@ -271,9 +406,10 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
     }
     if (plan.lookup) return { answer: 'No encontré esa referencia en el escenario de tu negocio.', clarification: true, intent: 'v3_lookup', agent: 'coordinator' };
   }
-  if (plan.clarificationQuestion) return { answer: plan.clarificationQuestion, clarification: true, intent: 'v3_clarification', agent: 'coordinator' };
+  if (plan.clarificationQuestion) return { answer: plan.clarificationQuestion, clarification: true, intent: 'v3_clarification', agent: 'coordinator',
+    ...(plan.suggestions ? { suggestions: plan.suggestions } : {}) };
   if (plan.tasks.length > 4) return { answer: 'Indica qué dominio deseas priorizar.', clarification: true, intent: 'v3_clarification', agent: 'coordinator' };
-  const answers = []; let previous;
+  const answers = [], v3Views = []; let previous, rankedForResponse = null;
   for (let i = 0; i < plan.tasks.length; i++) {
     const current = plan.tasks[i];
     if (current.fromPrevious) {
@@ -288,6 +424,7 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
         return candidateView(resolution, plan.tasks.slice(i), resolution.referenceField || `${resolution.type}Ref`);
       }
       previous = result; answers.push(renderV3(current.skillId, result, current.args));
+      let rankedEntities = [];
       scope.lastFamily = current.skillId;
       for (const [type, entity] of Object.entries(result.metadata.selected || {})) scope[`selected${type[0].toUpperCase()}${type.slice(1)}`] = entity;
       if (scope.readRecommendation && scope.readRecommendation.sku !== scope.selectedProduct?.key) scope.readRecommendation = null;
@@ -296,18 +433,20 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
         scope.readRecommendation = Number.isSafeInteger(quantity) && quantity > 0 ? { sku: row.sku, quantity, supplierCode: row.supplier?.preferredSupplierCode || null } : null;
       }
       if (current.skillId === 'get_business_analytics' && current.args.startDate) scope.selectedPeriod = { startDate: current.args.startDate, endDate: current.args.endDate };
-      const type = current.skillId === 'get_customer_intelligence' ? 'customer' : current.skillId === 'get_supplier_intelligence' ? 'supplier' : ['get_inventory_intelligence', 'get_product_forecast', 'get_business_analytics'].includes(current.skillId) ? 'product' : null;
+      const type = displayEntityType(current.skillId, current.args);
       const ranked = result.data.items || [];
-      if (type && ranked.length && !result.metadata.selected?.[type]) {
-        scope[`selected${type[0].toUpperCase()}${type.slice(1)}`] = null;
-        if (type === 'product') scope.readRecommendation = null;
-        const items = [];
+      if (type && ranked.length && (!result.metadata.selected?.[type] || current.skillId === 'get_cross_sell_recommendations')
+        && (current.args.mode === 'rank' || current.skillId === 'get_cross_sell_recommendations')) {
+        if (current.skillId !== 'get_cross_sell_recommendations') scope[`selected${type[0].toUpperCase()}${type.slice(1)}`] = null;
+        if (type === 'product' && current.skillId !== 'get_cross_sell_recommendations') scope.readRecommendation = null;
+        const entities = [];
         for (const row of ranked.slice(0, 5)) {
-          const key = row.sku || row.customerCode || row.supplierCode;
-          if (key) { const resolved = await service.resolveEntity(type, key, context); if (resolved.entity) items.push(resolved.entity); }
+          const key = row.sku || row.customerCode || row.supplierCode || row.categoryCode || row.subcategoryCode || row.consequentSkus?.[0] || row.recommendedSku;
+          if (key) { const resolved = await service.resolveEntity(type, key, context); if (resolved.entity) entities.push(resolved.entity); }
         }
-        if (items.length) scope.ranking = { type, items };
+        if (entities.length) { scope.ranking = { type, items: entities }; rankedEntities = entities; rankedForResponse = entities; }
       }
+      v3Views.push(await createV3View(current.skillId, result, current.args, service, context, rankedEntities));
       scope.pending = null; save();
     } catch (error) {
       const functional = error.functionalCode;
@@ -315,9 +454,19 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
         PRODUCT_NOT_FOUND: 'No encontré ese producto en tu negocio.', CUSTOMER_NOT_FOUND: 'No encontré ese cliente en tu negocio.', SUPPLIER_NOT_FOUND: 'No encontré ese proveedor en tu negocio.',
         INSUFFICIENT_HISTORY: 'No hay historia suficiente para ese origen del pronóstico.' })[functional] || 'El módulo analítico no está disponible en este momento.';
       answers.push(message);
+      if (functional === 'UNSUPPORTED_HORIZON') {
+        const product = scope.selectedProduct?.key;
+        v3Views.push({ kind: 'forecast', title: 'Horizonte no disponible', subtitle: message, metrics: [], items: [],
+          note: 'El escenario tiene pronósticos aprobados para 1, 7 y 14 días.' });
+        return { answer: answers.join('\n\n'), intent: 'v3_intelligence', agent: 'analyst', v3Views,
+          suggestions: [7, 14].map(days => ({ label: `Consultar ${days} días`, message: product ? `pronóstico de ${product} próximos ${days} días` : `pronóstico próximos ${days} días` })) };
+      }
     }
   }
-  return { answer: answers.join('\n\n'), intent: 'v3_intelligence', agent: plan.tasks.length > 1 ? 'coordinator' : plan.tasks[0].agent };
+  const suggestions = rankedForResponse?.length ? rankedForResponse.slice(0, 5).map(row => ({ label: row.label, message: row.key,
+    ...(row.type === 'product' || row.type === 'customer' || row.type === 'supplier' ? { detail: row.key } : {}) })) : undefined;
+  return { answer: answers.join('\n\n'), intent: 'v3_intelligence', agent: plan.tasks.length > 1 ? 'coordinator' : plan.tasks[0].agent,
+    ...(v3Views.length ? { v3Views } : {}), ...(suggestions ? { suggestions, suggestionsEntityType: rankedForResponse[0].type } : {}) };
 
   function candidateView(resolution, tasks, field) {
     const items = resolution.candidates || [], pagination = resolution.pagination;

@@ -8,7 +8,7 @@ const labels: Record<string, string> = { name: 'Nombre', sku: 'SKU', price: 'Pre
   resultingStock: 'Stock resultante', minStockLevel: 'Stock mínimo', category: 'Categoría', costPrice: 'Costo', description: 'Descripción',
   total: 'Total', paymentMethod: 'Pago', contact: 'Cliente / Proveedor', supplierCosts: 'Proveedor y precio de compra' };
 const statuses = { PENDING: 'Pendiente', CONFIRMED: 'Confirmada', EXECUTED: 'Ejecutada', CANCELLED: 'Cancelada', EXPIRED: 'Expirada', FAILED: 'Fallida' };
-export function PendingActionCard({ action, conversationId }: { action: PendingActionPreview; conversationId: string }) {
+export function PendingActionCard({ action, conversationId, disabled = false }: { action: PendingActionPreview; conversationId: string; disabled?: boolean }) {
   const [current, setCurrent] = useState(action);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -26,7 +26,7 @@ export function PendingActionCard({ action, conversationId }: { action: PendingA
     return () => clearTimeout(timer);
   }, [current.expiresAt, current.status]);
   async function decide(decision: 'confirm' | 'cancel') {
-    if (lock.current || expired || current.status !== 'PENDING') return;
+    if (lock.current || disabled || expired || current.status !== 'PENDING') return;
     lock.current = true; setBusy(true); setError('');
     try {
       const result = await apiClient.decideAgentAction(current.pendingActionId, conversationId, decision);
@@ -53,8 +53,8 @@ export function PendingActionCard({ action, conversationId }: { action: PendingA
       {current.result.total !== undefined && <p>Total: {assistantMoney(current.result.total, current.result.currency)}</p>}
     </div>}
     {current.status === 'PENDING' && !expired && current.requiresConfirmation && <div className="flex flex-wrap gap-2">
-      <Button disabled={busy} onClick={() => void decide('confirm')}>Confirmar</Button>
-      <Button variant="outline" disabled={busy} onClick={() => void decide('cancel')}>Cancelar</Button>
+      <Button disabled={busy || disabled} onClick={() => void decide('confirm')}>Confirmar</Button>
+      <Button variant="outline" disabled={busy || disabled} onClick={() => void decide('cancel')}>Cancelar</Button>
     </div>}
     {busy && <p role="status">Procesando acción…</p>}
     {error && <p role="alert">{error}</p>}

@@ -8,6 +8,8 @@ const tokenUsage = { ...tokens, usageAvailable: true };
 const period = { startDate: true, endDate: true };
 const actionItem = { sku: true, name: true, quantity: true, stock: true, resultingStock: true, price: true, total: true };
 const shape = {
+  v3Views: [{ kind: true, title: true, subtitle: true, metrics: [{ label: true, value: true }],
+    items: [{ type: true, key: true, label: true, secondaryLabel: true, selectMessage: true, metrics: [{ label: true, value: true }] }], note: true }],
   suggestions: [{ label: true, message: true, detail: true }],
   suggestionsEntityType: true,
   contextProvenance: { sourceType: true, entityType: true, label: true, query: true, page: true, pageSize: true, totalMatches: true },

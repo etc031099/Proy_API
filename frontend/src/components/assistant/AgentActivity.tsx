@@ -10,7 +10,11 @@ const labels: Record<string, string> = {
   get_low_stock_products: 'Consultó productos con stock bajo', get_recent_transactions: 'Consultó transacciones recientes',
   get_sales_summary: 'Consultó ventas completadas', get_top_selling_products: 'Consultó productos más vendidos',
   get_business_summary: 'Consultó el resumen del negocio', get_demand_forecast: 'Consultó la predicción ML histórica',
-  get_replenishment_candidates: 'Consultó candidatos de reposición', get_product_sales_summary: 'Consultó ventas del producto'
+  get_replenishment_candidates: 'Consultó candidatos de reposición', get_product_sales_summary: 'Consultó ventas del producto',
+  get_business_analytics: 'Consultó ventas e indicadores del negocio', get_inventory_intelligence: 'Consultó inteligencia de inventario',
+  get_product_forecast: 'Consultó pronóstico de demanda V3', get_cross_sell_recommendations: 'Consultó compras conjuntas observadas',
+  get_customer_intelligence: 'Consultó inteligencia de clientes', get_supplier_intelligence: 'Consultó inteligencia de proveedores',
+  get_business_health: 'Consultó resumen de salud del negocio'
 };
 const metric = (value: number | null) => value === null ? '—' : value.toLocaleString('es-PE');
 

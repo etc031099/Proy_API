@@ -8,6 +8,7 @@ import { AgentActivity } from '@/components/assistant/AgentActivity';
 import { ConversationHistory } from '@/components/assistant/ConversationHistory';
 import { PendingActionCard } from '@/components/assistant/PendingActionCard';
 import { ActionSuggestions } from '@/components/assistant/ActionSuggestions';
+import { V3ResponseCards } from '@/components/assistant/V3ResponseCards';
 import { assistantDisplayText } from '@/lib/assistantPresentation';
 import { useAuth } from '@/contexts/AuthContext';
 import { activeConversationKey, readActiveConversation, writeActiveConversation } from '@/lib/agentHistory';
@@ -126,7 +127,7 @@ export default function AssistantPage() {
       void refreshHistory();
       setError({ text: failure instanceof AgentApiError && ['AGENT_HISTORY_PERSISTENCE_FAILED', 'AGENT_HISTORY_CONFLICT'].includes(failure.code || '')
         ? 'No se pudo confirmar el resultado guardado. Recarga el historial antes de enviar otra consulta.'
-        : status === 503 || status === undefined ? 'El servicio no está disponible temporalmente. Vuelve a intentarlo.'
+        : status === 503 || status === undefined ? 'El módulo analítico no está disponible en este momento.'
         : status === 429 ? 'Se alcanzó el límite de consultas. Espera un momento antes de reintentar.'
           : status === 404 ? 'El asistente todavía no está habilitado.' : 'No fue posible consultar el asistente.',
       retryable: failure instanceof AgentApiError && failure.retryable });
@@ -165,9 +166,10 @@ export default function AssistantPage() {
           {messages.map(m => <article key={m.id} className={`rounded-lg p-4 min-w-0 ${m.role === 'user' ? 'bg-muted' : 'border'}`}>
             <p className="text-xs font-medium mb-2">{m.role === 'user' ? 'Tú' : 'Asistente'}</p>
             <p className="whitespace-pre-wrap break-words text-sm">{assistantDisplayText(m.text, m.response)}</p>
-            {m.response && <ActionSuggestions response={m.response} disabled={loading || historyBusy || m !== messages[messages.length - 1]}
+            {m.response?.v3Views?.length ? <V3ResponseCards views={m.response.v3Views} response={m.response} disabled={loading || historyBusy || m !== messages[messages.length - 1]}
+              onSelect={message => void send(message)} /> : m.response && <ActionSuggestions response={m.response} disabled={loading || historyBusy || m !== messages[messages.length - 1]}
               onSelect={message => void send(message)} />}
-            {m.response?.pendingAction && <PendingActionCard action={m.response.pendingAction} conversationId={m.response.conversationId} />}
+            {m.response?.pendingAction && <PendingActionCard action={m.response.pendingAction} conversationId={m.response.conversationId} disabled={loading || historyBusy} />}
             {m.status === 'failed' && <p className="text-xs text-muted-foreground">Consulta no completada.</p>}
             {m.status === 'pending' && <p className="text-xs text-muted-foreground">No hay un resultado confirmado para esta consulta.</p>}
             {m.response && <button className="mt-3 text-xs underline underline-offset-4" onClick={() => setActivity(m.response)}>

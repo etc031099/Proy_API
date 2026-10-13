@@ -7,6 +7,7 @@ export const assistantMoney = (value: number, currency = 'PEN') => {
 };
 // Keep the API's textual fallback; omit only lines already rendered as cards.
 export const assistantDisplayText = (text: string, response?: AgentResponse) => {
+  if (response?.v3Views?.length) return '';
   if (!response?.suggestions?.length) return text;
   const clean = (line: string) => line.trim().replace(/^(?:[•*-]\s*)?\d+[.)]\s*/, '');
   return text.split('\n').filter(line => !response.suggestions?.some(option => {

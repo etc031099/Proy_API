@@ -254,3 +254,96 @@ it('shows final fallback model, physical attempts and partial known usage withou
   expect(screen.getByText('gemini-3.8-flash · intento 1 · tokens: —')).toBeTruthy();
   expect(screen.queryByRole('alert')).toBeNull();
 });
+
+it('renders compact V3 inventory results with a full product label and clickable ranked selection', async () => {
+  send.mockResolvedValueOnce({ success: true, data: { ...response, answer: 'technical raw response should be represented by cards',
+    v3Views: [{ kind: 'inventory', title: 'Inteligencia de inventario', metrics: [], note: 'Corte V3', items: [
+      { type: 'product', key: 'BEB-GAS-015', label: 'Inca Kola Original 1.5 L', secondaryLabel: 'BEB-GAS-015', selectMessage: 'BEB-GAS-015',
+        metrics: [{ label: 'Stock', value: 5 }, { label: 'Riesgo', value: 'CRITICAL' }, { label: 'Cantidad sugerida', value: 10 }] }
+    ] }], suggestionsEntityType: 'product' } }).mockResolvedValueOnce({ success: true, data: response });
+  render(<AssistantPage />); submit('productos críticos');
+  expect(await screen.findByRole('region', { name: 'Inteligencia de inventario' })).toBeTruthy();
+  expect(screen.getByText('Inca Kola Original 1.5 L')).toBeTruthy();
+  expect(screen.getByText(/Riesgo: Crítico/)).toBeTruthy(); expect(screen.getByText(/Cantidad sugerida: 10/)).toBeTruthy();
+  expect(screen.queryByText('technical raw response should be represented by cards')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Seleccionar producto Inca Kola Original 1.5 L' }));
+  expect(await screen.findByText(response.answer)).toBeTruthy();
+  expect(send.mock.calls[1][0].message).toBe('BEB-GAS-015');
+});
+
+it('renders selectable customer and supplier rankings with human labels and no contact details', async () => {
+  send.mockResolvedValueOnce({ success: true, data: { ...response, v3Views: [{ kind: 'customer', title: 'Inteligencia de clientes',
+    metrics: [], items: [{ type: 'customer', key: 'CLI-003', label: 'Víctor Poma Salas', secondaryLabel: 'CLI-003',
+      selectMessage: 'CLI-003', metrics: [{ label: 'Segmento', value: 'en riesgo según actividad observada' }, { label: 'Gasto', value: 'S/ 250.00' }] }] }] } })
+    .mockResolvedValueOnce({ success: true, data: { ...response, v3Views: [{ kind: 'supplier', title: 'Inteligencia de proveedores',
+      metrics: [], items: [{ type: 'supplier', key: 'SUP-05', label: 'Horizonte Abastos', secondaryLabel: 'SUP-05', selectMessage: 'SUP-05',
+        metrics: [{ label: 'Compras', value: 4 }, { label: 'Puntualidad', value: '80%' }] }] }] } });
+  render(<AssistantPage />); submit('mejores clientes');
+  fireEvent.click(await screen.findByRole('button', { name: 'Seleccionar cliente Víctor Poma Salas' }));
+  await screen.findByRole('region', { name: 'Inteligencia de proveedores' });
+  expect(screen.getByText('Horizonte Abastos')).toBeTruthy();
+  expect(screen.getByText('SUP-05')).toBeTruthy();
+  expect(screen.queryByText(/@/)).toBeNull();
+});
+
+it('keeps category names, UTF-8 labels and concise business totals readable', async () => {
+  send.mockResolvedValue({ success: true, data: { ...response, v3Views: [{ kind: 'business', title: 'Ventas últimos 7 días',
+    subtitle: '2026-10-06 – 2026-10-12', metrics: [{ label: 'Ventas', value: 'S/ 1,234.50' }, { label: 'Tickets', value: 31 }],
+    items: [{ type: 'category', key: 'BEB', label: 'Abarrotes', selectMessage: 'BEB', metrics: [{ label: 'Ventas', value: 'S/ 500.00' }] }] }] } });
+  render(<AssistantPage />); submit('ventas últimos 7 días');
+  await screen.findByRole('region', { name: 'Ventas últimos 7 días' });
+  expect(screen.getByText('S/ 1,234.50')).toBeTruthy(); expect(screen.getByText('Abarrotes')).toBeTruthy();
+});
+
+it('offers only approved forecast horizons as clickable recovery options', async () => {
+  send.mockResolvedValueOnce({ success: true, data: { ...response, answer: 'El horizonte validado llega a 14 días.', v3Views: [
+    { kind: 'forecast', title: 'Horizonte no disponible', metrics: [], items: [], note: 'Opciones aprobadas: 1, 7 y 14 días.' }
+  ], suggestions: [{ label: 'Consultar 7 días', message: 'pronóstico próximos 7 días' }, { label: 'Consultar 14 días', message: 'pronóstico próximos 14 días' }] } })
+    .mockResolvedValueOnce({ success: true, data: response });
+  render(<AssistantPage />); submit('pronóstico próximos 28 días');
+  fireEvent.click(await screen.findByRole('button', { name: 'Consultar 14 días' }));
+  expect(send.mock.calls[1][0].message).toBe('pronóstico próximos 14 días');
+});
+
+it('shows one useful empty-state message without repeating the unavailable-data note', async () => {
+  send.mockResolvedValue({ success: true, data: { ...response, answer: 'raw duplicate', v3Views: [
+    { kind: 'cross_sell', title: 'Compras observadas juntas', metrics: [], items: [], note: 'No hay asociaciones validadas para este corte.' }
+  ] } });
+  render(<AssistantPage />); submit('qué se compra junto con este producto');
+  expect(await screen.findByRole('region', { name: 'Compras observadas juntas' })).toBeTruthy();
+  expect(screen.getAllByText('No hay asociaciones validadas para este corte.')).toHaveLength(1);
+  expect(screen.queryByText('No hay datos para los filtros solicitados.')).toBeNull();
+  expect(screen.queryByText('raw duplicate')).toBeNull();
+});
+
+it('selection while a write preview is visible never calls action confirmation', async () => {
+  const pending: NonNullable<AgentResponse['pendingAction']> = { pendingActionId: '33333333-3333-4333-8333-333333333333',
+    action: 'create_purchase', summary: 'Revisar pedido sugerido', fields: { name: 'Leche Gloria', quantity: 2 },
+    expiresAt: '2099-01-01T00:00:00Z', requiresConfirmation: true, status: 'PENDING' };
+  send.mockResolvedValueOnce({ success: true, data: { ...response, pendingAction: pending, answer: 'Elige el producto recomendado.',
+    suggestionsEntityType: 'product', suggestions: [{ label: 'Leche evaporada Gloria 390 g', detail: 'LAC-GLORIA-390', message: 'LAC-GLORIA-390' }] } })
+    .mockResolvedValueOnce({ success: true, data: response });
+  render(<AssistantPage />); submit('haz el pedido');
+  fireEvent.click(await screen.findByRole('button', { name: /Leche evaporada Gloria 390 g/ }));
+  await screen.findAllByText(/Estado: Pendiente/);
+  expect(apiClient.decideAgentAction).not.toHaveBeenCalled();
+  expect(send.mock.calls[1][0].message).toBe('LAC-GLORIA-390');
+});
+
+it('disables pending-action confirmation while another assistant request is loading', async () => {
+  const pending: NonNullable<AgentResponse['pendingAction']> = { pendingActionId: '33333333-3333-4333-8333-333333333333',
+    action: 'create_purchase', summary: 'Revisar pedido', fields: { name: 'Leche' }, expiresAt: '2099-01-01T00:00:00Z', requiresConfirmation: true, status: 'PENDING' };
+  let resolve!: (value: { success: boolean; data: AgentResponse }) => void;
+  send.mockResolvedValueOnce({ success: true, data: { ...response, pendingAction: pending } })
+    .mockReturnValueOnce(new Promise(done => { resolve = done; }));
+  render(<AssistantPage />); submit('prepara pedido'); await screen.findByRole('region', { name: 'Acción pendiente' }); submit('consulta inventario');
+  expect((screen.getByRole('button', { name: 'Confirmar' }) as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => resolve({ success: true, data: response }));
+  expect(apiClient.decideAgentAction).not.toHaveBeenCalled();
+});
+
+it('shows a human V3 service-unavailable message without technical details', async () => {
+  send.mockRejectedValue(new AgentApiError(503)); render(<AssistantPage />); submit();
+  expect(await screen.findByRole('alert')).toBeTruthy();
+  expect(screen.getByText('El módulo analítico no está disponible en este momento.')).toBeTruthy();
+});
