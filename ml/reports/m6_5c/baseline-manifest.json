@@ -1,0 +1,67 @@
+{
+  "strategyVersion": "minimarket-pasco-v3-moving-average-28-v1",
+  "forecastStrategy": "MOVING_AVERAGE_28",
+  "datasetSha256": "a90b913b6ee83174165b39eaab1526525b3aacc53cae1abe6c3f5a54a469cac8",
+  "datasetVersion": "minimarket-pasco-v3-seed2026-v1",
+  "scenarioId": "minimarket-pasco-v3",
+  "config": {
+    "forecastStrategy": "MOVING_AVERAGE_28",
+    "historyDays": 28,
+    "horizons": [
+      1,
+      7,
+      14
+    ],
+    "formula": "h * mean(last 28 completed-day unitsSold)",
+    "timezone": "America/Lima",
+    "missingDays": "INSUFFICIENT_HISTORY",
+    "target": "effective units sold, not unconstrained demand",
+    "clipping": "max(0,p)",
+    "coherence": "p7=max(p1,p7); p14=max(p7,p14)"
+  },
+  "configSha256": "c20fa1532121b6731314ec0630c6234d90ee2ba252befeed206e8bda04e14a82",
+  "frozenConfigSha256": "3d0847436c67b194e66e42f2d91c88587f31c742b3c78c5cb6577ef0bf463b44",
+  "featureVersion": "pasco-forecast-features-v1",
+  "cutoffDate": "2026-10-12",
+  "evaluationLabel": "TEST_RECOVERY_RUN",
+  "metrics": {
+    "1": {
+      "rows": 4640,
+      "wape": 0.7874183470604942,
+      "mae": 1.4511237684729066,
+      "rmse": 2.0361036919062423,
+      "bias_units": 0.11473214285714287,
+      "normalized_bias": 0.06225671182986117,
+      "actual_units": 8551.0,
+      "predicted_units": 9083.357142857143
+    },
+    "7": {
+      "rows": 4160,
+      "wape": 0.3196374983890863,
+      "mae": 4.1734975961538465,
+      "rmse": 5.849431627139249,
+      "bias_units": 0.79453125,
+      "normalized_bias": 0.060851114752287494,
+      "actual_units": 54317.0,
+      "predicted_units": 57622.25
+    },
+    "14": {
+      "rows": 3600,
+      "wape": 0.25229474757776643,
+      "mae": 6.596666666666667,
+      "rmse": 9.1713321460589,
+      "bias_units": 1.845,
+      "normalized_bias": 0.0705634880163182,
+      "actual_units": 94128.0,
+      "predicted_units": 100770.0
+    }
+  },
+  "experimental28d": "separate report only; no operational artifact",
+  "limitations": [
+    "synthetic scenario",
+    "effective sales, not unconstrained demand",
+    "no probability/confidence interval",
+    "no current/cloud serving activation",
+    "baseline approval uses preselected fallback policy; no new absolute WAPE threshold"
+  ]
+}

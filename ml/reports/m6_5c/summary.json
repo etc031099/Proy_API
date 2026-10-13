@@ -1,0 +1,77 @@
+{
+  "phase": "M6.5C",
+  "label": "TEST_RECOVERY_RUN",
+  "frozenConfigSha256": "3d0847436c67b194e66e42f2d91c88587f31c742b3c78c5cb6577ef0bf463b44",
+  "selection": {
+    "1": {
+      "method": "BASELINE_FALLBACK",
+      "candidate": null,
+      "featureSet": null,
+      "selectedFeatures": [],
+      "hyperparameters": null,
+      "fallbackSegments": [
+        "very_low",
+        "intermittent",
+        "high_stable",
+        "medium"
+      ]
+    },
+    "7": {
+      "method": "BASELINE_FALLBACK",
+      "candidate": null,
+      "featureSet": null,
+      "selectedFeatures": [],
+      "hyperparameters": null,
+      "fallbackSegments": [
+        "very_low",
+        "intermittent",
+        "high_stable",
+        "medium"
+      ]
+    },
+    "14": {
+      "method": "BASELINE_FALLBACK",
+      "candidate": null,
+      "featureSet": null,
+      "selectedFeatures": [],
+      "hyperparameters": null,
+      "fallbackSegments": [
+        "very_low",
+        "intermittent",
+        "high_stable",
+        "medium"
+      ]
+    }
+  },
+  "noRetuning": true,
+  "coherence": {
+    "commonRows": 3600,
+    "adjustedValues": 0,
+    "relativeMagnitude": 0.0
+  },
+  "testEvaluationSeconds": 6.760064399999919,
+  "fitCountRecovery": 5,
+  "state": "TEST_RECOVERY_COMPLETE_NO_RETUNING",
+  "reproducibility": {
+    "scope": "deterministic final-cutoff inference, no holdout reevaluation",
+    "products": 80,
+    "maxDelta": 0.0
+  },
+  "bundle": {
+    "path": "ml\\models\\minimarket-pasco-v3\\baseline-manifest.json",
+    "sha256": "9eb058d4c19c6e5c0693e0a02709bac97c32b9ef00332d8cc3a6a854b83a2deb",
+    "joblib": false
+  },
+  "inferenceContract": {
+    "sku": "ABA-ACE-001",
+    "cutoffDate": "2026-10-12",
+    "strategyVersion": "minimarket-pasco-v3-moving-average-28-v1",
+    "forecastSource": "MOVING_AVERAGE_28",
+    "status": "READY",
+    "confidence": null,
+    "predictionInterval": null,
+    "expectedUnitsNext1d": 1.6071428571428572,
+    "expectedUnitsNext7d": 11.25,
+    "expectedUnitsNext14d": 22.5
+  }
+}
