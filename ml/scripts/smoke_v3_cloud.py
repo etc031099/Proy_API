@@ -99,7 +99,13 @@ def smoke(*, cloud=False):
                                                json=request.model_dump(mode="json"))
                         if response.status_code != 200:
                             raise RuntimeError(f"Cloud smoke {domain} HTTP {response.status_code}")
-                        actual = response.json()["data"]
+                        body = response.json()
+                        metadata = body.get("metadata", {})
+                        if (metadata.get("scenarioId") != s.SCENARIO_ID
+                                or metadata.get("datasetSha256") != s.DATASET_SHA256
+                                or metadata.get("asOfDate") != "2026-10-12"):
+                            raise RuntimeError(f"Cloud smoke lineage mismatch: {domain}")
+                        actual = body["data"]
                     else:
                         actual, _ = getattr(runtime, method)(request)
                     times.append(round((time.perf_counter() - started) * 1000, 3))
@@ -109,6 +115,32 @@ def smoke(*, cloud=False):
                 report["domains"][domain] = {"parity": "MATCH", "hash": digest(actual),
                                              "localInitialMs": direct_first_ms, "firstMs": times[0],
                                              "warmMedianMs": statistics.median(times[1:]), "samplesMs": times}
+            if cloud:
+                base = cases[0][2].model_dump(mode="json")
+                foreign = {**base, "context": {**base["context"], "businessId": "OTHER-BUSINESS"}}
+                foreign_product = s.InventoryRequest(requestId="m69e-foreign-sku", context=context,
+                                                       mode="detail", skus=["M5-FOODS_3_511"]).model_dump(mode="json")
+                horizon = s.ForecastRequest(requestId="m69e-28d", context=context,
+                                             mode="detail", skus=["BEB-GAS-004"], horizonDays=28).model_dump(mode="json")
+                denied = [
+                    ("missingAuth", "business", base, None, 401),
+                    ("wrongAuth", "business", base, "wrong-test-value", 403),
+                    ("wrongTenant", "business", foreign, secret, 403),
+                    ("arbitraryBusinessId", "business", {**base, "businessId": "OTHER-BUSINESS"}, secret, 400),
+                    ("foreignProduct", "inventory", foreign_product, secret, 404),
+                    ("unsupported28d", "forecast", horizon, secret, 422),
+                ]
+                report["security"] = {}
+                for name, route, payload, auth, expected_status in denied:
+                    headers = {"X-ML-Service-Secret": auth} if auth else {}
+                    response = client.post(f"{CLOUD_URL}/v3/intelligence/{route}", headers=headers, json=payload)
+                    report["security"][name] = {"status": response.status_code, "expected": expected_status}
+                    if response.status_code != expected_status:
+                        raise RuntimeError(f"Cloud security smoke mismatch: {name}")
+                health_response = client.get(f"{CLOUD_URL}/v3/intelligence/health")
+                if health_response.status_code != 200:
+                    raise RuntimeError("Cloud V3 health failed after analytics")
+                report["cloudHealthAfterAnalytics"] = health_response.json()
         report["outputHash"] = digest(outputs)
         gc.collect()
         report["resourceMb"]["steady"] = process.memory_info().rss / 1048576
