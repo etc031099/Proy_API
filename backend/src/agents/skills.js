@@ -13,7 +13,9 @@ const schema = (properties = {}, required = [], oneOf) => ({
 const period = { startDate: date, endDate: date };
 const product = { productId: id, sku: text(100) };
 const both = ['operations', 'analyst'];
+const { V3_IDS, V3_SKILLS, v3SkillProperties } = require('./v3Skills');
 const READY_SKILL_IDS = Object.freeze([
+  ...V3_IDS,
   'search_products', 'get_product_details', 'get_low_stock_products', 'get_recent_transactions',
   'get_sales_summary', 'get_top_selling_products', 'get_business_summary',
   'get_demand_forecast', 'get_replenishment_candidates', 'get_product_sales_summary', 'analyze_demand_forecast',
@@ -31,6 +33,9 @@ const entry = (skillId, description, allowedAgents, inputSchema, maxRecords, dat
 });
 
 const SKILLS = deepFreeze([
+  ...V3_IDS.map(skillId => entry(skillId, `Consulta inteligencia V3: ${V3_SKILLS[skillId].domain}.`,
+    V3_SKILLS[skillId].agents, schema(v3SkillProperties(skillId)), skillId === 'get_business_health' ? 5 : 20, 'OPERATIONAL',
+    'Bounded authenticated V3 intelligence with approved lineage, operational date and safe domain projections')),
   entry('list_inventory_alert_channel_deliveries', 'Consultó notificaciones Telegram de reglas de stock.', ['operations'],
     schema({ sku: text(100), status: { type: 'string', enum: ['PENDING', 'IN_FLIGHT', 'DELIVERED', 'SKIPPED', 'FAILED'] }, limit: limit(20) }),
     20, 'OPERATIONAL', 'Bounded Telegram channel delivery states and safe diagnostic categories; no destinations, secrets or internal identifiers'),

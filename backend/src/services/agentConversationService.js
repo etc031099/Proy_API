@@ -89,10 +89,12 @@ const createAgentConversationService = ({ runtime, repository = createAgentHisto
           const productSelection = require('../agents/memory').compactProductSelection(conversation.contextSnapshot?.lastProductSelection, Date.now);
           const productSelectionExpiresAt = productSelection?.sourceIntent === 'search_product'
             ? productSelection.createdAt + require('../agents/memory').TTL_MS : null;
+          const v3 = require('../agents/v3Routing').compactV3State(conversation.contextSnapshot?.v3Context, Date.now());
           // Saved choices remain readable, but only a current draft, supplier resolution or product selection can act.
           if ((!draft || draft.expiresAt !== response.suggestionsExpiresAt)
             && (!supplier || supplier.expiresAt !== response.suggestionsExpiresAt)
-            && productSelectionExpiresAt !== response.suggestionsExpiresAt) response.suggestionsExpiresAt = 0;
+            && productSelectionExpiresAt !== response.suggestionsExpiresAt
+            && (!v3?.pending || v3.expiresAt !== response.suggestionsExpiresAt)) response.suggestionsExpiresAt = 0;
         }
         if (response?.pendingAction && actionService) {
           const context = require('../automations/contracts').createActionContext(req, { conversationId: id });

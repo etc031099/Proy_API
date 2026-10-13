@@ -5,6 +5,7 @@ const REMOTE_ML_SKILL_TIMEOUT_MS = 25000;
 const AGENT_ML_HTTP_TIMEOUT_MS = 20000;
 
 const ML_DEPENDENT_SKILLS = Object.freeze([
+  ...require('./v3Skills').V3_IDS,
   'get_demand_forecast',
   'get_replenishment_candidates',
   'analyze_demand_forecast',

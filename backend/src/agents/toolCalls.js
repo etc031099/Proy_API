@@ -15,6 +15,9 @@ const declarationSchema = (skill, properties) => {
 const getToolDeclarations = agentId => {
   const agent = getAgentDefinition(agentId);
   return Object.freeze(SKILLS.filter(skill => agent.allowedSkills.includes(skill.id)
+    // V3 families are dispatched deterministically after the tenant capability
+    // gate. Keep the generic V1/V2 provider declaration set unchanged.
+    && !require('./v3Skills').V3_IDS.includes(skill.id)
     && skill.allowedAgents.includes(agentId) && skill.readOnly && skill.executorStatus === 'READY')
     .map(skill => Object.freeze({
       name: skill.id,

@@ -778,5 +778,25 @@ const routeCompoundProductList = message => {
   return { intent: 'compound_product_list', agent: 'analyst', sourceIntent, comparisonType, limit };
 };
 
-module.exports = { routeDeterministically, routeCommercial, routeSupplierProducts, monthPeriod, weekPeriod, clarify,
+// Date-only analytics adapters reuse the hardened parser with a caller-owned
+// operational calendar. Existing operational routes retain their UTC clock.
+const resolveOperationalPeriod = (message, operationalDate) => {
+  const text = normalize(message), now = new Date(`${operationalDate}T12:00:00Z`);
+  const iso = text.match(/\d{4}-\d{2}-\d{2}/g);
+  if (iso) {
+    if (relativeSalesPeriod(text, now)) return { clarificationQuestion: 'Indica un único periodo; no mezcles fechas explícitas con otro periodo relativo.' };
+    if (iso.length > 2 || !iso.every(isDate) || (iso[1] && iso[0] > iso[1])) return { clarificationQuestion: 'Indica fechas completas y ordenadas.' };
+    return { period: { startDate: iso[0], endDate: iso[1] || iso[0] }, explicit: true };
+  }
+  const calendar = salesCalendarPeriod(`ventas ${text}`, now);
+  if (calendar?.clarificationQuestion) return calendar;
+  const relative = relativeSalesPeriod(text, now);
+  if (relative?.clarificationQuestion) return relative;
+  const natural = /\b\d{1,2}\s+de\s+[a-z]+\s+de\s+20\d{2}\b/.test(text) ? parseRequestedDate(text) : null;
+  const period = calendar?.period || relative || (natural ? { startDate: natural, endDate: natural } : null);
+  if (/\b(?:desde|hasta|entre)\b/.test(text) && !period) return { clarificationQuestion: 'Indica un rango completo con día, mes y año.' };
+  if (period) return { period: { ...period, endDate: /este mes/.test(text) ? operationalDate : period.endDate }, explicit: true };
+  return { period: rollingPeriod(now, 30), explicit: false };
+};
+module.exports = { routeDeterministically, routeCommercial, routeSupplierProducts, monthPeriod, weekPeriod, clarify, resolveOperationalPeriod,
   budgetPlanFollowupType, tenantScopeViolation, routeCompoundProductList, canonicalProductSku, explicitProductDetailQuery, routeTemporalGuard };

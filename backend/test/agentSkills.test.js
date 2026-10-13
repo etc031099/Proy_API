@@ -182,6 +182,7 @@ test('informal product components require every word and numeric component withi
 
 test('AG-R3, AG-R5, replenishment budgeting and alert delivery query skills are ready; three remain pending', () => {
   assert.deepEqual(SKILLS.filter(skill => skill.executorStatus === 'READY').map(skill => skill.id), [
+    ...require('../src/agents/v3Skills').V3_IDS,
     'list_inventory_alert_channel_deliveries',
     'list_stock_alert_rules', 'list_inventory_alerts', 'list_inventory_alert_outbox_events',
     'analyze_demand_forecast',

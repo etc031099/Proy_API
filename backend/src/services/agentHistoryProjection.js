@@ -40,6 +40,7 @@ const project = (value, schema) => {
 };
 const publicResponse = result => project(result, shape);
 const snapshot = state => ({
+  v3Context: require('../agents/v3Routing').compactV3State(state.v3Context, Date.now()),
   lastReplenishmentPlan: compactBudgetPlan(state.lastReplenishmentPlan, Date.now()),
   lastForecastAnalytics: require('../agents/forecastAnalytics').compactAnalyticsContext(state.lastForecastAnalytics),
   operationDraft: require('../automations/operationDraft').compactDraft(state.operationDraft),

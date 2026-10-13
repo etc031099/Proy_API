@@ -43,6 +43,19 @@ const withActionAssistant = (runtime, service, options = {}) => {
   const drafts = new Map(), locks = new Map(), now = options.clock || Date.now;
   const keyFor = (req, id) => JSON.stringify([String(req.user?._id), req.businessId, id]);
   async function handle(req, input) {
+    let v3State;
+    if (req.businessId === require('../services/v3IntelligenceService').V3.businessId && input.conversationId) {
+      const snapshot = await runtime.getContextSnapshot?.(req, input.conversationId);
+      const candidate = require('../agents/v3Routing').compactV3State(snapshot?.v3Context, now());
+      const binding = require('../agents/memory').contextBinding(require('../agents/contracts').createAgentRequestContext(req, { conversationId: input.conversationId }));
+      if (candidate?.binding === binding) v3State = candidate;
+      if (/^(?:haz|realiza) (?:el pedido|la compra)[.!]?$/i.test(input.message.trim())
+        && v3State?.readRecommendation?.sku === v3State?.selectedProduct?.key) {
+        const rec = v3State.readRecommendation;
+        // Explicit action intent becomes only a normal, revalidated proposal.
+        input = { ...input, message: `compra ${rec.quantity} del ${rec.sku}${rec.supplierCode ? ` con el proveedor ${rec.supplierCode}` : ''}` };
+      }
+    }
     const normalized = input.message.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/^[¿¡]/, '').replace(/[?!.]$/, '');
     const decision = actionDecision(input.message);
     const expiredDraft = drafts.get(keyFor(req, input.conversationId));
@@ -50,6 +63,11 @@ const withActionAssistant = (runtime, service, options = {}) => {
     const draftKey = keyFor(req, input.conversationId);
     let previous = drafts.get(draftKey);
     const explicit = actionIntent(input.message);
+    if (explicit && v3State) await runtime.clearV3Selection?.(req, input.conversationId);
+    if (v3State?.pending && !explicit && decision !== 'cancel'
+      && (/^(?:[1-5]|opcion [1-5]|si(?:,? ese)?|ok|vale|dale|ver mas|siguiente|anterior)$/.test(normalized)
+        || ordinalSelection(input.message).matched
+        || v3State.ranking?.items?.some(item => [item.key, item.label].some(value => value.toLowerCase() === input.message.trim().toLowerCase())))) return runtime.handle(req, input);
     const pendingQuestion = previous?.pendingActionId && !previous.readSuspended && !previous.selection && !previous.missingFields?.length && !explicit
       ? pendingQuestionType(input.message) : null;
     // A newer READ owns subsequent selections. Keep the frozen PendingAction
@@ -74,7 +92,7 @@ const withActionAssistant = (runtime, service, options = {}) => {
     // their existing selection flow; do not prepare/cancel a write for analytics.
     if (!previous && candidateCommand && input.conversationId) {
       const state = await runtime.getContextSnapshot?.(req, input.conversationId);
-      if (state?.lastForecastAnalytics || state?.supplierResolution || state?.supplierProductListing) return runtime.handle(req, input);
+      if (state?.lastForecastAnalytics || state?.supplierResolution || state?.supplierProductListing || state?.v3Context?.pending) return runtime.handle(req, input);
     }
     if (!skillId && !decision && !candidateCommand) return runtime.handle(req, input);
     const started = performance.now(), conversationId = input.conversationId || randomUUID();

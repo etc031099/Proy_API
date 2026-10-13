@@ -9,6 +9,7 @@ require('./webhookService.test');
 require('./cors.test');
 require('./inventoryMovement.test');
 require('./mlServiceClient.test');
+require('./v3Intelligence.test');
 require('./demandForecastService.test');
 require('./transactionsRoutes.test');
 require('./agents.test');

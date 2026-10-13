@@ -32,9 +32,9 @@ test('registry contains exactly three distinct immutable agent definitions', () 
   assert.equal(getAgentDefinition('analyst').llmPolicy.preferredMode, 'hybrid');
 });
 
-test('all twenty-two skills are unique read-only contracts with nineteen implemented executors', () => {
-  assert.equal(SKILLS.length, 22);
-  assert.equal(new Set(SKILLS.map(skill => skill.id)).size, 22);
+test('all twenty-nine skills are unique read-only contracts with twenty-six implemented executors', () => {
+  assert.equal(SKILLS.length, 29);
+  assert.equal(new Set(SKILLS.map(skill => skill.id)).size, 29);
   for (const skill of SKILLS) {
     assert.equal(skill.readOnly, true);
     assert.ok(['READY', 'PENDING_IMPLEMENTATION'].includes(skill.executorStatus));
@@ -45,7 +45,7 @@ test('all twenty-two skills are unique read-only contracts with nineteen impleme
     assert.ok(Object.isFrozen(skill.inputSchema.properties));
     assert.equal(new Set(skill.allowedAgents).size, skill.allowedAgents.length);
   }
-  assert.equal(SKILLS.filter(skill => skill.executorStatus === 'READY').length, 19);
+  assert.equal(SKILLS.filter(skill => skill.executorStatus === 'READY').length, 26);
   assert.equal(getSkillDefinition('get_supplier_products').executorStatus, 'READY');
   assert.deepEqual(getSkillDefinition('get_supplier_products').allowedAgents, ['operations']);
 });
@@ -123,6 +123,7 @@ test('all registered schemas accept their canonical minimal arguments without co
   const dates = { startDate: '2025-01-01', endDate: '2025-01-31' };
   const productId = '507f1f77bcf86cd799439011';
   const examples = {
+    ...Object.fromEntries(require('../src/agents/v3Skills').V3_IDS.map(id => [id, {}])),
     list_stock_alert_rules: {},
     list_inventory_alerts: {},
     list_inventory_alert_outbox_events: {},

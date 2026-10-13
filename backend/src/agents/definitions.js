@@ -1,4 +1,5 @@
 const { AgentError, TOKEN_BUDGETS, EXECUTION_LIMITS, deepFreeze } = require('./contracts');
+const { V3_IDS, V3_SKILLS } = require('./v3Skills');
 
 const AGENTS = deepFreeze([
   {
@@ -14,7 +15,7 @@ const AGENTS = deepFreeze([
     allowedActionSkills: ['create_product', 'create_sale', 'create_purchase', 'create_inventory_alert', 'create_stock_alert_rule'],
     description: 'Consulta hechos del catálogo, inventario y operaciones comerciales.',
     responsibilities: ['Productos e inventario', 'Proveedores', 'Transacciones', 'Ventas y compras factuales'],
-    allowedSkills: ['search_products', 'get_product_details', 'get_low_stock_products', 'get_inventory_summary',
+    allowedSkills: [...V3_IDS.filter(id => V3_SKILLS[id].agents.includes('operations')), 'search_products', 'get_product_details', 'get_low_stock_products', 'get_inventory_summary',
       'get_recent_transactions', 'get_sales_summary', 'get_purchase_summary', 'get_supplier_details', 'get_product_sales_summary',
       'get_supplier_products', 'list_stock_alert_rules', 'list_inventory_alerts', 'list_inventory_alert_outbox_events', 'list_inventory_alert_channel_deliveries'],
     llmPolicy: { preferredMode: 'deterministic-first', providerEnabled: true },
@@ -25,7 +26,7 @@ const AGENTS = deepFreeze([
     allowedActionSkills: [],
     description: 'Interpreta agregados, rankings y resultados estructurados del forecast existente.',
     responsibilities: ['Agregados y resumen del negocio', 'Rankings', 'Forecast y reposición', 'Interpretación de resultados'],
-    allowedSkills: ['search_products', 'get_product_details', 'get_low_stock_products', 'get_inventory_summary',
+    allowedSkills: [...V3_IDS.filter(id => V3_SKILLS[id].agents.includes('analyst')), 'search_products', 'get_product_details', 'get_low_stock_products', 'get_inventory_summary',
       'get_sales_summary', 'get_purchase_summary', 'get_business_summary', 'get_top_selling_products',
       'get_product_sales_summary', 'get_demand_forecast', 'get_replenishment_candidates', 'analyze_demand_forecast',
       'get_replenishment_cost', 'plan_replenishment_budget', 'compare_supplier_costs'],

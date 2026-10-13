@@ -14,16 +14,19 @@ const createMlServiceClient = ({
   timeoutMs = DEFAULT_TIMEOUT_MS,
   fetchImpl = global.fetch
 } = {}) => {
-  const predictDemand = async payload => {
+  const post = async (path, payload, signal, v3 = false) => {
     if (!serviceUrl || !serviceSecret || typeof fetchImpl !== 'function') {
       throw new MlServiceUnavailableError();
     }
 
     const controller = new AbortController();
+    const abort = () => controller.abort();
+    if (signal?.aborted) controller.abort();
+    signal?.addEventListener('abort', abort, { once: true });
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetchImpl(
-        `${serviceUrl.replace(/\/+$/, '')}/v1/predict/demand`,
+        `${serviceUrl.replace(/\/+$/, '')}${path}`,
         {
           method: 'POST',
           headers: {
@@ -35,8 +38,17 @@ const createMlServiceClient = ({
         }
       );
 
-      if (!response.ok) throw new MlServiceUnavailableError();
+      if (!response.ok) {
+        if (v3) {
+          const body = await response.json().catch(() => null);
+          const allowed = ['PRODUCT_NOT_FOUND', 'CUSTOMER_NOT_FOUND', 'SUPPLIER_NOT_FOUND', 'AMBIGUOUS_ENTITY', 'INVALID_PERIOD', 'UNSUPPORTED_HORIZON', 'INSUFFICIENT_HISTORY', 'ARTIFACT_UNAVAILABLE', 'SCENARIO_NOT_SUPPORTED', 'TENANT_MISMATCH'];
+          const code = body?.code || body?.error?.code || body?.detail?.code;
+          if (allowed.includes(code)) { const error = new MlServiceUnavailableError(); error.functionalCode = code; throw error; }
+        }
+        throw new MlServiceUnavailableError();
+      }
       const body = await response.json();
+      if (v3) return body;
       if (
         !body || !Array.isArray(body.results)
         || body.results.some(result => (
@@ -52,10 +64,16 @@ const createMlServiceClient = ({
       throw new MlServiceUnavailableError();
     } finally {
       clearTimeout(timeout);
+      signal?.removeEventListener('abort', abort);
     }
   };
 
-  return { predictDemand };
+  const predictDemand = payload => post('/v1/predict/demand', payload);
+  const intelligence = (domain, payload, { signal } = {}) => {
+    if (!['business', 'inventory', 'forecast', 'cross-sell', 'customers', 'suppliers', 'health'].includes(domain)) throw new MlServiceUnavailableError();
+    return post(`/v3/intelligence/${domain}`, payload, signal, true);
+  };
+  return { predictDemand, intelligence };
 };
 
 module.exports = {

@@ -28,10 +28,11 @@ const createAgentForecastService = ({ createService, createMlClient } = {}) => {
  * Each execution owns this factory, so forecast promises are only shared within
  * one authenticated request. Failed/timed-out calls are not cached globally.
  */
-const createSkillExecutors = ({ models, forecastService, clock = () => new Date(), toObjectId } = {}) => {
+const createSkillExecutors = ({ models, forecastService, v3Service, clock = () => new Date(), toObjectId } = {}) => {
   let readModels = models;
   let forecast = forecastService;
   const forecastPromises = new Map();
+  let intelligence = v3Service;
   const getModels = () => readModels ||= require('../models');
   const objectId = value => toObjectId ? toObjectId(value) : new (require('mongoose').Types.ObjectId)(value);
   const asOf = () => clock().toISOString();
@@ -67,6 +68,7 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
     };
   };
   const readForecast = async invocation => {
+    if (invocation.context.businessId === require('../services/v3IntelligenceService').V3.businessId) throw new AgentError('AGENT_EXECUTOR_NOT_READY');
     invocation.signal.throwIfAborted();
     const { args, context } = invocation;
     const key = `${context.businessId}\0${args.productId || 'batch'}`;
@@ -694,6 +696,10 @@ const createSkillExecutors = ({ models, forecastService, clock = () => new Date(
         ...(selected.selected ? { supplierReference: { id: selected.selected.supplierId, name: selected.selected.supplierName },
           productReference: { id: row.productId, sku: row.sku, name: row.name } } : {}) } };
     },
+    ...Object.fromEntries(require('./v3Skills').V3_IDS.map(id => [id, invocation => {
+      intelligence ||= require('../services/v3IntelligenceService').createV3IntelligenceService({ models });
+      return intelligence.execute(invocation);
+    }])),
     async get_demand_forecast(invocation) { return forecastResult(await readForecast(invocation), invocation); },
     async get_replenishment_candidates(invocation) { return forecastResult(await readForecast(invocation), invocation, true); }
   });

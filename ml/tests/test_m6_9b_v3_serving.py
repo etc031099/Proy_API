@@ -128,7 +128,12 @@ class M69BV3ServingTests(unittest.TestCase):
 
     def test_missing_basket_on_startup_keeps_other_domains_ready(self):
         runtime = V3IntelligenceRuntime()
-        with patch("ml.service.v3_intelligence_runtime._read_json", side_effect=FileNotFoundError):
+        def without_basket(path):
+            if path.name == "minimarket-pasco-v3-market-basket-v1.json":
+                raise FileNotFoundError
+            import json
+            return json.loads(path.read_text(encoding="utf-8"))
+        with patch("ml.service.v3_intelligence_runtime._read_json", side_effect=without_basket):
             runtime.load()
         self.assertTrue(runtime.ready)
         self.assertTrue(runtime.domains["business"])

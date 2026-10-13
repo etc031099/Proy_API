@@ -66,13 +66,14 @@ function rankEntities(rows, ref, offset = 0, supplier = false) {
 }
 async function resolveReference(model, context, ref, type, offset = 0) {
   if (typeof ref !== 'string' || !ref.trim() || ref.length > 100 || /[\x00-\x1f]/.test(ref)) fail('ACTION_VALIDATION_FAILED');
-  const fields = model === Product ? '_id sku name currency stock isActive supplierPrices' : '_id name isActive';
+  const fields = model === Product ? '_id sku name currency stock isActive supplierPrices' : '_id name isActive stableCode';
   const scope = { businessId: context.businessId, ...(type ? { type } : {}) };
   const identity = /^[a-f\d]{24}$/i.test(ref) ? [{ _id: ref }] : [
-    ...(model === Product ? [{ sku: normalizeSku(ref) }] : []), { name: new RegExp(`^${escapeRegex(ref.trim())}$`, 'i') }];
+    ...(model === Product ? [{ sku: normalizeSku(ref) }] : [{ stableCode: ref.trim().toUpperCase() }]), { name: new RegExp(`^${escapeRegex(ref.trim())}$`, 'i') }];
   const exact = await model.find({ ...scope, $or: identity }).select(fields).limit(2).lean().maxTimeMS(5000);
   const sku = model === Product && exact.find(row => row.sku === normalizeSku(ref));
   if (sku) return { confidence: 'EXACT', value: sku };
+  if (model === Contact && exact.length === 1 && exact[0].stableCode?.toLowerCase() === ref.trim().toLowerCase()) return { confidence: 'EXACT', value: exact[0] };
   if (model === Product && exact.length === 2) {
     const skuRows = await model.find({ ...scope, sku: normalizeSku(ref) }).select(fields).limit(1).lean().maxTimeMS(5000);
     if (skuRows.length) return { confidence: 'EXACT', value: skuRows[0] };

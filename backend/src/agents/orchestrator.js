@@ -133,6 +133,11 @@ const errorCode = error => error?.code === 'AGENT_BUDGET_EXCEEDED' || error?.cod
  * .handle(authenticatedReq, {message, conversationId?}) is the future UI boundary.
  */
 const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencies, onEvent = () => {}, clock = () => new Date() } = {}) => Object.freeze({
+  async clearV3Selection(req, conversationId) {
+    return memory.withConversation(createAgentRequestContext(req, { conversationId }), (state, commit) => {
+      if (state.v3Context) commit({ v3Context: { ...state.v3Context, pending: null, ranking: null } });
+    });
+  },
   async rememberSupplier(req, conversationId, supplier, product) {
     const safe = require('./memory').compactSupplier(supplier);
     const entity = require('./memory').compactEntity(product);
@@ -160,8 +165,10 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
     const context = createAgentRequestContext(req, { conversationId });
     const startedAt = performance.now();
     return memory.withConversation(context, async (state, commit) => {
+      const v3Service = dependencies?.v3Service || (context.businessId === require('../services/v3IntelligenceService').V3.businessId
+        ? require('../services/v3IntelligenceService').createV3IntelligenceService({ models: dependencies?.models }) : null);
       const execution = createAgentExecution({ context, onEvent, ...(provider ? { provider } : {}),
-        dependencies: { ...dependencies, clock: dependencies?.clock || clock } });
+        dependencies: { ...dependencies, ...(v3Service ? { v3Service } : {}), clock: dependencies?.clock || clock } });
       const results = [];
       let plan = { intent: 'ambiguous_query', agent: 'coordinator' }, answer, code = null, question = null;
       let supplierResolutionExpiry;
@@ -170,6 +177,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
       let supplierPageResponse;
       let synthesisStatus;
       let synthesisDiagnostic;
+      let v3Response;
       const run = async (agentId, skillId, args = {}) => {
         const result = await execution.executeSkill({ agentId, skillId, args });
         results.push({ skillId, result });
@@ -178,6 +186,12 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
       try {
         // Access-scope requests are rejected before consulting conversation snapshots, routing LLM, or skills.
         const securityPlan = tenantScopeViolation(message);
+        v3Response = !securityPlan && v3Service ? await execution.runAgent('coordinator', () => require('./v3Routing').handleV3({
+          message, state, context, service: v3Service, run, commit })) : null;
+        if (v3Response) {
+          answer = v3Response.answer; plan = { intent: v3Response.intent, agent: v3Response.agent, contextProvenance: v3Response.contextProvenance };
+          question = v3Response.clarification ? answer : null;
+        } else {
         const guardedPlan = securityPlan || routeTemporalGuard(message, state, clock(), context.businessId);
         const selectedSupplier = guardedPlan ? null : supplierSelection(message, state, Date.now());
         const selectedProduct = guardedPlan ? null : productCandidateSelection(message, state);
@@ -755,6 +769,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
               offset: supplierProductsResult.metadata.offset || 0, expiresAt: supplierProductListingExpiry } });
           }
         }
+        }
       } catch (error) {
         code = errorCode(error);
         if (plan.intent === 'product_list_followup') {
@@ -797,6 +812,8 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
         ...(supplierResolutionExpiry && (suggested || supplierPageResponse) ? { suggestionsExpiresAt: supplierResolutionExpiry }
           : productSelectionExpiry ? { suggestionsExpiresAt: productSelectionExpiry } : {}),
         ...(contextProvenance ? { contextProvenance } : {}),
+        ...(v3Response?.suggestions ? { suggestions: v3Response.suggestions, suggestionsEntityType: v3Response.suggestionsEntityType,
+          suggestionsExpiresAt: v3Response.suggestionsExpiresAt, ...(v3Response.suggestionsPagination ? { suggestionsPagination: v3Response.suggestionsPagination } : {}) } : {}),
         participants, actions, evidence: results.map(({ result }) => ({ ...result.evidence, recordCount: result.metadata.returnedCount })),
         usage: { ...usage, toolSelectionCycles: execution.getBudget().toolSelectionCycles, totalLatencyMs: latencyMs }, requiresClarification: Boolean(question), clarificationQuestion: question,
         code, latencyMs });

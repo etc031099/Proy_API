@@ -54,7 +54,7 @@ const createAgentExecution = options => {
   assertAgentRequestContext(context);
   if (typeof onEvent !== 'function') throw new AgentError('AGENT_INVALID_REQUEST');
   if (options.dependencies !== undefined && (!isPlainObject(options.dependencies)
-    || Reflect.ownKeys(options.dependencies).some(key => !['models', 'forecastService', 'clock', 'toObjectId'].includes(key)))) {
+    || Reflect.ownKeys(options.dependencies).some(key => !['models', 'forecastService', 'v3Service', 'clock', 'toObjectId'].includes(key)))) {
     throw new AgentError('AGENT_INVALID_REQUEST');
   }
   if (options.provider !== undefined && (!isPlainObject(options.provider)
