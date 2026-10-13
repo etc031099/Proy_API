@@ -20,6 +20,11 @@ from ml.service.model_runtime import (
     ModelUnavailableError,
 )
 from ml.service.schemas import PredictionRequest, PredictionResponse
+from ml.service.v3_intelligence_runtime import V3FunctionalError, V3IntelligenceRuntime
+from ml.service.v3_schemas import (
+    BusinessRequest, CrossSellRequest, CustomerRequest, ForecastRequest, HealthRequest,
+    InventoryRequest, SupplierRequest, V3HealthResponse, V3Response,
+)
 
 
 MINIMUM_SECRET_LENGTH = 32
@@ -32,6 +37,14 @@ SECRET_ENVIRONMENT_NAMES = (
 )
 
 logger = logging.getLogger("ml.service")
+_DEFAULT_V3_RUNTIME: V3IntelligenceRuntime | None = None
+
+
+def _default_v3_runtime() -> V3IntelligenceRuntime:
+    global _DEFAULT_V3_RUNTIME
+    if _DEFAULT_V3_RUNTIME is None:
+        _DEFAULT_V3_RUNTIME = V3IntelligenceRuntime()
+    return _DEFAULT_V3_RUNTIME
 
 
 class BodyLimitMiddleware:
@@ -90,8 +103,10 @@ def load_service_secret() -> str:
     return secret
 
 
-def create_app(runtime: ModelRuntime | None = None) -> FastAPI:
+def create_app(runtime: ModelRuntime | None = None,
+               v3_runtime: V3IntelligenceRuntime | None = None) -> FastAPI:
     selected_runtime = runtime or ModelRuntime()
+    selected_v3_runtime = v3_runtime or _default_v3_runtime()
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
@@ -101,6 +116,12 @@ def create_app(runtime: ModelRuntime | None = None) -> FastAPI:
         except ModelUnavailableError:
             logger.error(json.dumps({"event": "runtime_startup", "status": "unavailable"}))
         application.state.runtime = selected_runtime
+        try:
+            selected_v3_runtime.load()
+        except Exception:
+            logger.error(json.dumps({"event": "v3_runtime_startup", "status": "unavailable",
+                                     "code": "ARTIFACT_UNAVAILABLE"}))
+        application.state.v3_runtime = selected_v3_runtime
         yield
 
     application = FastAPI(
@@ -115,15 +136,24 @@ def create_app(runtime: ModelRuntime | None = None) -> FastAPI:
     application.add_middleware(BodyLimitMiddleware)
 
     @application.exception_handler(RequestValidationError)
-    async def validation_error_handler(_request: Request, error: RequestValidationError):
+    async def validation_error_handler(request: Request, error: RequestValidationError):
         oversized = any(item.get("type") == "too_long" for item in error.errors())
+        invalid_period = any("period" in str(item.get("loc", ()))
+                             and item.get("type") in {"date_from_datetime_parsing", "date_parsing", "greater_than"}
+                             for item in error.errors())
+        code = "INVALID_PERIOD" if invalid_period else "INVALID_REQUEST"
+        if not request.url.path.startswith("/v3/"):
+            return JSONResponse(
+                status_code=(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE if oversized else status.HTTP_400_BAD_REQUEST),
+                content={"detail": "Request validation failed"},
+            )
         return JSONResponse(
             status_code=(
                 status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
                 if oversized
                 else status.HTTP_400_BAD_REQUEST
             ),
-            content={"detail": "Request validation failed"},
+            content={"code": code, "message": "Request validation failed."},
         )
 
     def require_service_secret(
@@ -149,6 +179,87 @@ def create_app(runtime: ModelRuntime | None = None) -> FastAPI:
                 content={"status": "unavailable", "code": "MODEL_UNAVAILABLE"},
             )
         return JSONResponse(status_code=200, content={"status": "ready"})
+
+    @application.get("/v3/intelligence/health", response_model=V3HealthResponse)
+    async def v3_health(request: Request) -> V3HealthResponse:
+        v3 = request.app.state.v3_runtime
+        v1 = request.app.state.runtime
+        public = v3.public_status()
+        return V3HealthResponse(serviceAlive=True, v1Ready=bool(v1.available),
+                                v3IntelligenceReady=bool(public["v3IntelligenceReady"]),
+                                domains=public["domains"], domainErrors=public["domainErrors"],
+                                loadingMetrics=public["loadingMetrics"])
+
+    @application.get("/v3/intelligence/ready")
+    async def v3_ready(request: Request) -> JSONResponse:
+        v3 = request.app.state.v3_runtime
+        if not v3.ready:
+            return JSONResponse(status_code=503, content={"status": "unavailable", "code": "ARTIFACT_UNAVAILABLE"})
+        return JSONResponse(status_code=200, content={"status": "ready", "scenarioId": "minimarket-pasco-v3"})
+
+    async def execute_v3(request: Request, payload: Any, domain: str, method: str) -> V3Response:
+        current: V3IntelligenceRuntime = request.app.state.v3_runtime
+        if not current.ready:
+            raise HTTPException(status_code=503, detail={"code": "ARTIFACT_UNAVAILABLE", "message": "V3 intelligence artifacts are unavailable."})
+        if not current.domains.get(domain, False) and domain != "crossSell":
+            raise HTTPException(status_code=503, detail={"code": "ARTIFACT_UNAVAILABLE", "message": "Approved V3 domain artifact is unavailable."})
+        started = time.perf_counter()
+        try:
+            data, cutoff = getattr(current, method)(payload)
+            partial = data.get("available") is False
+            if domain == "health":
+                partial = partial or data.get("businessHealth", {}).get("marketBasket", {}).get("available") is False
+            return V3Response(requestId=payload.requestId, status="PARTIAL" if partial else "OK",
+                               data=json.loads(json.dumps(data, ensure_ascii=False, allow_nan=False, default=str)),
+                               metadata=current.metadata(cutoff, domain,
+                                                        round((time.perf_counter() - started) * 1000, 3)))
+        except V3FunctionalError as error:
+            raise HTTPException(status_code=error.status_code,
+                                detail={"code": error.code, "message": error.message}) from None
+        except (FileNotFoundError, KeyError, ValueError):
+            # Missing lineage/entities are normalized; no raw paths or source values escape.
+            raise HTTPException(status_code=503, detail={"code": "ARTIFACT_UNAVAILABLE",
+                                                        "message": "Approved V3 intelligence source is unavailable."}) from None
+        except Exception:
+            logger.exception(json.dumps({"event": "v3_request", "domain": domain,
+                                         "requestId": payload.requestId, "code": "INTERNAL_SERVICE_ERROR"}))
+            raise HTTPException(status_code=500, detail={"code": "INTERNAL_SERVICE_ERROR",
+                                                        "message": "V3 intelligence request could not be completed."}) from None
+
+    @application.post("/v3/intelligence/business", response_model=V3Response,
+                      dependencies=[Depends(require_service_secret)])
+    async def v3_business(request: Request, payload: BusinessRequest) -> V3Response:
+        return await execute_v3(request, payload, "business", "business_data")
+
+    @application.post("/v3/intelligence/inventory", response_model=V3Response,
+                      dependencies=[Depends(require_service_secret)])
+    async def v3_inventory(request: Request, payload: InventoryRequest) -> V3Response:
+        return await execute_v3(request, payload, "inventory", "inventory_data")
+
+    @application.post("/v3/intelligence/forecast", response_model=V3Response,
+                      dependencies=[Depends(require_service_secret)])
+    async def v3_forecast(request: Request, payload: ForecastRequest) -> V3Response:
+        return await execute_v3(request, payload, "forecast", "forecast_data")
+
+    @application.post("/v3/intelligence/cross-sell", response_model=V3Response,
+                      dependencies=[Depends(require_service_secret)])
+    async def v3_cross_sell(request: Request, payload: CrossSellRequest) -> V3Response:
+        return await execute_v3(request, payload, "crossSell", "cross_sell_data")
+
+    @application.post("/v3/intelligence/customers", response_model=V3Response,
+                      dependencies=[Depends(require_service_secret)])
+    async def v3_customer(request: Request, payload: CustomerRequest) -> V3Response:
+        return await execute_v3(request, payload, "customer", "customer_data")
+
+    @application.post("/v3/intelligence/suppliers", response_model=V3Response,
+                      dependencies=[Depends(require_service_secret)])
+    async def v3_supplier(request: Request, payload: SupplierRequest) -> V3Response:
+        return await execute_v3(request, payload, "supplier", "supplier_data")
+
+    @application.post("/v3/intelligence/health", response_model=V3Response,
+                      dependencies=[Depends(require_service_secret)])
+    async def v3_business_health(request: Request, payload: HealthRequest) -> V3Response:
+        return await execute_v3(request, payload, "health", "health_data")
 
     @application.post(
         "/v1/predict/demand",

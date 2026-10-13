@@ -204,10 +204,10 @@ def _normalize_input_rows(rows: list[dict[str, Any]], domain: str) -> None:
             raise ValueError(f"{domain} contains a row outside the canonical V3 tenant/scenario")
 
 
-def load_local_sources(repository_root: Path = ROOT) -> dict[str, Any]:
+def load_local_sources(repository_root: Path = ROOT, *, dataset: Any | None = None) -> dict[str, Any]:
     """Load only approved local canonical files and verify their manifest hashes."""
     root = Path(repository_root)
-    dataset = v3_forecast.load_validated_dataset(root)
+    dataset = dataset or v3_forecast.load_validated_dataset(root)
     generated = root / "data/minimarket-pasco-v3/generated"
     manifest = _read_json(generated / "manifest.json")
     required_files = ("sales.ndjson", "sale-items.ndjson", "purchases.ndjson", "purchase-items.ndjson",
@@ -329,7 +329,8 @@ def _sale_data(records: dict[str, Any], as_of: date) -> tuple[list[dict[str, Any
 
 def _sales_aggregates(sales: list[dict[str, Any]], lines_by_sale: dict[str, list[dict[str, Any]]],
                       product_map: dict[str, dict[str, Any]], period: dict[str, Any],
-                      *, category_code: str | None = None, subcategory_code: str | None = None) -> dict[str, Any]:
+                      *, category_code: str | None = None, subcategory_code: str | None = None,
+                      product_sku: str | None = None) -> dict[str, Any]:
     selected_sales: list[dict[str, Any]] = []
     selected_lines: dict[str, list[dict[str, Any]]] = {}
     for sale in sales:
@@ -337,8 +338,9 @@ def _sales_aggregates(sales: list[dict[str, Any]], lines_by_sale: dict[str, list
             continue
         lines = [line for line in lines_by_sale[sale["saleCode"]]
                  if (category_code is None or product_map[line["sku"]]["categoryCode"] == category_code)
-                 and (subcategory_code is None or product_map[line["sku"]]["subcategoryCode"] == subcategory_code)]
-        if lines or (category_code is None and subcategory_code is None):
+                 and (subcategory_code is None or product_map[line["sku"]]["subcategoryCode"] == subcategory_code)
+                 and (product_sku is None or line["sku"] == product_sku)]
+        if lines or (category_code is None and subcategory_code is None and product_sku is None):
             selected_sales.append(sale)
             selected_lines[sale["saleCode"]] = lines
     revenue = cogs = units = distinct_line_count = 0
@@ -364,7 +366,7 @@ def _sales_aggregates(sales: list[dict[str, Any]], lines_by_sale: dict[str, list
     supplier_ticket_rows: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
     for sale in selected_sales:
         lines = selected_lines[sale["saleCode"]]
-        if not lines and (category_code is not None or subcategory_code is not None):
+        if not lines and (category_code is not None or subcategory_code is not None or product_sku is not None):
             continue
         ticket_revenue = sum(int(line["lineTotalCents"]) for line in lines)
         ticket_units_count = sum(int(line.get("unitsSold", 0)) for line in lines)
@@ -450,12 +452,15 @@ def _sales_aggregates(sales: list[dict[str, Any]], lines_by_sale: dict[str, list
 
 def _metrics_bundle_for_periods(sales: list[dict[str, Any]], lines_by_sale: dict[str, list[dict[str, Any]]],
                                 product_map: dict[str, dict[str, Any]], period: dict[str, Any],
-                                *, category_code: str | None = None, subcategory_code: str | None = None) -> dict[str, Any]:
+                                *, category_code: str | None = None, subcategory_code: str | None = None,
+                                product_sku: str | None = None) -> dict[str, Any]:
     current = _sales_aggregates(sales, lines_by_sale, product_map, period,
-                                category_code=category_code, subcategory_code=subcategory_code)
+                                category_code=category_code, subcategory_code=subcategory_code,
+                                product_sku=product_sku)
     previous_period = equivalent_previous_period(period)
     previous = _sales_aggregates(sales, lines_by_sale, product_map, previous_period,
-                                 category_code=category_code, subcategory_code=subcategory_code) if previous_period else None
+                                 category_code=category_code, subcategory_code=subcategory_code,
+                                 product_sku=product_sku) if previous_period else None
     return {"current": current, "previous": previous, "previousPeriod": previous_period}
 
 
@@ -484,6 +489,7 @@ class BusinessIntelligenceV3:
 
     def summary(self, period: str | dict[str, str] = "LAST_30_DAYS", *, as_of_date: str | date = v3_forecast.HISTORY_END,
                 category_code: str | None = None, subcategory_code: str | None = None,
+                product_sku: str | None = None,
                 comparison_mode: str = "EQUIVALENT_PREVIOUS") -> dict[str, Any]:
         cutoff = _as_date(as_of_date)
         window = resolve_period(period, cutoff)
@@ -491,9 +497,12 @@ class BusinessIntelligenceV3:
             raise ValueError("Unknown V3 category filter")
         if subcategory_code and subcategory_code not in {p["subcategoryCode"] for p in self.products.values()}:
             raise ValueError("Unknown V3 subcategory filter")
+        if product_sku and product_sku not in self.products:
+            raise ValueError("Unknown V3 product filter")
         sales, lines = self._sales(cutoff)
         bundle = _metrics_bundle_for_periods(sales, lines, self.products, window,
-                                             category_code=category_code, subcategory_code=subcategory_code)
+                                             category_code=category_code, subcategory_code=subcategory_code,
+                                             product_sku=product_sku)
         current, previous = bundle["current"], bundle["previous"]
         if comparison_mode.upper() == "NONE":
             previous = None
@@ -514,7 +523,7 @@ class BusinessIntelligenceV3:
         if current["ticketCount"]:
             # For all-products summaries, line revenue must reconcile with completed ticket totals.
             all_line_cents = sum(int(line["lineTotalCents"]) for sale in current["sales"] for line in current["linesBySale"][sale["saleCode"]])
-            if category_code is None and subcategory_code is None and all_line_cents != current["revenueCents"]:
+            if category_code is None and subcategory_code is None and product_sku is None and all_line_cents != current["revenueCents"]:
                 raise ValueError("V3 sale lines and parent revenue do not reconcile")
         total_rev = current["revenueCents"]
         registered_rev = 0
@@ -542,7 +551,8 @@ class BusinessIntelligenceV3:
                                 "registeredRevenue": _money(registered_rev), "consumerFinalRevenue": _money(consumer_rev),
                                 "registeredRevenueSharePct": _safe_float(current["customerRevenueSharePct"], 4),
                                 "consumerFinalRevenueSharePct": _safe_float(consumer_rev / total_rev * 100 if total_rev else None, 4)},
-                "filters": {"categoryCode": category_code, "subcategoryCode": subcategory_code},
+                "filters": {"categoryCode": category_code, "subcategoryCode": subcategory_code,
+                            "productSku": product_sku},
                 "rankings": rankings, "categoryIntelligence": category_rows,
                 "marginIntelligence": margin_rows, "ticketIntelligence": basket,
                 "sourceCounts": {"completedTickets": current["ticketCount"], "saleLines": sum(len(v) for v in current["linesBySale"].values())}}
@@ -1121,8 +1131,11 @@ class SupplierIntelligenceV3:
 
 class BusinessHealthSnapshotV3:
     def __init__(self, root: Path, business: BusinessIntelligenceV3, customers: CustomerIntelligenceV3,
-                 suppliers: SupplierIntelligenceV3):
+                 suppliers: SupplierIntelligenceV3, basket_artifact: dict[str, Any] | None = None,
+                 load_basket_artifact: bool = True):
         self.root, self.business, self.customers, self.suppliers = Path(root), business, customers, suppliers
+        self.basket_artifact = basket_artifact
+        self.load_basket_artifact = load_basket_artifact
 
     def snapshot(self, *, as_of_date: str | date = v3_forecast.HISTORY_END,
                  period: str | dict[str, str] = "LAST_30_DAYS",
@@ -1130,7 +1143,8 @@ class BusinessHealthSnapshotV3:
                  customer_summary: dict[str, Any] | None = None,
                  supplier_summary: dict[str, Any] | None = None,
                  inventory: dict[str, Any] | None = None,
-                 inventory_unit_costs: dict[str, int] | None = None) -> dict[str, Any]:
+                 inventory_unit_costs: dict[str, int] | None = None,
+                 dataset: Any | None = None) -> dict[str, Any]:
         cutoff = _as_date(as_of_date)
         sales = business_summary or self.business.summary(period, as_of_date=cutoff)
         customer = customer_summary or self.customers.snapshot(as_of_date=cutoff)
@@ -1138,8 +1152,10 @@ class BusinessHealthSnapshotV3:
         suppliers = supplier_summary or self.suppliers.snapshot(as_of_date=cutoff, period=period, inventory=inventory)
         basket_path = self.root / "ml/data/minimarket-pasco-v3-market-basket-v1.json"
         basket: dict[str, Any]
-        if cutoff == v3_forecast.HISTORY_END and basket_path.is_file():
+        artifact = self.basket_artifact
+        if artifact is None and self.load_basket_artifact and basket_path.is_file():
             artifact = _read_json(basket_path)
+        if cutoff == v3_forecast.HISTORY_END and artifact is not None:
             basket = {"available": True, "analysisVersion": artifact["analysisVersion"],
                       "stableCrossSellRuleCount": sum(r["stability"]["status"] == "STABLE" and r["classification"] == "CROSS_SELL" for r in artifact["rules"]),
                       "usefulRuleCount": artifact["summary"]["rulesAfterRedundancyReduction"],
@@ -1148,6 +1164,10 @@ class BusinessHealthSnapshotV3:
                                        "lift": r["lift"], "stability": r["stability"]["status"]}
                                       for r in artifact["rules"] if r["classification"] == "CROSS_SELL" and r["stability"]["status"] == "STABLE"][:5],
                       "categoryAssociations": artifact["categoryRules"][:10], "sourceArtifactCutoff": artifact["cutoffDate"]}
+        elif artifact is None:
+            basket = {"available": False, "reason": "Approved M6.7 artifact is unavailable"}
+        elif artifact is None:
+            basket = {"available": False, "reason": "Approved M6.7 artifact is unavailable"}
         else:
             basket = {"available": False, "reason": "M6.7 artifact cutoff is later than asOfDate; omitted to prevent future leakage"}
         insights = self._insights(sales, customer, inventory, suppliers, basket)
@@ -1164,7 +1184,7 @@ class BusinessHealthSnapshotV3:
         inventory_domain = {**inventory["summary"], "overstockEstimatedValueCents": overstock_value_cents,
                             "forecastSource": "MOVING_AVERAGE_28", "forecastHorizons": [1, 7, 14]}
         if cutoff <= v3_forecast.HISTORY_END:
-            forecast = self._forecast_totals(cutoff, self.root)
+            forecast = self._forecast_totals(cutoff, self.root, dataset)
             inventory_domain["forecastExpectedUnitsNext1d"] = forecast["expectedUnitsNext1d"]
             inventory_domain["forecastExpectedUnitsNext7d"] = forecast["expectedUnitsNext7d"]
             inventory_domain["forecastExpectedUnitsNext14d"] = forecast["expectedUnitsNext14d"]
@@ -1182,8 +1202,8 @@ class BusinessHealthSnapshotV3:
                 "interpretation": "domain KPIs and documented rule-based insights; no composite score"}
 
     @staticmethod
-    def _forecast_totals(cutoff: date, root: Path = ROOT) -> dict[str, float]:
-        dataset = v3_forecast.load_validated_dataset(root)
+    def _forecast_totals(cutoff: date, root: Path = ROOT, dataset: Any | None = None) -> dict[str, float]:
+        dataset = dataset or v3_forecast.load_validated_dataset(root)
         forecasts = [v3_baseline_bundle.predict(dataset, sku=sku, cutoff=cutoff) for sku in sorted(dataset.product_by_sku)]
         if len(forecasts) != 80 or any(row.get("status") != "READY" or row.get("forecastSource") != "MOVING_AVERAGE_28" for row in forecasts):
             raise ValueError("Approved V3 moving-average forecast is incomplete")

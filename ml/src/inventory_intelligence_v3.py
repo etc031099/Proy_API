@@ -21,6 +21,7 @@ MIN_COVERAGE_RATIO = 0.80
 MIN_LEAD_RECEIPTS = 5
 EPSILON = 1e-9
 RISK_RANK = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+INVENTORY_VERSION = "MINIMARKET-PASCO-V3-INVENTORY-v1"
 
 
 def _read_json(path: Path) -> Any:
@@ -346,10 +347,11 @@ def rank_products(rows: list[dict[str, Any]], ranking: str) -> list[dict[str, An
 
 
 class InventoryIntelligenceV3:
-    def __init__(self, repository_root: Path):
+    def __init__(self, repository_root: Path, dataset: forecast_v3.V3Dataset | None = None):
         self.root = Path(repository_root)
         self.generated = self.root / "data/minimarket-pasco-v3/generated"
         self.definitions = self.root / "data/minimarket-pasco-v3"
+        self.dataset = dataset
 
     def snapshot(self, as_of_date: date = forecast_v3.HISTORY_END,
                  operational_records: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -361,7 +363,7 @@ class InventoryIntelligenceV3:
             raise ValueError("Canonical V3 scenario/dataset contract mismatch")
         if cutoff is None or not first <= cutoff <= forecast_v3.HISTORY_END:
             raise ValueError("asOfDate must be within the canonical V3 history")
-        dataset = forecast_v3.load_validated_dataset(self.root)
+        dataset = self.dataset or forecast_v3.load_validated_dataset(self.root)
         if operational_records is None:
             products = {row["sku"]: row for row in _read_ndjson(self.generated / "products.ndjson")}
             movement_rows = _read_ndjson(self.generated / "inventory-movements.ndjson")
