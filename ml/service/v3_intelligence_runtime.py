@@ -14,6 +14,7 @@ from typing import Any
 import psutil
 
 from ml.service.v3_schemas import BUSINESS_ID, DATASET_SHA256, DATASET_VERSION, REFERENCE_DATE, SCENARIO_ID, TIMEZONE, V3Context
+from ml.service.v3_package import verify_package
 from ml.src import business_customer_supplier_v3 as m68
 from ml.src import v3_baseline_bundle, v3_forecast
 from ml.src.inventory_intelligence_v3 import INVENTORY_VERSION, InventoryIntelligenceV3
@@ -72,6 +73,7 @@ class V3IntelligenceRuntime:
         if self.ready:
             return
         try:
+            verify_package(self.root)
             self.dataset = v3_forecast.load_validated_dataset(self.root)
             bundle_path = self.root / "ml/models/minimarket-pasco-v3/baseline-manifest.json"
             started = time.perf_counter()

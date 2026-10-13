@@ -155,6 +155,16 @@ Comando de build del servicio FastAPI:
 pip install -r ml/requirements.txt
 ```
 
+Para el serving V3, usar desde la raíz `bash ml/scripts/render-build.sh`.
+El build genera el escenario seed 2026 desde definiciones versionadas y verifica
+hashes/conteos, manifiesto forecast y artifact MBA; no entrena ni accede a Mongo.
+El descriptor `runtime-package.json` permanece en el paquete generado ignorado
+y debe verificarse al startup. Node.js también debe estar disponible en runtime
+para el canonicalizador aprobado. Conservar un solo worker; verificar el plan y
+la memoria antes de desplegar. Las siete rutas READ pueden comprobarse con
+`python -m ml.scripts.smoke_v3_cloud`; `--cloud` requiere el secreto interno
+existente en `ML_SERVICE_SECRET`, nunca como argumento ni en logs.
+
 Comando de inicio usado por el servicio Python:
 
 ```sh
