@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Minimarket Pasco V3 dataset manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "manifestSchemaVersion",
+    "scenarioId",
+    "scenarioVersion",
+    "datasetVersion",
+    "seed",
+    "generatorVersion",
+    "generatedAt",
+    "referenceDate",
+    "timezone",
+    "dateRange",
+    "counts",
+    "aggregates",
+    "hashes",
+    "integrity"
+  ],
+  "properties": {
+    "manifestSchemaVersion": {
+      "type": "string",
+      "const": "1.0.0"
+    },
+    "scenarioId": {
+      "type": "string",
+      "const": "minimarket-pasco-v3"
+    },
+    "scenarioVersion": {
+      "type": "string",
+      "const": "3.0.0"
+    },
+    "datasetVersion": {
+      "type": "string",
+      "const": "minimarket-pasco-v3-seed2026-v1"
+    },
+    "seed": {
+      "type": "integer",
+      "const": 2026
+    },
+    "generatorVersion": {
+      "type": "string"
+    },
+    "generatorCommit": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "configSha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "referenceDate": {
+      "type": "string",
+      "format": "date",
+      "const": "2026-10-12"
+    },
+    "timezone": {
+      "type": "string",
+      "const": "America/Lima"
+    },
+    "dateRange": {
+      "type": "object",
+      "required": [
+        "historyStart",
+        "historyEnd",
+        "minUtc",
+        "maxUtc"
+      ],
+      "properties": {
+        "historyStart": {
+          "type": "string",
+          "format": "date",
+          "const": "2025-10-13"
+        },
+        "historyEnd": {
+          "type": "string",
+          "format": "date",
+          "const": "2026-10-12"
+        },
+        "minUtc": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "maxUtc": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "counts": {
+      "type": "object",
+      "description": "Measured counts only; logical and physical counts are separate",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "aggregates": {
+      "type": "object",
+      "description": "Measured monetary/unit aggregates with currency, window, and method",
+      "additionalProperties": true
+    },
+    "hashes": {
+      "type": "object",
+      "required": [
+        "canonicalizationVersion",
+        "logicalDatasetSha256"
+      ],
+      "properties": {
+        "canonicalizationVersion": {
+          "type": "string",
+          "const": "v3-canonical-json-v1"
+        },
+        "logicalDatasetSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "files": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "entities": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "integrity": {
+      "type": "object",
+      "required": [
+        "orphanReferences",
+        "crossTenantReferences",
+        "duplicateStableKeys",
+        "invalidStockBalances"
+      ],
+      "properties": {
+        "orphanReferences": {
+          "type": "integer",
+          "const": 0
+        },
+        "crossTenantReferences": {
+          "type": "integer",
+          "const": 0
+        },
+        "duplicateStableKeys": {
+          "type": "integer",
+          "const": 0
+        },
+        "invalidStockBalances": {
+          "type": "integer",
+          "const": 0
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

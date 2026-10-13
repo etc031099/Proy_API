@@ -1,0 +1,45 @@
+{
+  "schemaVersion": "1.0.0",
+  "scenarioId": "minimarket-pasco-v3",
+  "simulationAssumption": true,
+  "instancesGenerated": false,
+  "currency": "PEN",
+  "templates": [
+    {
+      "promotionCodeTemplate": "V3-PROMO-{YYYYMM}-{NNNN}",
+      "key": "WEEKEND_BEVERAGES",
+      "displayName": "Promoción demo de bebidas de fin de semana",
+      "categoryCodes": ["BEB"],
+      "weekdayIso": [6, 7],
+      "discountPctRange": [5, 10],
+      "durationDaysRange": [2, 3],
+      "minimumEffectivePriceAboveCost": true,
+      "selection": "seeded_product_day",
+      "announcementLeadDaysRange": [3, 7]
+    },
+    {
+      "promotionCodeTemplate": "V3-PROMO-{YYYYMM}-{NNNN}",
+      "key": "SNACK_COMBO",
+      "displayName": "Combo demo de bebida y snack",
+      "categoryCodes": ["BEB", "SNA", "GAL"],
+      "associationProfileKey": "SNACK_PAIRINGS",
+      "discountPctRange": [5, 12],
+      "durationDaysRange": [2, 5],
+      "minimumEffectivePriceAboveCost": true,
+      "selection": "seeded_pair_without_guaranteed_purchase",
+      "announcementLeadDaysRange": [3, 7]
+    },
+    {
+      "promotionCodeTemplate": "V3-PROMO-{YYYYMM}-{NNNN}",
+      "key": "MONTHLY_SELECTED_PRODUCTS",
+      "displayName": "Productos seleccionados del mes (demo)",
+      "categoryCodes": ["ABA", "DES"],
+      "frequency": "occasional_monthly",
+      "discountPctRange": [5, 8],
+      "durationDaysRange": [3, 5],
+      "minimumEffectivePriceAboveCost": true,
+      "selection": "seeded_products_not_all_catalog",
+      "announcementLeadDaysRange": [3, 7]
+    }
+  ]
+}

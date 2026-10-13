@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "1.0.0",
+  "scenarioId": "minimarket-pasco-v3",
+  "scenarioVersion": "3.0.0",
+  "datasetVersion": "minimarket-pasco-v3-seed2026-v1",
+  "seed": 2026,
+  "name": "Minimarket Pasco · Demo V3",
+  "businessIdLogicalReserved": "MINIMARKET-PASCO-V3",
+  "referenceDate": "2026-10-12",
+  "historyStart": "2025-10-13",
+  "historyEnd": "2026-10-12",
+  "snapshotAtLocal": "2026-10-12T23:59:59",
+  "snapshotAtUtc": "2026-10-13T04:59:59.000Z",
+  "timezone": "America/Lima",
+  "currency": "PEN",
+  "country": "PE",
+  "region": "Pasco",
+  "city": "Cerro de Pasco",
+  "counts": {
+    "products": 80,
+    "categories": 10,
+    "subcategories": 42,
+    "suppliers": 10,
+    "registeredCustomers": 40
+  },
+  "consumerFinal": {
+    "kind": "anonymous_group",
+    "displayName": "Consumidor final",
+    "customerCode": null,
+    "customerKey": null,
+    "materializeContact": false,
+    "transactionProjection": {
+      "customerId": null,
+      "customerName": "Consumidor final"
+    },
+    "targetCompletedTicketShareRangePct": [
+      75,
+      85
+    ],
+    "targetCompletedTicketSharePct": 80
+  },
+  "definitionsOnly": true,
+  "transactionsGenerated": false,
+  "mongoLoaded": false,
+  "modelTrained": false,
+  "sourceSpecification": "docs/M6.1-MINIMARKET-PASCO-V3-SPEC.md"
+}

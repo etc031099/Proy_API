@@ -1,0 +1,56 @@
+{
+  "schemaVersion": "1.0.0",
+  "scenarioId": "minimarket-pasco-v3",
+  "namespace": "minimarket-pasco-v3-seed2026-v1:",
+  "templates": {
+    "productKey": "v3.{sku}",
+    "sku": "{CATEGORY}-{SUBCATEGORY}-{NNN}",
+    "supplierCode": "SUP-{NN}",
+    "customerCode": "CLI-{NNN}",
+    "promotionCode": "V3-PROMO-{NNNN}",
+    "saleCode": "V3-SALE-{YYYYMMDD}-{NNNN}",
+    "purchaseCode": "V3-PO-{YYYYMMDD}-{NNNN}",
+    "receiptCode": "{purchaseCode}-REC-01",
+    "saleLineKey": "{saleCode}|{productKey}",
+    "offerKey": "{scenarioId}|{productKey}|{supplierCode}|{effectiveFrom}",
+    "eventSourceId": "{datasetVersion}|{entityType}|{stableParentKey}|{ordinal}",
+    "dailyRowKey": "{productKey}|{localDate}"
+  },
+  "rules": {
+    "skuUniqueWithinTenant": true,
+    "keysIndependentOfMongoObjectId": true,
+    "normalization": "uppercase ASCII SKU; stable business keys are immutable",
+    "sequenceWidth": "minimum width only; never silently cap/overflow",
+    "eventOrdinalStartsAt": 1,
+    "oneActiveDatasetVersionPerScenario": true
+  },
+  "formats": {
+    "sku": {
+      "pattern": "^[A-Z]{3}-[A-Z]{3}-[0-9]{3}$"
+    },
+    "productKey": {
+      "pattern": "^v3\\.[A-Z]{3}-[A-Z]{3}-[0-9]{3}$"
+    },
+    "supplierCode": {
+      "pattern": "^SUP-[0-9]{2}$"
+    },
+    "customerCode": {
+      "pattern": "^CLI-[0-9]{3}$"
+    },
+    "promotionCode": {
+      "pattern": "^V3-PROMO-[0-9]{4,}$"
+    },
+    "saleCode": {
+      "pattern": "^V3-SALE-[0-9]{8}-[0-9]{4,}$"
+    },
+    "purchaseCode": {
+      "pattern": "^V3-PO-[0-9]{8}-[0-9]{4,}$"
+    }
+  },
+  "consumerFinal": {
+    "stableCustomerCode": null,
+    "customerId": null,
+    "customerName": "Consumidor final",
+    "mode": "anonymous_group_not_a_contact"
+  }
+}

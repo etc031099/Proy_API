@@ -7,6 +7,7 @@
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
     "test": "node test/run.js",
+    "validate:v3-definitions": "node ../scripts/validate-minimarket-v3-definitions.js",
     "test:integration": "node test/integration/run.js",
     "test:integration:actions": "node test/integration/actionWrites.run.js",
     "test:integration:alert-channels": "node test/integration/inventoryAlertChannels.run.js",

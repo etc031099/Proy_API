@@ -1,0 +1,158 @@
+{
+  "schemaVersion": "1.0.0",
+  "scenarioId": "minimarket-pasco-v3",
+  "currency": "PEN",
+  "effectiveFrom": "2025-10-13",
+  "announcedAt": "2025-10-01",
+  "primaryOffer": {
+    "source": "products.purchaseCostDemo + products.preferredSupplierCode",
+    "priceFactor": 1
+  },
+  "secondaryPriceRule": {
+    "source": "purchaseCostDemo",
+    "factorSequence": [
+      0.96,
+      0.98,
+      1,
+      1.02,
+      1.04,
+      1.06,
+      1.08
+    ],
+    "rounding": "nearest cent, half up",
+    "demoOnly": true
+  },
+  "packMultipleBySupplier": {
+    "SUP-01": 6,
+    "SUP-02": 6,
+    "SUP-03": 1,
+    "SUP-04": 3,
+    "SUP-05": 6,
+    "SUP-06": 12,
+    "SUP-07": 3,
+    "SUP-08": 3,
+    "SUP-09": 2,
+    "SUP-10": 3,
+    "SUP-05:ABA-ARR-002": 1,
+    "SUP-09:PAN-FRE-001": 4
+  },
+  "secondaryAssignments": [
+    {
+      "sku": "BEB-GAS-001",
+      "supplierCode": "SUP-02",
+      "priceFactor": 0.96
+    },
+    {
+      "sku": "BEB-GAS-003",
+      "supplierCode": "SUP-02",
+      "priceFactor": 0.98
+    },
+    {
+      "sku": "BEB-GAS-005",
+      "supplierCode": "SUP-01",
+      "priceFactor": 1
+    },
+    {
+      "sku": "BEB-GAS-006",
+      "supplierCode": "SUP-02",
+      "priceFactor": 1.02
+    },
+    {
+      "sku": "BEB-AGU-001",
+      "supplierCode": "SUP-01",
+      "priceFactor": 1.04
+    },
+    {
+      "sku": "BEB-AGU-002",
+      "supplierCode": "SUP-01",
+      "priceFactor": 1.06
+    },
+    {
+      "sku": "BEB-AGU-003",
+      "supplierCode": "SUP-02",
+      "priceFactor": 1.08
+    },
+    {
+      "sku": "BEB-AGU-004",
+      "supplierCode": "SUP-01",
+      "priceFactor": 0.96
+    },
+    {
+      "sku": "BEB-ISO-001",
+      "supplierCode": "SUP-01",
+      "priceFactor": 0.98
+    },
+    {
+      "sku": "BEB-ISO-002",
+      "supplierCode": "SUP-01",
+      "priceFactor": 1
+    },
+    {
+      "sku": "GAL-REL-001",
+      "supplierCode": "SUP-04",
+      "priceFactor": 1.02
+    },
+    {
+      "sku": "GAL-REL-002",
+      "supplierCode": "SUP-04",
+      "priceFactor": 1.04
+    },
+    {
+      "sku": "GAL-REL-003",
+      "supplierCode": "SUP-04",
+      "priceFactor": 1.06
+    },
+    {
+      "sku": "GAL-SOD-001",
+      "supplierCode": "SUP-04",
+      "priceFactor": 1.08
+    },
+    {
+      "sku": "GAL-WAF-001",
+      "supplierCode": "SUP-04",
+      "priceFactor": 0.96
+    },
+    {
+      "sku": "GAL-ANI-001",
+      "supplierCode": "SUP-04",
+      "priceFactor": 0.98
+    },
+    {
+      "sku": "DES-AVE-001",
+      "supplierCode": "SUP-05",
+      "priceFactor": 1
+    },
+    {
+      "sku": "DES-AVE-002",
+      "supplierCode": "SUP-05",
+      "priceFactor": 1.02
+    },
+    {
+      "sku": "DES-INF-001",
+      "supplierCode": "SUP-05",
+      "priceFactor": 1.04
+    },
+    {
+      "sku": "DES-UNT-001",
+      "supplierCode": "SUP-05",
+      "priceFactor": 1.06
+    },
+    {
+      "sku": "DES-CAF-002",
+      "supplierCode": "SUP-05",
+      "priceFactor": 1.08
+    },
+    {
+      "sku": "ABA-ARR-001",
+      "supplierCode": "SUP-10",
+      "priceFactor": 0.96
+    },
+    {
+      "sku": "ABA-ARR-002",
+      "supplierCode": "SUP-10",
+      "priceFactor": 0.98
+    }
+  ],
+  "offerKeyTemplate": "scenarioId|productKey|supplierCode|effectiveFrom",
+  "endOfCurrentOffer": null
+}

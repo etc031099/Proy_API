@@ -1,0 +1,497 @@
+{
+  "schemaVersion": "1.0.0",
+  "scenarioId": "minimarket-pasco-v3",
+  "simulationAssumption": true,
+  "demandProfiles": [
+    {
+      "key": "HIGH_STABLE",
+      "baseDemandMultiplier": 1.15,
+      "dispersionK": 15,
+      "weekdayMultipliers": {
+        "1": 0.95,
+        "2": 0.95,
+        "3": 0.95,
+        "4": 0.95,
+        "5": 1.05,
+        "6": 1.15,
+        "7": 1.05
+      },
+      "weekendMultiplier": 1.08,
+      "paydayMultiplier": 1.12,
+      "monthEndMultiplier": 1.1,
+      "seasonality": {
+        "default": 1,
+        "summerWaterMultiplier": 1.08,
+        "decemberBeverageSnackMultiplier": 1.1,
+        "coldBreakfastMayAugMultiplier": 1.1
+      },
+      "priceElasticityRange": [
+        -1.2,
+        -0.3
+      ],
+      "promotionUpliftRange": [
+        1.1,
+        1.35
+      ],
+      "hourWeights": {
+        "morning": 0.25,
+        "midday": 0.25,
+        "afternoon": 0.2,
+        "evening": 0.3
+      }
+    },
+    {
+      "key": "HIGH_WEEKEND",
+      "baseDemandMultiplier": 1.1,
+      "dispersionK": 15,
+      "weekdayMultipliers": {
+        "1": 0.95,
+        "2": 0.95,
+        "3": 0.95,
+        "4": 0.95,
+        "5": 1.05,
+        "6": 1.15,
+        "7": 1.05
+      },
+      "weekendMultiplier": 1.15,
+      "paydayMultiplier": 1.12,
+      "monthEndMultiplier": 1.1,
+      "seasonality": {
+        "default": 1,
+        "summerWaterMultiplier": 1.08,
+        "decemberBeverageSnackMultiplier": 1.1
+      },
+      "priceElasticityRange": [
+        -1.2,
+        -0.3
+      ],
+      "promotionUpliftRange": [
+        1.1,
+        1.35
+      ],
+      "hourWeights": {
+        "morning": 0.2,
+        "midday": 0.22,
+        "afternoon": 0.23,
+        "evening": 0.35
+      }
+    },
+    {
+      "key": "MEDIUM_STABLE",
+      "baseDemandMultiplier": 1,
+      "dispersionK": 15,
+      "weekdayMultipliers": {
+        "1": 0.95,
+        "2": 0.95,
+        "3": 0.95,
+        "4": 0.95,
+        "5": 1.05,
+        "6": 1.15,
+        "7": 1.05
+      },
+      "weekendMultiplier": 1.05,
+      "paydayMultiplier": 1.12,
+      "monthEndMultiplier": 1.1,
+      "seasonality": {
+        "default": 1
+      },
+      "priceElasticityRange": [
+        -1.2,
+        -0.3
+      ],
+      "promotionUpliftRange": [
+        1.1,
+        1.35
+      ],
+      "hourWeights": {
+        "morning": 0.25,
+        "midday": 0.25,
+        "afternoon": 0.2,
+        "evening": 0.3
+      }
+    },
+    {
+      "key": "LOW_VOLATILE",
+      "baseDemandMultiplier": 0.72,
+      "dispersionK": 15,
+      "weekdayMultipliers": {
+        "1": 0.95,
+        "2": 0.95,
+        "3": 0.95,
+        "4": 0.95,
+        "5": 1.05,
+        "6": 1.15,
+        "7": 1.05
+      },
+      "weekendMultiplier": 1.05,
+      "paydayMultiplier": 1.12,
+      "monthEndMultiplier": 1.1,
+      "seasonality": {
+        "default": 1
+      },
+      "priceElasticityRange": [
+        -1.2,
+        -0.3
+      ],
+      "promotionUpliftRange": [
+        1.1,
+        1.35
+      ],
+      "hourWeights": {
+        "morning": 0.25,
+        "midday": 0.25,
+        "afternoon": 0.2,
+        "evening": 0.3
+      }
+    },
+    {
+      "key": "BREAKFAST_COLD",
+      "baseDemandMultiplier": 1,
+      "dispersionK": 15,
+      "weekdayMultipliers": {
+        "1": 0.95,
+        "2": 0.95,
+        "3": 0.95,
+        "4": 0.95,
+        "5": 1.05,
+        "6": 1.15,
+        "7": 1.05
+      },
+      "weekendMultiplier": 1.05,
+      "paydayMultiplier": 1.12,
+      "monthEndMultiplier": 1.1,
+      "seasonality": {
+        "coldBreakfastMayAugMultiplier": 1.1,
+        "default": 1
+      },
+      "priceElasticityRange": [
+        -1.2,
+        -0.3
+      ],
+      "promotionUpliftRange": [
+        1.1,
+        1.35
+      ],
+      "hourWeights": {
+        "morning": 0.4,
+        "midday": 0.2,
+        "afternoon": 0.15,
+        "evening": 0.25
+      }
+    },
+    {
+      "key": "SNACK_WEEKEND",
+      "baseDemandMultiplier": 1.05,
+      "dispersionK": 15,
+      "weekdayMultipliers": {
+        "1": 0.95,
+        "2": 0.95,
+        "3": 0.95,
+        "4": 0.95,
+        "5": 1.05,
+        "6": 1.15,
+        "7": 1.05
+      },
+      "weekendMultiplier": 1.15,
+      "paydayMultiplier": 1.12,
+      "monthEndMultiplier": 1.1,
+      "seasonality": {
+        "decemberBeverageSnackMultiplier": 1.1,
+        "default": 1
+      },
+      "priceElasticityRange": [
+        -1.2,
+        -0.3
+      ],
+      "promotionUpliftRange": [
+        1.1,
+        1.35
+      ],
+      "hourWeights": {
+        "morning": 0.15,
+        "midday": 0.2,
+        "afternoon": 0.3,
+        "evening": 0.35
+      }
+    },
+    {
+      "key": "HOUSEHOLD_PERIODIC",
+      "baseDemandMultiplier": 0.85,
+      "dispersionK": 15,
+      "weekdayMultipliers": {
+        "1": 0.95,
+        "2": 0.95,
+        "3": 0.95,
+        "4": 0.95,
+        "5": 1.05,
+        "6": 1.15,
+        "7": 1.05
+      },
+      "weekendMultiplier": 1.1,
+      "paydayMultiplier": 1.12,
+      "monthEndMultiplier": 1.08,
+      "seasonality": {
+        "default": 1
+      },
+      "priceElasticityRange": [
+        -1.2,
+        -0.3
+      ],
+      "promotionUpliftRange": [
+        1.1,
+        1.35
+      ],
+      "hourWeights": {
+        "morning": 0.2,
+        "midday": 0.25,
+        "afternoon": 0.25,
+        "evening": 0.3
+      }
+    },
+    {
+      "key": "REGIONAL_LOW",
+      "baseDemandMultiplier": 0.6,
+      "dispersionK": 15,
+      "weekdayMultipliers": {
+        "1": 0.95,
+        "2": 0.95,
+        "3": 0.95,
+        "4": 0.95,
+        "5": 1.05,
+        "6": 1.15,
+        "7": 1.05
+      },
+      "weekendMultiplier": 1.05,
+      "paydayMultiplier": 1.12,
+      "monthEndMultiplier": 1.1,
+      "seasonality": {
+        "default": 1
+      },
+      "priceElasticityRange": [
+        -1.2,
+        -0.3
+      ],
+      "promotionUpliftRange": [
+        1.1,
+        1.35
+      ],
+      "hourWeights": {
+        "morning": 0.25,
+        "midday": 0.25,
+        "afternoon": 0.2,
+        "evening": 0.3
+      }
+    }
+  ],
+  "customerProfiles": [
+    {
+      "key": "FREQUENT_SMALL_TICKET",
+      "count": 8,
+      "shoppingFrequencyDays": [
+        1,
+        3
+      ],
+      "shoppingFrequency": "probabilistic_mean_interval",
+      "ticketLines": [
+        1,
+        3
+      ],
+      "categoryPreferences": {
+        "BEB": 1.1,
+        "DES": 1.2,
+        "SNA": 1.1
+      },
+      "registeredPurchaseSelectionWeight": 1.2
+    },
+    {
+      "key": "FREQUENT_HIGH_TICKET",
+      "count": 6,
+      "shoppingFrequencyDays": [
+        3,
+        6
+      ],
+      "shoppingFrequency": "probabilistic_mean_interval",
+      "ticketLines": [
+        4,
+        7
+      ],
+      "quantityBias": 1.25,
+      "categoryPreferences": {
+        "ABA": 1.25,
+        "LIM": 1.15,
+        "CUI": 1.1
+      },
+      "registeredPurchaseSelectionWeight": 1.1
+    },
+    {
+      "key": "OCCASIONAL",
+      "count": 12,
+      "shoppingFrequencyDays": [
+        12,
+        30
+      ],
+      "shoppingFrequency": "probabilistic_mean_interval",
+      "ticketLines": [
+        2,
+        5
+      ],
+      "categoryPreferences": {
+        "BEB": 1,
+        "DES": 1,
+        "ABA": 1,
+        "SNA": 1
+      },
+      "registeredPurchaseSelectionWeight": 0.8
+    },
+    {
+      "key": "RECENT",
+      "count": 6,
+      "registrationWithinDays": [
+        1,
+        30
+      ],
+      "firstTicketAfterRegistration": true,
+      "shoppingFrequencyDays": [
+        3,
+        7
+      ],
+      "shoppingFrequency": "probabilistic_mean_interval",
+      "ticketLines": [
+        1,
+        4
+      ],
+      "categoryPreferences": {
+        "BEB": 1.1,
+        "DES": 1.1
+      },
+      "registeredPurchaseSelectionWeight": 1
+    },
+    {
+      "key": "AT_RISK",
+      "count": 4,
+      "shoppingFrequencyDays": [
+        4,
+        10
+      ],
+      "shoppingFrequency": "probabilistic_mean_interval",
+      "noTicketRecencyDays": [
+        31,
+        60
+      ],
+      "ticketLines": [
+        2,
+        5
+      ],
+      "registeredPurchaseSelectionWeight": 0.55
+    },
+    {
+      "key": "INACTIVE",
+      "count": 4,
+      "noTicketInLastDays": 90,
+      "lastTicketBefore": "2026-07-15",
+      "ticketLines": [
+        2,
+        5
+      ],
+      "registeredPurchaseSelectionWeight": 0
+    }
+  ],
+  "associationProfiles": [
+    {
+      "key": "BEVERAGE_SNACK",
+      "rules": [
+        {
+          "sourceCategoryCode": "BEB",
+          "sourceSubcategoryCodes": [
+            "BEB-GASEOSAS"
+          ],
+          "targetCategoryCodes": [
+            "SNA"
+          ],
+          "probabilityUplift": 0.15
+        }
+      ]
+    },
+    {
+      "key": "BREAKFAST_PAIRINGS",
+      "rules": [
+        {
+          "sourceCategoryCode": "DES",
+          "sourceSubcategoryCodes": [
+            "DES-LECHES"
+          ],
+          "targetCategoryCodes": [
+            "DES"
+          ],
+          "targetSubcategoryCodes": [
+            "DES-AVENAS"
+          ],
+          "probabilityUplift": 0.12
+        },
+        {
+          "sourceCategoryCode": "DES",
+          "sourceSubcategoryCodes": [
+            "DES-CAFE"
+          ],
+          "targetCategoryCodes": [
+            "GAL"
+          ],
+          "probabilityUplift": 0.12
+        }
+      ]
+    },
+    {
+      "key": "PANTRY_PAIRINGS",
+      "rules": [
+        {
+          "sourceCategoryCode": "ABA",
+          "sourceSubcategoryCodes": [
+            "ABA-PASTAS"
+          ],
+          "targetCategoryCodes": [
+            "ABA"
+          ],
+          "targetSubcategoryCodes": [
+            "ABA-SAZONADORES-Y-SALSAS"
+          ],
+          "probabilityUplift": 0.2
+        }
+      ]
+    },
+    {
+      "key": "PERSONAL_CARE_PAIRINGS",
+      "rules": [
+        {
+          "sourceCategoryCode": "CUI",
+          "sourceSubcategoryCodes": [
+            "CUI-CUIDADO-CAPILAR"
+          ],
+          "targetCategoryCodes": [
+            "CUI"
+          ],
+          "targetSubcategoryCodes": [
+            "CUI-CUIDADO-CAPILAR"
+          ],
+          "probabilityUplift": 0.1,
+          "semanticPair": "shampoo→acondicionador"
+        }
+      ]
+    },
+    {
+      "key": "SNACK_PAIRINGS",
+      "rules": [
+        {
+          "sourceCategoryCode": "BEB",
+          "sourceSubcategoryCodes": [
+            "BEB-GASEOSAS"
+          ],
+          "targetCategoryCodes": [
+            "SNA",
+            "GAL"
+          ],
+          "probabilityUplift": 0.15
+        }
+      ]
+    }
+  ]
+}

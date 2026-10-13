@@ -1,0 +1,275 @@
+{
+  "schemaVersion": "1.0.0",
+  "scenarioId": "minimarket-pasco-v3",
+  "sourceSpecification": "M6.1 §4",
+  "suppliers": [
+    {
+      "supplierCode": "SUP-01",
+      "supplierKey": "v3.SUP-01",
+      "legalNameDemo": "Distribuciones Nevado del Centro Demo S.A.C.",
+      "displayName": "Nevado Bebidas",
+      "categories": [
+        "Bebidas",
+        "Gaseosas",
+        "Aguas",
+        "Isotónicas",
+        "Jugos y néctares"
+      ],
+      "addressDemo": {
+        "label": "Zona comercial simulada 01, Cerro de Pasco, Pasco, Perú",
+        "fictional": true,
+        "noRealStreetAddress": true
+      },
+      "emailDemo": "sup01@pasco-demo.example.com",
+      "phoneDemo": "DEMO-SUP-01",
+      "document": null,
+      "active": true,
+      "leadTimeMeanDays": 4,
+      "leadTimeStdDays": 1,
+      "leadTimeMaxDays": 7,
+      "onTimeProbabilityDemo": 0.86,
+      "purchaseTermsDemo": "Contado; bultos de 6/12 envases; transporte incluido",
+      "simulationAssumption": true
+    },
+    {
+      "supplierCode": "SUP-02",
+      "supplierKey": "v3.SUP-02",
+      "legalNameDemo": "Comercial Meseta Clara Demo E.I.R.L.",
+      "displayName": "Meseta Bebidas",
+      "categories": [
+        "Bebidas",
+        "Gaseosas",
+        "Aguas",
+        "Isotónicas",
+        "Jugos y néctares"
+      ],
+      "addressDemo": {
+        "label": "Zona comercial simulada 02, Cerro de Pasco, Pasco, Perú",
+        "fictional": true,
+        "noRealStreetAddress": true
+      },
+      "emailDemo": "sup02@pasco-demo.example.com",
+      "phoneDemo": "DEMO-SUP-02",
+      "document": null,
+      "active": true,
+      "leadTimeMeanDays": 3,
+      "leadTimeStdDays": 1,
+      "leadTimeMaxDays": 6,
+      "onTimeProbabilityDemo": 0.88,
+      "purchaseTermsDemo": "Contado; bultos de 6/12 envases; transporte incluido",
+      "simulationAssumption": true
+    },
+    {
+      "supplierCode": "SUP-03",
+      "supplierKey": "v3.SUP-03",
+      "legalNameDemo": "Lácteos Amanecer Alto Demo S.A.C.",
+      "displayName": "Amanecer Lácteos",
+      "categories": [
+        "Lácteos",
+        "Leches",
+        "Yogures",
+        "Untables",
+        "Bebidas"
+      ],
+      "addressDemo": {
+        "label": "Zona comercial simulada 03, Cerro de Pasco, Pasco, Perú",
+        "fictional": true,
+        "noRealStreetAddress": true
+      },
+      "emailDemo": "sup03@pasco-demo.example.com",
+      "phoneDemo": "DEMO-SUP-03",
+      "document": null,
+      "active": true,
+      "leadTimeMeanDays": 2,
+      "leadTimeStdDays": 0.5,
+      "leadTimeMaxDays": 3,
+      "onTimeProbabilityDemo": 0.92,
+      "purchaseTermsDemo": "Contado; yogurt en lotes de 6; frío supuesto",
+      "simulationAssumption": true
+    },
+    {
+      "supplierCode": "SUP-04",
+      "supplierKey": "v3.SUP-04",
+      "legalNameDemo": "Comercial Desayuno Andino Demo E.I.R.L.",
+      "displayName": "Desayuno Andino",
+      "categories": [
+        "Desayunos",
+        "Café",
+        "Avenas",
+        "Infusiones",
+        "Untables",
+        "Galletas"
+      ],
+      "addressDemo": {
+        "label": "Zona comercial simulada 04, Cerro de Pasco, Pasco, Perú",
+        "fictional": true,
+        "noRealStreetAddress": true
+      },
+      "emailDemo": "sup04@pasco-demo.example.com",
+      "phoneDemo": "DEMO-SUP-04",
+      "document": null,
+      "active": true,
+      "leadTimeMeanDays": 4,
+      "leadTimeStdDays": 1,
+      "leadTimeMaxDays": 7,
+      "onTimeProbabilityDemo": 0.84,
+      "purchaseTermsDemo": "Contado; múltiplos de 3; sin crédito inicial",
+      "simulationAssumption": true
+    },
+    {
+      "supplierCode": "SUP-05",
+      "supplierKey": "v3.SUP-05",
+      "legalNameDemo": "Abastos Horizonte Central Demo S.A.C.",
+      "displayName": "Horizonte Abastos",
+      "categories": [
+        "Abarrotes",
+        "Conservas",
+        "Sopas",
+        "Desayunos",
+        "Avenas",
+        "Café",
+        "Infusiones",
+        "Untables"
+      ],
+      "addressDemo": {
+        "label": "Zona comercial simulada 05, Cerro de Pasco, Pasco, Perú",
+        "fictional": true,
+        "noRealStreetAddress": true
+      },
+      "emailDemo": "sup05@pasco-demo.example.com",
+      "phoneDemo": "DEMO-SUP-05",
+      "document": null,
+      "active": true,
+      "leadTimeMeanDays": 5,
+      "leadTimeStdDays": 1.5,
+      "leadTimeMaxDays": 9,
+      "onTimeProbabilityDemo": 0.8,
+      "purchaseTermsDemo": "Contado; arroz 5 kg por unidad, otros bultos de 6",
+      "simulationAssumption": true
+    },
+    {
+      "supplierCode": "SUP-06",
+      "supplierKey": "v3.SUP-06",
+      "legalNameDemo": "Distribuidora Merienda del Valle Demo S.A.C.",
+      "displayName": "Merienda del Valle",
+      "categories": [
+        "Snacks",
+        "Chocolates",
+        "Galletas"
+      ],
+      "addressDemo": {
+        "label": "Zona comercial simulada 06, Cerro de Pasco, Pasco, Perú",
+        "fictional": true,
+        "noRealStreetAddress": true
+      },
+      "emailDemo": "sup06@pasco-demo.example.com",
+      "phoneDemo": "DEMO-SUP-06",
+      "document": null,
+      "active": true,
+      "leadTimeMeanDays": 3,
+      "leadTimeStdDays": 1,
+      "leadTimeMaxDays": 6,
+      "onTimeProbabilityDemo": 0.87,
+      "purchaseTermsDemo": "Contado; múltiplos de 12 para envases pequeños",
+      "simulationAssumption": true
+    },
+    {
+      "supplierCode": "SUP-07",
+      "supplierKey": "v3.SUP-07",
+      "legalNameDemo": "Comercial Hogar de Altura Demo E.I.R.L.",
+      "displayName": "Hogar de Altura",
+      "categories": [
+        "Limpieza"
+      ],
+      "addressDemo": {
+        "label": "Zona comercial simulada 07, Cerro de Pasco, Pasco, Perú",
+        "fictional": true,
+        "noRealStreetAddress": true
+      },
+      "emailDemo": "sup07@pasco-demo.example.com",
+      "phoneDemo": "DEMO-SUP-07",
+      "document": null,
+      "active": true,
+      "leadTimeMeanDays": 5,
+      "leadTimeStdDays": 1,
+      "leadTimeMaxDays": 8,
+      "onTimeProbabilityDemo": 0.81,
+      "purchaseTermsDemo": "Contado; múltiplos de 3; costo por paquete vendible",
+      "simulationAssumption": true
+    },
+    {
+      "supplierCode": "SUP-08",
+      "supplierKey": "v3.SUP-08",
+      "legalNameDemo": "Distribuciones Cuidado Serrano Demo S.A.C.",
+      "displayName": "Cuidado Serrano",
+      "categories": [
+        "Cuidado personal"
+      ],
+      "addressDemo": {
+        "label": "Zona comercial simulada 08, Cerro de Pasco, Pasco, Perú",
+        "fictional": true,
+        "noRealStreetAddress": true
+      },
+      "emailDemo": "sup08@pasco-demo.example.com",
+      "phoneDemo": "DEMO-SUP-08",
+      "document": null,
+      "active": true,
+      "leadTimeMeanDays": 5,
+      "leadTimeStdDays": 1.5,
+      "leadTimeMaxDays": 9,
+      "onTimeProbabilityDemo": 0.82,
+      "purchaseTermsDemo": "Contado; múltiplos de 3; costo por paquete vendible",
+      "simulationAssumption": true
+    },
+    {
+      "supplierCode": "SUP-09",
+      "supplierKey": "v3.SUP-09",
+      "legalNameDemo": "Panadería Horizonte Diario Demo E.I.R.L.",
+      "displayName": "Horizonte Diario",
+      "categories": [
+        "Panadería"
+      ],
+      "addressDemo": {
+        "label": "Zona comercial simulada 09, Cerro de Pasco, Pasco, Perú",
+        "fictional": true,
+        "noRealStreetAddress": true
+      },
+      "emailDemo": "sup09@pasco-demo.example.com",
+      "phoneDemo": "DEMO-SUP-09",
+      "document": null,
+      "active": true,
+      "leadTimeMeanDays": 1,
+      "leadTimeStdDays": 0,
+      "leadTimeMaxDays": 1,
+      "onTimeProbabilityDemo": 0.93,
+      "purchaseTermsDemo": "Entrega diaria; pan fresco múltiplos de 4 paquetes, envasado de 2",
+      "simulationAssumption": true
+    },
+    {
+      "supplierCode": "SUP-10",
+      "supplierKey": "v3.SUP-10",
+      "legalNameDemo": "Comercial Raíces de la Meseta Demo E.I.R.L.",
+      "displayName": "Raíces de la Meseta",
+      "categories": [
+        "Regionales",
+        "Abarrotes",
+        "Menestras"
+      ],
+      "addressDemo": {
+        "label": "Zona comercial simulada 10, Cerro de Pasco, Pasco, Perú",
+        "fictional": true,
+        "noRealStreetAddress": true
+      },
+      "emailDemo": "sup10@pasco-demo.example.com",
+      "phoneDemo": "DEMO-SUP-10",
+      "document": null,
+      "active": true,
+      "leadTimeMeanDays": 4,
+      "leadTimeStdDays": 1,
+      "leadTimeMaxDays": 7,
+      "onTimeProbabilityDemo": 0.83,
+      "purchaseTermsDemo": "Contado; múltiplos de 3; origen no atribuido a productor real",
+      "simulationAssumption": true
+    }
+  ]
+}

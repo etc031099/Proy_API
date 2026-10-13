@@ -40,3 +40,4 @@ require('./inventoryAlertOutboxQueries.test');
 require('./inventoryAlertChannels.test');
 require('./telegramPreferences.test');
 require('./telegramRecovery.test');
+require('./minimarketV3Definitions.test');

@@ -1,0 +1,40 @@
+{
+  "contractVersion": "v3-canonical-json-v1",
+  "encoding": "UTF-8",
+  "unicodeNormalization": "NFC",
+  "hashAlgorithm": "SHA-256",
+  "objectKeys": "lexicographically sorted recursively",
+  "dates": "business timestamps UTC ISO-8601 milliseconds; localDate kept as separate business field",
+  "money": "integer minor units (cents) plus explicit currency",
+  "quantity": "integer vendable packages",
+  "nullVsAbsent": "preserved distinctly; no implicit zero defaults",
+  "arrays": {
+    "sets": "sort by stable entity key",
+    "causalEvents": "preserve event sequence and tie-break by eventPriority then sourceEventId"
+  },
+  "references": "validate tenant/scenario/type and resolve canonical stable keys before hashing; strip environment-specific ObjectIds only after successful reference validation",
+  "hashStreaming": "sort logical records by stable key and stream canonical bytes into SHA-256; do not load all tickets in memory",
+  "excludedAfterValidation": [
+    "Mongo _id",
+    "__v",
+    "identified import-createdAt/updatedAt fields only",
+    "environment/job metadata",
+    "secrets and connection strings"
+  ],
+  "forbiddenExclusions": [
+    "business dates",
+    "registeredAt",
+    "orderedAt",
+    "promisedAt",
+    "receivedAt",
+    "sale date",
+    "promotion dates",
+    "snapshot time",
+    "price/cost/stock/quantity/identity references"
+  ],
+  "parityStates": {
+    "PASS": "all required checks executed with zero business differences, no orphan/cross-tenant refs",
+    "FAIL": "one or more business differences or integrity violations",
+    "BLOCKED": "required access/evidence/check unavailable; never report partial PASS"
+  }
+}

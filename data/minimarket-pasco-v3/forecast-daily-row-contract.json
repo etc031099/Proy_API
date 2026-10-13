@@ -1,0 +1,148 @@
+{
+  "contractVersion": "pasco-demand-v1",
+  "scenarioId": "minimarket-pasco-v3",
+  "datasetVersion": "minimarket-pasco-v3-seed2026-v1",
+  "timeZone": "America/Lima",
+  "originConvention": "close_of_local_day_t",
+  "firstTargetDay": "t+1",
+  "primaryTarget": "unitsSold",
+  "targetDefinition": "sum of effective units sold for t+1..t+h; net cancellations under the frozen same-day cancellation convention",
+  "horizonsDays": [
+    1,
+    7,
+    14
+  ],
+  "experimentalHorizonDays": [
+    28
+  ],
+  "deferredHorizonDays": [
+    30
+  ],
+  "dailyRowKey": [
+    "scenarioId",
+    "sku",
+    "localDate"
+  ],
+  "expectedRows": 29200,
+  "fields": [
+    {
+      "name": "localDate",
+      "type": "date",
+      "availability": "AVAILABLE_AT_PREDICTION",
+      "notes": "Lima local calendar day; timestamps stored separately in UTC"
+    },
+    {
+      "name": "scenarioId",
+      "type": "string",
+      "availability": "AVAILABLE_AT_PREDICTION"
+    },
+    {
+      "name": "sku",
+      "type": "string",
+      "availability": "AVAILABLE_AT_PREDICTION"
+    },
+    {
+      "name": "categoryCode",
+      "type": "string",
+      "availability": "AVAILABLE_AT_PREDICTION"
+    },
+    {
+      "name": "subcategoryCode",
+      "type": "string",
+      "availability": "AVAILABLE_AT_PREDICTION"
+    },
+    {
+      "name": "unitsSold",
+      "type": "integer",
+      "availability": "TARGET",
+      "notes": "Effective units sold; main forecasting target"
+    },
+    {
+      "name": "unitsDemandedSynthetic",
+      "type": "integer",
+      "availability": "DERIVED_ONLY_AFTER_DAY",
+      "notes": "Offline latent requested units; never a production feature or primary target"
+    },
+    {
+      "name": "lostDemandSynthetic",
+      "type": "integer",
+      "availability": "DERIVED_ONLY_AFTER_DAY",
+      "notes": "Requested minus sold under stockout; synthetic truth only"
+    },
+    {
+      "name": "announcedSalePriceAtOrigin",
+      "type": "decimal_money",
+      "availability": "AVAILABLE_AT_PREDICTION",
+      "notes": "Only if price was known/announced by origin; PEN cents"
+    },
+    {
+      "name": "realizedSalePrice",
+      "type": "decimal_money",
+      "availability": "DERIVED_ONLY_AFTER_DAY",
+      "notes": "Effective realized price for reporting; not substituted for unavailable future price"
+    },
+    {
+      "name": "promotionKnownAtOrigin",
+      "type": "boolean",
+      "availability": "AVAILABLE_AT_PREDICTION",
+      "notes": "Only promotions announced by origin"
+    },
+    {
+      "name": "promotionOccurred",
+      "type": "boolean",
+      "availability": "DERIVED_ONLY_AFTER_DAY"
+    },
+    {
+      "name": "onHandUsableAtOrigin",
+      "type": "integer",
+      "availability": "AVAILABLE_AT_PREDICTION"
+    },
+    {
+      "name": "knownInboundAtOrigin",
+      "type": "integer",
+      "availability": "AVAILABLE_AT_PREDICTION",
+      "notes": "Firm known receipts only"
+    },
+    {
+      "name": "stockoutFlag",
+      "type": "boolean",
+      "availability": "DERIVED_ONLY_AFTER_DAY",
+      "notes": "Observed outcome, not future-known feature"
+    },
+    {
+      "name": "availableHours",
+      "type": "decimal",
+      "availability": "DERIVED_ONLY_AFTER_DAY"
+    },
+    {
+      "name": "weekdayIso",
+      "type": "integer",
+      "availability": "AVAILABLE_AT_PREDICTION",
+      "notes": "Known calendar"
+    },
+    {
+      "name": "holidayCode",
+      "type": "string|null",
+      "availability": "AVAILABLE_AT_PREDICTION",
+      "notes": "Published holiday calendar; no unannounced synthetic pulse"
+    },
+    {
+      "name": "endingStock",
+      "type": "integer",
+      "availability": "DERIVED_ONLY_AFTER_DAY"
+    },
+    {
+      "name": "effectiveUnitCostAtSale",
+      "type": "decimal_money",
+      "availability": "DERIVED_ONLY_AFTER_DAY",
+      "notes": "Historical accounting value; future cost is not known unless announced"
+    }
+  ],
+  "leakageRules": [
+    "No seed, latent popularity, secret mission, future shock, latent uplift, future sales, or lostDemandSynthetic enters model inputs.",
+    "Features and preprocessing are fitted within chronological train folds only.",
+    "Calendar covariates are known; synthetic event pulses require announcement before origin.",
+    "Observed ending stock and realized promotion/price outcomes are post-day fields."
+  ],
+  "cancellationConvention": "same_business_day_before_close_for_initial_generator"
+}

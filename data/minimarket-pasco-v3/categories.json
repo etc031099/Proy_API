@@ -1,0 +1,328 @@
+{
+  "schemaVersion": "1.0.0",
+  "scenarioId": "minimarket-pasco-v3",
+  "categories": [
+    {
+      "code": "BEB",
+      "name": "Bebidas",
+      "active": true,
+      "subcategories": [
+        {
+          "code": "BEB-GASEOSAS",
+          "name": "Gaseosas",
+          "parentCode": "BEB",
+          "active": true
+        },
+        {
+          "code": "BEB-AGUAS",
+          "name": "Aguas",
+          "parentCode": "BEB",
+          "active": true
+        },
+        {
+          "code": "BEB-ISOTONICAS",
+          "name": "Isotónicas",
+          "parentCode": "BEB",
+          "active": true
+        },
+        {
+          "code": "BEB-JUGOS-Y-NECTARES",
+          "name": "Jugos y néctares",
+          "parentCode": "BEB",
+          "active": true
+        }
+      ]
+    },
+    {
+      "code": "DES",
+      "name": "Desayunos y lácteos",
+      "active": true,
+      "subcategories": [
+        {
+          "code": "DES-LECHES",
+          "name": "Leches",
+          "parentCode": "DES",
+          "active": true
+        },
+        {
+          "code": "DES-YOGURES",
+          "name": "Yogures",
+          "parentCode": "DES",
+          "active": true
+        },
+        {
+          "code": "DES-CAFE",
+          "name": "Café",
+          "parentCode": "DES",
+          "active": true
+        },
+        {
+          "code": "DES-COCOA",
+          "name": "Cocoa",
+          "parentCode": "DES",
+          "active": true
+        },
+        {
+          "code": "DES-AVENAS",
+          "name": "Avenas",
+          "parentCode": "DES",
+          "active": true
+        },
+        {
+          "code": "DES-INFUSIONES",
+          "name": "Infusiones",
+          "parentCode": "DES",
+          "active": true
+        },
+        {
+          "code": "DES-UNTABLES",
+          "name": "Untables",
+          "parentCode": "DES",
+          "active": true
+        }
+      ]
+    },
+    {
+      "code": "ABA",
+      "name": "Abarrotes",
+      "active": true,
+      "subcategories": [
+        {
+          "code": "ABA-ARROZ",
+          "name": "Arroz",
+          "parentCode": "ABA",
+          "active": true
+        },
+        {
+          "code": "ABA-AZUCAR",
+          "name": "Azúcar",
+          "parentCode": "ABA",
+          "active": true
+        },
+        {
+          "code": "ABA-ACEITES",
+          "name": "Aceites",
+          "parentCode": "ABA",
+          "active": true
+        },
+        {
+          "code": "ABA-PASTAS",
+          "name": "Pastas",
+          "parentCode": "ABA",
+          "active": true
+        },
+        {
+          "code": "ABA-HARINAS",
+          "name": "Harinas",
+          "parentCode": "ABA",
+          "active": true
+        },
+        {
+          "code": "ABA-MENESTRAS",
+          "name": "Menestras",
+          "parentCode": "ABA",
+          "active": true
+        },
+        {
+          "code": "ABA-SAZONADORES-Y-SALSAS",
+          "name": "Sazonadores y salsas",
+          "parentCode": "ABA",
+          "active": true
+        }
+      ]
+    },
+    {
+      "code": "SNA",
+      "name": "Snacks y chocolates",
+      "active": true,
+      "subcategories": [
+        {
+          "code": "SNA-PAPAS",
+          "name": "Papas",
+          "parentCode": "SNA",
+          "active": true
+        },
+        {
+          "code": "SNA-SNACKS-DE-MAIZ",
+          "name": "Snacks de maíz",
+          "parentCode": "SNA",
+          "active": true
+        },
+        {
+          "code": "SNA-CHOCOLATES",
+          "name": "Chocolates",
+          "parentCode": "SNA",
+          "active": true
+        },
+        {
+          "code": "SNA-MANI",
+          "name": "Maní",
+          "parentCode": "SNA",
+          "active": true
+        }
+      ]
+    },
+    {
+      "code": "GAL",
+      "name": "Galletas",
+      "active": true,
+      "subcategories": [
+        {
+          "code": "GAL-RELLENAS",
+          "name": "Rellenas",
+          "parentCode": "GAL",
+          "active": true
+        },
+        {
+          "code": "GAL-SODA-Y-SALADAS",
+          "name": "Soda y saladas",
+          "parentCode": "GAL",
+          "active": true
+        },
+        {
+          "code": "GAL-WAFERS",
+          "name": "Wafers",
+          "parentCode": "GAL",
+          "active": true
+        },
+        {
+          "code": "GAL-ANIMALITOS",
+          "name": "Animalitos",
+          "parentCode": "GAL",
+          "active": true
+        }
+      ]
+    },
+    {
+      "code": "LIM",
+      "name": "Limpieza",
+      "active": true,
+      "subcategories": [
+        {
+          "code": "LIM-DETERGENTES",
+          "name": "Detergentes",
+          "parentCode": "LIM",
+          "active": true
+        },
+        {
+          "code": "LIM-JABONES-DE-LAVAR",
+          "name": "Jabones de lavar",
+          "parentCode": "LIM",
+          "active": true
+        },
+        {
+          "code": "LIM-LAVAVAJILLAS",
+          "name": "Lavavajillas",
+          "parentCode": "LIM",
+          "active": true
+        },
+        {
+          "code": "LIM-LEJIAS",
+          "name": "Lejías",
+          "parentCode": "LIM",
+          "active": true
+        },
+        {
+          "code": "LIM-LIMPIADORES",
+          "name": "Limpiadores",
+          "parentCode": "LIM",
+          "active": true
+        },
+        {
+          "code": "LIM-PAPEL-HIGIENICO",
+          "name": "Papel higiénico",
+          "parentCode": "LIM",
+          "active": true
+        }
+      ]
+    },
+    {
+      "code": "CUI",
+      "name": "Cuidado personal",
+      "active": true,
+      "subcategories": [
+        {
+          "code": "CUI-HIGIENE-DENTAL",
+          "name": "Higiene dental",
+          "parentCode": "CUI",
+          "active": true
+        },
+        {
+          "code": "CUI-CUIDADO-CAPILAR",
+          "name": "Cuidado capilar",
+          "parentCode": "CUI",
+          "active": true
+        },
+        {
+          "code": "CUI-JABONES-CORPORALES",
+          "name": "Jabones corporales",
+          "parentCode": "CUI",
+          "active": true
+        },
+        {
+          "code": "CUI-PROTECCION-FEMENINA",
+          "name": "Protección femenina",
+          "parentCode": "CUI",
+          "active": true
+        }
+      ]
+    },
+    {
+      "code": "CON",
+      "name": "Conservas y alimentos rápidos",
+      "active": true,
+      "subcategories": [
+        {
+          "code": "CON-CONSERVAS-DE-PESCADO",
+          "name": "Conservas de pescado",
+          "parentCode": "CON",
+          "active": true
+        },
+        {
+          "code": "CON-SOPAS-INSTANTANEAS",
+          "name": "Sopas instantáneas",
+          "parentCode": "CON",
+          "active": true
+        }
+      ]
+    },
+    {
+      "code": "PAN",
+      "name": "Panadería y consumo inmediato",
+      "active": true,
+      "subcategories": [
+        {
+          "code": "PAN-PAN-FRESCO",
+          "name": "Pan fresco",
+          "parentCode": "PAN",
+          "active": true
+        },
+        {
+          "code": "PAN-PAN-ENVASADO",
+          "name": "Pan envasado",
+          "parentCode": "PAN",
+          "active": true
+        }
+      ]
+    },
+    {
+      "code": "REG",
+      "name": "Productos regionales",
+      "active": true,
+      "subcategories": [
+        {
+          "code": "REG-MACA",
+          "name": "Maca",
+          "parentCode": "REG",
+          "active": true
+        },
+        {
+          "code": "REG-GRANOS-ANDINOS",
+          "name": "Granos andinos",
+          "parentCode": "REG",
+          "active": true
+        }
+      ]
+    }
+  ]
+}
