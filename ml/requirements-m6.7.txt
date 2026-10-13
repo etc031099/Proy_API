@@ -1,0 +1,2 @@
+# Optional offline Market Basket Analysis tooling; keep out of the serving baseline.
+mlxtend==0.23.4
