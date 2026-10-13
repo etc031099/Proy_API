@@ -281,6 +281,7 @@ async function validateDataset(directory, definitions = loadDefinitions()) {
   require(manifest.counts.completedSales === [...sales.values()].filter((sale) => sale.status === 'completed').length, 'manifest completedSales incorrecto');
   require(manifest.counts.saleItems === rowCounts.get('sale-items.ndjson'), 'manifest saleItems incorrecto');
   require(manifest.counts.purchases === purchases.size, 'manifest purchases incorrecto');
+  require(manifest.counts.pendingPurchases === [...purchases.values()].filter((purchase) => purchase.status === 'pending').length, 'manifest pendingPurchases incorrecto');
   require(manifest.counts.purchaseItems === rowCounts.get('purchase-items.ndjson'), 'manifest purchaseItems incorrecto');
   require(manifest.counts.movements === rowCounts.get('inventory-movements.ndjson'), 'manifest movements incorrecto');
   require(manifest.counts.productDailyRows === rowCounts.get('product-daily.ndjson'), 'manifest productDailyRows incorrecto');

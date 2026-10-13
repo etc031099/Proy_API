@@ -6,7 +6,7 @@ const path = require('node:path');
 
 const DATA_DIR = path.resolve(__dirname, '../../data/minimarket-pasco-v3');
 const BUSINESS_KEY = 'MINIMARKET-PASCO-V3';
-const GENERATOR_VERSION = 'minimarket-pasco-v3-generator/1.0.0';
+const GENERATOR_VERSION = 'minimarket-pasco-v3-generator/1.1.0';
 const LOCAL_OFFSET = '-05:00';
 
 function seedToUint32(seed, stream) {
@@ -526,6 +526,19 @@ function drawMission(rng, config, calendar, dayPart) {
 
 function ceilToMultiple(quantity, multiple) { return Math.ceil(quantity / multiple) * multiple; }
 
+function estimateExpectedDailyDemand(recentSales, baseUnitsPerDay, windowDays = 28, priorDays = 7) {
+  const window = recentSales.slice(-windowDays);
+  const observable = window.filter((day) => !day.stockout);
+  if (!observable.length) return baseUnitsPerDay;
+  const observedUnits = observable.reduce((sum, day) => sum + day.unitsSold, 0);
+  return (observedUnits + baseUnitsPerDay * priorDays) / (observable.length + priorDays);
+}
+
+function perishableOrderCap(expectedDaily, shelfLifeDays, packMultiple) {
+  const shelfDemand = Math.ceil(expectedDaily * shelfLifeDays);
+  return Math.max(packMultiple, ceilToMultiple(shelfDemand, packMultiple));
+}
+
 function chooseSupplier(product, date, definitions, prices, rng) {
   const candidates = [{ supplierCode: product.preferredSupplierCode, priceCents: currentCostAt(product.sku, product.preferredSupplierCode, date, prices.costEvents, prices.offerPrice), preferred: true }];
   for (const assignment of definitions.offers.secondaryAssignments) {
@@ -546,14 +559,17 @@ function choosePreferredQuantityAndSupplier(product, date, productState, outstan
   const offer = chooseSupplier(product, date, definitions, prices, rng);
   const supplier = prices.supplierByCode.get(offer.supplierCode);
   const leadDays = sampleLeadDays(supplier, rng);
-  const expectedDaily = recentSales.length >= 28 ? recentSales.slice(-28).reduce((a, b) => a + b, 0) / 28 : product.baseUnitsPerDay;
+  const expectedDaily = estimateExpectedDailyDemand(recentSales, product.baseUnitsPerDay);
   const reviewDays = product.perishable ? rng.int(...definitions.simulation.inventory.reviewDaysPerishable) : definitions.simulation.inventory.reviewDaysNonPerishable;
   const inventoryPosition = productState.stock + outstandingQty;
   const target = Math.ceil(expectedDaily * (leadDays + reviewDays)) + product.safetyStockInitial;
   let orderQty = Math.max(0, target - inventoryPosition);
   const packMultiple = definitions.offers.packMultipleBySupplier[`${offer.supplierCode}:${product.sku}`]
     ?? definitions.offers.packMultipleBySupplier[offer.supplierCode] ?? 1;
-  if (product.perishable && product.shelfLifeDays) {
+  if (product.perishable && product.shelfLifeDays && product.shelfLifeDays <= 2) {
+    // A supplier pack is the smallest feasible replenishment even if it slightly exceeds a short shelf-life cap.
+    orderQty = Math.min(orderQty, perishableOrderCap(expectedDaily, product.shelfLifeDays, packMultiple));
+  } else if (product.perishable && product.shelfLifeDays) {
     const shelfCap = Math.ceil(expectedDaily * product.shelfLifeDays);
     if (ceilToMultiple(Math.max(orderQty, 1), packMultiple) > shelfCap) {
       if (shelfCap < packMultiple) orderQty = 0;
@@ -690,7 +706,7 @@ function generateDataset({ outputDir, seed = 2026, definitions = loadDefinitions
   const writer = getWriter(resolvedOutput);
   let dailyStatsForMovement = null;
   const summary = {
-    arrivedTickets: 0, completedSales: 0, saleItems: 0, cancelledSales: 0, pendingSales: 0, purchases: 0, purchaseItems: 0,
+    arrivedTickets: 0, completedSales: 0, saleItems: 0, cancelledSales: 0, pendingSales: 0, purchases: 0, pendingPurchases: 0, purchaseItems: 0,
     receivedPurchaseValueCents: 0, revenueCents: 0, cogsCents: 0, unitsSold: 0, lostDemand: 0,
     movements: 0, stockoutProductDays: 0, productDays: 0, promoProductDays: promotions.productDays,
     guestTickets: 0, registeredTickets: 0, productUnits: new Map(), categoryUnits: new Map(), monthlySales: new Map(), weekdaySales: new Map(),
@@ -1196,6 +1212,7 @@ function generateDataset({ outputDir, seed = 2026, definitions = loadDefinitions
         simulationAssumption: true,
       });
       summary.purchases += 1;
+      if (!received) summary.pendingPurchases += 1;
       const supplierStats = summary.supplierPurchases.get(bucket.supplierCode);
       supplierStats.orders += 1;
       if (received) {
@@ -1228,7 +1245,11 @@ function generateDataset({ outputDir, seed = 2026, definitions = loadDefinitions
       arrivedTickets: arrivalCount,
       simulationAssumption: true,
     });
-    for (const product of definitions.products) recentSales.get(product.sku).push(daily.get(product.sku).sold);
+    for (const product of definitions.products) {
+      const stats = daily.get(product.sku);
+      // Closing on-hand is an observable inventory state; do not use latent requested demand as an estimator input.
+      recentSales.get(product.sku).push({ unitsSold: stats.sold, stockout: productState.get(product.sku).stock === 0 });
+    }
   }
 
   // Materialize source maestros enriched with generated end-state, while preserving canonical presentation/SKU identity.
@@ -1428,6 +1449,7 @@ function generateDataset({ outputDir, seed = 2026, definitions = loadDefinitions
     pendingSales: summary.pendingSales,
     saleItems: summary.saleItems,
     purchases: summary.purchases,
+    pendingPurchases: summary.pendingPurchases,
     purchaseItems: summary.purchaseItems,
     promotions: promotions.episodes.length,
     movements: summary.movements,
@@ -1503,7 +1525,9 @@ module.exports = {
   cents,
   dateRange,
   dateTimeLocal,
+  estimateExpectedDailyDemand,
   generateDataset,
   loadDefinitions,
+  perishableOrderCap,
   sha256,
 };
