@@ -323,7 +323,7 @@ def evaluate_sku(
                            "availableDays60": last60_available, "saleDays30": last30_sale_days,
                            "unitsSold60": last60_sold, "slowMoving": slow, "deadStock": dead,
                            "lowStock": low_stock, "overstock": False, "excessUnitsEstimated": 0},
-        "evidence": {"snapshotSource": "canonical V3 ledger and product-day package", "noSyntheticLatentDemand": True,
+        "evidence": {"snapshotSource": "V3 scenario ledger and approved product-day package", "noSyntheticLatentDemand": True,
                      "reservationData": "not present in canonical scenario", "forecastContract": forecast["status"]},
     }
 
@@ -351,7 +351,8 @@ class InventoryIntelligenceV3:
         self.generated = self.root / "data/minimarket-pasco-v3/generated"
         self.definitions = self.root / "data/minimarket-pasco-v3"
 
-    def snapshot(self, as_of_date: date = forecast_v3.HISTORY_END) -> dict[str, Any]:
+    def snapshot(self, as_of_date: date = forecast_v3.HISTORY_END,
+                 operational_records: dict[str, Any] | None = None) -> dict[str, Any]:
         scenario = _read_json(self.definitions / "scenario.json")
         manifest = _read_json(self.generated / "manifest.json")
         cutoff = _as_date(as_of_date)
@@ -361,7 +362,17 @@ class InventoryIntelligenceV3:
         if cutoff is None or not first <= cutoff <= forecast_v3.HISTORY_END:
             raise ValueError("asOfDate must be within the canonical V3 history")
         dataset = forecast_v3.load_validated_dataset(self.root)
-        products = {row["sku"]: row for row in _read_ndjson(self.generated / "products.ndjson")}
+        if operational_records is None:
+            products = {row["sku"]: row for row in _read_ndjson(self.generated / "products.ndjson")}
+            movement_rows = _read_ndjson(self.generated / "inventory-movements.ndjson")
+            purchase_rows = _read_ndjson(self.generated / "purchases.ndjson")
+            purchase_lines = _read_ndjson(self.generated / "purchase-items.ndjson")
+        else:
+            self._validate_operational_records(operational_records)
+            products = {row["sku"]: row for row in operational_records["products"]}
+            movement_rows = operational_records["movements"]
+            purchase_rows = operational_records["purchases"]
+            purchase_lines = operational_records["purchaseLines"]
         product_definitions = {row["sku"]: row for row in _read_json(self.definitions / "products.json")["catalog"]}
         suppliers = {row["supplierCode"]: row for row in _read_json(self.definitions / "suppliers.json")["suppliers"]}
         offer_defs = _read_json(self.definitions / "supplier-offers.json")
@@ -379,15 +390,14 @@ class InventoryIntelligenceV3:
             if row["localDate"] <= cutoff.isoformat():
                 daily_by_sku[row["sku"]].append(row)
         movements: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for row in _read_ndjson(self.generated / "inventory-movements.ndjson"):
+        for row in movement_rows:
             if row["localDate"] <= cutoff.isoformat():
                 movements[row["sku"]].append(row)
         stock_by_sku = {}
         for sku, rows in movements.items():
             latest = max(rows, key=lambda row: (row["localDate"], row["occurredAt"], row.get("eventPriority", 0), row["movementCode"]))
             stock_by_sku[sku] = int(latest["stockAfter"])
-        purchase_by_code = {row["purchaseCode"]: row for row in _read_ndjson(self.generated / "purchases.ndjson")}
-        purchase_lines = _read_ndjson(self.generated / "purchase-items.ndjson")
+        purchase_by_code = {row["purchaseCode"]: row for row in purchase_rows}
         actual_leads: dict[tuple[str, str], list[float]] = defaultdict(list)
         supplier_leads: dict[str, list[float]] = defaultdict(list)
         inbound: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -507,3 +517,24 @@ class InventoryIntelligenceV3:
                            "perishableOrderCap": "pack-rounded max(1 pack, expected daily sales*shelf life); observed stockout truth excluded"},
                 "products": snapshot_rows, "rankings": {key: [row["sku"] for row in rank_products(snapshot_rows, key)]
                                                             for key in ("stockout_risk", "low_stock", "overstock", "slow_moving", "abc_a", "az", "single_source_critical", "reorder")}}
+
+    @staticmethod
+    def _validate_operational_records(records: dict[str, Any]) -> None:
+        required = {"products", "movements", "purchases", "purchaseLines", "scenario"}
+        if not required.issubset(records):
+            raise ValueError("Mongo V3 read result is missing required operational domains")
+        scenario = records["scenario"]
+        if (scenario.get("scenarioId") != forecast_v3.SCENARIO_ID
+                or scenario.get("status") != "completed"
+                or scenario.get("sourceSha256") != forecast_v3.DATASET_SHA256
+                or scenario.get("referenceDate") != forecast_v3.HISTORY_END.isoformat()
+                or scenario.get("datasetVersion") != forecast_v3.DATASET_VERSION):
+            raise ValueError("Mongo V3 scenario marker does not match the approved package")
+        expected_counts = {"products": 80, "purchases": 2155, "purchaseLines": 3408, "movements": 40445}
+        if any(len(records[key]) != count for key, count in expected_counts.items()):
+            raise ValueError("Mongo V3 operational counts differ from the approved scenario")
+        for domain in ("products", "movements", "purchases", "purchaseLines"):
+            if any(row.get("scenarioId") != forecast_v3.SCENARIO_ID for row in records[domain]):
+                raise ValueError(f"Mongo V3 {domain} contain a different scenario")
+        if len({row["sku"] for row in records["products"]}) != 80:
+            raise ValueError("Mongo V3 product SKUs are not unique")
