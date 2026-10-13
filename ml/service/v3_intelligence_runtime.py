@@ -15,6 +15,7 @@ import psutil
 
 from ml.service.v3_schemas import BUSINESS_ID, DATASET_SHA256, DATASET_VERSION, REFERENCE_DATE, SCENARIO_ID, TIMEZONE, V3Context
 from ml.service.v3_package import verify_package
+from ml.service.v3_source_pool import CanonicalRowPool
 from ml.src import business_customer_supplier_v3 as m68
 from ml.src import v3_baseline_bundle, v3_forecast
 from ml.src.inventory_intelligence_v3 import INVENTORY_VERSION, InventoryIntelligenceV3
@@ -75,6 +76,8 @@ class V3IntelligenceRuntime:
         try:
             verify_package(self.root)
             self.dataset = v3_forecast.load_validated_dataset(self.root)
+            source_pool = CanonicalRowPool()
+            source_pool.share_dataset_strings(self.dataset)
             bundle_path = self.root / "ml/models/minimarket-pasco-v3/baseline-manifest.json"
             started = time.perf_counter()
             try:
@@ -111,7 +114,7 @@ class V3IntelligenceRuntime:
             self.loading_metrics["marketBasketLoadMs"] = round((time.perf_counter() - started) * 1000, 3)
             self.loading_metrics["rssAfterMarketBasketMb"] = _rss_mb()
 
-            self.records = m68.load_local_sources(self.root, dataset=self.dataset)
+            self.records = m68.load_local_sources(self.root, dataset=self.dataset, row_loader=source_pool.read)
             self.static = m68._load_static(self.root)
             definitions_root = self.root / "data/minimarket-pasco-v3"
             self.inventory_static = {

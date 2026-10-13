@@ -204,10 +204,11 @@ def _normalize_input_rows(rows: list[dict[str, Any]], domain: str) -> None:
             raise ValueError(f"{domain} contains a row outside the canonical V3 tenant/scenario")
 
 
-def load_local_sources(repository_root: Path = ROOT, *, dataset: Any | None = None) -> dict[str, Any]:
+def load_local_sources(repository_root: Path = ROOT, *, dataset: Any | None = None, row_loader=None) -> dict[str, Any]:
     """Load only approved local canonical files and verify their manifest hashes."""
     root = Path(repository_root)
     dataset = dataset or v3_forecast.load_validated_dataset(root)
+    read_rows = row_loader or _read_ndjson
     generated = root / "data/minimarket-pasco-v3/generated"
     manifest = _read_json(generated / "manifest.json")
     required_files = ("sales.ndjson", "sale-items.ndjson", "purchases.ndjson", "purchase-items.ndjson",
@@ -221,17 +222,16 @@ def load_local_sources(repository_root: Path = ROOT, *, dataset: Any | None = No
     records = {
         "scenario": {"scenarioId": manifest["scenarioId"], "sourceSha256": manifest["hashes"]["logicalDatasetSha256"],
                      "datasetVersion": manifest["datasetVersion"], "referenceDate": manifest["referenceDate"], "status": "completed"},
-        "sales": _read_ndjson(generated / "sales.ndjson"),
-        "saleItems": _read_ndjson(generated / "sale-items.ndjson"),
-        "purchases": _read_ndjson(generated / "purchases.ndjson"),
-        "purchaseLines": _read_ndjson(generated / "purchase-items.ndjson"),
-        "customers": _read_ndjson(generated / "customers.ndjson"),
-        "suppliers": _read_ndjson(generated / "suppliers.ndjson"),
-        "products": _read_ndjson(generated / "products.ndjson"),
-        "suppliers": _read_ndjson(generated / "suppliers.ndjson"),
-        "movements": _read_ndjson(generated / "inventory-movements.ndjson"),
-        "inventorySnapshot": _read_ndjson(generated / "inventory-snapshot.ndjson"),
-        "supplierCostHistory": _read_ndjson(generated / "supplier-cost-history.ndjson"),
+        "sales": read_rows(generated / "sales.ndjson"),
+        "saleItems": read_rows(generated / "sale-items.ndjson"),
+        "purchases": read_rows(generated / "purchases.ndjson"),
+        "purchaseLines": read_rows(generated / "purchase-items.ndjson"),
+        "customers": read_rows(generated / "customers.ndjson"),
+        "suppliers": read_rows(generated / "suppliers.ndjson"),
+        "products": read_rows(generated / "products.ndjson"),
+        "movements": read_rows(generated / "inventory-movements.ndjson"),
+        "inventorySnapshot": read_rows(generated / "inventory-snapshot.ndjson"),
+        "supplierCostHistory": read_rows(generated / "supplier-cost-history.ndjson"),
         "source": "canonical_local",
     }
     return _validate_sources(records, root, dataset)
