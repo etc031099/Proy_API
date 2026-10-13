@@ -43,6 +43,10 @@ class M69B1ServingPerformanceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "lineage/version mismatch"):
                 v3_baseline_bundle.load_manifest(path)
 
+    def test_windows_node_json_output_uses_canonical_utf8_product_names(self):
+        self.assertEqual(self.runtime.business.products["PAN-FRE-001"]["name"],
+                         "Pan Francés fresco paquete 4 unidades")
+
     def test_derived_cache_separates_cutoff_period_and_engine_version(self):
         runtime = V3IntelligenceRuntime.__new__(V3IntelligenceRuntime)
         runtime._derived_cache = __import__("collections").OrderedDict()
@@ -133,7 +137,7 @@ class M69B1ServingPerformanceTests(unittest.TestCase):
         canonical = json.dumps(normalize(outputs), ensure_ascii=False, sort_keys=True,
                                separators=(",", ":"), allow_nan=False).encode("utf-8")
         self.assertEqual(hashlib.sha256(canonical).hexdigest(),
-                         "537580db3533985dd3591178f63e5ec458108aedb1392233728c2a18779bfbef")
+                         "5a4f77ca41e469b005f3a6b7404c205ab6796b5688e0e2007018c4f67b3d78e9")
 
 
 if __name__ == "__main__":

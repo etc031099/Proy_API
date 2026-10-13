@@ -36,6 +36,45 @@ def digest(value):
                                      separators=(",", ":"), default=str, allow_nan=False).encode()).hexdigest()
 
 
+def parity_diagnostics(expected, actual, limit=12):
+    """Report structural differences without response bodies, strings or credentials."""
+    differences = []
+
+    def visit(left, right, path):
+        if len(differences) >= limit:
+            return
+        if isinstance(left, dict) and isinstance(right, dict):
+            for key in sorted(left.keys() | right.keys()):
+                if key not in left or key not in right:
+                    differences.append({"path": f"{path}.{key}", "kind": "missingKey",
+                                        "localPresent": key in left, "cloudPresent": key in right})
+                else:
+                    visit(left[key], right[key], f"{path}.{key}")
+                if len(differences) >= limit:
+                    break
+        elif isinstance(left, list) and isinstance(right, list):
+            if len(left) != len(right):
+                differences.append({"path": path, "kind": "length", "local": len(left), "cloud": len(right)})
+            for index, (a, b) in enumerate(zip(left, right)):
+                visit(a, b, f"{path}[{index}]")
+                if len(differences) >= limit:
+                    break
+        elif digest(left) != digest(right):
+            item = {"path": path, "kind": "value", "localType": type(left).__name__,
+                    "cloudType": type(right).__name__}
+            if (isinstance(left, (int, float)) and not isinstance(left, bool)
+                    and isinstance(right, (int, float)) and not isinstance(right, bool)):
+                item.update(local=left, cloud=right)
+            elif path.endswith(".name") and isinstance(left, str) and isinstance(right, str):
+                # Product names in this approved synthetic catalog are useful for diagnosing
+                # deployment encoding/source drift and do not contain user data.
+                item.update(local=left, cloud=right)
+            differences.append(item)
+
+    visit(expected, actual, "data")
+    return {"localHash": digest(expected), "cloudHash": digest(actual), "differences": differences}
+
+
 def smoke(*, cloud=False):
     secret = os.environ.get("ML_SERVICE_SECRET") if cloud else None
     if cloud and (not secret or len(secret) < 32):
@@ -110,7 +149,9 @@ def smoke(*, cloud=False):
                         actual, _ = getattr(runtime, method)(request)
                     times.append(round((time.perf_counter() - started) * 1000, 3))
                     if digest(actual) != digest(expected):
-                        raise RuntimeError(f"Cloud/direct parity mismatch: {domain}")
+                        diagnostic = parity_diagnostics(expected, actual)
+                        raise RuntimeError(f"Cloud/direct parity mismatch: {domain}; "
+                                           + json.dumps(diagnostic, ensure_ascii=False, allow_nan=False))
                 outputs[domain] = actual
                 report["domains"][domain] = {"parity": "MATCH", "hash": digest(actual),
                                              "localInitialMs": direct_first_ms, "firstMs": times[0],

@@ -307,7 +307,7 @@ def _validate_sources(records: dict[str, Any], root: Path, dataset: Any | None =
 def _load_static(root: Path) -> dict[str, Any]:
     definitions = json.loads(subprocess.check_output(
         ["node", "-e", "const g=require('./scripts/lib/minimarket-v3-generator');const d=g.loadDefinitions();process.stdout.write(JSON.stringify({scenario:d.scenario,categories:d.categories,products:d.products,suppliers:d.suppliers,offers:d.offers,customers:d.customers,profiles:d.profiles,promotions:d.promotions}))"],
-        cwd=root, text=True, timeout=30))
+        cwd=root, text=True, encoding="utf-8", timeout=30))
     return definitions
 
 
@@ -1337,7 +1337,7 @@ def run_atlas_reader(target: str = "atlas", repository_root: Path = ROOT) -> dic
     try:
         reader = Path(repository_root) / "ml/scripts/m6_8_read_mongo.js"
         completed = subprocess.run(["node", str(reader), "--target", "atlas"], cwd=repository_root,
-                                   check=True, capture_output=True, text=True, timeout=240)
+                                   check=True, capture_output=True, text=True, encoding="utf-8", timeout=240)
         payload = json.loads(completed.stdout)
     except Exception:
         raise RuntimeError("ATLAS_READ_FAILED") from None
