@@ -47,6 +47,7 @@ ml/models/**
 !ml/models/demand_forecast_v1_contract.json
 ml/**/*.duckdb
 ml/**/*.duckdb.wal
+data/minimarket-pasco-v3/generated/
 ml/.venv/
 ml/.test-tmp/
 ml/**/__pycache__/
