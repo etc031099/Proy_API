@@ -1204,7 +1204,7 @@ class BusinessHealthSnapshotV3:
     @staticmethod
     def _forecast_totals(cutoff: date, root: Path = ROOT, dataset: Any | None = None) -> dict[str, float]:
         dataset = dataset or v3_forecast.load_validated_dataset(root)
-        forecasts = [v3_baseline_bundle.predict(dataset, sku=sku, cutoff=cutoff) for sku in sorted(dataset.product_by_sku)]
+        forecasts = v3_baseline_bundle.predict_many(dataset, skus=sorted(dataset.product_by_sku), cutoff=cutoff)
         if len(forecasts) != 80 or any(row.get("status") != "READY" or row.get("forecastSource") != "MOVING_AVERAGE_28" for row in forecasts):
             raise ValueError("Approved V3 moving-average forecast is incomplete")
         return {f"expectedUnitsNext{days}d": round(sum(float(row[f"expectedUnitsNext{days}d"]) for row in forecasts), 4) for days in (1, 7, 14)}

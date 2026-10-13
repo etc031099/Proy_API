@@ -5,9 +5,10 @@ import hashlib
 import json
 import os
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from datetime import date
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 import psutil
@@ -57,11 +58,15 @@ class V3IntelligenceRuntime:
         self.dataset = None
         self.records: dict[str, Any] = {}
         self.static: dict[str, Any] = {}
+        self.inventory_static: dict[str, Any] = {}
         self.basket: dict[str, Any] | None = None
         self.forecast_manifest: dict[str, Any] | None = None
         self.business = self.customers = self.suppliers = self.health = None
         self.inventory = None
         self._first_request = True
+        self._derived_cache: OrderedDict[tuple[str, str], Any] = OrderedDict()
+        self._cache_lock = RLock()
+        self._cache_limits = {"inventory": 3, "customer": 4, "supplier": 4}
 
     def load(self) -> None:
         if self.ready:
@@ -106,12 +111,21 @@ class V3IntelligenceRuntime:
 
             self.records = m68.load_local_sources(self.root, dataset=self.dataset)
             self.static = m68._load_static(self.root)
+            definitions_root = self.root / "data/minimarket-pasco-v3"
+            self.inventory_static = {
+                "products": _read_json(definitions_root / "products.json")["catalog"],
+                "suppliers": _read_json(definitions_root / "suppliers.json")["suppliers"],
+                "offers": _read_json(definitions_root / "supplier-offers.json"),
+            }
             self.business = m68.BusinessIntelligenceV3(self.root, self.records, self.static)
             self.customers = m68.CustomerIntelligenceV3(self.root, self.records, self.static, self.business)
             self.suppliers = m68.SupplierIntelligenceV3(self.root, self.records, self.static, self.business)
             self.domains["business"] = self.domains["customer"] = self.domains["supplier"] = True
             if self.forecast_manifest is not None:
-                self.inventory = InventoryIntelligenceV3(self.root, dataset=self.dataset)
+                self.inventory = InventoryIntelligenceV3(
+                    self.root, dataset=self.dataset, operational_records=self.records,
+                    static_data=self.inventory_static,
+                )
                 self.domains["forecast"] = self.domains["inventory"] = True
                 self.health = m68.BusinessHealthSnapshotV3(
                     self.root, self.business, self.customers, self.suppliers, basket_artifact=self.basket,
@@ -168,6 +182,39 @@ class V3IntelligenceRuntime:
             return None
         return round(values[(len(values) - 1) // 2], 3)
 
+    def _cached(self, domain: str, cutoff: date, parameters: dict[str, Any], compute):
+        """Bounded worker-local cache for immutable outputs derived from the approved V3 source."""
+        engine_versions = {"inventory": INVENTORY_VERSION, "customer": m68.CUSTOMER_VERSION,
+                           "supplier": m68.SUPPLIER_VERSION}
+        key_payload = {
+            "businessId": BUSINESS_ID, "scenarioId": SCENARIO_ID,
+            "datasetVersion": DATASET_VERSION, "datasetSha256": DATASET_SHA256,
+            "asOfDate": cutoff.isoformat(), "domain": domain,
+            "engineVersion": engine_versions[domain], "parameters": parameters,
+        }
+        key = (domain, json.dumps(key_payload, sort_keys=True, separators=(",", ":"), default=str))
+        with self._cache_lock:
+            if key in self._derived_cache:
+                self._derived_cache.move_to_end(key)
+                return self._derived_cache[key]
+            value = compute()
+            self._derived_cache[key] = value
+            same_domain = [cached_key for cached_key in self._derived_cache if cached_key[0] == domain]
+            while len(same_domain) > self._cache_limits[domain]:
+                oldest = same_domain.pop(0)
+                self._derived_cache.pop(oldest, None)
+            return value
+
+    def _inventory_snapshot(self, cutoff: date):
+        return self._cached("inventory", cutoff, {}, lambda: self.inventory.snapshot(cutoff))
+
+    def _customer_snapshot(self, cutoff: date):
+        return self._cached("customer", cutoff, {}, lambda: self.customers.snapshot(as_of_date=cutoff))
+
+    def _supplier_snapshot(self, cutoff: date, period, inventory):
+        return self._cached("supplier", cutoff, {"period": period},
+                            lambda: self.suppliers.snapshot(as_of_date=cutoff, period=period, inventory=inventory))
+
     @staticmethod
     def _period(period: Any, cutoff: date) -> str | dict[str, str]:
         if period is None:
@@ -221,7 +268,7 @@ class V3IntelligenceRuntime:
 
     def inventory_data(self, request):
         cutoff = self.resolve_context(request.context)
-        snapshot = self._run("inventory", lambda: self.inventory.snapshot(cutoff))
+        snapshot = self._run("inventory", lambda: self._inventory_snapshot(cutoff))
         rows = snapshot["products"]
         if request.skus:
             unknown = sorted(set(request.skus) - set(self.dataset.product_by_sku))
@@ -297,7 +344,7 @@ class V3IntelligenceRuntime:
         if request.mode in {"rank", "summary"} and not request.skus:
             skus = list(sorted(self.dataset.product_by_sku))
         def calculate():
-            rows = [v3_baseline_bundle.predict(self.dataset, sku=sku, cutoff=cutoff) for sku in skus]
+            rows = v3_baseline_bundle.predict_many(self.dataset, skus=skus, cutoff=cutoff)
             rows = [row for row in rows if row["status"] == "READY"]
             key = f"expectedUnitsNext{request.horizonDays}d"
             if request.mode == "rank":
@@ -347,7 +394,7 @@ class V3IntelligenceRuntime:
 
     def customer_data(self, request):
         cutoff = self.resolve_context(request.context)
-        result = self._run("customer", lambda: self.customers.snapshot(as_of_date=cutoff))
+        result = self._run("customer", lambda: self._customer_snapshot(cutoff))
         rows = result["customers"]
         if request.customerCode:
             found = [row for row in rows if row["customerCode"] == request.customerCode]
@@ -387,8 +434,8 @@ class V3IntelligenceRuntime:
     def supplier_data(self, request):
         cutoff = self.resolve_context(request.context)
         period = self._period(request.period, cutoff)
-        inventory = self._run("inventory", lambda: self.inventory.snapshot(cutoff))
-        result = self._run("supplier", lambda: self.suppliers.snapshot(as_of_date=cutoff, period=period, inventory=inventory))
+        inventory = self._run("inventory", lambda: self._inventory_snapshot(cutoff))
+        result = self._run("supplier", lambda: self._supplier_snapshot(cutoff, period, inventory))
         rows = result["suppliers"]
         if request.supplierCode:
             found = [row for row in rows if row["supplierCode"] == request.supplierCode]
@@ -400,13 +447,12 @@ class V3IntelligenceRuntime:
             if unknown:
                 raise V3FunctionalError("PRODUCT_NOT_FOUND", 404, "One or more product SKUs were not found.")
             wanted = set(request.productSkus)
-            alternatives = result["productAlternatives"]
+            alternatives = {row["sku"]: row.get("alternatives", []) for row in result["productAlternatives"]}
             matching_suppliers = {offer["supplierCode"] for sku in wanted
                                   for offer in alternatives.get(sku, []) if offer.get("supplierCode")}
-            for row in rows:
-                supplied = row.get("productsSupplied", [])
-                row["productsSupplied"] = [product for product in supplied if product.get("sku") in wanted]
-            rows = [row for row in rows if row["supplierCode"] in matching_suppliers
+            rows = [{**row, "productsSupplied": [product for product in row.get("productsSupplied", [])
+                                                   if product.get("sku") in wanted]}
+                    for row in rows if row["supplierCode"] in matching_suppliers
                     or any(product.get("sku") in wanted for product in row.get("productsSupplied", []))]
         if request.mode == "rank":
             key = request.metric
@@ -418,7 +464,7 @@ class V3IntelligenceRuntime:
             rows = [by_code[code] for code in ranked_codes if code in by_code]
         safe_rows = [self._public_supplier(row) for row in rows[request.offset:request.offset + request.limit]]
         if request.mode == "alternatives" and request.productSkus:
-            data = {"items": [{"sku": sku, "alternatives": result["productAlternatives"].get(sku, [])}
+            data = {"items": [{"sku": sku, "alternatives": alternatives.get(sku, [])}
                               for sku in request.productSkus], "total": len(request.productSkus)}
         elif request.mode == "dependency":
             data = {"singleSourceCriticalOrHigh": result["criticalInventorySupplierExposure"], "items": safe_rows,
@@ -442,9 +488,9 @@ class V3IntelligenceRuntime:
         period = self._period(request.period, cutoff)
         def calculate():
             business = self.business.summary(period, as_of_date=cutoff)
-            customer = self.customers.snapshot(as_of_date=cutoff)
-            inventory = self.inventory.snapshot(cutoff)
-            supplier = self.suppliers.snapshot(as_of_date=cutoff, period=period, inventory=inventory)
+            customer = self._customer_snapshot(cutoff)
+            inventory = self._inventory_snapshot(cutoff)
+            supplier = self._supplier_snapshot(cutoff, period, inventory)
             costs = {row["sku"]: int(row.get("endingAverageCostCents", 0)) for row in self.records["products"]}
             result = self.health.snapshot(as_of_date=cutoff, period=period, business_summary=business,
                                           customer_summary=customer, supplier_summary=supplier, inventory=inventory,

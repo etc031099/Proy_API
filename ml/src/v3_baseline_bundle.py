@@ -24,13 +24,21 @@ def config_hash() -> str:
 
 
 def predict(dataset: v.V3Dataset, *, sku: str, cutoff: date) -> dict:
+    return predict_many(dataset, skus=[sku], cutoff=cutoff)[0]
+
+
+def predict_many(dataset: v.V3Dataset, *, skus: list[str], cutoff: date) -> list[dict]:
+    """Batch the approved baseline call while preserving the per-SKU response contract."""
     strategies = {h: {"method": "BASELINE_FALLBACK", "baseline": "B3_MEAN_28"} for h in v.PRIMARY_HORIZONS}
-    item = v.predict_forecast_batch(dataset, prediction_origin=cutoff, skus=[sku], strategy_by_horizon=strategies)[0]
-    result = {"sku": sku, "cutoffDate": cutoff.isoformat(), "strategyVersion": STRATEGY_VERSION,
-              "forecastSource": "MOVING_AVERAGE_28", "status": item["status"],
-              "confidence": None, "predictionInterval": None}
-    result.update(item["forecast"] or {f"expectedUnitsNext{h}d": None for h in v.PRIMARY_HORIZONS})
-    return result
+    items = v.predict_forecast_batch(dataset, prediction_origin=cutoff, skus=skus, strategy_by_horizon=strategies)
+    results = []
+    for item in items:
+        result = {"sku": item["sku"], "cutoffDate": cutoff.isoformat(), "strategyVersion": STRATEGY_VERSION,
+                  "forecastSource": "MOVING_AVERAGE_28", "status": item["status"],
+                  "confidence": None, "predictionInterval": None}
+        result.update(item["forecast"] or {f"expectedUnitsNext{h}d": None for h in v.PRIMARY_HORIZONS})
+        results.append(result)
+    return results
 
 
 def load_manifest(path: Path) -> dict:

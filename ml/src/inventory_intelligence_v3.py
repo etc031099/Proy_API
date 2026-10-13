@@ -347,37 +347,50 @@ def rank_products(rows: list[dict[str, Any]], ranking: str) -> list[dict[str, An
 
 
 class InventoryIntelligenceV3:
-    def __init__(self, repository_root: Path, dataset: forecast_v3.V3Dataset | None = None):
+    def __init__(self, repository_root: Path, dataset: forecast_v3.V3Dataset | None = None,
+                 operational_records: dict[str, Any] | None = None,
+                 static_data: dict[str, Any] | None = None):
         self.root = Path(repository_root)
         self.generated = self.root / "data/minimarket-pasco-v3/generated"
         self.definitions = self.root / "data/minimarket-pasco-v3"
         self.dataset = dataset
+        self.operational_records = operational_records
+        self.static_data = static_data
+        if operational_records is not None:
+            self._validate_operational_records(operational_records)
 
     def snapshot(self, as_of_date: date = forecast_v3.HISTORY_END,
                  operational_records: dict[str, Any] | None = None) -> dict[str, Any]:
-        scenario = _read_json(self.definitions / "scenario.json")
-        manifest = _read_json(self.generated / "manifest.json")
         cutoff = _as_date(as_of_date)
         first = forecast_v3.HISTORY_START
-        if scenario["scenarioId"] != forecast_v3.SCENARIO_ID or manifest["hashes"]["logicalDatasetSha256"] != forecast_v3.DATASET_SHA256:
+        manifest = self.dataset.manifest if self.dataset is not None else _read_json(self.generated / "manifest.json")
+        if (manifest.get("scenarioId") != forecast_v3.SCENARIO_ID
+                or manifest.get("hashes", {}).get("logicalDatasetSha256") != forecast_v3.DATASET_SHA256):
             raise ValueError("Canonical V3 scenario/dataset contract mismatch")
         if cutoff is None or not first <= cutoff <= forecast_v3.HISTORY_END:
             raise ValueError("asOfDate must be within the canonical V3 history")
         dataset = self.dataset or forecast_v3.load_validated_dataset(self.root)
-        if operational_records is None:
+        records = operational_records if operational_records is not None else self.operational_records
+        if records is None:
             products = {row["sku"]: row for row in _read_ndjson(self.generated / "products.ndjson")}
             movement_rows = _read_ndjson(self.generated / "inventory-movements.ndjson")
             purchase_rows = _read_ndjson(self.generated / "purchases.ndjson")
             purchase_lines = _read_ndjson(self.generated / "purchase-items.ndjson")
         else:
-            self._validate_operational_records(operational_records)
-            products = {row["sku"]: row for row in operational_records["products"]}
-            movement_rows = operational_records["movements"]
-            purchase_rows = operational_records["purchases"]
-            purchase_lines = operational_records["purchaseLines"]
-        product_definitions = {row["sku"]: row for row in _read_json(self.definitions / "products.json")["catalog"]}
-        suppliers = {row["supplierCode"]: row for row in _read_json(self.definitions / "suppliers.json")["suppliers"]}
-        offer_defs = _read_json(self.definitions / "supplier-offers.json")
+            if records is not self.operational_records:
+                self._validate_operational_records(records)
+            products = {row["sku"]: row for row in records["products"]}
+            movement_rows = records["movements"]
+            purchase_rows = records["purchases"]
+            purchase_lines = records["purchaseLines"]
+        if self.static_data is None:
+            product_definitions = {row["sku"]: row for row in _read_json(self.definitions / "products.json")["catalog"]}
+            suppliers = {row["supplierCode"]: row for row in _read_json(self.definitions / "suppliers.json")["suppliers"]}
+            offer_defs = _read_json(self.definitions / "supplier-offers.json")
+        else:
+            product_definitions = {row["sku"]: row for row in self.static_data["products"]}
+            suppliers = {row["supplierCode"]: row for row in self.static_data["suppliers"]}
+            offer_defs = self.static_data["offers"]
         offers_by_sku: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for product in product_definitions.values():
             code = product["preferredSupplierCode"]
@@ -388,9 +401,13 @@ class InventoryIntelligenceV3:
                                        "configuredLeadTimeDays": suppliers[code]["leadTimeMeanDays"]})
 
         daily_by_sku: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for row in _read_ndjson(self.generated / "product-daily.ndjson"):
-            if row["localDate"] <= cutoff.isoformat():
-                daily_by_sku[row["sku"]].append(row)
+        if dataset is not None:
+            for sku, series in dataset.daily_by_sku.items():
+                daily_by_sku[sku].extend(row for row in series if row["localDate"] <= cutoff.isoformat())
+        else:
+            for row in _read_ndjson(self.generated / "product-daily.ndjson"):
+                if row["localDate"] <= cutoff.isoformat():
+                    daily_by_sku[row["sku"]].append(row)
         movements: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in movement_rows:
             if row["localDate"] <= cutoff.isoformat():
@@ -431,10 +448,13 @@ class InventoryIntelligenceV3:
         abc_by_sku = _abc_classes({sku: cost_value.get(sku, 0) for sku in product_definitions})
 
         snapshot_rows: list[dict[str, Any]] = []
+        sku_order = sorted(product_definitions)
+        forecast_rows = forecast_bundle.predict_many(dataset, skus=sku_order, cutoff=cutoff)
+        forecasts_by_sku = {row["sku"]: row for row in forecast_rows}
         for sku, definition in sorted(product_definitions.items()):
             if sku not in stock_by_sku:
                 raise ValueError(f"Canonical V3 stock ledger missing SKU {sku}")
-            item_forecast = forecast_bundle.predict(dataset, sku=sku, cutoff=cutoff)
+            item_forecast = forecasts_by_sku[sku]
             if item_forecast["status"] != "READY" or any(item_forecast.get(f"expectedUnitsNext{h}d") is None for h in (1, 7, 14)):
                 raise ValueError(f"Approved V3 forecast unavailable for {sku} at {cutoff}")
             preferred = definition["preferredSupplierCode"]
