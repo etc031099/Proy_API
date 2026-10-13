@@ -3,13 +3,20 @@
 const { BSON } = require('bson');
 const { canonicalJson, sha256 } = require('../../../scripts/lib/minimarket-v3-generator');
 const { Product, Contact, Transaction, InventoryMovement, HistoricalScenario, MinimarketV3Record } = require('../../src/models');
-const { auxiliaryStableKey, BUSINESS_ID, SCENARIO_ID, loadPackage, scenarioFilter } = require('./minimarketV3Mongo');
+const { auxiliaryStableKey, BUSINESS_ID, SCENARIO_ID, loadPackage, scenarioFilter, prepareDocuments } = require('./minimarketV3Mongo');
 
 function logicalHash(rows, keyFn) {
   return sha256(Buffer.from(canonicalJson([...rows].sort((a, b) => keyFn(a).localeCompare(keyFn(b))))));
 }
 function cents(value) { return Math.round(Number(value || 0) * 100); }
 function recordProjection(doc) { return doc.canonicalData; }
+function operationalFieldsMatch(actual, expected) {
+  if (!actual) return false;
+  // The driver persists optional undefined fields as BSON null (including nested lines).
+  const persistedExpected = BSON.deserialize(BSON.serialize(expected, { ignoreUndefined: false }));
+  const projection = Object.fromEntries(Object.keys(persistedExpected).map((field) => [field, actual[field]]));
+  return canonicalJson(JSON.parse(JSON.stringify(projection))) === canonicalJson(JSON.parse(JSON.stringify(persistedExpected)));
+}
 
 async function measureMongo() {
   const db = Product.db.db;
@@ -37,7 +44,7 @@ async function measureMongo() {
     v3StorageEstimateBytes: v3StorageEstimate,
     v3ApproxPhysicalFootprintBytes: v3StorageEstimate + Math.round(attributedIndexEstimate),
     v3ApproxLogicalFootprintBytes: v3BsonBytes + Math.round(attributedIndexEstimate),
-    packageBytes: fs.readdirSync(path.resolve(__dirname, '../../../data/minimarket-pasco-v3/generated'))
+    packageBytes: fs.readdirSync(path.resolve(__dirname, '../../../data/minimarket-pasco-v3/generated')).filter((file) => !file.startsWith('m6.4b-'))
       .reduce((sum, file) => sum + fs.statSync(path.resolve(__dirname, '../../../data/minimarket-pasco-v3/generated', file)).size, 0),
   };
 }
@@ -94,6 +101,8 @@ async function verifyParity(pkg = loadPackage()) {
   for (const [key, pass] of Object.entries(hashes)) assert(pass, `logical hash mismatch: ${key}`);
 
   assert(products.length === 80 && productBySku.size === 80, 'product/SKU count mismatch');
+  assert(new Set(products.map((row) => row.productKey)).size === 80, 'productKey uniqueness mismatch');
+  assert(products.every((row) => Number.isSafeInteger(row.stock) && row.stock >= 0), 'negative/invalid stock');
   assert(contacts.filter((row) => row.type === 'customer').length === 40, 'registered customer count mismatch');
   assert(contacts.filter((row) => row.type === 'vendor').length === 10, 'supplier count mismatch');
   assert(transactions.filter((row) => row.type === 'sale').length === pkg.sales.length, 'sales ticket count mismatch');
@@ -104,6 +113,33 @@ async function verifyParity(pkg = loadPackage()) {
   assert(aux.filter((row) => row.recordType === 'category').length === 10, 'category count mismatch');
   assert(aux.filter((row) => row.recordType === 'promotion').length === pkg.promotions.length, 'promotion count mismatch');
   assert(products.reduce((sum, row) => sum + row.supplierPrices.length, 0) === 103, 'embedded supplier offer count mismatch');
+
+  // Check persisted operational fields too, not only the preserved canonical audit copies.
+  const supplierIds = new Map(contacts.filter((row) => row.type === 'vendor').map((row) => [row.stableCode, row._id]));
+  const customerIds = new Map(contacts.filter((row) => row.type === 'customer').map((row) => [row.stableCode, row._id]));
+  const expected = prepareDocuments({ ...pkg,
+    productIds: new Map(products.map((row) => [row.sku, row._id])), productBySku: new Map(pkg.products.map((row) => [row.sku, row])),
+    supplierByCode: new Map(pkg.suppliers.map((row) => [row.supplierCode, row])),
+    transactionIds: new Map(transactions.map((row) => [row.stableCode, row._id])),
+  }, supplierIds, customerIds);
+  let operationalMismatches = 0;
+  for (const [actual, wanted, key] of [
+    [products, expected.products, 'sku'], [contacts, expected.contacts, 'sourceEventId'],
+    [transactions, expected.transactions, 'stableCode'], [movements, expected.movements, 'sourceEventId'],
+    [aux, expected.records, 'sourceEventId'],
+  ]) {
+    const actualByKey = new Map(actual.map((row) => [row[key], row]));
+    for (const doc of wanted) {
+      const row = actualByKey.get(doc[key]);
+      if (!operationalFieldsMatch(row, doc)) operationalMismatches += 1;
+    }
+  }
+  assert(operationalMismatches === 0, `operational field mismatch=${operationalMismatches}`);
+  const limaFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Lima', year: 'numeric', month: '2-digit', day: '2-digit' });
+  const limaDate = (at) => limaFormatter.format(new Date(at));
+  const temporalMismatches = transactions.filter((row) => limaDate(row.date) !== row.localDate).length
+    + movements.filter((row) => limaDate(row.occurredAt) !== row.localDate).length;
+  assert(temporalMismatches === 0, `Lima/UTC date mismatch=${temporalMismatches}`);
 
   let orphanProductRefs = 0; let crossTenantRefs = 0;
   for (const product of products) for (const offer of product.supplierPrices || []) {
@@ -138,6 +174,13 @@ async function verifyParity(pkg = loadPackage()) {
   const externalTransactionMovementReferences = await InventoryMovement.collection.countDocuments({ businessId: { $ne: BUSINESS_ID }, transactionId: { $in: transactionIds } });
   const externalOfferReferences = await Product.collection.countDocuments({ businessId: { $ne: BUSINESS_ID }, 'supplierPrices.supplierId': { $in: contactIds } });
   crossTenantRefs += externalProductReferences + externalContactReferences + externalMovementReferences + externalTransactionMovementReferences + externalOfferReferences;
+  const uniqueIds = (ids) => [...new Map(ids.filter(Boolean).map((id) => [String(id), id])).values()];
+  const referencedProducts = uniqueIds([...transactions.flatMap((row) => row.products.map((line) => line.productId)), ...movements.map((row) => row.productId)]);
+  const referencedContacts = uniqueIds([...products.flatMap((row) => [...row.supplierPrices.map((offer) => offer.supplierId), row.preferredSupplierId]), ...transactions.flatMap((row) => [row.customerId, row.vendorId, row.supplierId])]);
+  const outboundCrossTenantRefs = await Product.collection.countDocuments({ businessId: { $ne: BUSINESS_ID }, _id: { $in: referencedProducts } })
+    + await Contact.collection.countDocuments({ businessId: { $ne: BUSINESS_ID }, _id: { $in: referencedContacts } })
+    + await Transaction.collection.countDocuments({ businessId: { $ne: BUSINESS_ID }, _id: { $in: uniqueIds(movements.map((row) => row.transactionId)) } });
+  crossTenantRefs += outboundCrossTenantRefs;
   assert(orphanProductRefs === 0, `orphan refs=${orphanProductRefs}`);
   assert(crossTenantRefs === 0, `cross-tenant refs=${crossTenantRefs}`);
 
@@ -195,11 +238,12 @@ async function verifyParity(pkg = loadPackage()) {
   }
   assert(canonicalJson(actualCategoryTotals) === canonicalJson(canonicalCategoryTotals), 'category revenue/units totals differ from canonical');
   const lowStockCount = products.filter((row) => row.stock <= row.minStockLevel).length;
-  const recentPurchases = purchaseDocs.filter((row) => row.localDate >= '2026-10-05' && row.localDate <= '2026-10-12').length;
+  const recentPurchases = purchaseDocs.filter((row) => row.localDate >= '2026-10-06' && row.localDate <= '2026-10-12').length;
   const recent30DayPurchases = purchaseDocs.filter((row) => row.localDate >= '2026-09-13' && row.localDate <= '2026-10-12').length;
   const todaySales = saleDocs.filter((row) => row.localDate === '2026-10-12').length;
   const yesterdaySales = saleDocs.filter((row) => row.localDate === '2026-10-11').length;
   const last7Sales = saleDocs.filter((row) => row.localDate >= '2026-10-06' && row.localDate <= '2026-10-12').length;
+  const last30Sales = saleDocs.filter((row) => row.localDate >= '2026-09-13' && row.localDate <= '2026-10-12').length;
   const customerTotals = new Map();
   const supplierTotals = new Map();
   for (const row of saleDocs) if (row.customerId) {
@@ -236,9 +280,10 @@ async function verifyParity(pkg = loadPackage()) {
       pendingPurchases, purchaseItems: pkg.purchaseItems.length, movements: movements.length,
       revenueCents: salesRevenueCents, unitsSold: soldUnits, cogsCents,
       purchaseValueCents, receivedPurchaseValueCents, stockMismatch: stockMismatch.length, orphanRefs: orphanProductRefs, crossTenantRefs,
+      operationalMismatches, temporalMismatches, inboundCrossTenantRefs: crossTenantRefs - outboundCrossTenantRefs, outboundCrossTenantRefs,
       categoryTotals: actualCategoryTotals,
       dateRange: { min: dateRows[0], max: dateRows.at(-1) }, monthlySalesRevenueCents: monthlyTotals,
-      querySmokes: { todaySales, yesterdaySales, last7DaysSales: last7Sales, recentPurchases7d: recentPurchases, recentPurchases30d: recent30DayPurchases, lowStockProducts: lowStockCount, topCustomers, topSuppliers, productNameLookup: Boolean(products.find((row) => row.name === pkg.products[0].name)) },
+      querySmokes: { todaySales, yesterdaySales, last7DaysSales: last7Sales, last30DaysSales: last30Sales, recentPurchases7d: recentPurchases, recentPurchases30d: recent30DayPurchases, lowStockProducts: lowStockCount, topCustomers, topSuppliers, productNameLookup: Boolean(products.find((row) => row.name === pkg.products[0].name)) },
       nonV3CollectionCounts,
       productDailyRowsStoredOperationally: false, mongoSize: size,
     },
@@ -262,4 +307,4 @@ async function main() {
 }
 
 if (require.main === module) main().catch((error) => { console.error(error.message); process.exitCode = 1; });
-module.exports = { logicalHash, measureMongo, verifyParity };
+module.exports = { logicalHash, measureMongo, verifyParity, operationalFieldsMatch };

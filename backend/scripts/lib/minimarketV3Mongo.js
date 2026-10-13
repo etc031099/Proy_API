@@ -10,8 +10,41 @@ const { Product, Contact, Transaction, InventoryMovement, HistoricalScenario, Mi
 const SCENARIO_ID = 'minimarket-pasco-v3';
 const BUSINESS_ID = 'MINIMARKET-PASCO-V3';
 const DATABASE = 'inventory_billing';
+const ATLAS_HOST = 'cluster0.e2a81nq.mongodb.net';
 const DEFAULT_DATASET = path.resolve(__dirname, '../../../data/minimarket-pasco-v3/generated');
 const RESET_MODELS = [Product, Contact, Transaction, InventoryMovement, MinimarketV3Record];
+
+function assertAtlasMongoUri(uri) {
+  let parsed;
+  try { parsed = new URL(uri); } catch { throw new Error('Atlas target inválido.'); }
+  if (parsed.protocol !== 'mongodb+srv:' || parsed.hostname !== ATLAS_HOST || parsed.port
+      || parsed.pathname !== `/${DATABASE}` || parsed.searchParams.get('tls') === 'false'
+      || parsed.searchParams.get('ssl') === 'false') throw new Error('Atlas target no coincide con host/base aprobados.');
+  return parsed;
+}
+
+function assertImportConnection(connection, { target = 'local', atlasUri } = {}) {
+  if (connection.name !== DATABASE) throw new Error('Importación abortada: base incorrecta.');
+  if (target === 'local' && connection.host === '127.0.0.1') return;
+  if (target === 'atlas') {
+    assertAtlasMongoUri(atlasUri);
+    if (connection.getClient().options.srvHost === ATLAS_HOST && connection.host?.endsWith('.mongodb.net')) return;
+  }
+  throw new Error('Importación abortada: conexión no coincide con target explícito.');
+}
+
+function assertV3Write(doc, filter) {
+  for (const row of [doc, filter]) {
+    if (row.businessId !== BUSINESS_ID || row.scenarioId !== SCENARIO_ID) throw new Error('Escritura fuera del scope V3 abortada.');
+  }
+}
+
+function assertAtlasRollback({ atlas, scenarioId, businessId, confirmed }) {
+  if (atlas !== true || confirmed !== true || scenarioId !== SCENARIO_ID || businessId !== BUSINESS_ID) {
+    throw new Error('Rollback requiere Atlas explícito, scenario/business V3 exactos y confirmación.');
+  }
+  return scenarioFilter();
+}
 
 function assertLocalMongoUri(uri) {
   let parsed;
@@ -88,6 +121,7 @@ async function writeUpserts(model, documents, filterFor, batchSize = 500) {
   let count = 0;
   for (const group of batches(documents, batchSize)) {
     const filters = group.map(filterFor);
+    group.forEach((doc, index) => assertV3Write(doc, filters[index]));
     const existing = filters.length ? await model.collection.find({ $or: filters }).toArray() : [];
     const existingByIdentity = new Map(existing.map((row) => [canonicalJson(filterFor(row)), row]));
     const canonical = (row) => row.canonicalData ?? row.scenarioData ?? null;
@@ -304,21 +338,18 @@ async function seedStableIdMaps(pkg) {
 }
 
 async function upsertAuxiliary(pkg, docs) {
-  await MinimarketV3Record.collection.deleteMany({
-    businessId: BUSINESS_ID, scenarioId: SCENARIO_ID,
-    recordType: { $in: ['price_history', 'supplier_cost_history'] },
-    $or: [{ stableKey: { $exists: false } }, { stableKey: null }],
-  });
   return writeUpserts(MinimarketV3Record, docs, (row) => stableIdentity('auxiliary', row));
 }
 
-async function importPackage({ directory = DEFAULT_DATASET, reset = false, scenarioId = SCENARIO_ID } = {}) {
+async function importPackage({ directory = DEFAULT_DATASET, reset = false, scenarioId = SCENARIO_ID, target = 'local', atlasUri } = {}) {
   if (scenarioId !== SCENARIO_ID || scenarioId.includes('*')) throw new Error('El scenarioId de import/reset debe ser exactamente minimarket-pasco-v3.');
   const pkg = loadPackage(directory);
   const db = mongoose.connection.db;
-  if (mongoose.connection.name !== DATABASE || mongoose.connection.host !== '127.0.0.1') throw new Error('Importación abortada: la conexión activa no es Mongo local inventory_billing.');
+  assertImportConnection(mongoose.connection, { target, atlasUri });
+  if (target === 'atlas' && reset) throw new Error('Atlas reset requiere el comando rollback explícito.');
   const hello = await db.admin().command({ hello: 1 });
-  if (!hello.isWritablePrimary || !hello.setName) throw new Error('Importación abortada: Mongo local no está en PRIMARY de un replica set.');
+  if (!hello.isWritablePrimary || !hello.setName) throw new Error('Importación abortada: Mongo no está en PRIMARY de un replica set.');
+  if (target === 'atlas') await require('./minimarketV3Atlas').preflightAtlas(pkg);
   const existingScenario = await HistoricalScenario.collection.findOne({ businessId: BUSINESS_ID, scenarioId: SCENARIO_ID });
   if (reset) await resetScenario();
   else if (existingScenario && existingScenario.sourceSha256 !== pkg.manifest.hashes.logicalDatasetSha256) {
@@ -328,12 +359,14 @@ async function importPackage({ directory = DEFAULT_DATASET, reset = false, scena
     if (residue.some(Boolean)) throw new Error('Hay documentos V3 sin control HistoricalScenario; requiere reset exacto y auditado.');
   }
   if (!reset && existingScenario?.status === 'completed' && existingScenario.sourceSha256 === pkg.manifest.hashes.logicalDatasetSha256) {
+    const parity = await require('./minimarketV3Parity').verifyParity(pkg);
+    if (!parity.pass) throw new Error('Escenario completo no supera paridad; se detuvo sin escrituras.');
     return { alreadyImported: true, businessId: BUSINESS_ID, scenarioId: SCENARIO_ID, logicalSha256: pkg.manifest.hashes.logicalDatasetSha256 };
   }
   const outsideBefore = await collectionCountsOutsideScenario();
   await HistoricalScenario.collection.updateOne(
     { businessId: BUSINESS_ID, scenarioId: SCENARIO_ID },
-    { $set: { businessId: BUSINESS_ID, scenarioId: SCENARIO_ID, sourceSha256: pkg.manifest.hashes.logicalDatasetSha256, status: 'importing', importedRecords: 0, failureMessage: null, metadata: { datasetVersion: pkg.manifest.datasetVersion, seed: pkg.manifest.seed, referenceDate: pkg.manifest.referenceDate, timezone: pkg.manifest.timezone, counts: pkg.manifest.counts, aggregates: pkg.manifest.aggregates } } },
+    { $set: { businessId: BUSINESS_ID, scenarioId: SCENARIO_ID, sourceSha256: pkg.manifest.hashes.logicalDatasetSha256, status: 'importing', importedRecords: 0, failureMessage: null, metadata: { importTarget: target, datasetVersion: pkg.manifest.datasetVersion, seed: pkg.manifest.seed, referenceDate: pkg.manifest.referenceDate, timezone: pkg.manifest.timezone, counts: pkg.manifest.counts, aggregates: pkg.manifest.aggregates } } },
     { upsert: true },
   );
   let importedRecords = 0;
@@ -359,18 +392,20 @@ async function importPackage({ directory = DEFAULT_DATASET, reset = false, scena
     assertSameCounts(outsideBefore, outsideAfter);
     const { verifyParity } = require('./minimarketV3Parity');
     const parity = await verifyParity(pkg);
-    if (!parity.pass) throw new Error(`Paridad local falló: ${parity.errors.slice(0, 5).join('; ')}`);
+    if (!parity.pass) throw new Error(`Paridad falló: ${parity.errors.slice(0, 5).join('; ')}`);
     parity.summary.nonV3CollectionCountsBeforeAfter = { before: outsideBefore, after: outsideAfter };
-    await HistoricalScenario.collection.updateOne({ businessId: BUSINESS_ID, scenarioId: SCENARIO_ID }, { $set: { status: 'completed', importedRecords, failureMessage: null, metadata: { datasetVersion: pkg.manifest.datasetVersion, seed: pkg.manifest.seed, referenceDate: pkg.manifest.referenceDate, timezone: pkg.manifest.timezone, counts: pkg.manifest.counts, aggregates: pkg.manifest.aggregates, parity: parity.summary } } });
+    await HistoricalScenario.collection.updateOne({ businessId: BUSINESS_ID, scenarioId: SCENARIO_ID }, { $set: { status: 'completed', importedRecords, failureMessage: null, metadata: { importTarget: target, datasetVersion: pkg.manifest.datasetVersion, seed: pkg.manifest.seed, referenceDate: pkg.manifest.referenceDate, timezone: pkg.manifest.timezone, counts: pkg.manifest.counts, aggregates: pkg.manifest.aggregates, parity: parity.summary } } });
     return { alreadyImported: false, businessId: BUSINESS_ID, scenarioId: SCENARIO_ID, importedRecords, logicalSha256: pkg.manifest.hashes.logicalDatasetSha256, parity: parity.summary };
   } catch (error) {
-    await HistoricalScenario.collection.updateOne({ businessId: BUSINESS_ID, scenarioId: SCENARIO_ID }, { $set: { status: 'failed', importedRecords, failureMessage: String(error.message).slice(0, 300) } });
+    await HistoricalScenario.collection.updateOne({ businessId: BUSINESS_ID, scenarioId: SCENARIO_ID }, { $set: { status: 'failed', importedRecords, failureMessage: 'Import/parity failed; inspect the sanitized execution report.' } });
     throw error;
   }
 }
 
 module.exports = {
   BUSINESS_ID, DATABASE, DEFAULT_DATASET, SCENARIO_ID,
+  ATLAS_HOST, assertAtlasMongoUri, assertImportConnection, assertV3Write, assertAtlasRollback,
+  RESET_MODELS, assertSameCounts, writeUpserts, prepareDocuments,
   assertLocalMongoUri, buildLocalDockerUri, collectionCountsOutsideScenario,
   auxiliaryStableKey, importPackage, loadPackage, logicalFileSha256, reconcileStock, resetScenario, scenarioFilter, stableIdentity,
 };
