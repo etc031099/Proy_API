@@ -6,7 +6,8 @@ const historicalScenarioSchema = new mongoose.Schema({
   sourceSha256: { type: String, required: true },
   status: { type: String, enum: ['importing', 'completed', 'failed'], required: true },
   importedRecords: { type: Number, default: 0, min: 0 },
-  failureMessage: { type: String, default: null }
+  failureMessage: { type: String, default: null },
+  metadata: { type: mongoose.Schema.Types.Mixed, default: null }
 }, { timestamps: true });
 
 historicalScenarioSchema.index(

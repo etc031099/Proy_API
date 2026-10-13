@@ -10,6 +10,8 @@
     "validate:v3-definitions": "node ../scripts/validate-minimarket-v3-definitions.js",
     "seed:v3:generate": "node ../scripts/generate-minimarket-v3.js",
     "seed:v3:validate": "node ../scripts/validate-minimarket-v3-dataset.js",
+    "v3:import": "node scripts/import-minimarket-v3-local.js",
+    "v3:parity": "node scripts/lib/minimarketV3Parity.js",
     "test:integration": "node test/integration/run.js",
     "test:integration:actions": "node test/integration/actionWrites.run.js",
     "test:integration:alert-channels": "node test/integration/inventoryAlertChannels.run.js",

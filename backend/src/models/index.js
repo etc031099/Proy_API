@@ -6,6 +6,7 @@ const TelegramConnection = require('./TelegramConnection');
 const CreditPayment = require('./CreditPayment');
 const InventoryMovement = require('./InventoryMovement');
 const HistoricalScenario = require('./HistoricalScenario');
+const MinimarketV3Record = require('./MinimarketV3Record');
 
 module.exports = {
   User,
@@ -15,5 +16,6 @@ module.exports = {
   TelegramConnection,
   CreditPayment,
   InventoryMovement,
-  HistoricalScenario
+  HistoricalScenario,
+  MinimarketV3Record
 };

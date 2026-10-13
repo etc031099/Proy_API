@@ -14,7 +14,7 @@ const inventoryMovementSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['opening', 'purchase', 'sale', 'cancellation', 'manual_adjustment'],
+    enum: ['opening', 'purchase', 'sale', 'cancellation', 'manual_adjustment', 'waste', 'valuation_adjustment'],
     required: true
   },
   quantityDelta: { type: Number, required: true },
@@ -27,7 +27,14 @@ const inventoryMovementSchema = new mongoose.Schema({
     required: true
   },
   scenarioId: { type: String, default: null, trim: true },
-  sourceEventId: { type: String, default: null, trim: true }
+  sourceEventId: { type: String, default: null, trim: true },
+  stableCode: { type: String, default: null, trim: true },
+  localDate: { type: String, default: null, trim: true },
+  reason: { type: String, default: null, trim: true },
+  currency: { type: String, default: null, trim: true },
+  unitCostCents: { type: Number, default: null },
+  valueDeltaCents: { type: Number, default: null },
+  scenarioData: { type: mongoose.Schema.Types.Mixed, default: null }
 }, {
   timestamps: { createdAt: true, updatedAt: false }
 });
@@ -63,7 +70,7 @@ inventoryMovementSchema.pre('validate', function validateStockEquation(next) {
   if (!values.every(Number.isSafeInteger)) {
     return next(new Error('Inventory movement quantities must be safe integers'));
   }
-  if (this.quantityDelta === 0) {
+  if (this.quantityDelta === 0 && this.type !== 'valuation_adjustment') {
     return next(new Error('Zero-quantity inventory movements are not allowed'));
   }
   if (this.stockAfter !== this.stockBefore + this.quantityDelta) {

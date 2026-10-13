@@ -90,7 +90,23 @@ const productSchema = new mongoose.Schema({
     min: [0, 'Minimum stock level cannot be negative']
   },
   scenarioId: { type: String, default: null, trim: true },
-  sourceEventId: { type: String, default: null, trim: true }
+  sourceEventId: { type: String, default: null, trim: true },
+  productKey: { type: String, default: null, trim: true },
+  categoryCode: { type: String, default: null, trim: true },
+  subcategoryCode: { type: String, default: null, trim: true },
+  brand: { type: String, default: null, trim: true },
+  presentation: { type: String, default: null, trim: true },
+  sizeValue: { type: Number, default: null },
+  sizeUnit: { type: String, default: null, trim: true },
+  containedUnits: { type: Number, default: null },
+  unit: { type: String, default: null, trim: true },
+  perishable: { type: Boolean, default: false },
+  shelfLifeDays: { type: Number, default: null },
+  safetyStock: { type: Number, default: null },
+  reorderPoint: { type: Number, default: null },
+  demandProfileKey: { type: String, default: null, trim: true },
+  associationProfileKey: { type: String, default: null, trim: true },
+  canonicalData: { type: mongoose.Schema.Types.Mixed, default: null }
 }, {
   timestamps: true
 });

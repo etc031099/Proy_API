@@ -28,7 +28,15 @@ const transactionItemSchema = new mongoose.Schema({
   total: {
     type: Number,
     required: true
-  }
+  },
+  sku: { type: String, default: null, trim: true },
+  productKey: { type: String, default: null, trim: true },
+  stableLineKey: { type: String, default: null, trim: true },
+  sourceEventId: { type: String, default: null, trim: true },
+  requestedQuantity: { type: Number, default: null },
+  unitsSold: { type: Number, default: null },
+  discountCents: { type: Number, default: null },
+  costCents: { type: Number, default: null }
 }, { _id: false });
 
 const transactionSchema = new mongoose.Schema({
@@ -121,7 +129,11 @@ const transactionSchema = new mongoose.Schema({
   invoiceNumber: {
     type: String,
     trim: true
-  }
+  },
+  stableCode: { type: String, default: null, trim: true },
+  localDate: { type: String, default: null, trim: true },
+  sourceEventId: { type: String, default: null, trim: true },
+  scenarioData: { type: mongoose.Schema.Types.Mixed, default: null }
 }, {
   timestamps: true
 });

@@ -102,7 +102,10 @@ const contactSchema = new mongoose.Schema({
     EUR: { type: Number, default: 0, min: 0 }
   },
   scenarioId: { type: String, default: null, trim: true },
-  sourceEventId: { type: String, default: null, trim: true }
+  sourceEventId: { type: String, default: null, trim: true },
+  stableCode: { type: String, default: null, trim: true },
+  stableKey: { type: String, default: null, trim: true },
+  canonicalData: { type: mongoose.Schema.Types.Mixed, default: null }
 }, {
   timestamps: true
 });
