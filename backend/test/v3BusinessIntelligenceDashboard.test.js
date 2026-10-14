@@ -9,7 +9,10 @@ const { authenticate } = require('../src/middleware/auth');
 
 const user = { _id: '507f1f77bcf86cd799439011', businessId: V3.businessId, isActive: true, role: 'user' };
 const request = (query = {}, params = {}) => ({ user, businessId: user.businessId, query, params });
-const makeDashboard = ({ fail, partial = false, productPresent = true, supplierNoHistory = false } = {}) => {
+const makeDashboard = ({ fail, partial = false, productPresent = true, supplierNoHistory = false,
+  crossSellItems = [{ antecedentSkus: ['SKU-1'], consequentSkus: ['SKU-2'], recommendedSku: 'SKU-2',
+    recommendedProduct: 'Producto dos', ticketCount: 32,
+    support: .003, confidence: .4, lift: 1.8, stability: { status: 'STABLE' } }] } = {}) => {
   const calls = [];
   const intelligenceService = {
     async resolveContext(context) { calls.push({ kind: 'context', businessId: context.businessId });
@@ -56,8 +59,7 @@ const makeDashboard = ({ fail, partial = false, productPresent = true, supplierN
         case 'get_cross_sell_recommendations': return { status: 'READY', metadata, data: invocation.args.mode === 'summary'
           ? { available: true, total: 66, items: [], summary: { analysisCutoff: '2026-10-12', validTickets: 12647, itemsetsCount: 432,
             rulesCount: 66, qualityRulesCount: 67, crossSellCount: 33 } }
-          : { available: true, sourceSku: 'SKU-1', total: 1, items: [{ recommendedSku: 'SKU-2', recommendedProduct: 'Producto dos',
-            ticketCount: 32, support: .003, confidence: .4, lift: 1.8, stability: { status: 'STABLE' } }] } };
+          : { available: true, sourceSku: 'SKU-1', total: crossSellItems.length, items: crossSellItems } };
         case 'get_business_health': return { status: 'READY', metadata, data: { availabilityStatus: 'PARTIAL', healthScore: null,
           businessHealth: { sales: { kpis: {}, freshness: { status: 'LIVE' }, alerts: [] }, inventory: { critical: 2, freshness: { status: 'LIVE' }, alerts: [] },
             customers: { atRiskCount: 4, freshness: { status: 'LIVE' }, alerts: [] }, suppliers: { pending: 4, freshness: { status: 'LIVE' }, alerts: [] },
@@ -228,17 +230,43 @@ test('supplier API reports received/pending semantics and detail cost history av
 });
 
 test('Market Basket API labels frozen cutoff and projects approved rule metrics', async () => {
-  const { service } = makeDashboard();
-  const summary = await service.associations(request());
+  const { service, calls } = makeDashboard();
+  const summary = await service.associations(request({ period: 'TODAY' }));
   assert.ok(summary.data, JSON.stringify(summary.error));
   assert.equal(summary.data.mode, 'FROZEN');
   assert.equal(summary.data.cutoff, '2026-10-12');
+  assert.equal(summary.data.asOf, '2026-10-12');
+  assert.deepEqual(summary.data.items[0].antecedent, ['SKU-1']);
+  assert.deepEqual(summary.data.items[0].consequent, ['SKU-2']);
+  assert.equal(summary.data.items[0].support, .003);
+  assert.equal(summary.data.items[0].confidence, .4);
+  assert.equal(summary.data.items[0].lift, 1.8);
+  assert.equal(summary.data.items[0].ticketCount, 32);
   assert.equal(summary.data.summary.validTickets, 12647);
   assert.equal(summary.data.summary.crossSellCount, 33);
-  const related = await service.productRelated(request({}, { sku: 'SKU-1' }));
+  const related = await service.productRelated(request({ asOf: 'not-a-date', period: 'TODAY' }, { sku: 'SKU-1' }));
+  assert.equal(related.data.asOf, '2026-10-12');
   assert.equal(related.data.mode, 'FROZEN');
   assert.equal(related.data.items[0].relatedProduct.sku, 'SKU-2');
   assert.equal(related.data.items[0].ticketCount, 32);
+  const crossSellCalls = calls.filter(call => call.kind === 'get_cross_sell_recommendations');
+  assert.equal(crossSellCalls.length, 3);
+  assert.ok(crossSellCalls.every(call => call.args.asOfDate === '2026-10-12'
+    && call.args.startDate === undefined && call.args.endDate === undefined));
+});
+
+test('Market Basket returns an empty related list for a known SKU without rules and safely rejects an unknown SKU', async () => {
+  const empty = await makeDashboard({ crossSellItems: [] }).service.productRelated(request({}, { sku: 'SKU-1' }));
+  assert.ok(empty.data, JSON.stringify(empty.error));
+  assert.equal(empty.data.mode, 'FROZEN');
+  assert.equal(empty.data.cutoff, '2026-10-12');
+  assert.equal(empty.data.available, true);
+  assert.deepEqual(empty.data.items, []);
+  assert.equal(empty.data.total, 0);
+
+  const unknown = await makeDashboard({ productPresent: false }).service.productRelated(request({}, { sku: 'UNKNOWN-SKU' }));
+  assert.equal(unknown.error.code, 'PRODUCT_NOT_FOUND');
+  assert.equal(unknown.error.httpStatus, 404);
 });
 
 test('health API returns domain freshness and insights without a composite score', async () => {

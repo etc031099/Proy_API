@@ -38,7 +38,7 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, cl
       .select(fields).lean().maxTimeMS(3000);
     return new Map(rows.map(row => [row.sku, row]));
   };
-  const contextFor = async req => {
+  const contextFor = async (req, { frozen = false } = {}) => {
     const businessId = req.user?.businessId;
     if (!businessId || req.businessId && req.businessId !== businessId) {
       const error = new Error('Tenant context mismatch'); error.functionalCode = 'TENANT_MISMATCH'; throw error;
@@ -47,7 +47,9 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, cl
     const authenticated = { businessId, requestId, userId: String(req.user?._id || req.user?.id || '') };
     const binding = await service.resolveContext(authenticated);
     if (!binding) { const error = new Error('Scenario not supported'); error.functionalCode = 'SCENARIO_NOT_SUPPORTED'; throw error; }
-    const asOf = req.query?.asOf || binding.operationalDate;
+    // Market Basket is an approved frozen artifact, not a period-based LIVE
+    // query. Ignore generic dashboard date params and bind it to its lineage.
+    const asOf = frozen ? V3.historicalCutoff : req.query?.asOf || binding.operationalDate;
     if (!validDate(asOf) || asOf > binding.operationalDate || asOf < V3.earliestDate) {
       const error = new Error('Invalid period'); error.functionalCode = 'INVALID_PERIOD'; throw error;
     }
@@ -190,7 +192,7 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, cl
   const supplier = async req => entityDetail(req, { domain: 'suppliers', skill: 'get_supplier_intelligence', refArg: 'supplierRef', notFound: 'SUPPLIER_NOT_FOUND', mapper: supplierRow,
     args: { mode: 'detail' } });
   const associations = async req => {
-    const prepared = await run(req); if (prepared.error) return { error: prepared.error };
+    const prepared = await run(req, { frozen: true }); if (prepared.error) return { error: prepared.error };
     const { context } = prepared, limit = parseLimit(req.query?.limit), offset = parseOffset(req.query?.offset);
     if (!limit || offset === null) return { error: invalidLimitError() };
     try {
@@ -204,7 +206,7 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, cl
     } catch (error) { return { error: safeError(error) }; }
   };
   const productRelated = async req => {
-    const prepared = await run(req); if (prepared.error) return { error: prepared.error };
+    const prepared = await run(req, { frozen: true }); if (prepared.error) return { error: prepared.error };
     const { context } = prepared, sku = String(req.params?.sku || '').trim(), limit = parseLimit(req.query?.limit);
     if (!limit) return { error: invalidLimitError() };
     if (!/^[A-Za-z0-9._-]{1,100}$/.test(sku)) return { error: invalidRequestError() };
@@ -259,8 +261,8 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, cl
         item, historyAvailability } };
     } catch (error) { return { error: safeError(error) }; }
   };
-  const run = async req => {
-    try { return { context: await contextFor(req), error: null }; }
+  const run = async (req, options) => {
+    try { return { context: await contextFor(req, options), error: null }; }
     catch (error) { return { context: null, error: safeError(error) }; }
   };
   const summary = async req => {
