@@ -12,6 +12,7 @@ import type {
 } from '@/types/businessIntelligence';
 import { ChartCard, MetricInfo, MetricLabel } from './MetricInfo';
 import { CustomerClusteringPanel } from './CustomerClusteringPanel';
+import { SalesAnomalyPanel } from './SalesAnomalyPanel';
 
 export type ExtendedTab = 'sales' | 'customers' | 'suppliers' | 'related' | 'health';
 type LoadStatus = 'loading' | 'ready' | 'error';
@@ -154,6 +155,7 @@ export function ExtendedAnalyticsPanel({ tab, inventory }: { tab: ExtendedTab; i
   return <Card><CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3"><div><CardTitle>{title[tab]}</CardTitle><CardDescription>{freshness || 'Analítica del negocio'}</CardDescription></div>{['sales', 'suppliers', 'health'].includes(tab) && <PeriodSelect value={period} onChange={setPeriod} />}</CardHeader><CardContent className="space-y-5">
     <DataState status={status} message={message} onRetry={retry} />
     {tab === 'sales' && data && 'summary' in data && <SalesView data={data as SalesAnalytics} />}
+    {tab === 'sales' && <SalesAnomalyPanel />}
     {tab === 'customers' && data && 'items' in data && <CustomersView data={data as CustomersAnalytics} detail={customerDetail} detailStatus={detailStatus} detailMessage={detailMessage} onSelect={ref => void openDetail('customer', ref)} onRetry={retryDetail} />}
     {tab === 'suppliers' && data && 'items' in data && <SuppliersView data={data as SuppliersAnalytics} detail={supplierDetail} detailStatus={detailStatus} detailMessage={detailMessage} onSelect={ref => void openDetail('supplier', ref)} onRetry={retryDetail} />}
     {tab === 'health' && data && 'domains' in data && <HealthView data={data as BusinessHealthAnalytics} />}

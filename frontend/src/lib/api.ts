@@ -4,6 +4,7 @@ import { ApiResponse, DemandForecastResponse, DemoV2RegisterData, DemoV3Register
 import type { AgentMessageRequest, AgentResponse, AgentConversationList, AgentConversationDetail } from '@/types/agent';
 import type { AnalyticsEnvelope, AssociationsAnalytics, BusinessHealthAnalytics, BusinessSummary, CustomerAnalyticsDetail, CustomersAnalytics, ForecastResponse, InventorySummary, ProductInventory, ProductOption, RelatedProductAnalytics, SalesAnalytics, SalesPeriod, SupplierAnalyticsDetail, SuppliersAnalytics } from '@/types/businessIntelligence';
 import type { CustomerClustering } from '@/types/customerClustering';
+import type { SalesAnomalies } from '@/types/salesAnomalies';
 
 export class AgentApiError extends Error {
   constructor(readonly status?: number, readonly code?: string, readonly conversationId?: string) {
@@ -437,6 +438,9 @@ class ApiClient {
   }
   async getCustomerClustering(customerRef?: string): Promise<AnalyticsEnvelope<CustomerClustering>> {
     return (await this.instance.get('/intelligence/customers/clustering', { params: customerRef ? { customerRef } : undefined })).data;
+  }
+  async getSalesAnomalies(params?: { startDate?: string; endDate?: string; limit?: number }): Promise<AnalyticsEnvelope<SalesAnomalies>> {
+    return (await this.instance.get('/intelligence/sales/anomalies', { params })).data;
   }
   async getCustomerAnalytics(customerRef: string): Promise<AnalyticsEnvelope<CustomerAnalyticsDetail>> {
     return (await this.instance.get(`/intelligence/customers/${encodeURIComponent(customerRef)}`)).data;

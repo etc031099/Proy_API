@@ -25,6 +25,7 @@ export default defineConfig({
       'test/businessIntelligenceDashboard.test.tsx',
       'test/forecastEvaluation.test.tsx',
       'test/customerClustering.test.tsx',
+      'test/salesAnomalies.test.tsx',
       'test/businessIntelligenceExtended.api.test.ts',
       'test/businessIntelligenceExtended.component.test.tsx',
     ],
