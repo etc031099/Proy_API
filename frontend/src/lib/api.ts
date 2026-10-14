@@ -3,6 +3,7 @@ import type { ForecastEvaluation } from '@/types/forecastEvaluation';
 import { ApiResponse, DemandForecastResponse, DemoV2RegisterData, DemoV3RegisterData } from '@/types';
 import type { AgentMessageRequest, AgentResponse, AgentConversationList, AgentConversationDetail } from '@/types/agent';
 import type { AnalyticsEnvelope, AssociationsAnalytics, BusinessHealthAnalytics, BusinessSummary, CustomerAnalyticsDetail, CustomersAnalytics, ForecastResponse, InventorySummary, ProductInventory, ProductOption, RelatedProductAnalytics, SalesAnalytics, SalesPeriod, SupplierAnalyticsDetail, SuppliersAnalytics } from '@/types/businessIntelligence';
+import type { CustomerClustering } from '@/types/customerClustering';
 
 export class AgentApiError extends Error {
   constructor(readonly status?: number, readonly code?: string, readonly conversationId?: string) {
@@ -433,6 +434,9 @@ class ApiClient {
   }
   async getCustomersAnalytics(params?: { sortBy?: 'spend' | 'frequency' | 'recency' | 'gross_margin'; segment?: string; limit?: number; offset?: number }): Promise<AnalyticsEnvelope<CustomersAnalytics>> {
     return (await this.instance.get('/intelligence/customers', { params })).data;
+  }
+  async getCustomerClustering(customerRef?: string): Promise<AnalyticsEnvelope<CustomerClustering>> {
+    return (await this.instance.get('/intelligence/customers/clustering', { params: customerRef ? { customerRef } : undefined })).data;
   }
   async getCustomerAnalytics(customerRef: string): Promise<AnalyticsEnvelope<CustomerAnalyticsDetail>> {
     return (await this.instance.get(`/intelligence/customers/${encodeURIComponent(customerRef)}`)).data;

@@ -11,6 +11,7 @@ import type {
   InventorySummary, RelatedProductAnalytics, SalesAnalytics, SalesPeriod, SupplierAnalyticsDetail, SuppliersAnalytics,
 } from '@/types/businessIntelligence';
 import { ChartCard, MetricInfo, MetricLabel } from './MetricInfo';
+import { CustomerClusteringPanel } from './CustomerClusteringPanel';
 
 export type ExtendedTab = 'sales' | 'customers' | 'suppliers' | 'related' | 'health';
 type LoadStatus = 'loading' | 'ready' | 'error';
@@ -189,6 +190,7 @@ function CustomersView({ data, detail, detailStatus, detailMessage, onSelect, on
     <Table headers={['Cliente', 'Segmento', 'Recencia', 'Frecuencia', 'Valor monetario', 'Ticket promedio', 'Última compra']} empty="No hay clientes RFM para mostrar." rows={data.items.map(row => [row.customerId ? <button type="button" className="text-left font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => onSelect(row.customerId!)}>{row.displayName || 'Cliente'}<span className="block text-xs font-normal text-muted-foreground">Ver detalle</span></button> : row.displayName || 'Cliente', segmentLabels[row.segment || ''] || row.segment || 'No disponible', <>{numberText(row.recency)} <span className="text-xs text-muted-foreground">días</span></>, numberText(row.frequency), moneyText(row.monetary), moneyText(row.averageTicket), dateText(row.lastPurchaseDate)])} />
     <div className="text-xs text-muted-foreground"><MetricLabel label="Recencia" help="Cuánto tiempo pasó desde la última compra." /> · <MetricLabel label="Frecuencia" help="Cuántas compras realizó el cliente en la ventana analizada." /> · <MetricLabel label="Valor monetario" help="Cuánto gastó el cliente en la ventana analizada." />.</div>
     <DataState status={detailStatus} message={detailMessage} onRetry={onRetry} />{detail && <CustomerDetailCard detail={detail} />}
+    <CustomerClusteringPanel selectedRef={detail?.item.customerId} selectedRfmSegment={segmentLabels[detail?.item.segment || ''] || detail?.item.segment} onSelect={onSelect} />
   </div>;
 }
 function CustomerDetailCard({ detail }: { detail: CustomerAnalyticsDetail }) {

@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { apiClient } from '@/lib/api';
 import { ExtendedAnalyticsPanel } from '@/components/business-intelligence/ExtendedAnalyticsPanel';
 import type { InventorySummary } from '@/types/businessIntelligence';
@@ -12,6 +12,7 @@ vi.mock('recharts', () => ({
 }));
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+beforeEach(() => { vi.spyOn(apiClient, 'getCustomerClustering').mockRejectedValue(new Error('ML metadata outside this fixture')); });
 const envelope = <T,>(data: T) => ({ success: true, data });
 const meta = { asOf: '2026-10-14', timezone: 'America/Lima', mode: 'LIVE' as const, updatedAt: null, dataThrough: '2026-10-14' };
 const inventory = { ...meta, summary: { totalProducts: 1, riskCounts: { critical: 0, high: 0, medium: 1, low: 0 }, reorderCount: 0, lowStockCount: 0, overstockCount: 0, incomingUnits: 0 }, items: [{ sku: 'PAN-FRE-001', productName: 'Pan francés', presentation: null, stock: 21, coverageDays: 4, risk: 'MEDIUM', riskReasonCodes: [], recommendedQty: null, reorderNow: false }], total: 1 } as InventorySummary;
