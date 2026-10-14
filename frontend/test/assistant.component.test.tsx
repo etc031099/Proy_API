@@ -312,6 +312,7 @@ it('shows one useful empty-state message without repeating the unavailable-data 
   render(<AssistantPage />); submit('qué se compra junto con este producto');
   expect(await screen.findByRole('region', { name: 'Compras observadas juntas' })).toBeTruthy();
   expect(screen.getAllByText('No hay asociaciones validadas para este corte.')).toHaveLength(1);
+  expect(within(screen.getByRole('region', { name: 'Compras observadas juntas' })).queryByText('0', { exact: true })).toBeNull();
   expect(screen.queryByText('No hay datos para los filtros solicitados.')).toBeNull();
   expect(screen.queryByText('raw duplicate')).toBeNull();
 });

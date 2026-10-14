@@ -225,6 +225,50 @@ test('V3 forecast comparison resolves both authorized products in one skill', as
   const f = fixture(); const result = await f.run('Compara la demanda de PAN-FRE-001 y BEB-GAS-003'); zero(result);
   assert.equal(f.calls.at(-1).payload.mode, 'compare'); assert.deepEqual(f.calls.at(-1).payload.skus, ['PAN-FRE-001', 'BEB-GAS-003']);
   assert.equal(result.usage.totalSkillCalls, 1);
+  assert.equal(result.v3Views[0].items.length, 2);
+  assert.deepEqual(result.v3Views[0].items.map(row => row.key), ['PAN-FRE-001', 'BEB-GAS-003']);
+});
+
+test('V3 cloud forecast phrase keeps the temporal suffix outside the product reference', async () => {
+  const f = fixture(), cid = randomUUID();
+  const candidates = await f.run('¿Cuál es el pronóstico de Inca Kola para los próximos 7 días?', cid); zero(candidates);
+  assert.equal(candidates.suggestions.length, 2);
+  const selected = await f.run('BEB-GAS-004', cid); zero(selected);
+  assert.deepEqual(f.calls.at(-1).payload.skus, ['BEB-GAS-004']);
+  assert.equal(f.calls.at(-1).payload.horizonDays, 7);
+  assert.equal(selected.v3Views[0].items[0].key, 'BEB-GAS-004');
+  assert.match(selected.v3Views[0].items[0].label, /1\.5 L/);
+  assert.equal(selected.v3Views[0].items[0].metrics[0].value, 14);
+});
+
+test('V3 name-free forecast detail preserves the selected label and actual quantity', async () => {
+  const f = fixture(); const result = await f.run('Pronóstico de BEB-GAS-004'); zero(result);
+  assert.equal(result.v3Views[0].items.length, 1);
+  assert.equal(result.v3Views[0].items[0].key, 'BEB-GAS-004');
+  assert.equal(result.v3Views[0].items[0].metrics[0].value, 14);
+  assert.match(result.v3Views[0].items[0].label, /Inca Kola.*1\.5 L/);
+});
+
+test('V3 horizon-only followups reuse the selected product with no LLM', async () => {
+  const f = fixture(), cid = randomUUID(); zero(await f.run('Pronóstico de BEB-GAS-004', cid));
+  for (const horizon of [14, 1, 7]) {
+    const result = await f.run(`¿Y para los próximos ${horizon} días?`, cid); zero(result);
+    assert.equal(f.calls.at(-1).payload.horizonDays, horizon);
+    assert.deepEqual(f.calls.at(-1).payload.skus, ['BEB-GAS-004']);
+    assert.equal(result.v3Views[0].items[0].metrics[0].value, horizon * 2);
+  }
+  const calls = f.calls.length;
+  const unavailable = await f.run('¿Y para los próximos 28 días?', cid); zero(unavailable);
+  assert.equal(f.calls.length, calls);
+  assert.ok(unavailable.suggestions.every(row => row.message.includes('BEB-GAS-004')));
+});
+
+test('V3 horizon-only phrase in a new conversation clarifies without inheriting a product', async () => {
+  const f = fixture(); zero(await f.run('Pronóstico de BEB-GAS-004'));
+  const count = f.calls.length; const result = await f.run('¿Y para los próximos 14 días?'); zero(result);
+  assert.equal(result.requiresClarification, true);
+  assert.equal(result.usage.totalSkillCalls, 0);
+  assert.equal(f.calls.length, count);
 });
 test('V3 forecast comparison keeps the second entity during first-entity disambiguation', async () => {
   const f = fixture(), cid = randomUUID(); const first = await f.run('Compara la demanda de Inca Kola y pan francés', cid); zero(first);

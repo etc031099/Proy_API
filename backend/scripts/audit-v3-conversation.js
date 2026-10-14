@@ -52,6 +52,7 @@ async function main() {
     ['supplier-inventory', ['Qué proveedor tarda más y cuáles de sus productos están críticos']],
     ['customer-preferences', ['Quién es mi mejor cliente y qué suele comprar']],
     ['unsupported-28', ['Pronóstico próximos 28 días', 'pronóstico próximos 14 días']],
+    ['forecast-cloud-followup', ['¿Cuál es el pronóstico de Inca Kola para los próximos 7 días?', 'BEB-GAS-004', '¿Y para los próximos 14 días?', '¿Y para los próximos 1 días?', '¿Y para los próximos 28 días?']],
     ['categories', ['Ventas por categoría', 'BEB']],
     ['ordinal', ['Productos críticos', 'el segundo', 'Cuánto debería pedir']],
     ['visible-name', ['Pan francés', 'Pan francés', 'Cuánto debería pedir']],
@@ -69,7 +70,7 @@ async function main() {
   if (!output) throw new Error('Missing audit output path');
   fs.mkdirSync(path.dirname(output), { recursive: true });
   fs.writeFileSync(output, JSON.stringify(report, null, 2) + '\n', 'utf8');
-  console.log(JSON.stringify({ counts, severity, families: report.families.length, multiTurnFlows: 12 }));
+  console.log(JSON.stringify({ counts, severity, families: report.families.length, multiTurnFlows: cases.filter(row => row.id.startsWith('flow-')).length }));
   if (counts.FAIL) process.exitCode = 1;
 }
 main().catch(error => { console.error(`V3 audit failed: ${error.name}`); process.exitCode = 1; });

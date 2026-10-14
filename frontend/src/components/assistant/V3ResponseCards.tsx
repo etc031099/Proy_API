@@ -38,7 +38,7 @@ export function V3ResponseCards({ views, response, disabled, onSelect }: {
       {view.items.length > 0 && <ol className="mt-3 min-w-0 list-none space-y-2">
         {view.items.map((item, itemIndex) => <DisplayItem key={`${item.type}-${item.key}-${itemIndex}`} item={item} rank={itemIndex + 1} disabled={disabled} onSelect={onSelect} />)}
       </ol>}
-      {view.note && (view.metrics.length || view.items.length)
+      {view.note && !!(view.metrics.length || view.items.length)
         && <p className="mt-3 break-words text-xs text-muted-foreground">{view.note}</p>}
       {!view.metrics.length && !view.items.length && <p className="mt-2 break-words text-sm text-muted-foreground">
         {view.note || 'No hay datos para los filtros solicitados.'}</p>}

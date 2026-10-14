@@ -10,7 +10,7 @@ const clean = text => normalize(text).replace(/\bq\b/g, 'que').replace(/\bd\b/g,
   .replace(/\bprodcutos\b/g, 'productos').replace(/\bstan\b/g, 'estan').replace(/\breposision\b/g, 'reposicion');
 const trimRef = text => {
   const ref = String(text || '').replace(/[¿?¡!]/g, '').trim()
-    .replace(/\s+(?:hoy|ayer|anteayer|esta semana|este mes|el mes pasado|los proximos|los próximos|los ultimos|los últimos|en los|durante|para mañana|manana|mañana|por favor|el \d+ de).*$/i, '').trim();
+    .replace(/\s+(?:para\s+(?:los\s+)?pr[oó]ximos?\s+\d+\s+d[ií]as?|hoy|ayer|anteayer|esta semana|este mes|el mes pasado|los proximos|los próximos|los ultimos|los últimos|en los|durante|para mañana|manana|mañana|por favor|el \d+ de).*$/i, '').trim();
   return /^(?:el|ella|ellos|eso|ayer|hoy|anteayer|manana)$/.test(normalize(ref)) ? null : ref;
 };
 const productRef = message => message.match(/\b(?:[A-Z]{2,}(?:-[A-Z0-9]+){1,5}|M5-[A-Z]+_\d+_\d+)\b/)?.[0]
@@ -26,6 +26,10 @@ const queryPeriod = (message, binding, memory, followup = false) => {
 
 const routeV3 = (message, state, binding) => {
   const text = clean(message), memory = state || {};
+  const horizonFollowup = /^(?:y )?(?:para )?(?:los )?proximos? \d+ dias?$/.test(text);
+  if (horizonFollowup && memory.lastFamily !== 'get_product_forecast') {
+    return { clarificationQuestion: '¿De qué producto deseas consultar el pronóstico? No hay un pronóstico previo en esta conversación.' };
+  }
   if (/confianza|confidence|intervalo.*prediccion/.test(text)) return { clarificationQuestion: 'El pronóstico V3 no expone una confianza exacta ni un intervalo de predicción. WAPE no es una probabilidad de acierto individual.' };
   if (/^por que/.test(text) && /proveedor/.test(text)) return null;
   if (/alternativas|alternativo/.test(text) && /proveedor/.test(text)) {
@@ -95,8 +99,8 @@ const routeV3 = (message, state, binding) => {
     const ref = productRef(message) || (/\bel\b|\beso\b|\bsu\b/.test(text) ? memory.selectedProduct?.key : null);
     return { tasks: [task('get_cross_sell_recommendations', { mode: ref ? 'recommend' : 'rules', ...(ref ? { productRef: ref } : {}) })] };
   }
-  if (/pronostic|prediccion|forecast|demanda|cuanto vendere|manana|proxima semana/.test(text)) {
-    const ref = productRef(message) || (/\bsu\b|^y |manana/.test(text) ? memory.selectedProduct?.key : null);
+  if (horizonFollowup || /pronostic|prediccion|forecast|demanda|cuanto vendere|manana|proxima semana/.test(text)) {
+    const ref = productRef(message) || (horizonFollowup || /\bsu\b|^y |manana/.test(text) ? memory.selectedProduct?.key : null);
     const horizon = Number(text.match(/\b(\d+) dias?\b/)?.[1] || (/manana/.test(text) ? 1 : /14|dos semanas/.test(text) ? 14 : 7));
     if (/como calcul|metodo|metodologia/.test(text)) return { tasks: [task('get_product_forecast', { mode: 'method' })] };
     if (![1, 7, 14].includes(horizon) || /proximo mes|28 dias/.test(text)) return { clarificationQuestion: 'El horizonte validado para este escenario llega a 14 días.',
@@ -191,11 +195,20 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
   const metrics = [], items = [];
   const valueFor = (row, index) => rankedEntities[index] || null;
   const categoryNames = new Map();
+  const productNames = new Map();
   for (const row of rows) {
     const code = row.categoryCode || row.subcategoryCode;
     if (entityType === 'category' && code && !row.categoryName && !row.name) {
       const resolved = await service.resolveEntity(row.subcategoryCode ? 'subcategory' : 'category', code, context);
       if (resolved.entity) categoryNames.set(code, resolved.entity.label);
+    }
+    // Forecast rows carry SKU and quantities, while the backend owns labels.
+    if (skillId === 'get_product_forecast' && row.sku && !row.productName && !row.name) {
+      if (selected?.key === row.sku) productNames.set(row.sku, selected.label);
+      else {
+        const resolved = await service.resolveEntity('product', row.sku, context);
+        if (resolved.entity) productNames.set(row.sku, resolved.entity.label);
+      }
     }
   }
   const itemFor = (row, index, itemMetrics = []) => {
@@ -203,9 +216,9 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
       || row.consequentSkus?.[0] || row.recommendedSku;
     const type = resolved?.type || (entityType === 'category' ? 'category' : entityType);
     if (!key || !type) return null;
-    const labelText = resolved?.label || row.productName || row.displayName || row.name || row.categoryName || categoryNames.get(key);
+    const labelText = resolved?.label || row.productName || row.displayName || row.name || row.categoryName || categoryNames.get(key) || productNames.get(key);
     if (!labelText) return null;
-    const title = result.metadata.selected?.[type]?.label || labelText;
+    const title = result.metadata.selected?.[type]?.key === key ? result.metadata.selected[type].label : labelText;
     return { type, key, label: title, secondaryLabel: type === 'product' ? key : type === 'category' ? undefined : key,
       metrics: itemMetrics, ...((args.mode === 'rank' || skillId === 'get_cross_sell_recommendations' || skillId === 'get_supplier_intelligence' && args.mode === 'alternatives') ? { selectMessage: key } : {}) };
   };
