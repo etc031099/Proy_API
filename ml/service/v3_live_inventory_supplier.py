@@ -1,0 +1,698 @@
+"""LIVE inventory and supplier views over the immutable backend snapshot.
+
+This is deliberately a wrapper, not a second forecasting/replenishment engine:
+M6.6 policy fields that require a current forecast remain unavailable until F.4E.
+"""
+from __future__ import annotations
+
+import json
+from collections import OrderedDict, defaultdict
+from datetime import date, datetime, timedelta
+import math
+from statistics import median, pstdev
+from threading import RLock
+from typing import Any
+from zoneinfo import ZoneInfo
+
+from ml.service.v3_live_business_customer import LiveDomainError
+from ml.service.v3_live_context import LiveV3Context
+from ml.src import business_customer_supplier_v3 as m68
+from ml.src import inventory_intelligence_v3 as m66
+
+LIMA = ZoneInfo("America/Lima")
+
+
+def _get(row: Any, key: str, default=None):
+    return row.get(key, default) if isinstance(row, dict) else getattr(row, key, default)
+
+
+def _local_date(value: datetime) -> date:
+    return value.astimezone(LIMA).date()
+
+
+class LiveInventorySupplierAdapter:
+    """Bounded cache of immutable per-snapshot projections; no historical mutation."""
+
+    ENGINE_VERSION = "m6.9f4d-live-inventory-supplier-v1"
+
+    def __init__(self, records: dict[str, Any], static: dict[str, Any], inventory_engine,
+                 supplier_engine):
+        self.records, self.static = records, static
+        self.inventory_engine, self.supplier_engine = inventory_engine, supplier_engine
+        self._cache: OrderedDict[tuple[str, ...], dict[str, Any]] = OrderedDict()
+        self._lock = RLock()
+
+    def _key(self, live: LiveV3Context, domain: str, request) -> tuple[str, ...]:
+        meta = live.snapshot.metadata
+        filters = {key: getattr(request, key, None) for key in
+                   ("mode", "skus", "supplierCode", "productSkus", "risk", "abc", "xyz", "flag", "metric", "limit", "offset", "period")}
+        return (meta.businessId, meta.scenarioId, live.data_version, live.context_hash,
+                live.as_of_date.isoformat(), domain, self.ENGINE_VERSION,
+                json.dumps(filters, sort_keys=True, separators=(",", ":"), default=str))
+
+    def inventory_data(self, request, live: LiveV3Context):
+        key = self._key(live, "inventory", request)
+        with self._lock:
+            rows = self._cache.get(key)
+            if rows is None:
+                rows = self._inventory_rows(live)
+                self._cache[key] = rows
+                while len(self._cache) > 8:
+                    self._cache.popitem(last=False)
+            else:
+                self._cache.move_to_end(key)
+        values = list(rows["products"])
+        if request.skus:
+            missing = set(request.skus) - {row["sku"] for row in values}
+            if missing:
+                raise LiveDomainError("PRODUCT_NOT_FOUND", 404, "One or more product SKUs were not found.")
+            wanted = set(request.skus)
+            values = [row for row in values if row["sku"] in wanted]
+        # LIVE risk scores depend on the not-yet-approved LIVE forecast. Do not
+        # turn a missing score into an empty, apparently complete result.
+        if request.risk:
+            return {"availabilityStatus": "PARTIAL", "reasonCode": "LIVE_FORECAST_REQUIRED",
+                    "total": 0, "analyzedCount": 0, "unavailableCount": len(values),
+                    "items": [], "freshness": {**dict(live.freshness("inventory")),
+                    "engineVersion": self.ENGINE_VERSION}}, live.as_of_date
+        unavailable = 0
+        if request.abc:
+            unavailable = max(unavailable, sum(row["classification"]["abc"] is None for row in values))
+            values = [row for row in values if row["classification"]["abc"] == request.abc]
+        if request.xyz:
+            unavailable = max(unavailable, sum(row["classification"]["xyz"] is None for row in values))
+            values = [row for row in values if row["classification"]["xyz"] == request.xyz]
+        if request.flag:
+            if request.flag in {"should_reorder", "overstock"}:
+                return {"availabilityStatus": "PARTIAL", "reasonCode": "LIVE_FORECAST_REQUIRED",
+                        "total": 0, "analyzedCount": 0, "unavailableCount": len(values), "items": []}, live.as_of_date
+            if request.flag in {"slow_moving", "dead_stock"}:
+                field = "slowMoving" if request.flag == "slow_moving" else "deadStock"
+                unavailable = max(unavailable, sum(row["classification"][field] is None for row in values))
+            tests = {"low_stock": lambda r: r["risk"]["lowStock"],
+                     "single_source": lambda r: r["supplier"]["dependencyStatus"] == "SINGLE_SOURCE",
+                     "slow_moving": lambda r: r["classification"]["slowMoving"],
+                     "dead_stock": lambda r: r["classification"]["deadStock"]}
+            values = [row for row in values if tests[request.flag](row) is True]
+        if request.mode == "detail" and not request.skus:
+            raise LiveDomainError("AMBIGUOUS_ENTITY", 409, "A resolved product SKU is required for inventory detail.")
+        if request.mode == "rank":
+            if request.metric != "low_stock":
+                return {"availabilityStatus": "PARTIAL", "reasonCode": "LIVE_FORECAST_REQUIRED",
+                        "metric": request.metric, "total": 0, "analyzedCount": 0,
+                        "unavailableCount": len(values), "items": [],
+                        "freshness": {**dict(live.freshness("inventory")), "engineVersion": self.ENGINE_VERSION}}, live.as_of_date
+            values = sorted(values, key=lambda row: (row["risk"]["lowStock"] is None,
+                row["stock"]["onHand"] - int(row["inventoryPolicy"]["configuredMinimumStock"] or 0)
+                if row["stock"]["onHand"] is not None else math.inf, row["sku"]))
+        page = values[request.offset:request.offset + request.limit]
+        if request.mode in {"detail", "rank", "recommendations"} or request.skus or request.flag or request.risk or request.abc or request.xyz:
+            data = {"total": len(values), "analyzedCount": len(values), "unavailableCount": unavailable,
+                    "items": [self._public_inventory(row) for row in page]}
+        else:
+            data = {"summary": rows["summary"], "abcCounts": rows["abcCounts"],
+                    "xyzCounts": rows["xyzCounts"], "abcXyzCounts": rows["abcXyzCounts"],
+                    "analyzedCount": rows["summary"]["analyzedCount"],
+                    "unavailableCount": rows["summary"]["unavailableCount"]}
+        # Physical stock and minimums are usable, but forecast-derived fields are
+        # intentionally withheld until F.4E; report the domain as PARTIAL.
+        data["availabilityStatus"] = "PARTIAL" if (unavailable or rows["summary"]["unavailableCount"]
+                                                    or rows["summary"]["forecastAvailability"] != "AVAILABLE") else "AVAILABLE"
+        data["fieldAvailability"] = {"stock": "AVAILABLE", "incoming": "AVAILABLE",
+            "minimumStock": "AVAILABLE", "forecast": "NOT_AVAILABLE",
+            "coverage": "NOT_AVAILABLE", "risk": "PARTIAL",
+            "reorder": "NOT_AVAILABLE", "abc": "AVAILABLE" if rows["summary"]["abcAvailable"] and not rows["summary"]["abcUnavailableCount"] else "PARTIAL",
+            "xyz": "AVAILABLE" if rows["summary"]["xyzAvailable"] else "PARTIAL",
+            "slowMoving": "PARTIAL" if rows["summary"]["slowMovingUnavailableCount"] else "AVAILABLE",
+            "deadStock": "PARTIAL" if rows["summary"]["deadStockUnavailableCount"] else "AVAILABLE"}
+        data["freshness"] = {**dict(live.freshness("inventory")), "engineVersion": self.ENGINE_VERSION}
+        return data, live.as_of_date
+
+    def _inventory_rows(self, live: LiveV3Context):
+        cutoff = live.as_of_date
+        products = {str(_get(row, "sku")): row for row in self.static.get("products", ()) if _get(row, "sku")}
+        for product in live.products_by_key.values():
+            sku = _get(product, "sku")
+            if sku:
+                products[sku] = product
+        pending: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        overdue: dict[str, int] = defaultdict(int)
+        # Frozen purchase promises remain authoritative only for the frozen base.
+        base_purchase = {row["purchaseCode"]: row for row in self.records.get("purchases", ())}
+        for line in self.records.get("purchaseLines", ()):
+            purchase = base_purchase.get(line.get("purchaseCode"))
+            if not purchase or purchase.get("purchaseCode") in live.cancelled_transaction_keys:
+                continue
+            state = m66._purchase_line_as_of(purchase, line, date(2026, 10, 12))
+            sku = line.get("sku")
+            if not sku:
+                continue
+            remaining = int(state["remainingUnits"])
+            if remaining:
+                promised = date.fromisoformat(purchase["promisedLocalDate"]) if purchase.get("promisedLocalDate") else None
+                if promised is not None and promised > cutoff:
+                    pending[sku].append({"units": remaining, "expectedReceiptDate": promised.isoformat(),
+                                         "supplierCode": line.get("supplierCode"), "source": "HISTORICAL_PENDING"})
+                else:
+                    overdue[sku] += remaining
+        # Delta purchase state is reconstructed from immutable CREATE + RECEIVE/CANCEL journal.
+        cancelled = live.cancelled_transaction_keys
+        for purchase in live.snapshot.purchases:
+            if purchase.purchaseKey in cancelled or purchase.status == "cancelled" or purchase.receiptEvidence == "IMMEDIATE_PURCHASE":
+                continue
+            for line in purchase.lines:
+                received = int(live.received_by_purchase_line.get(line.lineKey, 0))
+                remaining = max(0, int(line.quantityOrdered) - received)
+                if not remaining:
+                    continue
+                promise = _local_date(purchase.promisedAtUtc) if purchase.promisedAtUtc else None
+                sku = line.sku or _get(live.products_by_key.get(line.productKey), "sku")
+                if not sku:
+                    continue
+                if promise is not None and promise > cutoff:
+                    pending[sku].append({"units": remaining, "expectedReceiptDate": promise.isoformat(),
+                                         "supplierCode": purchase.supplierKey, "source": "LIVE_PENDING"})
+                else:
+                    overdue[sku] += remaining
+        # Reuse the approved M6.6 daily observations for frozen history and
+        # overlay only explicit backend-closed LIVE days for XYZ.
+        dataset = getattr(self.inventory_engine, "dataset", None)
+        daily: dict[str, dict[date, dict[str, Any]]] = defaultdict(dict)
+        if dataset is not None:
+            for sku, series in dataset.daily_by_sku.items():
+                for item in series:
+                    day = date.fromisoformat(item["localDate"])
+                    if day <= date(2026, 10, 12):
+                        daily[sku][day] = item
+        for item in live.snapshot.closedSalesDays:
+            sku = _get(live.products_by_key.get(item.productKey), "sku")
+            if sku and item.localDate > date(2026, 10, 12) and item.localDate <= cutoff:
+                daily[sku][item.localDate] = {"localDate": item.localDate.isoformat(),
+                    "unitsSold": int(item.unitsSold),
+                    "availableHours": item.availableHours if item.availability == "OBSERVED" else None,
+                    "onHandUsableAtOrigin": item.onHandUsableAtOrigin,
+                    "effectiveUnitCostAtSale": None}
+        abc_values: dict[str, int] = defaultdict(int)
+        costs_complete = True
+        abc_start = cutoff - timedelta(days=364)
+        for sku, series in daily.items():
+            for day, item in series.items():
+                units = int(item.get("unitsSold", 0))
+                if abc_start <= day <= cutoff and day <= date(2026, 10, 12) and units:
+                    unit_cost = item.get("effectiveUnitCostAtSale")
+                    if unit_cost is None:
+                        costs_complete = False
+                    else:
+                        abc_values[sku] += units * int(unit_cost)
+        for sale in live.snapshot.sales:
+            if sale.saleKey in live.cancelled_transaction_keys or sale.initialStatus != "completed":
+                continue
+            if sale.localDate < abc_start or sale.localDate > cutoff:
+                continue
+            for line in sale.lines:
+                sku = line.sku or _get(live.products_by_key.get(line.productKey), "sku")
+                if line.costKnown and line.unitCostAtSaleCents is not None:
+                    abc_values[sku] += int(line.quantity) * int(line.unitCostAtSaleCents)
+                else:
+                    costs_complete = False
+        abc = m66._abc_classes({**{sku: 0 for sku in products}, **abc_values}) if costs_complete else {}
+        base_skus = {str(row.get("sku")) for row in self.records.get("products", ())}
+        # LIVE XYZ excludes the current (possibly incomplete) Monday-Sunday
+        # week, then evaluates the immediately preceding 13 complete weeks.
+        current_week_start = cutoff - timedelta(days=cutoff.weekday())
+        first_week = current_week_start - timedelta(days=7 * m66.XYZ_WEEKS)
+        xyz_by_sku = {}
+        for sku in products:
+            weekly = []
+            series = daily.get(sku, {})
+            for offset in range(m66.XYZ_WEEKS):
+                week_start = first_week + timedelta(days=7 * offset)
+                observed = [row for day, row in series.items()
+                            if week_start <= day < week_start + timedelta(days=7)
+                            and float(row.get("availableHours") or 0) > 0
+                            and (row.get("onHandUsableAtOrigin") or 0) > 0]
+                if len(observed) >= m66.MIN_WEEK_AVAILABILITY_DAYS:
+                    weekly.append(sum(float(row["unitsSold"]) for row in observed) * 7 / len(observed))
+            xyz_by_sku[sku] = m66._xyz(weekly)
+        offers_by_sku = self.supplier_engine._offers(date(2026, 10, 12)) if hasattr(self.supplier_engine, "_offers") else {}
+        rows = []
+        for sku, product in sorted(products.items()):
+            product_key = str(_get(product, "productKey", sku))
+            stock = live.stock_for(product_key=product_key, sku=sku)
+            incoming_orders = pending.get(sku, [])
+            incoming = sum(int(item["units"]) for item in incoming_orders)
+            minimum = _get(product, "minStock", _get(product, "minStockInitial"))
+            known_stock = stock is not None
+            low = bool(known_stock and minimum is not None and stock <= int(minimum))
+            new_sku = sku not in base_skus
+            abc_row = abc.get(sku)
+            xyz_row = xyz_by_sku.get(sku, {})
+            abc_value = abc_row.get("consumptionValueCents") if abc_row else None
+            abc_class = abc_row.get("abc") if abc_row and not new_sku else None
+            xyz_class = xyz_row.get("xyz") if xyz_row.get("status") != "INSUFFICIENT_HISTORY" and not new_sku else None
+            history = sorted((row for row in daily.get(sku, {}).values() if row["localDate"] <= cutoff.isoformat()),
+                             key=lambda row: row["localDate"])
+            last30, last60 = history[-30:], history[-60:]
+            available30 = sum(float(row.get("availableHours") or 0) > 0 and (row.get("onHandUsableAtOrigin") or 0) > 0 for row in last30)
+            available60 = sum(float(row.get("availableHours") or 0) > 0 and (row.get("onHandUsableAtOrigin") or 0) > 0 for row in last60)
+            sale_days30 = sum(int(row["unitsSold"]) > 0 for row in last30)
+            sold60 = sum(int(row["unitsSold"]) for row in last60)
+            age = len(history)
+            slow_evidence = age >= 60 and len(last30) == 30 and available30 / 30 >= m66.MIN_COVERAGE_RATIO
+            dead_evidence = (known_stock and stock > 0 and age >= 60 and len(last60) == 60
+                             and available60 / 60 >= m66.MIN_COVERAGE_RATIO)
+            slow = (0 < sale_days30 <= 4) if slow_evidence else None
+            dead = (sold60 == 0) if dead_evidence else None
+            class_status = ("PROVISIONAL" if new_sku else "COST_NOT_AVAILABLE" if not costs_complete else
+                            "INSUFFICIENT_HISTORY" if xyz_class is None else "AVAILABLE")
+            classification = {"abc": abc_class, "abcValueCents": abc_value, "xyz": xyz_class,
+                "xyzStatus": xyz_row.get("status", "INSUFFICIENT_HISTORY"),
+                "xyzWeeksObserved": xyz_row.get("weeksObserved", 0),
+                "abcXyz": f"{abc_class}-{xyz_class}" if abc_class and xyz_class else None,
+                "status": class_status, "overstock": None,
+                "slowMoving": slow, "deadStock": dead,
+                "slowMovingStatus": "AVAILABLE" if slow_evidence else "INSUFFICIENT_HISTORY",
+                "deadStockStatus": "AVAILABLE" if dead_evidence else "INSUFFICIENT_HISTORY",
+                "availableDays30": available30, "availableDays60": available60,
+                "saleDays30": sale_days30, "unitsSold60": sold60, "productObservableAgeDays": age}
+            row = {"sku": sku, "productKey": product_key, "productName": _get(product, "name", sku),
+                "categoryCode": _get(product, "categoryCode"), "asOfDate": cutoff.isoformat(),
+                "stock": {"onHand": stock, "incoming": incoming if known_stock else None,
+                          "inventoryPosition": stock + incoming if known_stock else None,
+                          "pendingOrders": incoming_orders, "overdueOrUnknownExpectedArrivalUnits": overdue.get(sku, 0) if known_stock else None},
+                "coverage": {"daysCover": None, "status": "LIVE_FORECAST_REQUIRED"},
+                "demand": {"expectedDaily": None, "source": None},
+                "inventoryPolicy": {"configuredMinimumStock": minimum,
+                    "safetyStock": None, "reorderPoint": None,
+                    "configuredSafetyStock": _get(product, "safetyStock"),
+                    "configuredReorderPoint": _get(product, "reorderPoint"),
+                    "status": "LIVE_FORECAST_REQUIRED"},
+                "risk": {"level": None, "reasonCodes": ["LIVE_FORECAST_REQUIRED"], "lowStock": low if minimum is not None and known_stock else None,
+                    "status": "PARTIAL" if known_stock else "STOCK_UNAVAILABLE"},
+                "classification": classification,
+                "recommendation": {"shouldReorder": None, "recommendedQty": None,
+                    "status": "LIVE_FORECAST_REQUIRED"},
+                "supplier": {"preferredSupplierCode": _get(product, "preferredSupplierCode"),
+                    "dependencyStatus": ("SINGLE_SOURCE" if len(_get(product, "supplierOffers", ()) or offers_by_sku.get(sku, ())) == 1
+                        else "MULTI_SOURCE" if (_get(product, "supplierOffers", ()) or offers_by_sku.get(sku, ()))
+                        else "NO_ACTIVE_OFFER"),
+                    "activeOfferCount": len(_get(product, "supplierOffers", ()) or offers_by_sku.get(sku, ()))}}
+            rows.append(row)
+        known = sum(row["stock"]["onHand"] is not None for row in rows)
+        abc_counts = {key: sum(row["classification"]["abc"] == key for row in rows) for key in ("A", "B", "C")}
+        abc_counts["UNCLASSIFIED"] = sum(row["classification"]["abc"] is None for row in rows)
+        xyz_counts = {key: sum(row["classification"]["xyz"] == key for row in rows) for key in ("X", "Y", "Z")}
+        xyz_counts["UNCLASSIFIED"] = sum(row["classification"]["xyz"] is None for row in rows)
+        matrix = {f"{a}-{x}": 0 for a in "ABC" for x in "XYZ"}
+        for row in rows:
+            pair = row["classification"]["abcXyz"]
+            if pair in matrix:
+                matrix[pair] += 1
+        summary = {"products": len(rows), "analyzedCount": known, "unavailableCount": len(rows) - known,
+            "incomingUnits": sum(row["stock"]["incoming"] or 0 for row in rows),
+            "lowStock": sum(row["risk"]["lowStock"] is True for row in rows),
+            "inventoryValueCents": None, "critical": None, "high": None, "medium": None, "shouldReorder": None,
+            "forecastAvailability": "NOT_AVAILABLE", "abcAvailable": costs_complete,
+            "abcUnavailableCount": sum(row["classification"]["abc"] is None for row in rows),
+            "xyzAvailable": all(row["classification"]["xyzStatus"] != "INSUFFICIENT_HISTORY" for row in rows),
+            "xyzUnavailableCount": sum(row["classification"]["xyz"] is None for row in rows),
+            "slowMovingUnavailableCount": sum(row["classification"]["slowMoving"] is None for row in rows),
+            "deadStockUnavailableCount": sum(row["classification"]["deadStock"] is None for row in rows)}
+        return {"products": rows, "summary": summary, "abcCounts": abc_counts,
+                "xyzCounts": xyz_counts, "abcXyzCounts": matrix}
+
+    @staticmethod
+    def _public_inventory(row):
+        return {key: row[key] for key in ("sku", "productName", "stock", "coverage", "demand",
+            "inventoryPolicy", "risk", "classification", "recommendation", "supplier")}
+
+    def supplier_data(self, request, live: LiveV3Context):
+        key = self._key(live, "supplier", request)
+        with self._lock:
+            data = self._cache.get(key)
+            if data is None:
+                data = self._supplier_rows(live)
+                self._cache[key] = data
+                while len(self._cache) > 8:
+                    self._cache.popitem(last=False)
+        # Work on new row dictionaries so request-specific period fields never
+        # mutate the cached snapshot projection.
+        rows = [dict(row) for row in data["suppliers"]]
+        if request.supplierCode:
+            rows = [row for row in rows if row["supplierCode"] == request.supplierCode]
+            if not rows:
+                raise LiveDomainError("SUPPLIER_NOT_FOUND", 404, "Supplier code was not found.")
+        if request.productSkus:
+            known_skus = {str(row.get("sku")) for row in self.records.get("products", ())}
+            known_skus.update(_get(product, "sku") for product in live.products_by_key.values() if _get(product, "sku"))
+            if set(request.productSkus) - known_skus:
+                raise LiveDomainError("PRODUCT_NOT_FOUND", 404, "One or more product SKUs were not found.")
+            skus = set(request.productSkus)
+            rows = [row for row in rows if skus.intersection(row["productsSuppliedObserved"])]
+        if request.mode == "rank":
+            field = {"orders": "purchaseOrderCount", "spend": "receivedSpendCents",
+                     "lead_time": "leadTime.averageDays", "fastestLeadTime": "leadTime.averageDays",
+                     "late_share": "punctuality.delayRatePct", "punctuality": "punctuality.onTimeRatePct",
+                     "delays": "punctuality.delayedOrderCount", "productCoverage": "offeredSkuCount",
+                     "exclusiveProducts": "exclusiveOfferedSkuCount"}.get(request.metric)
+            if not field:
+                raise LiveDomainError("DATA_NOT_AVAILABLE", 422, "This LIVE supplier ranking needs additional evidence.")
+            def metric_value(row):
+                value = row
+                for part in field.split("."):
+                    value = value.get(part) if isinstance(value, dict) else None
+                return value
+            ascending = request.metric in {"lead_time", "fastestLeadTime"}
+            rows = sorted(rows, key=lambda row: (metric_value(row) is None,
+                metric_value(row) if ascending else -(metric_value(row) or 0), row["supplierCode"]))
+        page = rows[request.offset:request.offset + request.limit]
+        if request.period is not None:
+            start = request.period.startDate
+            end = request.period.endDate
+        else:
+            start = date(2026, 10, 13)
+            end = live.as_of_date
+        if isinstance(start, date):
+            start = start.isoformat()
+        if isinstance(end, date):
+            end = end.isoformat()
+        historical_orders_in_period = defaultdict(int)
+        for purchase in self.records.get("purchases", ()):
+            if (purchase.get("status") != "cancelled"
+                    and purchase.get("purchaseCode") not in live.cancelled_transaction_keys
+                    and start <= purchase.get("orderedLocalDate", "") <= end):
+                historical_orders_in_period[purchase.get("supplierCode")] += 1
+        live_orders_in_period = defaultdict(int)
+        for purchase in live.snapshot.purchases:
+            if (purchase.purchaseKey not in live.cancelled_transaction_keys and purchase.status != "cancelled"
+                    and start <= _local_date(purchase.orderedAtUtc).isoformat() <= end):
+                code = str(_get(live.suppliers_by_key.get(purchase.supplierKey), "supplierCode", purchase.supplierKey))
+                live_orders_in_period[code] += 1
+        for row in page:
+            count = historical_orders_in_period[row["supplierCode"]] + live_orders_in_period[row["supplierCode"]]
+            days = (date.fromisoformat(end) - date.fromisoformat(start)).days + 1
+            row["purchaseFrequency"] = {"ordersInSelectedPeriod": count,
+                "ordersPer30Days": count / max(1, days) * 30}
+        data_out = {"total": len(rows), "items": page,
+                    "summary": {"suppliers": len(data["suppliers"]),
+                        "purchaseOrders": sum(row["purchaseOrderCount"] for row in data["suppliers"]),
+                        "pendingOrders": sum(row["pendingOrderCount"] for row in data["suppliers"]),
+                        "receivedOrders": sum(row["receivedOrderCount"] for row in data["suppliers"]),
+                        "receivedSpendCents": sum(row["receivedSpendCents"] for row in data["suppliers"]),
+                        "committedSpendCents": sum(row["committedSpendCents"] for row in data["suppliers"]),
+                        "pendingCommitmentCents": sum(row["pendingCommitmentCents"] for row in data["suppliers"])}}
+        data_out["period"] = (request.period.model_dump(mode="json") if request.period is not None else
+                               {"startDate": start, "endDate": end,
+                                "timezone": "America/Lima", "metricWindow": "LIVE_OPERATIONAL_DELTA"})
+        selected_codes = {row["supplierCode"] for row in rows}
+        data_out["costIntelligence"] = [item for item in data.get("costIntelligence", [])
+                                         if item["supplierCode"] in selected_codes]
+        data_out["metricsWindow"] = {"scope": "LIFETIME_AS_OF", "asOfDate": live.as_of_date.isoformat(),
+                                      "periodFiltersOrderFrequencyOnly": True}
+        data_out["availabilityStatus"] = "PARTIAL" if data["insufficientEvidence"] else "AVAILABLE"
+        data_out["freshness"] = {**dict(live.freshness("supplier")), "engineVersion": self.ENGINE_VERSION}
+        if request.mode == "alternatives":
+            data_out = {"total": len(request.productSkus), "items": self._alternatives(live, request.productSkus),
+                        "availabilityStatus": "AVAILABLE",
+                        "freshness": {**dict(live.freshness("supplier")), "engineVersion": self.ENGINE_VERSION}}
+        elif request.mode == "dependency":
+            data_out["singleSourceCriticalOrHigh"] = {"available": False,
+                "reasonCode": "LIVE_FORECAST_REQUIRED", "exposures": []}
+            data_out["availabilityStatus"] = "PARTIAL"
+        return data_out, live.as_of_date
+
+    def _alternatives(self, live: LiveV3Context, skus: list[str]):
+        products = {str(_get(row, "sku")): row for row in self.static.get("products", ()) if _get(row, "sku")}
+        for product in live.products_by_key.values():
+            sku = _get(product, "sku")
+            if sku:
+                products[sku] = product
+        missing = set(skus) - set(products)
+        if missing:
+            raise LiveDomainError("PRODUCT_NOT_FOUND", 404, "One or more product SKUs were not found.")
+        output = []
+        historical_offers = {}
+        if hasattr(self.supplier_engine, "_offers"):
+            historical_offers = self.supplier_engine._offers(date(2026, 10, 12))
+        supplier_names = {str(_get(row, "supplierCode")): _get(row, "displayName", _get(row, "name"))
+                          for row in self.static.get("suppliers", ())}
+        for sku in skus:
+            product = products[sku]
+            projections = _get(product, "supplierOffers", None)
+            if projections:
+                offers = []
+                for offer in projections:
+                    code = str(_get(offer, "supplierKey"))
+                    offers.append({"supplierCode": code, "supplierName": supplier_names.get(code, code),
+                        "preferred": bool(_get(offer, "preferred", False)), "unitCostCents": _get(offer, "costCents"),
+                        "currency": _get(offer, "currency"), "offerSource": "LIVE_CATALOG_PROJECTION",
+                        "performanceStatus": "NOT_INFERRED"})
+            else:
+                offers = [{**row, "performanceStatus": "NOT_INFERRED"}
+                          for row in historical_offers.get(sku, [])]
+            output.append({"sku": sku, "alternatives": offers})
+        return output
+
+    def _supplier_rows(self, live: LiveV3Context):
+        # Preserve historical M6.8 observations at the frozen cutoff and add only
+        # explicitly dated LIVE purchase/receipt evidence.
+        historical_engine = self.supplier_engine
+        base_purchases = self.records.get("purchases", ())
+        if any(row.get("purchaseCode") in live.cancelled_transaction_keys for row in base_purchases):
+            cancelled = live.cancelled_transaction_keys
+            filtered_records = {**self.supplier_engine.records,
+                "purchases": [row for row in self.supplier_engine.records["purchases"] if row.get("purchaseCode") not in cancelled],
+                "purchaseLines": [row for row in self.supplier_engine.records["purchaseLines"] if row.get("purchaseCode") not in cancelled]}
+            historical_engine = m68.SupplierIntelligenceV3(self.supplier_engine.root, filtered_records,
+                self.supplier_engine.static, self.supplier_engine.business)
+        base_inventory = self.inventory_engine.snapshot(date(2026, 10, 12))
+        historical = historical_engine.snapshot(as_of_date=date(2026, 10, 12),
+            period="HISTORY", inventory=base_inventory)
+        rows = {row["supplierCode"]: dict(row) for row in historical["suppliers"]}
+        line_supplier: dict[str, str] = {}
+        cost_events: list[dict[str, Any]] = []
+        live_orders: dict[str, list[Any]] = defaultdict(list)
+        for purchase in live.snapshot.purchases:
+            if purchase.purchaseKey in live.cancelled_transaction_keys or purchase.status == "cancelled":
+                continue
+            supplier = str(_get(live.suppliers_by_key.get(purchase.supplierKey), "supplierCode", purchase.supplierKey))
+            live_orders[supplier].append(purchase)
+            for line in purchase.lines:
+                line_supplier[line.lineKey] = supplier
+                received_qty = int(live.received_by_purchase_line.get(line.lineKey, 0))
+                sku = line.sku or _get(live.products_by_key.get(line.productKey), "sku")
+                if purchase.receiptEvidence == "IMMEDIATE_PURCHASE" and sku:
+                    cost_events.append({"supplierCode": supplier, "sku": sku,
+                        "productName": _get(live.products_by_key.get(line.productKey), "name", sku),
+                        "date": _local_date(purchase.orderedAtUtc), "units": int(line.quantityOrdered),
+                        "unitCostCents": int(line.purchaseUnitCostCents), "costProvenance": "ORDER_COST",
+                        "eventKey": purchase.purchaseKey})
+                if received_qty and purchase.receiptEvidence != "IMMEDIATE_PURCHASE":
+                    # Event time is the only valid receivedAt evidence in this snapshot contract.
+                    events = [event for event in live.snapshot.transactionChanges
+                              if event.kind == "RECEIVE" and event.transactionKey == purchase.purchaseKey
+                              and any(change.lineKey == line.lineKey and (change.receivedQty or 0) > 0 for change in event.lineChanges)]
+                    unit_cost = int(line.purchaseUnitCostCents)
+                    for event in events:
+                        qty = sum(int(change.receivedQty or 0) for change in event.lineChanges if change.lineKey == line.lineKey)
+                        if qty:
+                            cost_events.append({"supplierCode": supplier, "sku": sku,
+                                "productName": _get(live.products_by_key.get(line.productKey), "name", sku),
+                                "date": _local_date(event.effectiveAtUtc), "units": qty,
+                                "unitCostCents": unit_cost, "costProvenance": "ORDER_COST",
+                                "eventKey": event.eventKey})
+        suppliers = {row["supplierCode"]: row for row in self.static.get("suppliers", ())}
+        for key, contact in live.suppliers_by_key.items():
+            code = str(_get(contact, "supplierCode", _get(contact, "entityKey", key)))
+            suppliers.setdefault(code, {"supplierCode": code, "displayName": _get(contact, "name", code)})
+            suppliers[code]["displayName"] = _get(contact, "name", suppliers[code].get("displayName", code))
+        insufficient = False
+        output = []
+        for code, config in sorted(suppliers.items()):
+            row = rows.get(code)
+            if row is None:
+                row = {"supplierCode": code, "displayName": config.get("displayName", code),
+                       "purchaseOrderCount": 0, "receivedOrderCount": 0, "pendingOrderCount": 0,
+                       "unitsOrdered": 0, "unitsReceived": 0, "receivedSpendCents": 0,
+                       "committedSpendCents": 0, "pendingCommitmentCents": 0,
+                       "productsSupplied": [], "productsSuppliedObserved": [],
+                       "leadTimeDays": None, "delayRatePct": None,
+                       "leadTime": {"sampleSize": 0, "averageDays": None, "medianDays": None,
+                                    "p90Days": None, "stdDevDays": None, "sampleQuality": "INSUFFICIENT_HISTORY", "status": "INSUFFICIENT_HISTORY"},
+                       "punctuality": {"onTimeOrders": None, "receivedOrders": 0, "onTimeRatePct": None,
+                                       "delayedOrderCount": None, "delayRatePct": None, "sampleSize": 0,
+                                       "status": "INSUFFICIENT_HISTORY"}}
+            row = dict(row)
+            row["displayName"] = config.get("displayName", row.get("displayName", code))
+            historical_received_spend = int(row.get("receivedSpendCents", 0))
+            ordered_count = received_order_count = pending_count = units_ordered = units_received = 0
+            committed = pending_commitment = received_spend = 0
+            product_codes = set(row.get("productsSuppliedObserved", []))
+            product_codes.update(item.get("sku") for item in row.get("productsSupplied", []) if item.get("sku"))
+            live_leads, live_punctual = [], []
+            for purchase in live_orders.get(code, ()):
+                ordered_count += 1
+                ordered_day = _local_date(purchase.orderedAtUtc)
+                total_cost = 0
+                order_total = 0
+                complete = True
+                is_immediate = purchase.receiptEvidence == "IMMEDIATE_PURCHASE"
+                for line in purchase.lines:
+                    qty = int(line.quantityOrdered)
+                    received = qty if is_immediate else int(live.received_by_purchase_line.get(line.lineKey, 0))
+                    order_total += qty * int(line.purchaseUnitCostCents)
+                    total_cost += received * int(line.purchaseUnitCostCents)
+                    units_ordered += qty
+                    units_received += received
+                    if line.sku:
+                        product_codes.add(line.sku)
+                    complete &= received >= qty
+                committed += order_total
+                pending_commitment += 0 if is_immediate else max(0, order_total - total_cost)
+                received_spend += total_cost
+                if is_immediate:
+                    received_order_count += 1
+                elif complete:
+                    receipt_events = [event for event in live.snapshot.transactionChanges
+                                      if event.kind == "RECEIVE" and event.transactionKey == purchase.purchaseKey]
+                    if receipt_events:
+                        received_order_count += 1
+                        if purchase.receiptEvidence == "DATED_RECEIPT":
+                            received_day = max(_local_date(event.effectiveAtUtc) for event in receipt_events)
+                            live_leads.append(max(0, (received_day - ordered_day).days))
+                            if purchase.promisedAtUtc is not None:
+                                live_punctual.append(received_day <= _local_date(purchase.promisedAtUtc))
+                else:
+                    pending_count += 1
+            row["purchaseOrderCount"] += ordered_count
+            row["receivedOrderCount"] += received_order_count
+            row["pendingOrderCount"] += pending_count
+            row["unitsOrdered"] += units_ordered
+            row["unitsReceived"] += units_received
+            row["receivedSpendCents"] += received_spend
+            row["committedSpendCents"] += committed
+            row["pendingCommitmentCents"] += pending_commitment
+            row["productsSuppliedObserved"] = sorted(product_codes)
+            row["ordersAvailability"] = "AVAILABLE"
+            row["costProvenance"] = sorted(
+                ({"HISTORICAL_COST"} if historical_received_spend else set())
+                | ({"ORDER_COST"} if received_spend else set())) or ["UNAVAILABLE"]
+            row["metricsWindow"] = "LIFETIME_AS_OF"
+            # LIVE dated samples are included only when completion and actual dates exist.
+            historical_n = int(row.get("leadTime", {}).get("sampleSize", 0))
+            combined_leads = []
+            if row.get("leadTime", {}).get("averageDays") is not None:
+                combined_leads.extend([float(row["leadTime"]["averageDays"])] * historical_n)
+            combined_leads.extend(live_leads)
+            if combined_leads:
+                row["leadTime"] = {**row["leadTime"], "sampleSize": len(combined_leads),
+                    "averageDays": sum(combined_leads) / len(combined_leads),
+                    "status": "AVAILABLE" if len(combined_leads) >= 5 else "INSUFFICIENT_HISTORY"}
+                if live_leads and historical_n:
+                    # M6.8 exposes historic distribution aggregates, not raw
+                    # samples. Do not retain stale quantiles after adding LIVE
+                    # observations that cannot be merged exactly.
+                    row["leadTime"].update({"medianDays": None, "p90Days": None,
+                        "stdDevDays": None, "sampleQuality": "PARTIAL_DISTRIBUTION_UNAVAILABLE"})
+                elif live_leads:
+                    row["leadTime"].update({"medianDays": median(live_leads),
+                        "p90Days": (sorted(live_leads)[math.ceil(.9 * len(live_leads)) - 1]
+                                    if len(live_leads) >= 5 else None),
+                        "stdDevDays": pstdev(live_leads),
+                        "sampleQuality": "ADEQUATE" if len(live_leads) >= 5 else "LOW_SAMPLE"})
+                row["leadTimeDays"] = row["leadTime"]["averageDays"] if len(combined_leads) >= 5 else None
+            elif not historical_n:
+                row["leadTime"]["status"] = "INSUFFICIENT_HISTORY"
+                row["leadTimeDays"] = None
+            # No completion/promise evidence means punctuality stays unavailable.
+            historical_punctuality = row.get("punctuality", {})
+            old_samples = int(historical_punctuality.get("sampleSize", historical_punctuality.get("receivedOrders", 0)) or 0)
+            old_on_time = int(historical_punctuality.get("onTimeOrders", 0) or 0)
+            sample_count = old_samples + len(live_punctual)
+            if sample_count:
+                on_time_count = old_on_time + sum(live_punctual)
+                delay_count = sample_count - on_time_count
+                historical_punctuality.update({"sampleSize": sample_count, "receivedOrders": sample_count,
+                    "onTimeOrders": on_time_count, "onTimeRatePct": on_time_count / sample_count * 100,
+                    "delayedOrderCount": delay_count, "delayRatePct": delay_count / sample_count * 100,
+                    "status": "AVAILABLE" if sample_count >= 5 else "INSUFFICIENT_HISTORY"})
+            elif live_orders.get(code):
+                historical_punctuality["status"] = "INSUFFICIENT_HISTORY"
+                historical_punctuality["onTimeRatePct"] = None
+            insufficient |= row.get("leadTime", {}).get("status") == "INSUFFICIENT_HISTORY"
+            output.append(row)
+        total_received_spend = sum(int(row.get("receivedSpendCents", 0)) for row in output)
+        total_committed_spend = sum(int(row.get("committedSpendCents", 0)) for row in output)
+        for row in output:
+            row["purchaseSpendSharePct"] = (round(row["receivedSpendCents"] / total_received_spend * 100, 4)
+                                            if total_received_spend else None)
+            row["committedSpendSharePct"] = (round(row["committedSpendCents"] / total_committed_spend * 100, 4)
+                                             if total_committed_spend else None)
+        cost_intelligence = self._combine_cost_intelligence(historical.get("costIntelligence", []), cost_events)
+        for item in cost_intelligence:
+            item["supplierName"] = suppliers.get(item["supplierCode"], {}).get("displayName", item["supplierCode"])
+        return {"suppliers": output, "costIntelligence": cost_intelligence,
+                "insufficientEvidence": insufficient}
+
+    @staticmethod
+    def _combine_cost_intelligence(historical_rows, events):
+        grouped: dict[tuple[str, str], dict[str, Any]] = {}
+        for row in historical_rows:
+            key = (row["supplierCode"], row["sku"])
+            grouped[key] = {"supplierCode": row["supplierCode"], "supplierName": row.get("supplierName"),
+                "sku": row["sku"], "productName": row.get("productName"),
+                "receiptCount": int(row.get("receiptCount", 0)), "units": int(row.get("unitsReceived", 0)),
+                "weightedCost": float(row.get("averagePurchaseCostCentsWeighted") or 0) * int(row.get("unitsReceived", 0)),
+                "minimum": row.get("minimumObservedCostCents"), "maximum": row.get("maximumObservedCostCents"),
+                "firstDate": row.get("firstObservedDate"), "firstCost": row.get("latestPurchaseCostCents"),
+                "latestDate": row.get("latestObservedDate"), "latestCost": row.get("latestPurchaseCostCents"),
+                "baselineRecentChangePct": row.get("recentChangePct"), "baselineLatestCost": row.get("latestPurchaseCostCents"),
+                "liveFirstCost": None, "liveLatestCost": None, "liveEventCount": 0,
+                "costProvenance": {"HISTORICAL_COST"}}
+        for event in sorted(events, key=lambda row: (row["supplierCode"], row["sku"],
+                                                       row["date"], row["eventKey"])):
+            key = (event["supplierCode"], event["sku"])
+            bucket = grouped.setdefault(key, {"supplierCode": event["supplierCode"], "supplierName": None,
+                "sku": event["sku"], "productName": event["productName"], "receiptCount": 0,
+                "units": 0, "weightedCost": 0.0, "minimum": None, "maximum": None,
+                "firstDate": None, "firstCost": None, "latestDate": None, "latestCost": None,
+                "baselineRecentChangePct": None, "baselineLatestCost": None,
+                "liveFirstCost": None, "liveLatestCost": None, "liveEventCount": 0,
+                "costProvenance": set()})
+            amount = int(event["unitCostCents"])
+            qty = int(event["units"])
+            bucket["receiptCount"] += 1
+            bucket["liveEventCount"] += 1
+            if bucket["liveFirstCost"] is None:
+                bucket["liveFirstCost"] = amount
+            bucket["liveLatestCost"] = amount
+            bucket["units"] += qty
+            bucket["weightedCost"] += amount * qty
+            bucket["minimum"] = amount if bucket["minimum"] is None else min(bucket["minimum"], amount)
+            bucket["maximum"] = amount if bucket["maximum"] is None else max(bucket["maximum"], amount)
+            if bucket["firstDate"] is None or event["date"].isoformat() < bucket["firstDate"]:
+                bucket["firstDate"], bucket["firstCost"] = event["date"].isoformat(), amount
+            if bucket["latestDate"] is None or event["date"].isoformat() >= bucket["latestDate"]:
+                bucket["latestDate"], bucket["latestCost"] = event["date"].isoformat(), amount
+            bucket["costProvenance"].add(event["costProvenance"])
+        result = []
+        for (_, _), bucket in sorted(grouped.items()):
+            first, latest = bucket["firstCost"], bucket["latestCost"]
+            result.append({"supplierCode": bucket["supplierCode"], "supplierName": bucket["supplierName"],
+                "sku": bucket["sku"], "productName": bucket["productName"],
+                "receiptCount": bucket["receiptCount"], "unitsReceived": bucket["units"],
+                "latestPurchaseCostCents": latest,
+                "averagePurchaseCostCentsWeighted": round(bucket["weightedCost"] / bucket["units"], 4) if bucket["units"] else None,
+                "minimumObservedCostCents": bucket["minimum"], "maximumObservedCostCents": bucket["maximum"],
+                "firstObservedDate": bucket["firstDate"], "latestObservedDate": bucket["latestDate"],
+                "recentChangePct": (round((bucket["liveLatestCost"] - bucket["baselineLatestCost"]) /
+                    bucket["baselineLatestCost"] * 100, 4) if bucket["liveEventCount"] and bucket["baselineLatestCost"]
+                    else round((bucket["liveLatestCost"] - bucket["liveFirstCost"]) /
+                    bucket["liveFirstCost"] * 100, 4) if bucket["liveEventCount"] > 1 and bucket["liveFirstCost"]
+                    else bucket["baselineRecentChangePct"] if not bucket["liveEventCount"] else None),
+                "costProvenance": sorted(bucket["costProvenance"]),
+                "interpretation": "Observed acquisition costs only; pending order prices are excluded from cost trends."})
+        return result
+
+
+__all__ = ["LiveInventorySupplierAdapter"]

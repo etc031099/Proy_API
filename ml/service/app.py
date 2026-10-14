@@ -225,15 +225,18 @@ def create_app(runtime: ModelRuntime | None = None,
             except V3FunctionalError as error:
                 raise HTTPException(status_code=error.status_code,
                                     detail={"code": error.code, "message": error.message}) from None
-            if domain not in {"business", "customer"}:
+            if domain not in {"business", "customer", "inventory", "supplier"}:
                 raise HTTPException(status_code=501, detail={"code": "LIVE_ANALYTICS_NOT_READY",
                     "message": "This LIVE analytics domain is not enabled yet."})
-            if getattr(current, "live_adapter", None) is None:
+            if ((domain in {"business", "customer"} and getattr(current, "live_adapter", None) is None)
+                    or (domain in {"inventory", "supplier"}
+                        and getattr(current, "live_inventory_supplier", None) is None)):
                 raise HTTPException(status_code=501, detail={"code": "LIVE_ANALYTICS_NOT_READY",
                     "message": "This LIVE analytics domain is not enabled yet."})
             started = time.perf_counter()
             try:
-                live_method = "live_business_data" if domain == "business" else "live_customer_data"
+                live_method = {"business": "live_business_data", "customer": "live_customer_data",
+                               "inventory": "live_inventory_data", "supplier": "live_supplier_data"}[domain]
                 data, cutoff = getattr(current, live_method)(payload, live_context)
                 partial = data.get("availabilityStatus") == "PARTIAL"
                 return V3Response(requestId=payload.requestId, status="PARTIAL" if partial else "OK",

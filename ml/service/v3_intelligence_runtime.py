@@ -18,6 +18,7 @@ from ml.service.v3_package import verify_package
 from ml.service.v3_source_pool import CanonicalRowPool
 from ml.service.v3_live_context import LiveSnapshotError, LiveV3ContextStore, SNAPSHOT_MAX_BYTES
 from ml.service.v3_live_business_customer import LiveBusinessCustomerAdapter, LiveDomainError
+from ml.service.v3_live_inventory_supplier import LiveInventorySupplierAdapter
 from ml.src import business_customer_supplier_v3 as m68
 from ml.src import v3_baseline_bundle, v3_forecast
 from ml.src.inventory_intelligence_v3 import INVENTORY_VERSION, InventoryIntelligenceV3
@@ -73,6 +74,7 @@ class V3IntelligenceRuntime:
         self._cache_limits = {"inventory": 3, "customer": 4, "supplier": 4}
         self.live_contexts = LiveV3ContextStore(max_entries=2)
         self.live_adapter = None
+        self.live_inventory_supplier = None
 
     def load(self) -> None:
         if self.ready:
@@ -142,6 +144,9 @@ class V3IntelligenceRuntime:
                     load_basket_artifact=False,
                 )
                 self.domains["health"] = True
+            if self.inventory is not None:
+                self.live_inventory_supplier = LiveInventorySupplierAdapter(
+                    self.records, self.inventory_static, self.inventory, self.suppliers)
             self.ready = True
         except Exception:
             # Keep diagnostics stable and sanitized; V1 remains independently available.
@@ -152,7 +157,9 @@ class V3IntelligenceRuntime:
     def public_status(self) -> dict[str, Any]:
         return {"serviceAlive": True, "v3IntelligenceReady": self.ready,
                 "domains": dict(self.domains),
-                "liveDomains": {name: bool(self.ready and getattr(self, "live_adapter", None) is not None and name in {"business", "customer"})
+                "liveDomains": {name: bool(self.ready and (
+                                    (getattr(self, "live_adapter", None) is not None and name in {"business", "customer"})
+                                    or (getattr(self, "live_inventory_supplier", None) is not None and name in {"inventory", "supplier"})))
                                 for name in self.domains},
                 "loadingMetrics": dict(self.loading_metrics),
                 "domainErrors": dict(self.domain_errors),
@@ -329,6 +336,22 @@ class V3IntelligenceRuntime:
         except ValueError as error:
             code = "INVALID_PERIOD" if "Period" in str(error) or "period" in str(error) else "DATA_NOT_AVAILABLE"
             raise V3FunctionalError(code, 422, "LIVE Customer request is not supported by the available evidence.") from None
+
+    def live_inventory_data(self, request, live):
+        if getattr(self, "live_inventory_supplier", None) is None:
+            raise V3FunctionalError("LIVE_ANALYTICS_NOT_READY", 501, "LIVE Inventory analytics are not enabled.")
+        try:
+            return self._run("inventory", lambda: self.live_inventory_supplier.inventory_data(request, live))
+        except LiveDomainError as error:
+            raise V3FunctionalError(error.code, error.status_code, error.message) from None
+
+    def live_supplier_data(self, request, live):
+        if getattr(self, "live_inventory_supplier", None) is None:
+            raise V3FunctionalError("LIVE_ANALYTICS_NOT_READY", 501, "LIVE Supplier analytics are not enabled.")
+        try:
+            return self._run("supplier", lambda: self.live_inventory_supplier.supplier_data(request, live))
+        except LiveDomainError as error:
+            raise V3FunctionalError(error.code, error.status_code, error.message) from None
 
     def inventory_data(self, request):
         cutoff = self.resolve_context(request.context)
