@@ -19,6 +19,7 @@ from ml.service.v3_source_pool import CanonicalRowPool
 from ml.service.v3_live_context import LiveSnapshotError, LiveV3ContextStore, SNAPSHOT_MAX_BYTES
 from ml.service.v3_live_business_customer import LiveBusinessCustomerAdapter, LiveDomainError
 from ml.service.v3_live_inventory_supplier import LiveInventorySupplierAdapter
+from ml.service.v3_live_forecast import LiveForecastAdapter
 from ml.src import business_customer_supplier_v3 as m68
 from ml.src import v3_baseline_bundle, v3_forecast
 from ml.src.inventory_intelligence_v3 import INVENTORY_VERSION, InventoryIntelligenceV3
@@ -75,6 +76,7 @@ class V3IntelligenceRuntime:
         self.live_contexts = LiveV3ContextStore(max_entries=2)
         self.live_adapter = None
         self.live_inventory_supplier = None
+        self.live_forecast = None
 
     def load(self) -> None:
         if self.ready:
@@ -147,6 +149,8 @@ class V3IntelligenceRuntime:
             if self.inventory is not None:
                 self.live_inventory_supplier = LiveInventorySupplierAdapter(
                     self.records, self.inventory_static, self.inventory, self.suppliers)
+                if self.forecast_manifest is not None:
+                    self.live_forecast = LiveForecastAdapter(self.dataset, self.records)
             self.ready = True
         except Exception:
             # Keep diagnostics stable and sanitized; V1 remains independently available.
@@ -159,7 +163,12 @@ class V3IntelligenceRuntime:
                 "domains": dict(self.domains),
                 "liveDomains": {name: bool(self.ready and (
                                     (getattr(self, "live_adapter", None) is not None and name in {"business", "customer"})
-                                    or (getattr(self, "live_inventory_supplier", None) is not None and name in {"inventory", "supplier"})))
+                                    or (getattr(self, "live_inventory_supplier", None) is not None and name in {"inventory", "supplier"})
+                                    or (getattr(self, "live_forecast", None) is not None and name == "forecast")
+                                    or (getattr(self, "live_adapter", None) is not None
+                                        and getattr(self, "live_forecast", None) is not None
+                                        and getattr(self, "live_inventory_supplier", None) is not None
+                                        and getattr(self, "health", None) is not None and name == "health")))
                                 for name in self.domains},
                 "loadingMetrics": dict(self.loading_metrics),
                 "domainErrors": dict(self.domain_errors),
@@ -341,7 +350,8 @@ class V3IntelligenceRuntime:
         if getattr(self, "live_inventory_supplier", None) is None:
             raise V3FunctionalError("LIVE_ANALYTICS_NOT_READY", 501, "LIVE Inventory analytics are not enabled.")
         try:
-            return self._run("inventory", lambda: self.live_inventory_supplier.inventory_data(request, live))
+            forecasts = self.live_forecast.all_forecasts(live) if getattr(self, "live_forecast", None) else None
+            return self._run("inventory", lambda: self.live_inventory_supplier.inventory_data(request, live, forecasts))
         except LiveDomainError as error:
             raise V3FunctionalError(error.code, error.status_code, error.message) from None
 
@@ -352,6 +362,129 @@ class V3IntelligenceRuntime:
             return self._run("supplier", lambda: self.live_inventory_supplier.supplier_data(request, live))
         except LiveDomainError as error:
             raise V3FunctionalError(error.code, error.status_code, error.message) from None
+
+    def live_forecast_data(self, request, live):
+        if getattr(self, "live_forecast", None) is None:
+            raise V3FunctionalError("LIVE_ANALYTICS_NOT_READY", 501, "LIVE Forecast analytics are not enabled.")
+        try:
+            return self._run("forecast", lambda: self.live_forecast.forecast_data(request, live))
+        except LiveDomainError as error:
+            raise V3FunctionalError(error.code, error.status_code, error.message) from None
+
+    def live_health_data(self, request, live):
+        if (getattr(self, "live_forecast", None) is None or getattr(self, "live_adapter", None) is None
+                or getattr(self, "live_inventory_supplier", None) is None or self.health is None):
+            raise V3FunctionalError("LIVE_ANALYTICS_NOT_READY", 501, "LIVE Business Health is not enabled.")
+        from types import SimpleNamespace
+        try:
+            common = {"period": request.period, "offset": 0, "limit": 100,
+                      "mode": "summary", "metric": "revenue", "categoryCode": None,
+                      "subcategoryCode": None, "productSku": None, "entityType": None,
+                      "customerCode": None, "segment": None, "supplierCode": None,
+                      "productSkus": [], "skus": [], "horizonDays": 7,
+                      "risk": None, "abc": None, "xyz": None, "flag": None}
+            business, _ = self.live_adapter.business_data(SimpleNamespace(**{**common, "mode": "compare"}), live)
+            customer, _ = self.live_adapter.customer_data(SimpleNamespace(**common), live)
+            forecasts = self.live_forecast.all_forecasts(live)
+            inventory = self.live_inventory_supplier._inventory_rows(live, forecasts)
+            supplier, _ = self.live_inventory_supplier.supplier_data(SimpleNamespace(**common), live)
+
+            basket_artifact = self.basket if self.basket and live.as_of_date >= BASKET_CUTOFF else None
+            basket = ({"available": True, "analysisVersion": basket_artifact["analysisVersion"],
+                "stableCrossSellRuleCount": sum(r.get("classification") == "CROSS_SELL"
+                    and r.get("stability", {}).get("status") == "STABLE" for r in basket_artifact.get("rules", [])),
+                "usefulRuleCount": basket_artifact.get("summary", {}).get("rulesAfterRedundancyReduction"),
+                "topExamples": [{"antecedentSkus": r.get("antecedentSkus"), "consequentSkus": r.get("consequentSkus"),
+                    "ticketCount": r.get("ticketCount"), "support": r.get("support"), "confidence": r.get("confidence"),
+                    "lift": r.get("lift"), "stability": r.get("stability", {}).get("status")}
+                    for r in basket_artifact.get("rules", []) if r.get("classification") == "CROSS_SELL"
+                    and r.get("stability", {}).get("status") == "STABLE"][:request.limit],
+                "categoryAssociations": basket_artifact.get("categoryRules", [])[:request.limit],
+                "sourceArtifactCutoff": BASKET_CUTOFF.isoformat(),
+                "freshness": dict(live.freshness("marketBasket"))}
+                if basket_artifact else {"available": False, "reasonCode": "ARTIFACT_UNAVAILABLE",
+                    "freshness": dict(live.freshness("marketBasket"))})
+            offer_rows = self.suppliers._offers(BASKET_CUTOFF)
+            exposure = self.suppliers._critical_exposure(inventory, offer_rows)
+            supplier_component = {"suppliers": [row for row in supplier["items"]
+                    if row.get("purchaseSpendSharePct") is not None],
+                "summary": supplier["summary"], "criticalInventorySupplierExposure": exposure}
+            customer_summary = {"segmentDistribution": customer.get("segmentDistribution", {}),
+                "registeredCustomerCount": customer.get("summary", {}).get("registeredCustomerCount",
+                    sum(customer.get("segmentDistribution", {}).values())),
+                "customers": customer.get("items", [])}
+            inventory_summary = {**inventory["summary"],
+                "overstockEstimatedValueCents": None,
+                "forecastSource": "MOVING_AVERAGE_28", "forecastHorizons": [1, 7, 14]}
+            ready_forecasts = [row for row in forecasts if row.get("status") == "READY"]
+            forecast_totals = {f"forecastExpectedUnitsNext{h}d": round(sum(float(row[f"expectedUnitsNext{h}d"])
+                for row in ready_forecasts), 4) if len(ready_forecasts) == len(inventory["products"]) else None
+                for h in (1, 7, 14)}
+            inventory_summary.update(forecast_totals)
+            insights = self.health._insights(business, customer_summary, {"summary": inventory_summary},
+                                             supplier_component, basket)
+            if inventory_summary.get("overstockEstimatedValueCents") is None:
+                insights = [row for row in insights if row.get("code") != "OVERSTOCK_VALUE"]
+            alerts = sorted(insights, key=lambda row: ({"CRITICAL": 0, "WARNING": 1, "INFO": 2}.get(row.get("severity"), 3), row.get("code", "")))[:request.limit]
+            alert_codes = {row["code"] for row in alerts}
+            domain_codes = {"sales": {"SALES_DOWN_VS_PREVIOUS_PERIOD"}, "margin": {"MARGIN_DOWN"},
+                "customers": {"CUSTOMER_AT_RISK_COUNT"}, "inventory": {"CRITICAL_STOCK_COUNT", "OVERSTOCK_VALUE", "SINGLE_SOURCE_INVENTORY_EXPOSURE"},
+                "suppliers": {"HIGH_SUPPLIER_DEPENDENCY"}, "marketBasket": {"CROSS_SELL_OPPORTUNITIES"}}
+            sections = {}
+            for name, codes in domain_codes.items():
+                sections[name] = {"alerts": [a for a in alerts if a["code"] in codes and a["code"] in alert_codes]}
+            sections["sales"].update({"kpis": business.get("kpis"), "trends": business.get("trends"), "customerMix": business.get("customerMix")})
+            sections["margin"].update(business.get("marginIntelligence", {}))
+            sections["customers"].update({"segmentDistribution": customer_summary["segmentDistribution"],
+                "atRiskCount": customer_summary["segmentDistribution"].get("AT_RISK", 0),
+                "inactiveCount": customer_summary["segmentDistribution"].get("INACTIVE", 0),
+                "newCount": customer_summary["segmentDistribution"].get("NEW", 0)})
+            sections["inventory"].update(inventory_summary)
+            sections["suppliers"].update({"summary": supplier["summary"],
+                "topSpendShares": sorted([{"supplierCode": row["supplierCode"], "sharePct": row.get("purchaseSpendSharePct")}
+                    for row in supplier["items"] if row.get("purchaseSpendSharePct") is not None],
+                    key=lambda row: (-row["sharePct"], row["supplierCode"]))[:5],
+                "criticalInventoryExposure": exposure})
+            sections["marketBasket"].update(basket)
+            freshness = {name: dict(live.freshness(name)) for name in
+                         ("business", "inventory", "customer", "supplier", "marketBasket")}
+            freshness["business"]["engineVersion"] = LiveBusinessCustomerAdapter.ENGINE_VERSION
+            freshness["customer"]["engineVersion"] = LiveBusinessCustomerAdapter.ENGINE_VERSION
+            freshness["inventory"]["engineVersion"] = LiveInventorySupplierAdapter.ENGINE_VERSION
+            freshness["supplier"]["engineVersion"] = LiveInventorySupplierAdapter.ENGINE_VERSION
+            freshness["forecast"] = self.live_forecast._freshness(live, [row.get("observationsThrough") for row in ready_forecasts])
+            if isinstance(sections["marketBasket"].get("freshness"), dict):
+                freshness["marketBasket"] = sections["marketBasket"]["freshness"]
+            sections["forecast"] = {"source": "MOVING_AVERAGE_28", "horizons": [1, 7, 14],
+                "knownCount": len(ready_forecasts), "missingCount": len(forecasts) - len(ready_forecasts),
+                **forecast_totals, "freshness": freshness["forecast"]}
+            sections["sales"]["freshness"] = freshness["business"]
+            sections["margin"]["freshness"] = freshness["business"]
+            for name in ("inventory", "customers", "suppliers", "marketBasket"):
+                freshness_key = {"customers": "customer", "suppliers": "supplier"}.get(name, name)
+                sections[name]["freshness"] = freshness[freshness_key]
+            inventory_partial = any(int(inventory["summary"].get(key) or 0) > 0 for key in (
+                "unavailableCount", "riskUnavailableCount", "recommendationUnavailableCount",
+                "abcUnavailableCount", "xyzUnavailableCount", "slowMovingUnavailableCount",
+                "deadStockUnavailableCount"))
+            partial = (business.get("availabilityStatus") == "PARTIAL"
+                       or customer.get("availabilityStatus") == "PARTIAL"
+                       or inventory["summary"].get("forecastAvailability") != "AVAILABLE"
+                       or inventory_partial
+                       or len(ready_forecasts) != len(forecasts) or supplier.get("availabilityStatus") == "PARTIAL"
+                       or not basket.get("available"))
+            return {"contractVersion": m68.HEALTH_VERSION, "scenarioId": SCENARIO_ID,
+                "datasetVersion": DATASET_VERSION, "datasetSha256": DATASET_SHA256,
+                "asOfDate": live.as_of_date.isoformat(), "timezone": TIMEZONE,
+                "period": business.get("period"), "businessHealth": sections,
+                "alerts": alerts, "healthScore": None,
+                "interpretation": "LIVE and frozen domain indicators with documented rule-based insights; no composite score.",
+                "availabilityStatus": "PARTIAL" if partial else "AVAILABLE", "freshness": freshness}, live.as_of_date
+        except LiveDomainError as error:
+            raise V3FunctionalError(error.code, error.status_code, error.message) from None
+        except Exception as error:
+            raise V3FunctionalError("DATA_NOT_AVAILABLE", 422,
+                "LIVE Business Health is unavailable because one or more required domains lack valid evidence.") from error
 
     def inventory_data(self, request):
         cutoff = self.resolve_context(request.context)
@@ -621,9 +754,23 @@ class V3IntelligenceRuntime:
                 "durationMs": duration_ms, "latencyP50Ms": self.latency_p50(domain)}
 
     def live_metadata(self, cutoff: date, domain: str, duration_ms: float, live) -> V3LiveMetadata:
-        versions = {"business": m68.BUSINESS_VERSION, "customer": m68.CUSTOMER_VERSION}
+        versions = {"business": m68.BUSINESS_VERSION, "customer": m68.CUSTOMER_VERSION,
+                    "inventory": INVENTORY_VERSION, "supplier": m68.SUPPLIER_VERSION,
+                    "forecast": FORECAST_STRATEGY_VERSION, "health": m68.HEALTH_VERSION}
+        engine_by_domain = {"business": LiveBusinessCustomerAdapter.ENGINE_VERSION,
+            "customer": LiveBusinessCustomerAdapter.ENGINE_VERSION,
+            "inventory": LiveInventorySupplierAdapter.ENGINE_VERSION,
+            "supplier": LiveInventorySupplierAdapter.ENGINE_VERSION,
+            "forecast": getattr(getattr(self, "live_forecast", None), "ENGINE_VERSION", None),
+            "health": "m6.9f4e-live-business-health-v1"}
         freshness = dict(live.freshness(domain))
-        freshness["engineVersion"] = LiveBusinessCustomerAdapter.ENGINE_VERSION
+        freshness["engineVersion"] = engine_by_domain.get(domain)
+        if domain == "forecast" and getattr(self, "live_forecast", None) is not None:
+            freshness.update(self.live_forecast._freshness(live, [live.snapshot.metadata.observationsClosedThrough.isoformat()]))
+        if domain == "health":
+            freshness["domains"] = {name: dict(live.freshness(name)) for name in
+                ("business", "inventory", "customer", "supplier", "marketBasket")}
+            freshness["domains"]["forecast"] = self.live_forecast._freshness(live, [live.snapshot.metadata.observationsClosedThrough.isoformat()])
         freshness = json.loads(json.dumps(
             freshness, ensure_ascii=False, allow_nan=False,
             default=lambda value: value.isoformat() if isinstance(value, (date, datetime)) else str(value),
@@ -631,7 +778,7 @@ class V3IntelligenceRuntime:
         return V3LiveMetadata(scenarioId=SCENARIO_ID, asOfDate=cutoff, timezone=TIMEZONE,
             datasetVersion=DATASET_VERSION, datasetSha256=DATASET_SHA256,
             contractVersion="m6.9f4-live-intelligence-v1", source="HISTORICAL_PLUS_OPERATIONAL_SNAPSHOT",
-            engineVersion=LiveBusinessCustomerAdapter.ENGINE_VERSION, versions=versions,
+            engineVersion=engine_by_domain.get(domain), versions=versions,
             durationMs=duration_ms, latencyP50Ms=self.latency_p50(domain),
             dataVersion=live.data_version, snapshotHash=live.context_hash,
             freshness=freshness)

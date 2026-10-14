@@ -225,18 +225,24 @@ def create_app(runtime: ModelRuntime | None = None,
             except V3FunctionalError as error:
                 raise HTTPException(status_code=error.status_code,
                                     detail={"code": error.code, "message": error.message}) from None
-            if domain not in {"business", "customer", "inventory", "supplier"}:
+            if domain not in {"business", "customer", "inventory", "supplier", "forecast", "health"}:
                 raise HTTPException(status_code=501, detail={"code": "LIVE_ANALYTICS_NOT_READY",
                     "message": "This LIVE analytics domain is not enabled yet."})
             if ((domain in {"business", "customer"} and getattr(current, "live_adapter", None) is None)
                     or (domain in {"inventory", "supplier"}
-                        and getattr(current, "live_inventory_supplier", None) is None)):
+                        and getattr(current, "live_inventory_supplier", None) is None)
+                    or (domain == "forecast" and getattr(current, "live_forecast", None) is None)
+                    or (domain == "health" and (getattr(current, "live_forecast", None) is None
+                        or getattr(current, "live_inventory_supplier", None) is None
+                        or getattr(current, "live_adapter", None) is None
+                        or getattr(current, "health", None) is None))):
                 raise HTTPException(status_code=501, detail={"code": "LIVE_ANALYTICS_NOT_READY",
                     "message": "This LIVE analytics domain is not enabled yet."})
             started = time.perf_counter()
             try:
                 live_method = {"business": "live_business_data", "customer": "live_customer_data",
-                               "inventory": "live_inventory_data", "supplier": "live_supplier_data"}[domain]
+                               "inventory": "live_inventory_data", "supplier": "live_supplier_data",
+                               "forecast": "live_forecast_data", "health": "live_health_data"}[domain]
                 data, cutoff = getattr(current, live_method)(payload, live_context)
                 partial = data.get("availabilityStatus") == "PARTIAL"
                 return V3Response(requestId=payload.requestId, status="PARTIAL" if partial else "OK",
