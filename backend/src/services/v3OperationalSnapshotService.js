@@ -67,7 +67,7 @@ async function getDataVersion(businessId, { session, majority = false } = {}) {
   let query = V3OperationalRevision.findById(businessId);
   if (session) query = query.session(session);
   if (majority && typeof query.readConcern === 'function') query = query.readConcern('majority');
-  const row = await query.lean().maxTimeMS(5000);
+  const row = await query.setOptions({ useBigInt64: true }).lean().maxTimeMS(5000);
   return row?.revision == null ? '0' : String(row.revision);
 }
 
@@ -75,7 +75,8 @@ async function bumpV3OperationalRevision({ businessId, session, changes = [], ef
   if (businessId !== config.businessId) return null;
   if (!session || !session.inTransaction()) throw new Error('V3 revision must be bumped inside the owning Mongo transaction.');
   await resolveV3OperationalScenario(businessId, { session });
-  const bootstrap = await V3OperationalRevision.findById(businessId).session(session).lean().maxTimeMS(5000);
+  const bootstrap = await V3OperationalRevision.findById(businessId).session(session)
+    .setOptions({ useBigInt64: true }).lean().maxTimeMS(5000);
   if (!bootstrap || bootstrap.bootstrapStatus !== 'VERIFIED'
       || bootstrap.historicalDatasetVersion !== config.datasetVersion
       || bootstrap.historicalDatasetSha256 !== config.sourceSha256) {
@@ -85,7 +86,7 @@ async function bumpV3OperationalRevision({ businessId, session, changes = [], ef
   const row = await V3OperationalRevision.findOneAndUpdate(
     { _id: businessId, bootstrapStatus: 'VERIFIED' }, { $inc: { revision: 1n } },
     { upsert: false, new: true, session, projection: { revision: 1 } }
-  ).lean().maxTimeMS(5000);
+  ).setOptions({ useBigInt64: true }).lean().maxTimeMS(5000);
   const revision = row?.revision;
   if (typeof revision !== 'bigint' || revision < 1n) throw new Error('V3 revision storage did not return BSON int64 data.');
   if (changes.length) {
@@ -103,7 +104,8 @@ async function bumpV3OperationalRevision({ businessId, session, changes = [], ef
 // It establishes conceptual revision zero only when post-cutoff operational data is absent.
 async function bootstrapV3OperationalRevision({ businessId, attestNoUnjournaledBaseCatalogChanges = false }) {
   await resolveV3OperationalScenario(businessId);
-  const revision = await V3OperationalRevision.findById(businessId).lean().maxTimeMS(5000);
+  const revision = await V3OperationalRevision.findById(businessId)
+    .setOptions({ useBigInt64: true }).lean().maxTimeMS(5000);
   if (revision?.bootstrapStatus === 'VERIFIED' && revision.historicalDatasetVersion === config.datasetVersion
       && revision.historicalDatasetSha256 === config.sourceSha256) return revision;
   if (revision && revision.revision !== 0n) throw fail('SNAPSHOT_BOOTSTRAP_AMBIGUOUS', 'Operational revision is already non-zero but is not verified; an audited capture is required.', 409);
@@ -127,7 +129,8 @@ async function bootstrapV3OperationalRevision({ businessId, attestNoUnjournaledB
   try {
     return await V3OperationalRevision.findOneAndUpdate({ _id: businessId, revision: 0n }, {
       $set: { revision: 0n, bootstrapStatus: 'VERIFIED', historicalDatasetVersion: config.datasetVersion, historicalDatasetSha256: config.sourceSha256 }
-    }, { upsert: true, new: true, runValidators: true }).lean().maxTimeMS(5000);
+    }, { upsert: true, new: true, runValidators: true })
+      .setOptions({ useBigInt64: true }).lean().maxTimeMS(5000);
   } catch (error) {
     if (error.code === 11000) throw fail('SNAPSHOT_BOOTSTRAP_RACE', 'V3 operational bootstrap raced another initializer; retry the bootstrap check.', 409);
     throw error;
@@ -291,9 +294,11 @@ async function readSnapshotData({ businessId, session, asOfDate, capturedAtUtc }
     : new Date(limaDayStart(nextDay(asOfDate)).getTime() - 1);
   // Mongo sessions in a transaction must be used serially (not Promise.all).
   const changes = await V3OperationalChange.find({ businessId, effectiveAtUtc: { $gte: from, $lte: through } })
-    .sort({ revision: 1, eventOrdinal: 1 }).limit(config.maxChanges + 1).session(session).lean().maxTimeMS(15000);
+    .sort({ revision: 1, eventOrdinal: 1 }).limit(config.maxChanges + 1).session(session)
+    .setOptions({ useBigInt64: true }).lean().maxTimeMS(15000);
   const futureCatalogChanges = await V3OperationalChange.find({ businessId, entityType: 'product', effectiveAtUtc: { $gt: through }, operation: { $in: ['UPDATE', 'DEACTIVATE'] } })
-    .sort({ effectiveAtUtc: 1, revision: 1, eventOrdinal: 1 }).limit(config.maxChanges + 1).session(session).lean().maxTimeMS(15000);
+    .sort({ effectiveAtUtc: 1, revision: 1, eventOrdinal: 1 }).limit(config.maxChanges + 1).session(session)
+    .setOptions({ useBigInt64: true }).lean().maxTimeMS(15000);
   const products = await Product.find({ businessId }).select('_id productKey sku name isActive price currency costPrice category categoryCode subcategoryCode brand presentation sizeValue sizeUnit containedUnits unit perishable shelfLifeDays minStockLevel safetyStock reorderPoint demandProfileKey supplierPrices preferredSupplierId createdAt scenarioId stock')
     .limit(config.maxProducts + 1).session(session).lean().maxTimeMS(15000);
   const movements = await InventoryMovement.aggregate([
@@ -346,7 +351,8 @@ async function buildV3OperationalSnapshot({ businessId, asOfDate, now = new Date
       const required = minimumDataVersion != null && BigInt(minimumDataVersion) > BigInt(floor) ? String(minimumDataVersion) : floor;
       session.startTransaction({ readConcern: { level: 'snapshot' }, readPreference: 'primary' });
       const scenario = await resolveV3OperationalScenario(businessId, { session });
-      const revisionRow = await V3OperationalRevision.findById(businessId).session(session).lean().maxTimeMS(5000);
+      const revisionRow = await V3OperationalRevision.findById(businessId).session(session)
+        .setOptions({ useBigInt64: true }).lean().maxTimeMS(5000);
       if (!revisionRow || revisionRow.bootstrapStatus !== 'VERIFIED'
           || revisionRow.historicalDatasetVersion !== config.datasetVersion
           || revisionRow.historicalDatasetSha256 !== config.sourceSha256) {
