@@ -588,7 +588,7 @@ test('H.1 ML knowledge questions route to existing READ skills with public evide
     ['¿Qué modelos de Machine Learning son no supervisados?', 'get_customer_intelligence', 'clustering'],
     ['¿Con qué productos se compra PAN-FRE-001?', 'get_cross_sell_recommendations', 'recommend'],
     ['¿El inventario usa Machine Learning?', 'get_inventory_intelligence', 'summary'],
-    ['¿Los proveedores usan Machine Learning?', 'get_inventory_intelligence', 'summary']
+    ['¿Los proveedores usan Machine Learning?', 'get_supplier_intelligence', 'summary']
   ];
   for (const [message, skillId, mode] of cases) {
     const plan = routeV3(message, {}, binding);
@@ -662,7 +662,9 @@ test('H.1 multi-intent ML queries are bounded to four deterministic skills and c
   const noMl = await fixture().run('¿El inventario usa Machine Learning?'); zero(noMl);
   assert.match(noMl.answer, /no un modelo de Machine Learning/i);
   assert.match(noMl.answer, /cobertura, safety stock, reposición y ABC\/XYZ/i);
-  assert.match(noMl.answer, /sin producir un score o calificación de proveedor/i);
+  assert.doesNotMatch(noMl.answer, /proveedores resume órdenes/i);
+  const suppliersNoMl = await fixture().run('¿Por qué no aplicó ML a proveedores?'); zero(suppliersNoMl);
+  assert.match(suppliersNoMl.answer, /no se produce un score o calificación global de proveedor/i);
   const unsupervised = await fixture().run('¿Qué modelos de Machine Learning son no supervisados?'); zero(unsupervised);
   assert.match(unsupervised.answer, /K-Means/); assert.match(unsupervised.answer, /Isolation Forest/);
   const frozen = await fixture().run('¿Qué modelos usan datos históricos congelados?'); zero(frozen);
@@ -674,4 +676,50 @@ test('H.1 multi-intent ML queries are bounded to four deterministic skills and c
 test('H.1 READ ML routing leaves WRITE preview and confirmation protocol untouched', async () => {
   assert.equal(routeV3('compra 3 del producto PAN-FRE-001', {}, binding), null);
   assert.equal(routeV3('vende 1 del producto PAN-FRE-001', {}, binding), null);
+});
+
+test('H.2 six-turn domain switching follows the latest explicit customer and supplier context', async () => {
+  const f = fixture(), conversationId = randomUUID(), callsPerTurn = [];
+  const first = await f.run('¿Qué stock tiene PAN-FRE-001?', conversationId); zero(first); callsPerTurn.push(f.calls.length);
+  const second = await f.run('Detalle del cliente CLI-001', conversationId); zero(second); callsPerTurn.push(f.calls.length);
+  const third = await f.run('¿Y su riesgo?', conversationId); zero(third); callsPerTurn.push(f.calls.length);
+  assert.equal(f.calls.at(-1).domain, 'customers'); assert.equal(f.calls.at(-1).payload.customerCode, 'CLI-001');
+  const fourth = await f.run('¿En qué cluster ML está?', conversationId); zero(fourth); callsPerTurn.push(f.calls.length);
+  assert.equal(f.calls.at(-1).domain, 'customers'); assert.equal(f.calls.at(-1).payload.customerCode, 'CLI-001');
+  assert.equal(fourth.usage.totalSkillCalls, 1);
+  const fifth = await f.run('Detalle del proveedor SUP-05', conversationId); zero(fifth); callsPerTurn.push(f.calls.length);
+  const sixth = await f.run('Ese proveedor llegó tarde?', conversationId); zero(sixth); callsPerTurn.push(f.calls.length);
+  assert.equal(f.calls.at(-1).domain, 'suppliers'); assert.equal(f.calls.at(-1).payload.supplierCode, 'SUP-05');
+  // K-Means needs an RFM lookup before its single clustering skill request.
+  assert.deepEqual(callsPerTurn, [1, 2, 3, 5, 6, 7]);
+  assert.equal(f.calls.length, 7);
+  assert.equal(f.calls[3].payload.mode, 'detail');
+  assert.equal(f.calls[4].payload.mode, 'clustering');
+  assert.ok(f.events.filter(event => event.type === 'skill_called').every(event => !Object.hasOwn(event, 'args')));
+});
+
+test('H.2 concise metric and methodology explanations stay contract-backed and non-ML claims stay precise', async () => {
+  const f = fixture();
+  const accuracy = await f.run('¿Por qué no usó accuracy en Isolation Forest?'); zero(accuracy);
+  assert.match(accuracy.answer, /requiere etiquetas reales/i); assert.match(accuracy.answer, /no tiene etiquetas de anomalías verificadas/i);
+  const coverage = await f.run('¿Qué significa coverage?'); zero(coverage);
+  assert.match(coverage.answer, /métrica operativa, no una probabilidad/i);
+  const reorder = await f.run('¿Qué es el punto de reposición?'); zero(reorder);
+  assert.match(reorder.answer, /no crea ni confirma una compra/i);
+  const leadTime = await f.run('¿Qué significa lead time?'); zero(leadTime);
+  assert.match(leadTime.answer, /tiempo observado entre la orden al proveedor y la recepción/i);
+  const score = await f.run('¿Existe un score ML de proveedor?'); zero(score);
+  assert.match(score.answer, /No existe un score ML de proveedor/i);
+});
+
+test('H.2 customer ranking follow-up requires a live customer ranking and clarifies otherwise', async () => {
+  const f = fixture(), conversationId = randomUUID();
+  const ranking = await f.run('Quiénes son mis mejores clientes', conversationId); zero(ranking);
+  const topKey = ranking.v3Views[0].items[0].key;
+  const followup = await f.run('¿Cuál de esos compra más?', conversationId); zero(followup);
+  assert.equal(f.calls.at(-1).domain, 'customers');
+  assert.equal(f.calls.at(-1).payload.customerCode, topKey);
+  const ambiguous = await fixture().run('¿Cuál de esos compra más?'); zero(ambiguous);
+  assert.equal(ambiguous.usage.totalSkillCalls, 0);
+  assert.match(ambiguous.answer, /no tengo una lista de clientes vigente/i);
 });
