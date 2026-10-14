@@ -647,6 +647,16 @@ class V3IntelligenceRuntime:
 
     def customer_data(self, request):
         cutoff = self.resolve_context(request.context)
+        if request.mode == "clustering":
+            from ml.service.customer_clustering import clustering_data
+            if cutoff != REFERENCE_DATE:
+                raise V3FunctionalError("INVALID_PERIOD", 422, "Frozen clustering requires its training cutoff.")
+            try:
+                return clustering_data(self.root, request.customerCode,
+                    request.assignmentRfm.model_dump() if request.assignmentRfm is not None else None,
+                    request.assignmentAsOfDate.isoformat() if request.assignmentAsOfDate else cutoff.isoformat()), cutoff
+            except LookupError:
+                raise V3FunctionalError("CUSTOMER_NOT_FOUND", 404, "Customer code was not found.") from None
         result = self._run("customer", lambda: self._customer_snapshot(cutoff))
         rows = result["customers"]
         if request.customerCode:

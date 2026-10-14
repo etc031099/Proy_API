@@ -404,7 +404,18 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, cl
       { signal: new AbortController().signal }) }; }
     catch (error) { return { error: safeError(error) }; }
   };
-  return Object.freeze({ summary, inventory, sales, customers, customer, suppliers, supplier, associations, productRelated, health, forecastEvaluation,
+  const customerClustering = async req => {
+    const prepared = await run(req, { frozen: true });
+    if (prepared.error) return { error: prepared.error };
+    const customerRef = req.query?.customerRef;
+    if (customerRef !== undefined && (typeof customerRef !== 'string' || !customerRef.trim() || customerRef.length > 160)) {
+      return { error: { code: 'INVALID_REQUEST', httpStatus: 400, message: 'La referencia del cliente no es válida.' } };
+    }
+    try { return { data: await service.customerClustering(prepared.context.authenticated,
+      { signal: new AbortController().signal, customerRef }) }; }
+    catch (error) { return { error: safeError(error) }; }
+  };
+  return Object.freeze({ summary, inventory, sales, customers, customer, suppliers, supplier, associations, productRelated, health, forecastEvaluation, customerClustering,
     forecast: req => product(req, 'forecast'), productInventory: req => product(req, 'inventory') });
 };
 

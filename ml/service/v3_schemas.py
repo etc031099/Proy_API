@@ -291,13 +291,32 @@ class CrossSellRequest(V3Request, PageRequest):
     categoryCode: str | None = Field(default=None, min_length=1, max_length=64)
 
 
+class ClusteringRfm(StrictSchema):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    recency: float | None = Field(default=None, ge=0)
+    frequency: float = Field(ge=0)
+    monetary: float = Field(ge=0)
+
+
 class CustomerRequest(V3Request, PageRequest):
-    mode: Literal["detail", "rank", "preferences", "activity", "summary"] = "summary"
+    mode: Literal["detail", "rank", "preferences", "activity", "summary", "clustering"] = "summary"
     customerCode: str | None = Field(default=None, min_length=1, max_length=64)
     segment: Literal["AT_RISK", "INACTIVE", "NEW", "LOYAL", "TOP_HIGH_VALUE", "POTENTIAL",
                      "INSUFFICIENT_HISTORY"] | None = None
     metric: Literal["spend", "tickets", "recency", "gross_margin"] = "spend"
     period: PeriodRange | None = None
+    assignmentRfm: ClusteringRfm | None = None
+    assignmentAsOfDate: date | None = None
+
+    @model_validator(mode="after")
+    def clustering_assignment_scope(self):
+        if self.assignmentRfm is not None or self.assignmentAsOfDate is not None:
+            if (self.mode != "clustering" or not self.customerCode or self.assignmentRfm is None
+                    or self.assignmentAsOfDate is None or self.assignmentAsOfDate < REFERENCE_DATE):
+                raise ValueError("Clustering assignment requires resolved customer and dated RFM")
+        if self.mode == "clustering" and self.period is not None:
+            raise ValueError("Frozen clustering does not accept a sales period")
+        return self
 
 
 class SupplierRequest(V3Request, PageRequest):

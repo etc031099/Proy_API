@@ -315,6 +315,9 @@ def create_app(runtime: ModelRuntime | None = None,
     @application.post("/v3/intelligence/customers", response_model=V3Response,
                       dependencies=[Depends(require_service_secret)])
     async def v3_customer(request: Request, payload: CustomerRequest) -> V3Response:
+        if payload.mode == "clustering" and payload.dataMode == "LIVE":
+            raise HTTPException(status_code=422, detail={"code": "INVALID_PERIOD",
+                "message": "Clustering uses a frozen artifact; dated RFM may be provided by the authenticated backend."})
         return await execute_v3(request, payload, "customer", "customer_data")
 
     @application.post("/v3/intelligence/suppliers", response_model=V3Response,

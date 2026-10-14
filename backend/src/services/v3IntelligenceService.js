@@ -277,6 +277,44 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
         || !Number.isFinite(row.metrics?.test?.wape))) throw unavailable();
     return data;
   };
-  return Object.freeze({ resolveContext, resolveEntity, execute, operationalClock, forecastEvaluation });
+  const customerClustering = async (context, { signal, customerRef } = {}) => {
+    const binding = await resolveContext(context);
+    if (!binding) throw new AgentError('AGENT_SKILL_NOT_ALLOWED');
+    const payload = { requestId: context.requestId, dataMode: 'HISTORICAL', mode: 'clustering',
+      context: { businessId: binding.businessId, scenarioId: binding.scenarioId,
+        datasetVersion: binding.datasetVersion, datasetSha256: binding.datasetSha256,
+        timezone: binding.timezone, asOfDate: V3.historicalCutoff } };
+    if (customerRef) {
+      // Raw RFM never comes from frontend parameters: the existing tenant-scoped
+      // customer skill reads and verifies its historical/LIVE source first.
+      const result = await execute({ context, signal, skill: { id: 'get_customer_intelligence', maxRecords: 1 },
+        args: { mode: 'detail', customerRef, limit: 1 } });
+      const row = result.data?.items?.[0];
+      if (!row) { const error = unavailable(); error.functionalCode = 'CUSTOMER_NOT_FOUND'; throw error; }
+      const raw = row.rfm90d?.raw;
+      if (!raw || !Number.isFinite(raw.frequency90d) || !Number.isFinite(raw.monetary90dCents)) throw unavailable();
+      payload.customerCode = row.customerCode;
+      payload.assignmentRfm = { recency: raw.recencyDays, frequency: raw.frequency90d, monetary: raw.monetary90dCents / 100 };
+      payload.assignmentAsOfDate = binding.operationalDate;
+    }
+    let body;
+    try { body = await client.intelligence('customers', payload, { signal }); }
+    catch (error) { const safe = unavailable(); safe.functionalCode = error?.functionalCode; throw safe; }
+    const meta = body?.metadata;
+    if (body?.requestId !== payload.requestId || body.status !== 'OK'
+      || meta?.scenarioId !== binding.scenarioId || meta?.datasetVersion !== binding.datasetVersion
+      || meta?.datasetSha256 !== binding.datasetSha256 || meta?.timezone !== binding.timezone
+      || meta?.asOfDate !== V3.historicalCutoff || meta?.source !== 'CANONICAL_V3_BUNDLE'
+      || meta?.contractVersion !== 'm6.9b-v3-intelligence-v1') throw unavailable();
+    const data = safeData(body.data);
+    if (data.contractVersion !== 'customer-kmeans-v3-v1' || data.algorithm !== 'KMeans'
+      || data.learningType !== 'unsupervised' || data.trainingCutoff !== V3.historicalCutoff
+      || data.status !== 'EXPLORATORY' || !Array.isArray(data.assignments) || !Array.isArray(data.clusters)
+      || data.assignments.some(row => 'probability' in row || 'confidence' in row)
+      || customerRef && (data.assignments.length !== 1 || data.assignments[0].customerRef !== payload.customerCode
+        || data.assignmentAsOfDate !== payload.assignmentAsOfDate)) throw unavailable();
+    return data;
+  };
+  return Object.freeze({ resolveContext, resolveEntity, execute, operationalClock, forecastEvaluation, customerClustering });
 };
 module.exports = { V3, createV3IntelligenceService, safeData };

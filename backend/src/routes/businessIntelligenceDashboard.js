@@ -23,6 +23,7 @@ const createBusinessIntelligenceDashboardRoutes = ({ service, authenticateMiddle
   router.get('/summary', endpoint('summary'));
   router.get('/sales', endpoint('sales'));
   router.get('/customers', endpoint('customers'));
+  router.get('/customers/clustering', endpoint('customerClustering'));
   router.get('/customers/:customerRef', endpoint('customer'));
   router.get('/suppliers', endpoint('suppliers'));
   router.get('/suppliers/:supplierRef', endpoint('supplier'));
