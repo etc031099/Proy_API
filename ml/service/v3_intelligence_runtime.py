@@ -16,6 +16,7 @@ import psutil
 from ml.service.v3_schemas import BUSINESS_ID, DATASET_SHA256, DATASET_VERSION, REFERENCE_DATE, SCENARIO_ID, TIMEZONE, V3Context
 from ml.service.v3_package import verify_package
 from ml.service.v3_source_pool import CanonicalRowPool
+from ml.service.v3_live_context import LiveSnapshotError, LiveV3ContextStore, SNAPSHOT_MAX_BYTES
 from ml.src import business_customer_supplier_v3 as m68
 from ml.src import v3_baseline_bundle, v3_forecast
 from ml.src.inventory_intelligence_v3 import INVENTORY_VERSION, InventoryIntelligenceV3
@@ -69,6 +70,7 @@ class V3IntelligenceRuntime:
         self._derived_cache: OrderedDict[tuple[str, str], Any] = OrderedDict()
         self._cache_lock = RLock()
         self._cache_limits = {"inventory": 3, "customer": 4, "supplier": 4}
+        self.live_contexts = LiveV3ContextStore(max_entries=2)
 
     def load(self) -> None:
         if self.ready:
@@ -168,6 +170,35 @@ class V3IntelligenceRuntime:
         if cutoff > REFERENCE_DATE or cutoff < v3_forecast.HISTORY_START:
             raise V3FunctionalError("INVALID_PERIOD", 422, "Requested cutoff is outside the available V3 history.")
         return cutoff
+
+    def ingest_request_context(self, request, *, request_body_bytes: int):
+        """Select frozen history or validate/cache an authorized LIVE context.
+
+        Analytics remain deliberately unavailable for LIVE until M6.9F.4; this
+        method never falls back to the frozen cutoff for a post-cutoff request.
+        """
+        if request.dataMode == "HISTORICAL":
+            if request.operationalSnapshot is not None:
+                raise V3FunctionalError("LIVE_SNAPSHOT_INVALID", 422,
+                                       "Historical requests cannot include an operational snapshot.")
+            return self.resolve_context(request.context), None
+        if request.dataMode != "LIVE":
+            raise V3FunctionalError("INVALID_REQUEST", 422, "Unsupported V3 data mode.")
+        if request.operationalSnapshot is None:
+            raise V3FunctionalError("LIVE_SNAPSHOT_REQUIRED", 422,
+                                   "A complete operational snapshot is required for LIVE requests.")
+        try:
+            context = request.context
+            live = self.live_contexts.build(
+                request.operationalSnapshot, base_records=self.records,
+                request_business_id=context.businessId, request_scenario_id=context.scenarioId,
+                request_dataset_version=context.datasetVersion, request_dataset_sha256=context.datasetSha256,
+                request_timezone=context.timezone, request_as_of_date=context.asOfDate,
+                request_body_bytes=request_body_bytes,
+            )
+        except LiveSnapshotError as error:
+            raise V3FunctionalError(error.code, error.status_code, error.message) from None
+        return live.as_of_date, live
 
     def _run(self, domain: str, fn):
         started = time.perf_counter()

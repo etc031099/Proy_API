@@ -21,6 +21,7 @@ from ml.service.model_runtime import (
 )
 from ml.service.schemas import PredictionRequest, PredictionResponse
 from ml.service.v3_intelligence_runtime import V3FunctionalError, V3IntelligenceRuntime
+from ml.service.v3_live_context import SNAPSHOT_MAX_BYTES
 from ml.service.v3_schemas import (
     BusinessRequest, CrossSellRequest, CustomerRequest, ForecastRequest, HealthRequest,
     InventoryRequest, SupplierRequest, V3HealthResponse, V3Response,
@@ -62,6 +63,11 @@ class BodyLimitMiddleware:
             except ValueError:
                 await JSONResponse(status_code=400, content={"detail": "Invalid Content-Length header"})(scope, receive, send)
                 return
+            if (scope.get("path", "").startswith("/v3/intelligence/")
+                    and declared_size > SNAPSHOT_MAX_BYTES):
+                await JSONResponse(status_code=413, content={"code": "LIVE_SNAPSHOT_TOO_LARGE",
+                                                              "message": "V3 request exceeds the 1.5 MiB limit."})(scope, receive, send)
+                return
             if declared_size > MAX_BODY_BYTES:
                 await JSONResponse(status_code=413, content={"detail": "Request payload is too large"})(scope, receive, send)
                 return
@@ -75,6 +81,11 @@ class BodyLimitMiddleware:
             if message["type"] == "http.disconnect":
                 return
             received_size += len(message.get("body", b""))
+            if (scope.get("path", "").startswith("/v3/intelligence/")
+                    and received_size > SNAPSHOT_MAX_BYTES):
+                await JSONResponse(status_code=413, content={"code": "LIVE_SNAPSHOT_TOO_LARGE",
+                                                              "message": "V3 request exceeds the 1.5 MiB limit."})(scope, receive, send)
+                return
             if received_size > MAX_BODY_BYTES:
                 await JSONResponse(status_code=413, content={"detail": "Request payload is too large"})(scope, receive, send)
                 return
@@ -199,6 +210,28 @@ def create_app(runtime: ModelRuntime | None = None,
 
     async def execute_v3(request: Request, payload: Any, domain: str, method: str) -> V3Response:
         current: V3IntelligenceRuntime = request.app.state.v3_runtime
+        if payload.dataMode == "LIVE":
+            body_bytes = len(await request.body())
+            if body_bytes > SNAPSHOT_MAX_BYTES:
+                raise HTTPException(status_code=413, detail={"code": "LIVE_SNAPSHOT_TOO_LARGE",
+                                                            "message": "V3 live snapshot exceeds the request size limit."})
+            if not current.ready:
+                raise HTTPException(status_code=503, detail={"code": "ARTIFACT_UNAVAILABLE",
+                                                            "message": "V3 historical base is unavailable."})
+            try:
+                current.ingest_request_context(payload, request_body_bytes=body_bytes)
+            except V3FunctionalError as error:
+                raise HTTPException(status_code=error.status_code,
+                                    detail={"code": error.code, "message": error.message}) from None
+            # F.3 validates and constructs the overlay; F.4 alone may execute
+            # live analytics. Never return frozen answers for a LIVE request.
+            raise HTTPException(status_code=501, detail={"code": "LIVE_ANALYTICS_NOT_READY",
+                                                        "message": "The LIVE snapshot was validated; live analytics are not enabled yet."})
+        try:
+            current.ingest_request_context(payload, request_body_bytes=len(await request.body()))
+        except V3FunctionalError as error:
+            raise HTTPException(status_code=error.status_code,
+                                detail={"code": error.code, "message": error.message}) from None
         if not current.ready:
             raise HTTPException(status_code=503, detail={"code": "ARTIFACT_UNAVAILABLE", "message": "V3 intelligence artifacts are unavailable."})
         if not current.domains.get(domain, False) and domain != "crossSell":

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictFloat, StrictInt, model_validator
 
 
 BUSINESS_ID = "MINIMARKET-PASCO-V3"
@@ -21,6 +21,10 @@ class StrictSchema(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
+class FrozenSnapshotSchema(StrictSchema):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
+
+
 class V3Context(StrictSchema):
     businessId: str = Field(min_length=1, max_length=100)
     scenarioId: str = Field(min_length=1, max_length=100)
@@ -33,6 +37,204 @@ class V3Context(StrictSchema):
 class V3Request(StrictSchema):
     requestId: str = Field(min_length=1, max_length=128)
     context: V3Context
+    # `mode` is already the operation selector (summary/detail/rank) on every
+    # domain request. Keep that public contract intact and add a source selector.
+    dataMode: Literal["HISTORICAL", "LIVE"] = "HISTORICAL"
+    operationalSnapshot: "V3OperationalSnapshot | None" = None
+
+
+class SnapshotCounts(FrozenSnapshotSchema):
+    catalogChanges: StrictInt = Field(ge=0, le=30_000)
+    sales: StrictInt = Field(ge=0, le=4_096)
+    purchases: StrictInt = Field(ge=0, le=2_048)
+    transactionChanges: StrictInt = Field(ge=0, le=30_000)
+    stockStates: StrictInt = Field(ge=0, le=5_000)
+    closedSalesDays: StrictInt = Field(ge=0, le=30_000)
+
+
+class CostCoverage(FrozenSnapshotSchema):
+    knownSaleLines: StrictInt = Field(ge=0, le=65_536)
+    unknownSaleLines: StrictInt = Field(ge=0, le=65_536)
+
+
+class SnapshotMetadata(FrozenSnapshotSchema):
+    snapshotVersion: Literal["v3-operational-snapshot-v1"]
+    contractVersion: Literal["1"]
+    businessId: str = Field(min_length=1, max_length=100)
+    scenarioId: str = Field(min_length=1, max_length=100)
+    historicalDatasetVersion: str = Field(min_length=1, max_length=100)
+    historicalDatasetSha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    historicalCutoff: date
+    deltaStart: date
+    timezone: str = Field(min_length=1, max_length=64)
+    operationalDate: date
+    asOfDate: date
+    capturedAtUtc: datetime
+    dataThroughUtc: datetime | None
+    observationsClosedThrough: date
+    dataVersion: str = Field(pattern=r"^(0|[1-9][0-9]*)$", max_length=19)
+    completeness: Literal["COMPLETE"]
+    counts: SnapshotCounts
+    costCoverage: CostCoverage
+    availabilityCoverage: Literal["UNKNOWN", "OBSERVED"]
+    snapshotHash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    payloadBytes: StrictInt = Field(ge=1, le=1_572_864)
+
+
+class SupplierOfferProjection(FrozenSnapshotSchema):
+    supplierKey: str = Field(min_length=1, max_length=160)
+    costCents: StrictInt | None = Field(default=None, ge=0)
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    preferred: bool
+    active: bool
+
+
+class ProductProjection(FrozenSnapshotSchema):
+    productKey: str = Field(min_length=1, max_length=160)
+    sku: str | None = Field(default=None, max_length=100)
+    name: str = Field(min_length=1, max_length=240)
+    active: bool
+    priceCents: StrictInt | None = Field(default=None, ge=0)
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    costPriceCents: StrictInt | None = Field(default=None, ge=0)
+    category: str | None = Field(default=None, max_length=120)
+    categoryCode: str | None = Field(default=None, max_length=64)
+    subcategoryCode: str | None = Field(default=None, max_length=64)
+    brand: str | None = Field(default=None, max_length=120)
+    presentation: str | None = Field(default=None, max_length=120)
+    sizeValue: StrictInt | StrictFloat | None = Field(default=None, ge=0)
+    sizeUnit: str | None = Field(default=None, max_length=32)
+    containedUnits: StrictInt | None = Field(default=None, ge=1)
+    unit: str | None = Field(default=None, max_length=32)
+    perishable: bool
+    shelfLifeDays: StrictInt | None = Field(default=None, ge=1)
+    minStock: StrictInt = Field(ge=0)
+    safetyStock: StrictInt | None = Field(default=None, ge=0)
+    reorderPoint: StrictInt | None = Field(default=None, ge=0)
+    demandProfileKey: str | None = Field(default=None, max_length=80)
+    supplierOffers: tuple[SupplierOfferProjection, ...] = Field(max_length=100)
+
+
+class ContactProjection(FrozenSnapshotSchema):
+    entityKey: str = Field(min_length=1, max_length=160)
+    name: str = Field(min_length=1, max_length=240)
+    type: Literal["customer", "vendor"]
+    active: bool
+    createdAtUtc: datetime | None = None
+
+
+class CatalogProjection(FrozenSnapshotSchema):
+    entityType: Literal["product", "contact"]
+    before: ProductProjection | ContactProjection | None
+    after: ProductProjection | ContactProjection
+
+    @model_validator(mode="after")
+    def projection_types_match(self):
+        expected = ProductProjection if self.entityType == "product" else ContactProjection
+        if not isinstance(self.after, expected) or (self.before is not None and not isinstance(self.before, expected)):
+            raise ValueError("catalog projection shape does not match entityType")
+        return self
+
+
+class CatalogChange(FrozenSnapshotSchema):
+    eventKey: str = Field(min_length=1, max_length=240)
+    effectiveAtUtc: datetime
+    revision: str = Field(pattern=r"^[1-9][0-9]*$", max_length=19)
+    entityType: Literal["product", "customer", "supplier"]
+    entityKey: str = Field(min_length=1, max_length=160)
+    operation: Literal["CREATE", "UPDATE", "DEACTIVATE"]
+    projection: CatalogProjection
+
+
+class SaleLine(FrozenSnapshotSchema):
+    lineKey: str = Field(min_length=1, max_length=200)
+    productKey: str = Field(min_length=1, max_length=160)
+    sku: str | None = Field(default=None, max_length=100)
+    quantity: StrictInt = Field(gt=0, le=1_000_000)
+    unitPriceCents: StrictInt = Field(ge=0, le=1_000_000_000)
+    lineTotalCents: StrictInt = Field(ge=0, le=1_000_000_000)
+    unitCostAtSaleCents: StrictInt | None = Field(default=None, ge=0, le=1_000_000_000)
+    costBasis: Literal["CAPTURED", "UNKNOWN"]
+    costKnown: bool
+    promo: bool = False
+
+
+class LiveSale(FrozenSnapshotSchema):
+    saleKey: str = Field(min_length=1, max_length=160)
+    occurredAtUtc: datetime
+    localDate: date
+    customerKey: str | None = Field(default=None, max_length=160)
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    totalCents: StrictInt = Field(ge=0, le=1_000_000_000)
+    initialStatus: Literal["completed", "pending", "cancelled"]
+    lines: tuple[SaleLine, ...] = Field(min_length=1, max_length=128)
+
+
+class PurchaseLine(FrozenSnapshotSchema):
+    lineKey: str = Field(min_length=1, max_length=200)
+    productKey: str = Field(min_length=1, max_length=160)
+    sku: str | None = Field(default=None, max_length=100)
+    quantityOrdered: StrictInt = Field(gt=0, le=1_000_000)
+    purchaseUnitCostCents: StrictInt = Field(ge=0, le=1_000_000_000)
+    lineTotalCents: StrictInt = Field(ge=0, le=1_000_000_000)
+
+
+class LivePurchase(FrozenSnapshotSchema):
+    purchaseKey: str = Field(min_length=1, max_length=160)
+    supplierKey: str = Field(min_length=1, max_length=160)
+    orderedAtUtc: datetime
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    status: Literal["pending", "completed", "cancelled"]
+    receiptEvidence: Literal["IMMEDIATE_PURCHASE", "DATED_RECEIPT", "NONE"]
+    promisedAtUtc: datetime | None
+    lines: tuple[PurchaseLine, ...] = Field(min_length=1, max_length=128)
+
+
+class TransactionLineChange(FrozenSnapshotSchema):
+    lineKey: str = Field(min_length=1, max_length=200)
+    receivedQty: StrictInt | None = Field(default=None, ge=0, le=1_000_000)
+
+
+class TransactionChange(FrozenSnapshotSchema):
+    eventKey: str = Field(min_length=1, max_length=240)
+    effectiveAtUtc: datetime
+    revision: str = Field(pattern=r"^[1-9][0-9]*$", max_length=19)
+    entityType: Literal["transaction"]
+    entityKey: str = Field(min_length=1, max_length=160)
+    transactionKey: str = Field(min_length=1, max_length=160)
+    transactionOrigin: Literal["HISTORICAL", "LIVE"]
+    kind: Literal["CANCEL", "RECEIVE"]
+    lineChanges: tuple[TransactionLineChange, ...] = Field(max_length=128)
+
+
+class StockState(FrozenSnapshotSchema):
+    productKey: str = Field(min_length=1, max_length=160)
+    sku: str | None = Field(default=None, max_length=100)
+    onHand: StrictInt = Field(ge=0, le=1_000_000_000)
+    stockBasis: Literal["MONGO_LEDGER"]
+
+
+class ClosedSalesDay(FrozenSnapshotSchema):
+    productKey: str = Field(min_length=1, max_length=160)
+    localDate: date
+    unitsSold: StrictInt = Field(ge=0, le=1_000_000)
+    completeness: Literal["COMPLETE"]
+    availability: Literal["UNKNOWN", "OBSERVED"]
+    availableHours: float | None = Field(default=None, ge=0, le=24)
+    onHandUsableAtOrigin: StrictInt | None = Field(default=None, ge=0)
+
+
+class V3OperationalSnapshot(FrozenSnapshotSchema):
+    metadata: SnapshotMetadata
+    catalogChanges: tuple[CatalogChange, ...] = Field(max_length=30_000)
+    sales: tuple[LiveSale, ...] = Field(max_length=4_096)
+    purchases: tuple[LivePurchase, ...] = Field(max_length=2_048)
+    transactionChanges: tuple[TransactionChange, ...] = Field(max_length=30_000)
+    stockStates: tuple[StockState, ...] = Field(max_length=5_000)
+    closedSalesDays: tuple[ClosedSalesDay, ...] = Field(max_length=30_000)
+
+
+V3Request.model_rebuild()
 
 
 class PeriodRange(StrictSchema):
@@ -132,5 +334,5 @@ __all__ = [
     "BUSINESS_ID", "SCENARIO_ID", "DATASET_SHA256", "REFERENCE_DATE", "TIMEZONE",
     "MAX_PAGE_SIZE", "MAX_OFFSET", "MAX_ENTITY_BATCH", "BusinessRequest", "InventoryRequest",
     "ForecastRequest", "CrossSellRequest", "CustomerRequest", "SupplierRequest", "HealthRequest",
-    "V3Response", "V3Metadata", "V3HealthResponse",
+    "V3Response", "V3Metadata", "V3HealthResponse", "V3OperationalSnapshot",
 ]
