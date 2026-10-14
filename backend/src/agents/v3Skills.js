@@ -22,9 +22,10 @@ const v3SkillProperties = id => {
     props.clusterFilter = text(80); props.clusterId = { type: 'integer', minimum: 1, maximum: 10 };
     props.concept = { type: 'string', enum: ['kmeans', 'silhouette', 'ari', 'rfm', 'unsupervised'] };
   }
-  if (spec.domain === 'business') props.concept = { type: 'string', enum: ['isolation_forest', 'anomaly', 'score', 'contamination', 'fraud', 'unsupervised'] };
+  if (spec.domain === 'business') props.concept = { type: 'string', enum: ['isolation_forest', 'anomaly', 'score', 'contamination', 'fraud', 'unsupervised', 'accuracy'] };
   if (spec.domain === 'cross-sell') props.concept = { type: 'string', enum: ['fp_growth', 'support', 'confidence', 'lift', 'causality'] };
-  if (spec.domain === 'inventory' || spec.domain === 'suppliers') props.concept = { type: 'string', enum: ['not_ml'] };
+  if (spec.domain === 'inventory') props.concept = { type: 'string', enum: ['inventory_not_ml', 'coverage', 'reorder_point', 'safety_stock'] };
+  if (spec.domain === 'suppliers') props.concept = { type: 'string', enum: ['supplier_not_ml', 'lead_time', 'punctuality', 'dependency', 'supplier_score'] };
   if (id !== 'get_business_health') props.offset = { type: 'integer', minimum: 0, maximum: 10000 };
   if (['business', 'customers', 'suppliers', 'health'].includes(spec.domain)) {
     props.startDate = { ...text(10), format: 'date' }; props.endDate = { ...text(10), format: 'date' };

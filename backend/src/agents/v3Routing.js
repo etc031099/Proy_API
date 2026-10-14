@@ -8,7 +8,8 @@ const { resolveOperationalPeriod } = require('./intentRouting');
 const { addCalendarDays } = require('../utils/operationalClock');
 const { contextBinding, TTL_MS } = require('./memory');
 const clean = text => normalize(text).replace(/\bq\b/g, 'que').replace(/\bd\b/g, 'de')
-  .replace(/\bprodcutos\b/g, 'productos').replace(/\bstan\b/g, 'estan').replace(/\breposision\b/g, 'reposicion');
+  .replace(/\bprodcutos\b/g, 'productos').replace(/\bstan\b/g, 'estan').replace(/\breposision\b/g, 'reposicion')
+  .replace(/\bclietnes\b/g, 'clientes').replace(/\boy\b/g, 'hoy');
 const trimRef = text => {
   const ref = String(text || '').replace(/[¿?¡!]/g, '').trim()
     .replace(/\s+(?:para\s+(?:los\s+)?pr[oó]ximos?\s+\d+\s+d[ií]as?|hoy|ayer|anteayer|esta semana|este mes|el mes pasado|los proximos|los próximos|los ultimos|los últimos|en los|durante|para mañana|manana|mañana|por favor|el \d+ de).*$/i, '').trim();
@@ -29,21 +30,45 @@ const queryPeriod = (message, binding, memory, followup = false) => {
 
 const machineLearningPlan = (text, message, binding, memory) => {
   const overview = /(?:que|cuales).{0,45}(?:algoritmos?|tecnicas?|partes|componentes).{0,50}(?:machine learning|\bml\b|aprendizaje)|(?:machine learning|\bml\b).{0,35}(?:utiliza|usa|aplica|sistema)|que partes.{0,30}usan? ml|que partes.{0,30}no usan? ml/.test(text);
-  const noMl = /(?:que partes|que areas|que modulos).{0,45}no usan? (?:ml|machine learning)|inventario.{0,30}(?:usa|utiliza).{0,20}(?:ml|machine learning)|proveedores?.{0,30}(?:usa|utiliza).{0,20}(?:ml|machine learning)/.test(text);
+  const noMl = /(?:que partes|que areas|que modulos).{0,45}no usan? (?:ml|machine learning)|inventario.{0,30}(?:usa|utiliza).{0,20}(?:ml|machine learning)|proveedores?.{0,30}(?:usa|utiliza).{0,20}(?:ml|machine learning)|por que no.{0,35}(?:ml|machine learning).{0,25}proveedor|proveedores?.{0,35}(?:ml|machine learning).{0,25}no/.test(text);
+  const inventoryConcept = /cobertura|\bcoverage\b|safety stock|stock minimo|punto de reposicion|cantidad sugerida|recomendacion operativa|reponer|reposicion/.test(text)
+    && /que es|que significa|modelo|hgb|ma28|machine learning|\bml\b|confirma una compra|como se calcula/.test(text);
+  const supplierConcept = /proveedor/.test(text) && /score|k.?means|machine learning|\bml\b|clasific|probabilidad/.test(text)
+    || /lead time|puntualidad|dependencia/.test(text) && /que es|que significa/.test(text);
   const health = /salud|diagnostico/.test(text) && /negocio|sistema|general/.test(text);
   const supervisedIntent = /supervisad/.test(text) && !/no supervisad/.test(text);
-  const forecastIntent = /histgradient|\bhgb\b|wape|baseline|media movil|\bma28\b|features?|variables?.{0,20}modelo|modelo.{0,24}(?:predic|demanda)|algoritmo.{0,24}(?:predic|demanda)|tecnica.{0,24}(?:predic|demanda)|caracteristicas.{0,20}modelo/.test(text) || supervisedIntent;
+  const forecastIntent = !(/fp.?growth/.test(text) && /modelo predictivo/.test(text)) && (/histgradient|\bhgb\b|wape|baseline|media movil|\bma28\b|modelo.{0,24}(?:predic|demanda)|algoritmo.{0,24}(?:predic|demanda)|tecnica.{0,24}(?:predic|demanda)|caracteristicas.{0,20}modelo/.test(text)
+    || /features?|variables?.{0,20}modelo/.test(text) && /hgb|histgradient|pronostic|predic|demanda|forecast/.test(text) || supervisedIntent);
+  const boundedForecastIntent = forecastIntent;
   const unsupervisedIntent = /no supervisad/.test(text) && /modelo|algoritmo|tecnica|machine learning|\bml\b|aprendizaje/.test(text);
-  const customerIntent = /k.?means|cluster|clustering|agrupamiento|silhouette|\bari\b|\brfm\b|algoritmo.{0,25}(?:cliente|segment)|como estan segmentados.{0,25}clientes|segmentacion.{0,25}clientes/.test(text) || unsupervisedIntent;
-  const anomalyIntent = /isolation forest|anomali|anomaly|atipic|fuera del patron|fraude|contamination|contaminacion|score.{0,20}(?:anomali|anomaly|atipic)|(?:anomali|anomaly|atipic).{0,20}score/.test(text) || unsupervisedIntent;
-  const basketIntent = /fp.?growth|support|confidence|\blift\b|asociacion|con que productos se compra|productos.{0,25}compran juntos|productos.{0,25}suelen comprar|compra.{0,20}juntos|causalidad/.test(text);
+  const customerIntent = /k.?means|cluster|clustering|agrupamiento|silhouette|\bari\b|\brfm\b|algoritmo.{0,25}(?:cliente|segment)|como estan segmentados.{0,25}clientes|segmentacion.{0,25}clientes|clientes?.{0,20}grupo mas alto/.test(text) || unsupervisedIntent;
+  const anomalyIntent = /isolation forest|anomali|anomaly|atipic|fuera del patron|fraude|contamination|contaminacion|jaccard|detector|score.{0,20}(?:anomali|anomaly|atipic|negativo)|(?:anomali|anomaly|atipic).{0,20}score|confirma incidentes/.test(text) || unsupervisedIntent;
+  const basketIntent = /fp.?growth|support|confidence|\blift\b|asociacion|reglas?.{0,20}(?:productos|ticket|support|confidence)|(?:ticket|evidencia).{0,20}regla|patrones frecuentes|productos.{0,25}relacionados|con que productos se compra|productos.{0,25}compran juntos|productos.{0,25}suelen comprar|compra.{0,20}juntos|causalidad/.test(text);
   const frozenIntent = /congelad|frozen|cutoff|corte historico/.test(text)
     && /modelo|algoritmo|tecnica|artifact|historico/.test(text);
   const tasks = [], add = (id, args = {}) => { if (!tasks.some(row => row.skillId === id && row.args.mode === args.mode)) tasks.push(task(id, args)); };
   if (noMl) {
-    add('get_inventory_intelligence', { mode: 'summary', concept: 'not_ml' });
-    add('get_supplier_intelligence', { mode: 'summary', concept: 'not_ml' });
+    if (/inventar|coverage|cobertura|stock|reponer|reposicion/.test(text) || /que partes|que areas|que modulos/.test(text))
+      add('get_inventory_intelligence', { mode: 'summary', concept: 'inventory_not_ml' });
+    if (/proveedor/.test(text) || /que partes|que areas|que modulos/.test(text))
+      add('get_supplier_intelligence', { mode: 'summary', concept: 'supplier_not_ml' });
     return { tasks };
+  }
+  if (inventoryConcept) {
+    const concept = /coverage|cobertura/.test(text) ? 'coverage' : /safety stock|stock minimo/.test(text) ? 'safety_stock'
+      : /punto de reposicion|reorder point/.test(text) ? 'reorder_point' : 'inventory_not_ml';
+    return { tasks: [task('get_inventory_intelligence', { mode: 'summary', concept })] };
+  }
+  if (supplierConcept) {
+    const concept = /score|k.?means|clasific|probabilidad/.test(text) ? 'supplier_score' : /lead time/.test(text) ? 'lead_time'
+      : /puntualidad/.test(text) ? 'punctuality' : /dependencia/.test(text) ? 'dependency' : 'supplier_not_ml';
+    return { tasks: [task('get_supplier_intelligence', { mode: 'summary', concept })] };
+  }
+  if (/cual de esos compra mas|quien de esos compra mas/.test(text)) {
+    const topCustomer = memory.lastFamily === 'get_customer_intelligence' && memory.ranking?.type === 'customer'
+      ? memory.ranking.items?.[0]?.key : null;
+    return topCustomer ? { tasks: [task('get_customer_intelligence', { mode: 'detail', customerRef: topCustomer })] }
+      : { clarificationQuestion: 'No tengo una lista de clientes vigente para comparar. ¿Quieres ver clientes en riesgo, frecuentes o por gasto?' };
   }
   if (overview) {
     add('get_product_forecast', { mode: 'evaluation', concept: 'algorithm' });
@@ -56,15 +81,15 @@ const machineLearningPlan = (text, message, binding, memory) => {
   if (frozenIntent) return { tasks: [task('get_customer_intelligence', { mode: 'clustering', concept: 'kmeans' }),
     task('get_business_analytics', { mode: 'anomalies', concept: 'isolation_forest' }),
     task('get_cross_sell_recommendations', { mode: 'rules', concept: 'fp_growth' })] };
-  const domains = [forecastIntent, customerIntent, anomalyIntent, basketIntent].filter(Boolean).length;
+  const domains = [boundedForecastIntent, customerIntent && !/proveedor/.test(text), anomalyIntent, basketIntent].filter(Boolean).length;
   if (domains > 1) {
-    if (forecastIntent) add('get_product_forecast', { mode: 'evaluation', concept: /wape/.test(text) ? 'wape' : 'algorithm' });
-    if (customerIntent) add('get_customer_intelligence', { mode: 'clustering', concept: /silhouette/.test(text) ? 'silhouette' : /\bari\b/.test(text) ? 'ari' : unsupervisedIntent ? 'unsupervised' : 'kmeans' });
-    if (anomalyIntent) add('get_business_analytics', { mode: 'anomalies', concept: /fraude/.test(text) ? 'fraud' : unsupervisedIntent ? 'unsupervised' : 'anomaly' });
+    if (boundedForecastIntent) add('get_product_forecast', { mode: 'evaluation', concept: /wape/.test(text) ? 'wape' : 'algorithm' });
+    if (customerIntent && !/proveedor/.test(text)) add('get_customer_intelligence', { mode: 'clustering', concept: /silhouette/.test(text) ? 'silhouette' : /\bari\b/.test(text) ? 'ari' : unsupervisedIntent ? 'unsupervised' : 'kmeans' });
+    if (anomalyIntent) add('get_business_analytics', { mode: 'anomalies', concept: /fraude/.test(text) ? 'fraud' : /accuracy/.test(text) ? 'accuracy' : unsupervisedIntent ? 'unsupervised' : 'anomaly' });
     if (basketIntent) add('get_cross_sell_recommendations', { mode: 'rules', concept: /support/.test(text) ? 'support' : /confidence/.test(text) ? 'confidence' : /lift/.test(text) ? 'lift' : 'fp_growth' });
     return tasks.length <= 4 ? { tasks } : { clarificationQuestion: 'Puedo comparar hasta cuatro dominios por consulta. Indica cuáles deseas priorizar.' };
   }
-  if (forecastIntent) {
+  if (boundedForecastIntent) {
     const concept = /wape/.test(text) ? 'wape' : /baseline/.test(text) ? 'baseline' : /supervisad/.test(text) ? 'supervised'
       : /caracteristicas|features?|variables del modelo/.test(text) ? 'features' : /por que|media movil|ma28/.test(text) ? 'why_method' : 'algorithm';
     return { tasks: [task('get_product_forecast', { mode: 'evaluation', concept })] };
@@ -72,16 +97,18 @@ const machineLearningPlan = (text, message, binding, memory) => {
   if (customerIntent) {
     if (/consumidor final/.test(text)) return { clarificationQuestion: 'Consumidor Final es un agregado anónimo y no tiene una asignación individual de K-Means.' };
     const customerRef = message.match(/\bCLI-\d+\b/i)?.[0]
-      || trimRef(message.match(/cliente\s+(.+?)(?:\s+en (?:el )?cluster|[?]|$)/i)?.[1]);
+      || trimRef(message.match(/cliente\s+(.+?)(?:\s+en (?:el )?cluster|[?]|$)/i)?.[1])
+      || (/cluster/.test(text) ? memory.selectedCustomer?.key : null);
     const explicitMemberQuery = /quienes?|que clientes|muestrame|lista|en que cluster|cluster tiene/.test(text);
     const clusterId = Number(text.match(/cluster\s+(?:numero\s+)?(\d+)/)?.[1]);
     const clusterFilter = /inactiv/.test(text) ? 'inactivos' : /gasto bajo/.test(text) ? 'gasto bajo'
-      : /gasto moderado|moderado/.test(text) ? 'gasto moderado' : /gasto alto|frecuent/.test(text) ? 'gasto alto' : undefined;
+      : /gasto moderado|moderado/.test(text) ? 'gasto moderado' : /gasto alto|frecuent|grupo mas alto/.test(text) ? 'gasto alto' : undefined;
     return { tasks: [task('get_customer_intelligence', { mode: 'clustering', concept: /silhouette/.test(text) ? 'silhouette' : /\bari\b/.test(text) ? 'ari' : /rfm/.test(text) ? 'rfm' : unsupervisedIntent ? 'unsupervised' : 'kmeans',
       ...(customerRef ? { customerRef } : {}), ...(clusterFilter ? { clusterFilter } : {}),
       ...(clusterId > 0 ? { clusterId } : {}), ...(explicitMemberQuery && !customerRef && !clusterFilter && !(clusterId > 0) ? { clusterFilter: 'no-exact-match' } : {}) })] };
   }
   if (anomalyIntent) {
+    if (/manana|proxima semana|proximo mes|futuro/.test(text)) return { clarificationQuestion: `Isolation Forest está congelado al ${binding.historicalCutoff}; no calcula anomalías futuras.` };
     let period = { startDate: binding.earliestDate, endDate: binding.historicalCutoff };
     if (/(?:ayer|hoy|ultimos|ultimas|desde|entre|periodo|dias|semanas|mes|20\d\d-\d\d-\d\d)/.test(text)) {
       const parsed = queryPeriod(message, binding, memory);
@@ -92,7 +119,7 @@ const machineLearningPlan = (text, message, binding, memory) => {
     const requestedLimit = Number(text.match(/(?:top|ultimos)\s+(\d+)/)?.[1] || 10);
     if (!Number.isInteger(requestedLimit) || requestedLimit < 1) return { clarificationQuestion: 'Indica un número de días atípicos entre 1 y 20.' };
     const limit = Math.min(requestedLimit, 20);
-    return { tasks: [task('get_business_analytics', { mode: 'anomalies', concept: /fraude/.test(text) ? 'fraud' : /score/.test(text) ? 'score' : 'anomaly', ...period, limit })] };
+    return { tasks: [task('get_business_analytics', { mode: 'anomalies', concept: /fraude/.test(text) ? 'fraud' : /accuracy/.test(text) ? 'accuracy' : /score/.test(text) ? 'score' : 'anomaly', ...period, limit })] };
   }
   if (basketIntent) {
     const relatedRef = trimRef(message.match(/(?:con que productos se compra|que productos se compran junto con|productos relacionados (?:a|con)|asociaciones para|cross sell de)\s+(.+)$/i)?.[1]);
@@ -106,9 +133,12 @@ const machineLearningPlan = (text, message, binding, memory) => {
 
 const routeV3 = (message, state, binding) => {
   const text = clean(message), memory = state || {};
-  if (/^(?:vende|vender|compra|comprar|crea|crear|avisa|avisame|actualiza|ajusta|confirma|confirmar|cancela|cancelar|si hazlo|procede|adelante|no lo hagas|mejor no)\b/.test(text)) return null;
+  if (/^(?:vende|vender|compra|comprar|crea|crear|avisa|avisame|actualiza|ajusta|confirma|confirmar|confirmo|hazlo|correcto|cancela|cancelar|si hazlo|procede|adelante|no lo hagas|no hagas nada|mejor no)\b/.test(text)
+    || /^(?:ese|el segundo)$/.test(text)) return null;
   const machineLearning = machineLearningPlan(text, message, binding, memory);
   if (machineLearning) return machineLearning;
+  if (/producto.{0,25}mas importante/.test(text) && !/ventas|vendido|revenue|abc|riesgo|critic/.test(text))
+    return { clarificationQuestion: '¿A qué te refieres con “más importante”: más vendido, mayor ingreso, clase ABC o mayor riesgo de inventario?' };
   const horizonFollowup = /^(?:y )?(?:para )?(?:los )?proximos? \d+ dias?$/.test(text);
   if (horizonFollowup && memory.lastFamily !== 'get_product_forecast') {
     return { clarificationQuestion: '¿De qué producto deseas consultar el pronóstico? No hay un pronóstico previo en esta conversación.' };
@@ -135,6 +165,10 @@ const routeV3 = (message, state, binding) => {
   if (/^por que (?:ocurre|pasa) (?:esto|eso)$/.test(text) && memory.lastFamily) return { clarificationQuestion: 'Estos datos muestran hechos y asociaciones observadas; no permiten demostrar su causa. Puedo comparar periodos o ampliar un dominio.' };
   // Only the three approved compound forms; no unbounded general planner.
   if (/ y /.test(text)) {
+    if (/inventario/.test(text) && /proveedor/.test(text) && /pedido|orden|pendient/.test(text))
+      return { tasks: [task('get_inventory_intelligence', { mode: 'summary' }), task('get_supplier_intelligence', { mode: 'rank', metric: 'orders', limit: 5 })] };
+    if (/salud|diagnostico/.test(text) && /negocio|general/.test(text) && /proveedor/.test(text) && /retras|demor|tarda/.test(text))
+      return { tasks: [task('get_business_health', {}), task('get_supplier_intelligence', { mode: 'rank', metric: 'delays', sortDirection: 'desc' })] };
     if (/stock/.test(text) && /pronostic|prediccion|forecast|demanda|vendere/.test(text)) {
       const ref = productRef(message) || memory.selectedProduct?.key;
       if (!ref) return { clarificationQuestion: '¿De qué producto deseas consultar el stock y el pronóstico?' };
@@ -157,13 +191,16 @@ const routeV3 = (message, state, binding) => {
     if (/mejor cliente|cliente.*compra mas/.test(text) && /suele comprar|preferencia/.test(text)) return { tasks: [task('get_customer_intelligence', { mode: 'rank', metric: 'spend', limit: 1 }),
       task('get_customer_intelligence', { mode: 'preferences' }, { fromPrevious: 'customer' })] };
   }
-  if (/como (?:esta|va) (?:mi|el) negocio|como va el negocio|resumen general|diagnostico general|que deberia revisar hoy|salud (?:de|del)|principales problemas/.test(text)) {
+  if (/como (?:esta|va) (?:mi|el) negocio|como va el negocio|resumen general|vista general.{0,20}negocio|estado del negocio|diagnostico general|que deberia revisar hoy|salud (?:de|del)|salud general del negocio|principales problemas/.test(text)) {
     const period = queryPeriod(message, binding, memory);
     return period.clarificationQuestion ? period : { tasks: [task('get_business_health', period)] };
   }
   if (/amplia (?:el )?inventario/.test(text)) return { tasks: [task('get_inventory_intelligence', { mode: 'rank', metric: 'stockout_risk' })] };
   if (/amplia (?:los )?clientes/.test(text)) return { tasks: [task('get_customer_intelligence', { mode: 'rank', metric: 'spend' })] };
-  const customerLanguage = /clientes?|gast[oó]|gasto|suele comprar|suelen comprar|preferencias|recencia|frecuencia|quien me compra|que compra /.test(text);
+  const contextualCustomerFollowup = memory.lastFamily === 'get_customer_intelligence'
+    && /^(?:y )?(?:su riesgo|cual de esos compra mas|quien de esos compra mas|que compra|cuanto gasto|su detalle)/.test(text);
+  const customerLanguage = /clientes?|gast[oó]|gasto|suele comprar|suelen comprar|preferencias|recencia|frecuencia|quien me compra|que compra /.test(text)
+    || contextualCustomerFollowup;
   if (customerLanguage && !/negocio|categoria|producto.*vendido|proveedor|sup \d+/.test(text)) {
     const ref = message.match(/\bCLI-\d+\b/i)?.[0] || trimRef(message.match(/(?:busca a|cliente|gasto|gastó|comprar|compra)\s+([A-ZÁÉÍÓÚÑ][\p{L}\s]+?)(?:\s+(?:en|este|el mes|los últimos)|[?]|$)/u)?.[1]);
     const general = /clientes|quienes|quien.*compra mas|mejor cliente/.test(text);
@@ -180,7 +217,7 @@ const routeV3 = (message, state, binding) => {
     }
     return { tasks: [task('get_customer_intelligence', args)] };
   }
-  if (/proveedor|abastece|lead time|puntualidad|retrasos|dependencia|\bsup \d+\b/.test(text)
+  if (/proveedor|abastece|lead time|puntualidad|retrasos|dependencia|llego tarde|llegaron tarde|se atraso|\bsup \d+\b/.test(text)
     || /que productos me vende/.test(text) && memory.selectedSupplier) {
     if (/precio|barato|cuesta|cost[oó]/.test(text)) return null; // existing configured-offer skills
     if (/mejor|peor/.test(text) && !/tarda|demora|gasto|compras|lead time|puntual|depend/.test(text)) return { clarificationQuestion: '¿Qué métrica deseas comparar: gasto, órdenes, lead time, puntualidad o dependencia? No hay un score de mejor proveedor.' };
@@ -188,8 +225,8 @@ const routeV3 = (message, state, binding) => {
     if (/critic|alto riesgo/.test(text)) return { tasks: [task('get_inventory_intelligence', { mode: 'rank', risk: /critic/.test(text) ? 'CRITICAL' : 'HIGH',
       ...(ref || memory.selectedSupplier ? { supplierRef: ref || memory.selectedSupplier.key } : {}) })] };
     const general = /que proveedor|proveedores|quien.*abastece|de que proveedor/.test(text);
-    const selected = ref || (!general && /\bsu\b|me vende|productos|lead time|puntual/.test(text) ? memory.selectedSupplier?.key : null);
-    const args = { mode: selected ? 'detail' : 'rank', metric: /tarda|demora|retras/.test(text) ? 'delays' : /lead time/.test(text) ? 'lead_time' : /puntual/.test(text) ? 'punctuality' : /depend/.test(text) ? 'dependency' : /orden|pedido/.test(text) ? 'orders' : 'spend', ...(selected ? { supplierRef: selected } : {}) };
+    const selected = ref || (!general && /\bsu\b|ese proveedor|el anterior|me vende|productos|lead time|puntual|llego tarde|se atraso/.test(text) ? memory.selectedSupplier?.key : null);
+    const args = { mode: selected ? 'detail' : 'rank', metric: /tarda|demora|retras|llego tarde|se atraso/.test(text) ? 'delays' : /lead time/.test(text) ? 'lead_time' : /puntual/.test(text) ? 'punctuality' : /depend/.test(text) ? 'dependency' : /orden|pedido/.test(text) ? 'orders' : 'spend', ...(selected ? { supplierRef: selected } : {}) };
     if (/tarda/.test(text)) args.metric = 'lead_time';
     if (/tarda mas|demora mas|mas retras/.test(text)) args.sortDirection = 'desc';
     if (/menor|menos|rapido/.test(text)) args.sortDirection = 'asc';
@@ -218,7 +255,8 @@ const routeV3 = (message, state, binding) => {
     return { tasks: [task('get_product_forecast', args)] };
   }
   if (/stock|inventario|disponible/.test(text) && /cuant|queda|qued|tiene|hay|disponible|inventario de|stock de|stock del/.test(text)) {
-    const ref = productRef(message) || (memory.selectedProduct?.key && /^(?:y |cuanto|que|cual|esta|hay|queda)/.test(text)
+    const canReuseProduct = !memory.lastFamily || ['get_inventory_intelligence', 'get_product_forecast', 'get_business_analytics'].includes(memory.lastFamily);
+    const ref = productRef(message) || (canReuseProduct && memory.selectedProduct?.key && /^(?:y |cuanto|que|cual|esta|hay|queda)/.test(text)
       ? memory.selectedProduct.key : null);
     if (!ref && !/bajo|critico|agot|riesgo|sobre/.test(text)) return { clarificationQuestion: '¿De qué producto deseas consultar el stock disponible?' };
     if (ref) return { tasks: [task('get_inventory_intelligence', { mode: 'detail', productRef: ref })] };
@@ -312,13 +350,22 @@ const mlExplanation = concept => ({
   anomaly: 'Una anomalía es una observación estadísticamente alejada del patrón aprendido; no identifica por sí sola la causa ni confirma un incidente.',
   fraud: 'No. Isolation Forest solo señala comportamientos estadísticamente atípicos que requieren revisión contextual. No existen etiquetas de fraude ni incidentes confirmados.',
   score: 'El anomaly score ordena observaciones por atipicidad según el artifact. No es una probabilidad de fraude ni de error.',
+  accuracy: 'Accuracy requiere etiquetas reales para comparar predicciones correctas e incorrectas. Este Isolation Forest es no supervisado y el escenario no tiene etiquetas de anomalías verificadas; por eso no se reporta accuracy.',
   contamination: 'Contamination es un parámetro de Isolation Forest relacionado con la proporción esperada de observaciones atípicas; no es una probabilidad individual.',
   fp_growth: 'FP-Growth extrae patrones frecuentes de compras y genera reglas de asociación. El artifact de Market Basket está congelado al 2026-10-12; asociación no implica causalidad.',
   support: 'Support es la proporción de tickets que contienen conjuntamente los productos de una regla; ticketCount muestra evidencia observada en cantidad de tickets.',
   confidence: 'Confidence estima qué proporción de tickets con el antecedente también contiene el consecuente. Es frecuencia condicional observada, no causalidad.',
   lift: 'Lift compara la frecuencia conjunta observada con la esperada si antecedente y consecuente fueran independientes. Mayor que 1 indica asociación positiva, no efecto causal.',
   causality: 'No puede concluirse causalidad: FP-Growth describe compras que aparecen juntas en el histórico congelado al 2026-10-12.',
-  not_ml: 'Este dominio usa analítica operativa/descriptiva, no un modelo de Machine Learning. El inventario calcula cobertura, safety stock, reposición y ABC/XYZ; proveedores resume órdenes, gasto, lead time y puntualidad sin producir un score o calificación de proveedor.'
+  inventory_not_ml: 'El inventario usa analítica operativa, no un modelo de Machine Learning: calcula cobertura, safety stock, reposición y ABC/XYZ. El método actual de forecast es MA28; HGB no controla la reposición ni una cantidad sugerida confirma una compra.',
+  supplier_not_ml: 'Actualmente no se usa Machine Learning para proveedores. Se resumen órdenes, gasto, lead time, puntualidad y dependencia de abastecimiento; no se produce un score o calificación global de proveedor.',
+  coverage: 'La cobertura estima cuántos días puede sostenerse el stock disponible según la demanda estimada; es una métrica operativa, no una probabilidad ni un modelo ML.',
+  reorder_point: 'El punto de reposición es un umbral operativo para indicar cuándo conviene reponer, considerando demanda y plazo de abastecimiento; alcanzarlo no crea ni confirma una compra.',
+  safety_stock: 'El safety stock es una reserva operativa para amortiguar variaciones de demanda y abastecimiento. No es ML por sí mismo ni activa una compra automáticamente.',
+  lead_time: 'Lead time es el tiempo observado entre la orden al proveedor y la recepción. Se resume desde compras registradas; no equivale a una predicción de retraso.',
+  punctuality: 'La puntualidad resume qué proporción de órdenes recibidas llegó dentro del plazo observado. Es una métrica descriptiva, no una probabilidad futura ni un score global.',
+  dependency: 'La dependencia describe concentración de abastecimiento y productos con fuente única; no califica por sí sola la calidad del proveedor.',
+  supplier_score: 'No existe un score ML de proveedor. Se usan métricas descriptivas de gasto, órdenes, plazo y puntualidad; no se produce una calificación global.'
 })[concept];
 const displayEntityType = (skillId, args) => skillId === 'get_customer_intelligence' ? 'customer'
   : skillId === 'get_supplier_intelligence' ? (args.mode === 'alternatives' ? 'product' : 'supplier')
@@ -475,7 +522,7 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
       ]); if (item) items.push(item);
     }
     if (d.singleSourceCriticalOrHigh) metrics.push({ label: 'Productos de alto riesgo con una sola fuente', value: d.singleSourceCriticalOrHigh.singleSourceCriticalOrHighSkuCount });
-    note = args.concept === 'not_ml' ? mlExplanation(args.concept) : 'Métricas descriptivas observadas; no constituyen una calificación de proveedor.';
+    note = ['supplier_not_ml', 'supplier_score', 'lead_time', 'punctuality', 'dependency'].includes(args.concept) ? mlExplanation(args.concept) : 'Métricas descriptivas observadas; no constituyen una calificación de proveedor.';
   } else if (skillId === 'get_business_health') {
     kind = 'health'; title = 'Resumen de salud del negocio';
     const h = d.businessHealth || {};
