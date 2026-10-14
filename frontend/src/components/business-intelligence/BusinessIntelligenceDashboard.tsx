@@ -12,6 +12,7 @@ import type { BusinessSummary, ForecastResponse, IntelligenceMode, InventorySumm
 import { ExtendedAnalyticsPanel, type ExtendedTab } from './ExtendedAnalyticsPanel';
 import { ChartCard, MetricInfo, MetricLabel } from './MetricInfo';
 import { ForecastEvaluationPanel } from './ForecastEvaluationPanel';
+import { AnalyticsErrorBoundary } from './AnalyticsErrorBoundary';
 
 type TabKey = 'summary' | 'forecast' | 'inventory' | ExtendedTab;
 type LoadState = 'loading' | 'ready' | 'error';
@@ -149,6 +150,7 @@ export function BusinessIntelligenceDashboard() {
           { key: 'sales', label: 'Ventas' }, { key: 'customers', label: 'Clientes' }, { key: 'suppliers', label: 'Proveedores' },
           { key: 'related', label: 'Productos relacionados' }, { key: 'health', label: 'Salud' }] as const).map(item => <button key={item.key} id={`intelligence-tab-${item.key}`} type="button" role="tab" aria-controls={`intelligence-panel-${item.key}`} aria-selected={tab === item.key} onClick={() => setTab(item.key)} className={`shrink-0 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:shrink ${tab === item.key ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground'}`}>{item.label}</button>)}
       </div>
+      <AnalyticsErrorBoundary key={tab} label={{ summary: 'resumen', forecast: 'predicción', inventory: 'inventario', sales: 'ventas', customers: 'clientes', suppliers: 'proveedores', related: 'productos relacionados', health: 'salud' }[tab]}>
       {tab === 'summary' && <section id="intelligence-panel-summary" role="tabpanel" aria-labelledby="intelligence-tab-summary" tabIndex={0} className="mt-4 space-y-6">
         {overviewState === 'loading' && <SkeletonGrid />}
         {overviewError && <ErrorPanel retry={() => void loadOverview()} />}
@@ -213,6 +215,7 @@ export function BusinessIntelligenceDashboard() {
         {selected && detailState === 'ready' && productInventory && <ProductInventoryPanel inventory={productInventory} />}
       </section>}
       {(['sales', 'customers', 'suppliers', 'related', 'health'] as const).includes(tab as ExtendedTab) && <section id={`intelligence-panel-${tab}`} role="tabpanel" aria-labelledby={`intelligence-tab-${tab}`} tabIndex={0} className="mt-4"><ExtendedAnalyticsPanel tab={tab as ExtendedTab} inventory={inventory} /></section>}
+      </AnalyticsErrorBoundary>
     </div>
   </div>;
 }

@@ -58,15 +58,15 @@ describe('forecast ML evidence and operative method', () => {
     expect(screen.getAllByText(/^0[.,]234567$/).length).toBeGreaterThan(0);
     expect(container.textContent).not.toMatch(/accuracy|precision|recall|No es un modelo ML|100 - WAPE/i);
     expect(container.textContent).not.toContain('Campeón');
-    expect(container.textContent).not.toContain(model.artifactHash);
+    expect(screen.getByText(model.artifactHash!).closest('details')?.open).toBe(false);
     expect(screen.getByText(/no una serie TEST de predicciones/)).toBeTruthy();
   });
 
   it('exposes temporal splits and academic explanations with keyboard-accessible help', async () => {
     render(<ForecastEvaluationPanel />);
     await screen.findByText('Método operativo seleccionado');
-    fireEvent.click(screen.getAllByRole('button', { name: 'Ayuda: WAPE' })[0]);
-    expect(screen.getByRole('tooltip').textContent).toContain('Un valor menor indica mejor desempeño');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Ayuda: WAPE TEST' })[0]);
+    expect(screen.getByRole('tooltip').textContent).toContain('Un valor menor indica menor error');
     expect(screen.getAllByText(/Train:/).length).toBe(2);
     expect(screen.getAllByText(/Validation:/).length).toBe(2);
     expect(screen.getAllByText(/Test:/).length).toBe(2);
@@ -101,5 +101,23 @@ describe('forecast ML evidence and operative method', () => {
     const get = vi.spyOn(instance, 'get').mockResolvedValue({ data: { success: true, data: fixture } });
     expect((await apiClient.getForecastModelEvaluation()).data).toEqual(fixture);
     await waitFor(() => expect(get).toHaveBeenCalledWith('/intelligence/forecast/evaluation'));
+  });
+
+  it('explains the six-step ML workflow and category/product rejection without changing API values', async () => {
+    render(<ForecastEvaluationPanel />);
+    await screen.findByText('Método operativo seleccionado');
+    const flow = screen.getByRole('region', { name: 'Cómo se aplicó Machine Learning' });
+    expect(flow.querySelectorAll('li')).toHaveLength(6);
+    expect(flow.textContent).toMatch(/Datos históricos.*Preparación de variables.*Entrenamiento HistGradientBoosting.*Validación temporal.*Comparación con baseline.*Decisión operativa/);
+    expect(screen.getByText(/se entrenó y evaluó HistGradientBoostingRegressor, un modelo de aprendizaje supervisado/)).toBeTruthy();
+    expect(screen.getByText('El pronóstico operativo actual utiliza Media Móvil de 28 días.')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Evaluación histórica del modelo ML — Horizonte de 7 días' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Evaluación histórica V3 · Horizonte de 28 días' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Ayuda: ¿Por qué no fue seleccionado?' }));
+    expect(screen.getByRole('tooltip').textContent).toMatch(/resultado agregado.*protección de categorías y productos prioritarios/);
+    expect(screen.getByText(/Horizontes aprobados: 1 \/ 7 \/ 14 días/)).toBeTruthy();
+    expect(screen.queryByText(/sintético|synthetic/i)).toBeNull();
+    expect(screen.getByText('legacy').closest('details')?.open).toBe(false);
+    expect(screen.getAllByText(/^0[.,]123456$/).length).toBeGreaterThan(0);
   });
 });

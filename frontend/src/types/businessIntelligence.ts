@@ -120,7 +120,7 @@ export interface SupplierAnalyticsDetail extends AnalyticsMeta {
   historyAvailability: string;
 }
 export interface AssociationRule {
-  antecedent: string[]; antecedentProducts: Array<Record<string, unknown>>; consequent: string[]; consequentProducts: Array<Record<string, unknown>>;
+  antecedent: string[]; antecedentProducts: Array<string | Record<string, unknown>>; consequent: string[]; consequentProducts: Array<string | Record<string, unknown>>;
   support: number | null; confidence: number | null; lift: number | null; ticketCount: number | null; stability: string | null; status: string | null;
 }
 export interface AssociationsAnalytics extends AnalyticsMeta {

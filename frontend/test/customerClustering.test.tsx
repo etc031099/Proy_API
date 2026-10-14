@@ -65,4 +65,13 @@ describe('K-Means customer panel', () => {
     expect(get).toHaveBeenCalledWith('/intelligence/customers/clustering', { params: { customerRef: 'CUS-01' } });
     await waitFor(() => expect(get).toHaveBeenCalledTimes(1));
   });
+  it('uses canonical subsample stability for academic ARI and keeps seed stability secondary', async () => {
+    vi.spyOn(apiClient, 'getCustomerClustering').mockResolvedValue(envelope());
+    render(<CustomerClusteringPanel onSelect={vi.fn()} />);
+    const formatted = new Intl.NumberFormat('es-PE', { maximumFractionDigits: 6 }).format(evidence.metrics.subsampleAriMean);
+    expect(await screen.findByText(new RegExp(`estabilidad ARI por submuestras ${formatted.replace('.', '\\.')}`))).toBeTruthy();
+    expect(screen.getByText(/ARI entre semillas: 1/)).toBeTruthy();
+    expect(screen.getAllByText(/Perfil representativo del cluster:/)).toHaveLength(4);
+    expect(screen.queryByText(/Centro inverso/)).toBeNull();
+  });
 });
