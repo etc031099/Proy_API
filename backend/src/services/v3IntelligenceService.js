@@ -9,14 +9,14 @@ const V3 = Object.freeze({ ...require('../config/v3Demo'), scenarioId: 'minimark
   datasetVersion: 'minimarket-pasco-v3-seed2026-v1', datasetSha256: 'a90b913b6ee83174165b39eaab1526525b3aacc53cae1abe6c3f5a54a469cac8',
   historicalCutoff: '2026-10-12', referenceDate: '2026-10-12', timezone: 'America/Lima', earliestDate: '2025-10-13' });
 const unavailable = () => new AgentError('ML_SERVICE_UNAVAILABLE');
-const safeData = (value, depth = 0) => {
+const safeData = (value, depth = 0, maxArrayLength = 100) => {
   if (depth > 18) throw unavailable();
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
   if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (Array.isArray(value)) { if (value.length > 100) throw unavailable(); return value.map(row => safeData(row, depth + 1)); }
+  if (Array.isArray(value)) { if (value.length > maxArrayLength) throw unavailable(); return value.map(row => safeData(row, depth + 1, maxArrayLength)); }
   if (!isPlainObject(value)) throw unavailable();
   return Object.fromEntries(Object.entries(value).filter(([key]) => !/^(?:_id|id|email|phone|address|payload|secret|token|headers|url|lease|canonicalData)$/i.test(key))
-    .map(([key, row]) => [key, safeData(row, depth + 1)]));
+    .map(([key, row]) => [key, safeData(row, depth + 1, maxArrayLength)]));
 };
 // One request owns the source binding and entity promises. No decisions are cached
 // across users/tenants or across conversation turns.
@@ -315,6 +315,43 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
         || data.assignmentAsOfDate !== payload.assignmentAsOfDate)) throw unavailable();
     return data;
   };
-  return Object.freeze({ resolveContext, resolveEntity, execute, operationalClock, forecastEvaluation, customerClustering });
+  const salesAnomalies = async (context, { signal, startDate = V3.earliestDate, endDate = V3.historicalCutoff, limit = 10 } = {}) => {
+    const binding = await resolveContext(context);
+    if (!binding) throw new AgentError('AGENT_SKILL_NOT_ALLOWED');
+    if (!isDate(startDate) || !isDate(endDate) || startDate < V3.earliestDate || startDate > endDate
+      || endDate > V3.historicalCutoff || !Number.isInteger(limit) || limit < 1 || limit > 20) {
+      const error = new AgentError('AGENT_INVALID_SKILL_ARGS'); error.functionalCode = 'INVALID_PERIOD'; throw error;
+    }
+    const payload = { requestId: context.requestId, dataMode: 'HISTORICAL', mode: 'anomalies', limit,
+      period: { startDate, endDate }, context: { businessId: binding.businessId, scenarioId: binding.scenarioId,
+        datasetVersion: binding.datasetVersion, datasetSha256: binding.datasetSha256,
+        timezone: binding.timezone, asOfDate: V3.historicalCutoff } };
+    let body;
+    try { body = await client.intelligence('business', payload, { signal }); }
+    catch (error) { const safe = unavailable(); safe.functionalCode = error?.functionalCode; throw safe; }
+    const meta = body?.metadata;
+    if (body?.requestId !== payload.requestId || body.status !== 'OK'
+      || meta?.scenarioId !== binding.scenarioId || meta?.datasetVersion !== binding.datasetVersion
+      || meta?.datasetSha256 !== binding.datasetSha256 || meta?.timezone !== binding.timezone
+      || meta?.asOfDate !== V3.historicalCutoff || meta?.source !== 'CANONICAL_V3_BUNDLE'
+      || meta?.contractVersion !== 'm6.9b-v3-intelligence-v1') throw unavailable();
+    // This sole frozen 365-day series has a specific bound; other skill limits
+    // retain their existing 100-element guard.
+    const data = safeData(body.data, 0, 365);
+    if (data.contractVersion !== 'sales-isolation-forest-v3-v1' || data.algorithm !== 'IsolationForest'
+      || data.mode !== 'FROZEN' || data.analysisCutoff !== V3.historicalCutoff || data.status !== 'EXPLORATORY'
+      || data.period?.startDate !== startDate || data.period?.endDate !== endDate
+      || !Array.isArray(data.series) || !Array.isArray(data.topAnomalies) || data.topAnomalies.length > limit
+      || data.filteredDays !== data.series.length || data.filteredAnomalyCount !== data.series.filter(row => row.isAnomaly).length
+      || data.series.length !== (Date.parse(endDate)-Date.parse(startDate))/86400000+1
+      || new Set(data.series.map(row => row.date)).size !== data.series.length
+      || data.series.some(row => !isDate(row.date) || row.date < startDate || row.date > endDate
+        || !Number.isFinite(row.anomalyScore) || typeof row.isAnomaly !== 'boolean'
+        || row.isAnomaly !== (row.decisionFunction < 0) || Math.abs(row.decisionFunction-(row.anomalyScore-data.threshold)) > 1e-12
+        || 'probability' in row || 'accuracy' in row)
+      || data.topAnomalies.some(row => !row.isAnomaly || !data.series.some(day => day.date === row.date && day.anomalyScore === row.anomalyScore))) throw unavailable();
+    return data;
+  };
+  return Object.freeze({ resolveContext, resolveEntity, execute, operationalClock, forecastEvaluation, customerClustering, salesAnomalies });
 };
 module.exports = { V3, createV3IntelligenceService, safeData };

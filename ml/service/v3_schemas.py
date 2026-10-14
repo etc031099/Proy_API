@@ -259,13 +259,19 @@ class PageRequest(StrictSchema):
 
 
 class BusinessRequest(V3Request, PageRequest):
-    mode: Literal["summary", "compare", "rank"] = "summary"
+    mode: Literal["summary", "compare", "rank", "anomalies"] = "summary"
     period: PeriodRange | None = None
     entityType: Literal["product", "category"] | None = None
     metric: Literal["units", "revenue", "gross_margin", "tickets"] | None = None
     categoryCode: str | None = Field(default=None, min_length=1, max_length=64)
     subcategoryCode: str | None = Field(default=None, min_length=1, max_length=64)
     productSku: str | None = Field(default=None, min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def anomaly_scope(self):
+        if self.mode == "anomalies" and any((self.entityType, self.metric, self.categoryCode, self.subcategoryCode, self.productSku, self.offset)):
+            raise ValueError("Frozen business anomalies do not accept entity filters or offset")
+        return self
 
 
 class InventoryRequest(V3Request, PageRequest):

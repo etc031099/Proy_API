@@ -285,6 +285,14 @@ class V3IntelligenceRuntime:
 
     def business_data(self, request):
         cutoff = self.resolve_context(request.context)
+        if request.mode == "anomalies":
+            from ml.service.sales_anomalies import anomalies_data
+            if cutoff != REFERENCE_DATE:
+                raise V3FunctionalError("INVALID_PERIOD", 422, "Frozen anomaly analysis requires its cutoff.")
+            period = self._period(request.period, cutoff) if request.period else {"startDate": v3_forecast.HISTORY_START.isoformat(), "endDate": cutoff.isoformat()}
+            if period["startDate"] < v3_forecast.HISTORY_START.isoformat():
+                raise V3FunctionalError("INVALID_PERIOD", 422, "Anomaly period is outside frozen history.")
+            return anomalies_data(self.root, period["startDate"], period["endDate"], request.limit), cutoff
         if request.productSku and request.productSku not in self.dataset.product_by_sku:
             raise V3FunctionalError("PRODUCT_NOT_FOUND", 404, "Product SKU was not found.")
         if request.categoryCode and request.categoryCode not in self.business.categories:

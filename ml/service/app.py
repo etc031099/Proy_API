@@ -272,10 +272,12 @@ def create_app(runtime: ModelRuntime | None = None,
             partial = data.get("available") is False
             if domain == "health":
                 partial = partial or data.get("businessHealth", {}).get("marketBasket", {}).get("available") is False
+            metadata = current.metadata(cutoff, domain, round((time.perf_counter() - started) * 1000, 3))
+            if domain == "business" and payload.mode == "anomalies":
+                metadata["engineVersion"] = data["version"]
             return V3Response(requestId=payload.requestId, status="PARTIAL" if partial else "OK",
                                data=json.loads(json.dumps(data, ensure_ascii=False, allow_nan=False, default=str)),
-                               metadata=current.metadata(cutoff, domain,
-                                                        round((time.perf_counter() - started) * 1000, 3)))
+                               metadata=metadata)
         except V3FunctionalError as error:
             raise HTTPException(status_code=error.status_code,
                                 detail={"code": error.code, "message": error.message}) from None
@@ -292,6 +294,8 @@ def create_app(runtime: ModelRuntime | None = None,
     @application.post("/v3/intelligence/business", response_model=V3Response,
                       dependencies=[Depends(require_service_secret)])
     async def v3_business(request: Request, payload: BusinessRequest) -> V3Response:
+        if payload.mode == "anomalies" and payload.dataMode == "LIVE":
+            raise HTTPException(status_code=422, detail={"code": "INVALID_PERIOD", "message": "Sales anomalies are frozen historical evidence only."})
         return await execute_v3(request, payload, "business", "business_data")
 
     @application.post("/v3/intelligence/inventory", response_model=V3Response,

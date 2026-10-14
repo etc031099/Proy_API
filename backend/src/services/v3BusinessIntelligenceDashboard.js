@@ -415,7 +415,20 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, cl
       { signal: new AbortController().signal, customerRef }) }; }
     catch (error) { return { error: safeError(error) }; }
   };
-  return Object.freeze({ summary, inventory, sales, customers, customer, suppliers, supplier, associations, productRelated, health, forecastEvaluation, customerClustering,
+  const salesAnomalies = async req => {
+    const prepared = await run(req, { frozen: true });
+    if (prepared.error) return { error: prepared.error };
+    const startDate = req.query?.startDate || V3.earliestDate;
+    const endDate = req.query?.endDate || V3.historicalCutoff;
+    const limit = parseLimit(req.query?.limit);
+    if (!validDate(startDate) || !validDate(endDate) || startDate < V3.earliestDate || startDate > endDate
+      || endDate > V3.historicalCutoff) return { error: invalidPeriodError() };
+    if (!limit) return { error: invalidLimitError() };
+    try { return { data: await service.salesAnomalies(prepared.context.authenticated,
+      { signal: new AbortController().signal, startDate, endDate, limit }) }; }
+    catch (error) { return { error: safeError(error) }; }
+  };
+  return Object.freeze({ summary, inventory, sales, customers, customer, suppliers, supplier, associations, productRelated, health, forecastEvaluation, customerClustering, salesAnomalies,
     forecast: req => product(req, 'forecast'), productInventory: req => product(req, 'inventory') });
 };
 
