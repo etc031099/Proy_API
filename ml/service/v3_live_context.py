@@ -515,8 +515,11 @@ class LiveV3ContextStore:
             products[str(row.get("productKey") or row.get("sku"))] = row
             if row.get("sku"):
                 products_by_sku[str(row["sku"])] = row
-        customers = {str(row.get("customerCode") or row.get("customerKey")): row
-                     for row in base_records.get("customers", ()) if row.get("customerCode") or row.get("customerKey")}
+        customers = {}
+        for row in base_records.get("customers", ()):
+            for identity in (row.get("customerCode"), row.get("customerKey")):
+                if identity:
+                    customers[str(identity)] = row
         suppliers = {str(row.get("supplierCode") or row.get("supplierKey")): row
                      for row in base_records.get("suppliers", ()) if row.get("supplierCode") or row.get("supplierKey")}
         ordered_catalog = sorted(snapshot.catalogChanges,

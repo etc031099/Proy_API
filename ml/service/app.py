@@ -198,7 +198,8 @@ def create_app(runtime: ModelRuntime | None = None,
         public = v3.public_status()
         return V3HealthResponse(serviceAlive=True, v1Ready=bool(v1.available),
                                 v3IntelligenceReady=bool(public["v3IntelligenceReady"]),
-                                domains=public["domains"], domainErrors=public["domainErrors"],
+                                domains=public["domains"], liveDomains=public["liveDomains"],
+                                domainErrors=public["domainErrors"],
                                 loadingMetrics=public["loadingMetrics"])
 
     @application.get("/v3/intelligence/ready")
@@ -210,6 +211,7 @@ def create_app(runtime: ModelRuntime | None = None,
 
     async def execute_v3(request: Request, payload: Any, domain: str, method: str) -> V3Response:
         current: V3IntelligenceRuntime = request.app.state.v3_runtime
+        live_context = None
         if payload.dataMode == "LIVE":
             body_bytes = len(await request.body())
             if body_bytes > SNAPSHOT_MAX_BYTES:
@@ -219,14 +221,33 @@ def create_app(runtime: ModelRuntime | None = None,
                 raise HTTPException(status_code=503, detail={"code": "ARTIFACT_UNAVAILABLE",
                                                             "message": "V3 historical base is unavailable."})
             try:
-                current.ingest_request_context(payload, request_body_bytes=body_bytes)
+                _, live_context = current.ingest_request_context(payload, request_body_bytes=body_bytes)
             except V3FunctionalError as error:
                 raise HTTPException(status_code=error.status_code,
                                     detail={"code": error.code, "message": error.message}) from None
-            # F.3 validates and constructs the overlay; F.4 alone may execute
-            # live analytics. Never return frozen answers for a LIVE request.
-            raise HTTPException(status_code=501, detail={"code": "LIVE_ANALYTICS_NOT_READY",
-                                                        "message": "The LIVE snapshot was validated; live analytics are not enabled yet."})
+            if domain not in {"business", "customer"}:
+                raise HTTPException(status_code=501, detail={"code": "LIVE_ANALYTICS_NOT_READY",
+                    "message": "This LIVE analytics domain is not enabled yet."})
+            if getattr(current, "live_adapter", None) is None:
+                raise HTTPException(status_code=501, detail={"code": "LIVE_ANALYTICS_NOT_READY",
+                    "message": "This LIVE analytics domain is not enabled yet."})
+            started = time.perf_counter()
+            try:
+                live_method = "live_business_data" if domain == "business" else "live_customer_data"
+                data, cutoff = getattr(current, live_method)(payload, live_context)
+                partial = data.get("availabilityStatus") == "PARTIAL"
+                return V3Response(requestId=payload.requestId, status="PARTIAL" if partial else "OK",
+                    data=json.loads(json.dumps(data, ensure_ascii=False, allow_nan=False, default=str)),
+                    metadata=current.live_metadata(cutoff, domain,
+                        round((time.perf_counter() - started) * 1000, 3), live_context))
+            except V3FunctionalError as error:
+                raise HTTPException(status_code=error.status_code,
+                    detail={"code": error.code, "message": error.message}) from None
+            except Exception:
+                logger.exception(json.dumps({"event": "v3_live_request", "domain": domain,
+                    "requestId": payload.requestId, "code": "INTERNAL_SERVICE_ERROR"}))
+                raise HTTPException(status_code=500, detail={"code": "INTERNAL_SERVICE_ERROR",
+                    "message": "V3 live intelligence request could not be completed."}) from None
         try:
             current.ingest_request_context(payload, request_body_bytes=len(await request.body()))
         except V3FunctionalError as error:

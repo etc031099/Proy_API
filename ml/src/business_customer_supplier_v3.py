@@ -90,10 +90,10 @@ def _add_months(day: date, delta: int) -> date:
     return date(year, month, min(day.day, last.day))
 
 
-def resolve_period(period: str | dict[str, str], as_of_date: str | date) -> dict[str, Any]:
+def resolve_period(period: str | dict[str, str], as_of_date: str | date, *, allow_live: bool = False) -> dict[str, Any]:
     """Resolve an inclusive local-calendar date range, never using wall clock."""
     cutoff = _as_date(as_of_date)
-    if not v3_forecast.HISTORY_START <= cutoff <= v3_forecast.HISTORY_END:
+    if cutoff < v3_forecast.HISTORY_START or (not allow_live and cutoff > v3_forecast.HISTORY_END):
         raise ValueError("asOfDate is outside the approved V3 history")
     if isinstance(period, dict):
         start, end = _as_date(period["startDate"]), _as_date(period["endDate"])
@@ -122,7 +122,7 @@ def resolve_period(period: str | dict[str, str], as_of_date: str | date) -> dict
     if start > end or end > cutoff:
         raise ValueError("Period must be ordered and cannot include dates after asOfDate")
     clipped_start = max(start, v3_forecast.HISTORY_START)
-    clipped_end = min(end, cutoff)
+    clipped_end = min(end, cutoff) if not allow_live else end
     if clipped_start > clipped_end:
         raise ValueError("Period has no dates inside the approved V3 history")
     return {"code": code, "startDate": clipped_start.isoformat(), "endDate": clipped_end.isoformat(),
@@ -490,9 +490,9 @@ class BusinessIntelligenceV3:
     def summary(self, period: str | dict[str, str] = "LAST_30_DAYS", *, as_of_date: str | date = v3_forecast.HISTORY_END,
                 category_code: str | None = None, subcategory_code: str | None = None,
                 product_sku: str | None = None,
-                comparison_mode: str = "EQUIVALENT_PREVIOUS") -> dict[str, Any]:
+                comparison_mode: str = "EQUIVALENT_PREVIOUS", allow_live: bool = False) -> dict[str, Any]:
         cutoff = _as_date(as_of_date)
-        window = resolve_period(period, cutoff)
+        window = resolve_period(period, cutoff, allow_live=allow_live)
         if category_code and category_code not in self.categories:
             raise ValueError("Unknown V3 category filter")
         if subcategory_code and subcategory_code not in {p["subcategoryCode"] for p in self.products.values()}:
@@ -651,14 +651,15 @@ def _quantile_rfm_score(values: list[float], target: float, *, reverse: bool = F
 
 def _period_customer_metrics(sales: list[dict[str, Any]], lines_by_sale: dict[str, list[dict[str, Any]]],
                              product_map: dict[str, dict[str, Any]], start: date, end: date,
-                             customer_codes: set[str]) -> dict[str, dict[str, Any]]:
+                             customer_codes: set[str], *, allow_live: bool = False) -> dict[str, dict[str, Any]]:
     clipped_start = max(start, v3_forecast.HISTORY_START)
-    clipped_end = min(end, v3_forecast.HISTORY_END)
+    clipped_end = end if allow_live else min(end, v3_forecast.HISTORY_END)
     if clipped_start > clipped_end:
         return {code: {"revenueCents": 0, "cogsCents": 0, "units": 0, "tickets": 0,
                        "promotionTickets": 0, "grossMarginCents": 0, "averageTicketCents": None,
                        "averageItemsPerTicket": None} for code in customer_codes}
-    period = resolve_period({"startDate": clipped_start.isoformat(), "endDate": clipped_end.isoformat()}, clipped_end)
+    period = resolve_period({"startDate": clipped_start.isoformat(), "endDate": clipped_end.isoformat()}, clipped_end,
+                            allow_live=allow_live)
     ag = _sales_aggregates(sales, lines_by_sale, product_map, period)
     result = {}
     for code in customer_codes:
@@ -670,21 +671,22 @@ def _period_customer_metrics(sales: list[dict[str, Any]], lines_by_sale: dict[st
 
 
 class CustomerIntelligenceV3:
-    def __init__(self, root: Path, records: dict[str, Any], static: dict[str, Any], business: BusinessIntelligenceV3):
+    def __init__(self, root: Path, records: dict[str, Any], static: dict[str, Any], business: BusinessIntelligenceV3,
+                 *, customers: list[dict[str, Any]] | None = None):
         self.root, self.records, self.static, self.business = Path(root), records, static, business
-        self.customers = sorted(static["customers"], key=lambda row: row["customerCode"])
+        self.customers = sorted(customers if customers is not None else static["customers"], key=lambda row: row["customerCode"])
         self.products = business.products
         self.categories = business.categories
 
-    def snapshot(self, *, as_of_date: str | date = v3_forecast.HISTORY_END) -> dict[str, Any]:
+    def snapshot(self, *, as_of_date: str | date = v3_forecast.HISTORY_END, allow_live: bool = False) -> dict[str, Any]:
         cutoff = _as_date(as_of_date)
         sales, lines = self.business._sales(cutoff)
-        history = resolve_period("HISTORY", cutoff)
+        history = resolve_period("HISTORY", cutoff, allow_live=allow_live)
         all_metrics = _sales_aggregates(sales, lines, self.products, history)
         customer_codes = {row["customerCode"] for row in self.customers}
-        recent90 = _period_customer_metrics(sales, lines, self.products, cutoff - timedelta(days=89), cutoff, customer_codes)
-        last30 = _period_customer_metrics(sales, lines, self.products, cutoff - timedelta(days=29), cutoff, customer_codes)
-        prior30 = _period_customer_metrics(sales, lines, self.products, cutoff - timedelta(days=59), cutoff - timedelta(days=30), customer_codes)
+        recent90 = _period_customer_metrics(sales, lines, self.products, cutoff - timedelta(days=89), cutoff, customer_codes, allow_live=allow_live)
+        last30 = _period_customer_metrics(sales, lines, self.products, cutoff - timedelta(days=29), cutoff, customer_codes, allow_live=allow_live)
+        prior30 = _period_customer_metrics(sales, lines, self.products, cutoff - timedelta(days=59), cutoff - timedelta(days=30), customer_codes, allow_live=allow_live)
         activity = {code: [] for code in customer_codes}
         customer_first: dict[str, str] = {}
         customer_last: dict[str, str] = {}
@@ -735,7 +737,7 @@ class CustomerIntelligenceV3:
                          "purchaseFrequency": {"ticketsPer30DaysObserved": hist_tickets / max(1, (cutoff - date.fromisoformat(first)).days + 1) * 30 if first else 0,
                                                "averageDaysBetweenTickets": ((date.fromisoformat(last) - date.fromisoformat(first)).days / (hist_tickets - 1)) if hist_tickets > 1 else None},
                          "grossMarginContributionCents": int(life["revenueCents"] - life["cogsCents"]),
-                         "windows": {"last7Days": self._compact_window(_period_customer_metrics(sales, lines, self.products, cutoff - timedelta(days=6), cutoff, {code})[code]),
+                         "windows": {"last7Days": self._compact_window(_period_customer_metrics(sales, lines, self.products, cutoff - timedelta(days=6), cutoff, {code}, allow_live=allow_live)[code]),
                                      "last30Days": self._compact_window(last30[code]), "last90Days": self._compact_window(recent90[code]),
                                      "history": self._compact_window(life)},
                          "rfm90d": {"raw": rfm_raw, "score": rfm, "scoreMethod": "tie-aware percentile ranks over all 40 registered customers"},
@@ -784,7 +786,7 @@ class CustomerIntelligenceV3:
                                         "revenuePct": _safe_float((total_revenue - reg_revenue) / max(1, total_revenue) * 100, 4)},
                 "segmentDistribution": dict(sorted(by_segment.items())), "customers": rows,
                 "rankings": rankings, "syntheticProfileAudit": profile_audit["summary"],
-                "methodology": {"rfm": "quantile/rank based over 40 registered customers, ties receive midrank; zero-activity customers remain in sample",
+                "methodology": {"rfm": f"quantile/rank based over {len(rows)} registered customers, ties receive midrank; zero-activity customers remain in sample",
                     "inactive": "no completed ticket in the last 90 days", "atRisk": "last purchase >45 days ago or observed 30-day trend declining",
                     "trend": "GROWING/DECLINING requires at least 2 of spend, frequency and average ticket to move by >=10%; otherwise STABLE",
                     "new": "first observed purchase within 30 days and <=2 tickets in last 90 days",

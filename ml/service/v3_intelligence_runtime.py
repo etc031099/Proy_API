@@ -6,17 +6,18 @@ import json
 import os
 import time
 from collections import OrderedDict, deque
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from threading import RLock
 from typing import Any
 
 import psutil
 
-from ml.service.v3_schemas import BUSINESS_ID, DATASET_SHA256, DATASET_VERSION, REFERENCE_DATE, SCENARIO_ID, TIMEZONE, V3Context
+from ml.service.v3_schemas import BUSINESS_ID, DATASET_SHA256, DATASET_VERSION, REFERENCE_DATE, SCENARIO_ID, TIMEZONE, V3Context, V3LiveMetadata
 from ml.service.v3_package import verify_package
 from ml.service.v3_source_pool import CanonicalRowPool
 from ml.service.v3_live_context import LiveSnapshotError, LiveV3ContextStore, SNAPSHOT_MAX_BYTES
+from ml.service.v3_live_business_customer import LiveBusinessCustomerAdapter, LiveDomainError
 from ml.src import business_customer_supplier_v3 as m68
 from ml.src import v3_baseline_bundle, v3_forecast
 from ml.src.inventory_intelligence_v3 import INVENTORY_VERSION, InventoryIntelligenceV3
@@ -71,6 +72,7 @@ class V3IntelligenceRuntime:
         self._cache_lock = RLock()
         self._cache_limits = {"inventory": 3, "customer": 4, "supplier": 4}
         self.live_contexts = LiveV3ContextStore(max_entries=2)
+        self.live_adapter = None
 
     def load(self) -> None:
         if self.ready:
@@ -128,6 +130,7 @@ class V3IntelligenceRuntime:
             self.customers = m68.CustomerIntelligenceV3(self.root, self.records, self.static, self.business)
             self.suppliers = m68.SupplierIntelligenceV3(self.root, self.records, self.static, self.business)
             self.domains["business"] = self.domains["customer"] = self.domains["supplier"] = True
+            self.live_adapter = LiveBusinessCustomerAdapter(self.root, self.records, self.static, self.business)
             if self.forecast_manifest is not None:
                 self.inventory = InventoryIntelligenceV3(
                     self.root, dataset=self.dataset, operational_records=self.records,
@@ -148,7 +151,10 @@ class V3IntelligenceRuntime:
 
     def public_status(self) -> dict[str, Any]:
         return {"serviceAlive": True, "v3IntelligenceReady": self.ready,
-                "domains": dict(self.domains), "loadingMetrics": dict(self.loading_metrics),
+                "domains": dict(self.domains),
+                "liveDomains": {name: bool(self.ready and getattr(self, "live_adapter", None) is not None and name in {"business", "customer"})
+                                for name in self.domains},
+                "loadingMetrics": dict(self.loading_metrics),
                 "domainErrors": dict(self.domain_errors),
                 "contractVersion": CONTRACT_VERSION,
                 "scenarioId": SCENARIO_ID if self.ready else None,
@@ -174,8 +180,8 @@ class V3IntelligenceRuntime:
     def ingest_request_context(self, request, *, request_body_bytes: int):
         """Select frozen history or validate/cache an authorized LIVE context.
 
-        Analytics remain deliberately unavailable for LIVE until M6.9F.4; this
-        method never falls back to the frozen cutoff for a post-cutoff request.
+        LIVE analytics consume this validated context and never fall back to the
+        frozen cutoff for a post-cutoff request.
         """
         if request.dataMode == "HISTORICAL":
             if request.operationalSnapshot is not None:
@@ -301,6 +307,28 @@ class V3IntelligenceRuntime:
             return {"metric": key, "total": len(rows), "items": rows[request.offset:request.offset + request.limit],
                     "period": result["period"], "currency": "PEN"}
         return self._run("business", calculate), cutoff
+
+    def live_business_data(self, request, live):
+        if getattr(self, "live_adapter", None) is None:
+            raise V3FunctionalError("LIVE_ANALYTICS_NOT_READY", 501, "LIVE Business analytics are not enabled.")
+        try:
+            return self._run("business", lambda: self.live_adapter.business_data(request, live))
+        except LiveDomainError as error:
+            raise V3FunctionalError(error.code, error.status_code, error.message) from None
+        except ValueError as error:
+            code = "INVALID_PERIOD" if "Period" in str(error) or "period" in str(error) else "DATA_NOT_AVAILABLE"
+            raise V3FunctionalError(code, 422, "LIVE Business request is not supported by the available evidence.") from None
+
+    def live_customer_data(self, request, live):
+        if getattr(self, "live_adapter", None) is None:
+            raise V3FunctionalError("LIVE_ANALYTICS_NOT_READY", 501, "LIVE Customer analytics are not enabled.")
+        try:
+            return self._run("customer", lambda: self.live_adapter.customer_data(request, live))
+        except LiveDomainError as error:
+            raise V3FunctionalError(error.code, error.status_code, error.message) from None
+        except ValueError as error:
+            code = "INVALID_PERIOD" if "Period" in str(error) or "period" in str(error) else "DATA_NOT_AVAILABLE"
+            raise V3FunctionalError(code, 422, "LIVE Customer request is not supported by the available evidence.") from None
 
     def inventory_data(self, request):
         cutoff = self.resolve_context(request.context)
@@ -568,3 +596,19 @@ class V3IntelligenceRuntime:
                 "contractVersion": CONTRACT_VERSION, "source": "CANONICAL_V3_BUNDLE",
                 "engineVersion": versions[domain], "versions": versions,
                 "durationMs": duration_ms, "latencyP50Ms": self.latency_p50(domain)}
+
+    def live_metadata(self, cutoff: date, domain: str, duration_ms: float, live) -> V3LiveMetadata:
+        versions = {"business": m68.BUSINESS_VERSION, "customer": m68.CUSTOMER_VERSION}
+        freshness = dict(live.freshness(domain))
+        freshness["engineVersion"] = LiveBusinessCustomerAdapter.ENGINE_VERSION
+        freshness = json.loads(json.dumps(
+            freshness, ensure_ascii=False, allow_nan=False,
+            default=lambda value: value.isoformat() if isinstance(value, (date, datetime)) else str(value),
+        ))
+        return V3LiveMetadata(scenarioId=SCENARIO_ID, asOfDate=cutoff, timezone=TIMEZONE,
+            datasetVersion=DATASET_VERSION, datasetSha256=DATASET_SHA256,
+            contractVersion="m6.9f4-live-intelligence-v1", source="HISTORICAL_PLUS_OPERATIONAL_SNAPSHOT",
+            engineVersion=LiveBusinessCustomerAdapter.ENGINE_VERSION, versions=versions,
+            durationMs=duration_ms, latencyP50Ms=self.latency_p50(domain),
+            dataVersion=live.data_version, snapshotHash=live.context_hash,
+            freshness=freshness)

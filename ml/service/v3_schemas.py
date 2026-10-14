@@ -282,7 +282,8 @@ class CrossSellRequest(V3Request, PageRequest):
 class CustomerRequest(V3Request, PageRequest):
     mode: Literal["detail", "rank", "preferences", "activity", "summary"] = "summary"
     customerCode: str | None = Field(default=None, min_length=1, max_length=64)
-    segment: Literal["AT_RISK", "INACTIVE", "NEW", "LOYAL", "TOP_HIGH_VALUE", "POTENTIAL"] | None = None
+    segment: Literal["AT_RISK", "INACTIVE", "NEW", "LOYAL", "TOP_HIGH_VALUE", "POTENTIAL",
+                     "INSUFFICIENT_HISTORY"] | None = None
     metric: Literal["spend", "tickets", "recency", "gross_margin"] = "spend"
     period: PeriodRange | None = None
 
@@ -314,11 +315,18 @@ class V3Metadata(StrictSchema):
     latencyP50Ms: float | None = Field(default=None, ge=0)
 
 
+class V3LiveMetadata(V3Metadata):
+    source: Literal["HISTORICAL_PLUS_OPERATIONAL_SNAPSHOT"]
+    dataVersion: str = Field(pattern=r"^(0|[1-9][0-9]*)$", max_length=19)
+    snapshotHash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    freshness: dict[str, JsonValue]
+
+
 class V3Response(StrictSchema):
     requestId: str
     status: Literal["OK", "PARTIAL"]
     data: dict[str, JsonValue]
-    metadata: V3Metadata
+    metadata: V3Metadata | V3LiveMetadata
 
 
 class V3HealthResponse(StrictSchema):
@@ -326,6 +334,7 @@ class V3HealthResponse(StrictSchema):
     v1Ready: bool
     v3IntelligenceReady: bool
     domains: dict[str, bool]
+    liveDomains: dict[str, bool]
     domainErrors: dict[str, str]
     loadingMetrics: dict[str, float | int | None]
 
@@ -334,5 +343,5 @@ __all__ = [
     "BUSINESS_ID", "SCENARIO_ID", "DATASET_SHA256", "REFERENCE_DATE", "TIMEZONE",
     "MAX_PAGE_SIZE", "MAX_OFFSET", "MAX_ENTITY_BATCH", "BusinessRequest", "InventoryRequest",
     "ForecastRequest", "CrossSellRequest", "CustomerRequest", "SupplierRequest", "HealthRequest",
-    "V3Response", "V3Metadata", "V3HealthResponse", "V3OperationalSnapshot",
+    "V3Response", "V3Metadata", "V3LiveMetadata", "V3HealthResponse", "V3OperationalSnapshot",
 ]
