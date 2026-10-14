@@ -13,6 +13,7 @@ const createBusinessIntelligenceDashboardRoutes = ({ service, authenticateMiddle
     keyGenerator: req => `${req.user.businessId}:${req.user._id}`,
     message: { success: false, code: 'ANALYTICS_RATE_LIMITED', message: 'Demasiadas consultas de analítica. Inténtalo más tarde.' } });
   const endpoint = method => async (req, res) => {
+    if (method === 'revision') res.set('Cache-Control', 'no-store');
     const result = await dashboard[method](req);
     if (result.error) return res.status(result.error.httpStatus).json({ success: false,
       code: result.error.code, message: result.error.message,
@@ -20,6 +21,7 @@ const createBusinessIntelligenceDashboardRoutes = ({ service, authenticateMiddle
     return res.json({ success: true, data: result.data });
   };
   router.use(authenticateMiddleware, businessAccessMiddleware, limiter);
+  router.get('/revision', endpoint('revision'));
   router.get('/summary', endpoint('summary'));
   router.get('/sales', endpoint('sales'));
   router.get('/sales/anomalies', endpoint('salesAnomalies'));

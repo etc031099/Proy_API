@@ -9,6 +9,42 @@ const { authenticate } = require('../src/middleware/auth');
 
 const user = { _id: '507f1f77bcf86cd799439011', businessId: V3.businessId, isActive: true, role: 'user' };
 const request = (query = {}, params = {}) => ({ user, businessId: user.businessId, query, params });
+
+test('revision read is primary/majority, verified, lossless and tenant-bound without ML or snapshots', async () => {
+  const reads = [];
+  let row = { revision: 9007199254740993n, bootstrapStatus: 'VERIFIED', historicalDatasetVersion: V3.datasetVersion, historicalDatasetSha256: V3.datasetSha256 };
+  const chain = { select() { return this; }, read(value) { reads.push(value); return this; }, readConcern(value) { reads.push(value); return this; },
+    setOptions() { return this; }, lean() { return this; }, maxTimeMS: async () => row };
+  const service = createV3BusinessIntelligenceDashboard({ models: { V3OperationalRevision: { findById(id) { reads.push(id); return chain; } } },
+    intelligenceService: { resolveContext: async context => context.businessId === V3.businessId ? { operationalDate: '2026-10-14' } : null,
+      execute() { assert.fail('Revision must not invoke analytics'); } } });
+  const result = await service.revision(request({ businessId: 'OTHER' }));
+  assert.equal(result.data.dataVersion, '9007199254740993'); assert.equal(result.data.businessId, V3.businessId);
+  assert.deepEqual(reads, [V3.businessId, 'primary', 'majority']);
+  row = { ...row, revision: 0n }; assert.equal((await service.revision(request())).data.dataVersion, '0');
+  row = { ...row, bootstrapStatus: 'UNVERIFIED' }; assert.equal((await service.revision(request())).error.code, 'SNAPSHOT_BOOTSTRAP_REQUIRED');
+  row = null; assert.equal((await service.revision(request())).error.httpStatus, 503);
+  const foreign = await service.revision({ user: { ...user, businessId: 'OTHER' }, businessId: 'OTHER', query: {} });
+  assert.equal(foreign.error.httpStatus, 403);
+});
+
+test('sales parallel reads stay bounded, ordered and share one request context', async () => {
+  let active = 0, peak = 0;
+  const requestIds = new Set();
+  const service = createV3BusinessIntelligenceDashboard({ intelligenceService: {
+    resolveContext: async () => ({ operationalDate: '2026-10-14' }),
+    execute: async invocation => {
+      requestIds.add(invocation.context.requestId); active++; peak = Math.max(peak, active);
+      await new Promise(resolve => setTimeout(resolve, 2)); active--;
+      return { status: 'READY', metadata: { dataMode: 'LIVE' }, data: { kpis: { revenueCents: 1200, unitsSold: 2, ticketCount: 1 }, items: [] } };
+    }
+  } });
+  const result = await service.sales(request({ period: 'LAST_7_DAYS', includeSeries: 'true' }));
+  assert.ok(result.data, JSON.stringify(result.error));
+  assert.equal(result.data.series.length, 7); assert.equal(peak, 4); assert.equal(requestIds.size, 1);
+  assert.deepEqual(result.data.series.map(row => row.date), ['2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11', '2026-10-12', '2026-10-13', '2026-10-14']);
+  assert.ok(result.data.series.every(row => row.revenue.value === 12 && row.units === 2));
+});
 const makeDashboard = ({ fail, partial = false, productPresent = true, supplierNoHistory = false,
   crossSellItems = [{ antecedentSkus: ['SKU-1'], consequentSkus: ['SKU-2'], recommendedSku: 'SKU-2',
     recommendedProduct: 'Producto dos', ticketCount: 32,
@@ -162,7 +198,7 @@ test('snapshot and tenant failures are mapped to safe messages without internal 
 
 test('dashboard routes apply authentication before business access and analytics handlers', async () => {
   const router = createBusinessIntelligenceDashboardRoutes({
-    service: Object.fromEntries(['summary', 'sales', 'customers', 'customer', 'suppliers', 'supplier', 'associations', 'productRelated',
+    service: Object.fromEntries(['revision', 'summary', 'sales', 'customers', 'customer', 'suppliers', 'supplier', 'associations', 'productRelated',
       'health', 'inventory', 'forecast', 'productInventory'].map(name => [name, async () => ({ data: {} })]))
   });
   assert.equal(router.stack[0].handle, authenticate);
@@ -171,6 +207,10 @@ test('dashboard routes apply authentication before business access and analytics
   await authenticate({ header: () => undefined }, res, () => assert.fail('unauthenticated request continued'));
   assert.equal(status, 401);
   assert.equal(body.success, false);
+  const headers = {};
+  res.set = (key, value) => { headers[key] = value; return res; };
+  await router.stack.find(layer => layer.route?.path === '/revision').route.stack[0].handle(request(), res);
+  assert.equal(headers['Cache-Control'], 'no-store');
 });
 
 test('sales API keeps the requested period and uses V3 business rankings without inventing margin', async () => {

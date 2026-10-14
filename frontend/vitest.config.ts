@@ -27,6 +27,7 @@ export default defineConfig({
       'test/customerClustering.test.tsx',
       'test/salesAnomalies.test.tsx',
       'test/businessIntelligenceExtended.api.test.ts',
+      'test/intelligenceReadCache.test.ts',
       'test/businessIntelligenceExtended.component.test.tsx',
     ],
     environment: 'jsdom',

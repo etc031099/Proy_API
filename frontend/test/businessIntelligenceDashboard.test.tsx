@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BusinessIntelligenceDashboard } from '@/components/business-intelligence/BusinessIntelligenceDashboard';
 import { apiClient } from '@/lib/api';
@@ -134,6 +134,32 @@ describe('business intelligence dashboard', () => {
     expect(await screen.findByText('No se seleccionó ningún producto automáticamente.')).toBeTruthy();
     expect(apiClient.searchBusinessIntelligenceProducts).not.toHaveBeenCalled();
     expect(apiClient.getBusinessIntelligenceForecast).not.toHaveBeenCalled();
+  });
+
+  it('does not load product inventory when an unrelated tab is opened after selecting a product', async () => {
+    vi.spyOn(apiClient, 'searchBusinessIntelligenceProducts').mockResolvedValue(success({ products: [productOption] }));
+    vi.spyOn(apiClient, 'getBusinessIntelligenceForecast').mockResolvedValue(success(forecastFixture));
+    const inventoryRead = vi.spyOn(apiClient, 'getBusinessIntelligenceProductInventory');
+    vi.spyOn(apiClient, 'getCustomersAnalytics').mockRejectedValue(new Error('test-only unavailable customer data'));
+    vi.spyOn(apiClient, 'getCustomerClustering').mockRejectedValue(new Error('test-only unavailable model data'));
+    render(<BusinessIntelligenceDashboard />);
+    await openForecast(); await screen.findByText('Pronóstico 7 días');
+    fireEvent.click(screen.getByRole('tab', { name: 'Clientes' }));
+    await screen.findByText('No se pudo cargar la consulta.');
+    expect(inventoryRead).not.toHaveBeenCalled();
+  });
+
+  it('hides the previous inventory while revalidating, and keeps it hidden on failure', async () => {
+    render(<BusinessIntelligenceDashboard />);
+    await screen.findByText('Productos en riesgo');
+    let rejectRead!: (error: Error) => void;
+    vi.mocked(apiClient.getBusinessIntelligenceSummary).mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRead = reject; }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Inventario' }));
+    await screen.findByText('Cargando ranking de inventario…');
+    expect(screen.queryByText('Riesgo de inventario')).toBeNull();
+    await act(async () => { rejectRead(new Error('revision unavailable')); });
+    await screen.findByText('No se pudo cargar la inteligencia del negocio.');
+    expect(screen.queryByText('Riesgo de inventario')).toBeNull();
   });
 
   it('shows inventory detail values, risk labels, reorder action and ABC/XYZ', async () => {

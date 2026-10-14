@@ -51,6 +51,24 @@ const healthMetricLabels: Record<string, string> = {
   slowMovingUnavailableCount: 'Rotación lenta no disponible', deadStockUnavailableCount: 'Inventario sin movimiento no disponible',
   overstockEstimatedValueCents: 'Valor estimado de sobrestock',
   classificationMethod: 'Criterio de clasificación', p90Method: 'Método de cálculo del percentil 90',
+  averageTicket: 'Ticket promedio', averageDistinctSkusPerTicket: 'Productos distintos por ticket',
+  averageUnitsPerTicket: 'Unidades promedio por ticket', cogs: 'Costo de ventas',
+  highRevenueLowMargin: 'Alto ingreso y bajo margen', lowRevenueHighMargin: 'Bajo ingreso y alto margen', highMarginProducts: 'Productos con margen alto',
+  incomingUnits: 'Unidades por recibir', lowStock: 'Productos con stock bajo', shouldReorder: 'Productos que requieren reposición',
+  overstock: 'Productos con sobrestock', slowMoving: 'Productos con rotación lenta', deadStock: 'Productos sin movimiento',
+  forecastAvailability: 'Disponibilidad del pronóstico', abcAvailable: 'Clasificación ABC disponible', xyzAvailable: 'Clasificación XYZ disponible',
+  purchaseOrders: 'Órdenes de compra', receivedSpendCents: 'Gasto recibido', committedSpendCents: 'Gasto comprometido',
+  pendingCommitmentCents: 'Compromiso pendiente', exposures: 'Productos expuestos al riesgo',
+  unitsOrdered: 'Unidades pedidas', unitsReceived: 'Unidades recibidas', fillRate: 'Tasa de cumplimiento de unidades',
+  pendingOrderCount: 'Órdenes pendientes', overdueOrUnknownExpectedArrivalUnits: 'Unidades vencidas o sin fecha prevista',
+  recommendedProducts: 'Productos con cantidad de reposición sugerida', riskCounts: 'Distribución del riesgo',
+  registeredTickets: 'Tickets de clientes registrados', consumerFinalTickets: 'Tickets de consumidor final',
+  registeredTicketSharePct: 'Participación de tickets registrados (%)', consumerFinalTicketSharePct: 'Participación de tickets de consumidor final (%)',
+  registeredRevenue: 'Ingresos de clientes registrados', consumerFinalRevenue: 'Ingresos de consumidor final',
+  registeredRevenueSharePct: 'Participación de ingresos registrados (%)', consumerFinalRevenueSharePct: 'Participación de ingresos de consumidor final (%)',
+  value: 'Valor actual', previousValue: 'Valor anterior', absoluteChange: 'Variación absoluta', percentChange: 'Variación (%)',
+  comparisonAvailable: 'Comparación disponible', comparableDurations: 'Períodos de duración equivalente', status: 'Estado',
+  TOP_HIGH_VALUE: 'Mayor valor', singleSource: 'Productos con proveedor único',
 };
 const segmentLabels: Record<string, string> = { HIGH_VALUE: 'Alto valor', POTENTIAL: 'Potencial', NEW: 'Nuevo', AT_RISK: 'En riesgo', INACTIVE: 'Inactivo', ACTIVE: 'Activo', LOYAL: 'Fiel', CHAMPION: 'Cliente frecuente', PROMISING: 'Prometedor', NEEDS_ATTENTION: 'Requiere atención', HIBERNATING: 'Inactivo reciente' };
 const chartColors = ['#2563eb', '#0f766e', '#7c3aed', '#d97706', '#db2777', '#0891b2', '#65a30d'];
@@ -86,9 +104,10 @@ function healthMetricLabel(key: string): string {
     .replace(/^./, character => character.toLocaleUpperCase('es-PE'));
 }
 function healthMetricValue(key: string, value: unknown): string {
-  if (key === 'classificationMethod') return 'Percentiles relativos de ingresos (p75/p25) y margen bruto (p25/p75); no representa utilidad neta.';
-  if (key === 'p90Method') return 'Rango más cercano';
-  if (key === 'horizons' && Array.isArray(value)) {
+  if (value == null) return 'No disponible';
+  if (key === 'classificationMethod' && value === 'relative product percentiles: revenue p75/p25 and gross-margin-rate p25/p75; no net-profit claim') return 'Percentiles relativos de ingresos (p75/p25) y margen bruto (p25/p75); no representa utilidad neta.';
+  if (key === 'p90Method' && value === 'nearest rank') return 'Rango más cercano';
+  if (['horizons', 'forecastHorizons'].includes(key) && Array.isArray(value)) {
     const horizons = value.filter((item): item is number => typeof item === 'number' && Number.isFinite(item) && item > 0);
     return horizons.length ? horizons.map(day => `${day} ${day === 1 ? 'día' : 'días'}`).join(' · ') : 'No disponible';
   }
@@ -99,21 +118,30 @@ function healthMetricValue(key: string, value: unknown): string {
   }
   if (typeof value === 'number' && Number.isFinite(value)) {
     if (key.toLowerCase().includes('cents')) return moneyText({ value: value / 100, currency: 'PEN' });
-    if (key.toLowerCase().includes('pct') && value >= 0 && value <= 1) return percentText(value);
+    if (['revenue', 'grossMargin', 'cogs', 'averageTicket', 'registeredRevenue', 'consumerFinalRevenue'].includes(key)) return moneyText({ value, currency: 'PEN' });
+    if (key.toLowerCase().includes('pct') || key === 'percentChange') return `${numberText(value)}%`;
     return numberText(value);
   }
   if (typeof value === 'string') return value === 'MOVING_AVERAGE_28' ? 'Media móvil de 28 días' : statusLabels[value] || value;
   if (typeof value === 'boolean') return value ? 'Sí' : 'No';
   return 'No disponible';
 }
-function healthEntries(metrics: Record<string, unknown>, parent = '', depth = 0): Array<{ label: string; value: string }> {
+export function healthEntries(metrics: Record<string, unknown>, parent = '', depth = 0): Array<{ label: string; value: string }> {
   return Object.entries(metrics).flatMap(([key, value]) => {
     // These fields are freshness, routing, or explanatory metadata—not dashboard metrics.
     if (['alerts', 'freshness', 'meaning', 'interpretation', 'engineVersion', 'datasetVersion', 'datasetSha256', 'contractVersion'].includes(key)) return [];
+    // Unknown schema fields are not automatically promoted to visible business indicators.
+    if (!healthMetricLabels[key] && !segmentLabels[key]) return [];
+    const cents = metrics[`${key}Cents`];
+    if (['revenue', 'grossMargin', 'cogs', 'averageTicket'].includes(key) && `${key}Cents` in metrics
+      && (value === null && cents === null || typeof value === 'number' && typeof cents === 'number' && Math.abs(value * 100 - cents) < 1e-8)) return [];
     const label = [parent, healthMetricLabel(key)].filter(Boolean).join(' · ');
     if (value && typeof value === 'object' && !Array.isArray(value) && depth < 3)
       return healthEntries(value as Record<string, unknown>, label, depth + 1);
-    return [{ label, value: healthMetricValue(key, value) }];
+    // Trend values for these metrics are cents in M6.8, unlike their KPI aliases.
+    const trendMoney = ['value', 'previousValue', 'absoluteChange'].includes(key)
+      && /Tendencias · (Ingresos|Margen bruto|Ticket promedio)$/.test(parent);
+    return [{ label, value: trendMoney ? healthMetricValue('amountCents', value) : healthMetricValue(key, value) }];
   }).slice(0, 12);
 }
 function insightText(value: Record<string, unknown>): string | null {
@@ -209,7 +237,7 @@ function ExtendedAnalyticsContent({ tab, inventory }: { tab: ExtendedTab; invent
     return () => { current = false; };
   }, [tab, period, reload, requestKey]);
 
-  const selectedSku = sku || inventory?.items?.[0]?.sku || '';
+  const selectedSku = sku;
   useEffect(() => {
     if (tab !== 'related' || !selectedSku) { setRelated(null); setRelatedStatus('ready'); return; }
     let current = true;
@@ -241,8 +269,8 @@ function ExtendedAnalyticsContent({ tab, inventory }: { tab: ExtendedTab; invent
       setDetailStatus('ready');
     } catch (error) { if (current()) { setDetailMessage(errorLabel(error)); setDetailStatus('error'); } }
   };
-  const retry = () => setReload(value => value + 1);
-  const retryDetail = () => { if (selectedDetail) void openDetail(selectedDetail.kind, selectedDetail.ref); };
+  const retry = () => { apiClient.invalidateIntelligenceReads(); setReload(value => value + 1); };
+  const retryDetail = () => { apiClient.invalidateIntelligenceReads(); if (selectedDetail) void openDetail(selectedDetail.kind, selectedDetail.ref); };
   const freshness = data && 'mode' in data ? `${data.mode === 'LIVE' ? 'Actualizado con datos operativos' : 'Histórico hasta 12 oct. 2026'}${data.dataThrough ? ` · Datos hasta ${dateText(data.dataThrough)}` : ''}` : null;
 
   if (tab === 'related') {
@@ -260,7 +288,7 @@ function ExtendedAnalyticsContent({ tab, inventory }: { tab: ExtendedTab; invent
       ]} /><div className="flex flex-wrap items-center gap-2"><Badge variant="outline">Histórico congelado</Badge><span className="text-xs text-muted-foreground">Corte: {dateText(basket.cutoff)} · {basket.total} reglas disponibles</span></div><p className="text-xs text-muted-foreground">FROZEN · cutoff {basket.cutoff}</p>{basket.items.find(rule => rule.lift != null && rule.lift > 1) && <p className="rounded-md bg-muted/50 p-3 text-sm">Entre las reglas visibles hay una coocurrencia más frecuente que la esperada bajo independencia (lift &gt; 1). Es una asociación histórica, no una relación causal.</p>}
         {basket.items.length ? <div className="grid gap-3 xl:grid-cols-2">{basket.items.map((rule, index) => <article key={`${rule.antecedent.join('-')}-${rule.consequent.join('-')}-${index}`} className="rounded-xl border p-4"><p className="font-semibold leading-relaxed">{basketNames(rule.antecedentProducts, rule.antecedent)} <span aria-label="se asocia con" className="text-primary">→</span> {basketNames(rule.consequentProducts, rule.consequent)}</p><div className="mt-1 space-y-0.5 text-xs text-muted-foreground"><p>SKU: {rule.antecedent.join(', ')} → {rule.consequent.join(', ')}</p></div><div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4"><Kpi label="Soporte" value={percentText(rule.support)} help="Proporción de tickets donde aparece esta combinación." /><Kpi label="Confianza" value={percentText(rule.confidence)} help="De quienes compraron el producto A, qué proporción también compró B." /><Kpi label="Lift" value={numberText(rule.lift)} help="Compara la frecuencia observada con la esperada si los productos fueran independientes; no implica causalidad." /><Kpi label="Tickets" value={numberText(rule.ticketCount)} /></div><p className="mt-2 text-xs text-muted-foreground">Estabilidad: {statusText(rule.stability || rule.status)}</p></article>)}</div> : <p className="rounded-lg border border-dashed p-5 text-sm text-muted-foreground">{basket.available ? 'No se encontraron reglas para mostrar.' : 'El análisis histórico no tiene reglas disponibles.'}</p>}
       </>}</CardContent></Card><Card><CardHeader><CardTitle>Productos relacionados</CardTitle><CardDescription>Recomendaciones de productos que aparecen en los mismos tickets. Se leen del análisis histórico aprobado.</CardDescription></CardHeader><CardContent className="space-y-4">
-        {inventory?.items.length ? <label className="flex flex-wrap items-center gap-2 text-sm">Producto<select aria-label="Producto relacionado" className="max-w-full rounded-md border bg-background px-2 py-1.5" value={selectedSku} onChange={event => setSku(event.target.value)}>{inventory.items.map(item => <option key={item.sku} value={item.sku}>{item.productName} · SKU: {item.sku}</option>)}</select></label> : <p className="text-sm text-muted-foreground">No hay productos del ranking disponibles para consultar.</p>}
+        {inventory?.items.length ? <label className="flex flex-wrap items-center gap-2 text-sm">Producto<select aria-label="Producto relacionado" className="max-w-full rounded-md border bg-background px-2 py-1.5" value={selectedSku} onChange={event => setSku(event.target.value)}><option value="">Elige un producto</option>{inventory.items.map(item => <option key={item.sku} value={item.sku}>{item.productName} · SKU: {item.sku}</option>)}</select></label> : <p className="text-sm text-muted-foreground">No hay productos del ranking disponibles para consultar.</p>}
         <DataState status={relatedStatus} message={relatedMessage} onRetry={retry} />{related && <><p className="text-sm"><strong>{related.sourceProduct.name}</strong><span className="ml-2 text-xs text-muted-foreground">SKU: {related.sourceProduct.sku}</span></p><div className="flex items-center gap-2"><Badge variant="outline">Histórico congelado</Badge><span className="text-xs text-muted-foreground">Corte: {dateText(related.cutoff)}</span></div><p className="text-xs text-muted-foreground">FROZEN · cutoff {related.cutoff}</p>
           {related.items.length ? <div className="grid gap-3 md:grid-cols-2">{related.items.map((item, index) => <article key={`${item.relatedProduct.sku || item.relatedProduct.name}-${index}`} className="rounded-xl border p-4"><h3 className="font-semibold">{item.relatedProduct.name || 'Producto relacionado'}</h3><p className="text-xs text-muted-foreground">SKU: {item.relatedProduct.sku || 'No disponible'}</p><div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4"><Kpi label="Soporte" value={percentText(item.support)} help="Proporción de tickets donde aparecen juntos los productos." /><Kpi label="Confianza" value={percentText(item.confidence)} help="De los tickets con el producto elegido, proporción que también contiene este producto." /><Kpi label="Lift" value={numberText(item.lift)} help="Frecuencia de la asociación respecto de lo esperado por independencia estadística; no implica causalidad." /><Kpi label="Tickets" value={numberText(item.ticketCount)} /></div><p className="mt-2 text-xs text-muted-foreground">{item.lift != null && item.lift > 1 ? 'Asociación positiva observada; no implica causalidad.' : 'La métrica describe coocurrencia histórica, no causalidad.'}</p></article>)}</div> : <p className="rounded-lg border border-dashed p-5 text-sm text-muted-foreground">{related.available ? 'No se encontraron asociaciones suficientes para este producto.' : 'El análisis histórico no tiene recomendaciones disponibles.'}</p>}
         </>}

@@ -107,20 +107,25 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, cl
     if (includeSeries && daysBetween(period.startDate, period.endDate) > 29) return { error: invalidPeriodError() };
     try {
       const summaryArgs = { ...periodArgs(period), mode: compare ? 'compare' : 'summary' };
-      const summaryResult = await execute(context, 'get_business_analytics', summaryArgs, 1);
-      const summaryClarification = executionError(summaryResult); if (summaryClarification) return { error: summaryClarification };
-      const [productsResult, categoriesResult] = await Promise.all([
+      const [summaryResult, productsResult, categoriesResult] = await Promise.all([
+        execute(context, 'get_business_analytics', summaryArgs, 1),
         execute(context, 'get_business_analytics', { ...periodArgs(period), mode: 'rank', entityType: 'product', metric: 'revenue', limit }, limit),
         execute(context, 'get_business_analytics', { ...periodArgs(period), mode: 'rank', entityType: 'category', metric: 'revenue', limit }, limit),
       ]);
+      const summaryClarification = executionError(summaryResult); if (summaryClarification) return { error: summaryClarification };
       const kpis = kpiContract(summaryResult.data);
       const series = [];
       if (includeSeries) {
-        for (let day = period.startDate; day <= period.endDate; day = addDays(day, 1)) {
-          const pointResult = await execute(context, 'get_business_analytics', { mode: 'summary', startDate: day, endDate: day }, 1);
-          const point = kpiContract(pointResult.data);
-          series.push({ date: day, revenue: point.revenue, units: point.units, tickets: point.tickets,
-            status: pointResult.status || 'UNAVAILABLE' });
+        const days = [];
+        for (let day = period.startDate; day <= period.endDate; day = addDays(day, 1)) days.push(day);
+        // Independent dates share this request's immutable snapshot. Bound concurrency for ML Free.
+        for (let offset = 0; offset < days.length; offset += 4) {
+          series.push(...await Promise.all(days.slice(offset, offset + 4).map(async day => {
+            const pointResult = await execute(context, 'get_business_analytics', { mode: 'summary', startDate: day, endDate: day }, 1);
+            const point = kpiContract(pointResult.data);
+            return { date: day, revenue: point.revenue, units: point.units, tickets: point.tickets,
+              status: pointResult.status || 'UNAVAILABLE' };
+          })));
         }
       }
       const ranking = result => (result.data?.items || []).map(row => ({
@@ -264,6 +269,21 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, cl
   const run = async (req, options) => {
     try { return { context: await contextFor(req, options), error: null }; }
     catch (error) { return { context: null, error: safeError(error) }; }
+  };
+  const revision = async req => {
+    const prepared = await run(req); if (prepared.error) return { error: prepared.error };
+    const { context } = prepared;
+    try {
+      const row = await getModels().V3OperationalRevision.findById(context.authenticated.businessId)
+        .select('revision bootstrapStatus historicalDatasetVersion historicalDatasetSha256')
+        .read('primary').readConcern('majority').setOptions({ useBigInt64: true }).lean().maxTimeMS(3000);
+      if (!row || row.bootstrapStatus !== 'VERIFIED' || row.historicalDatasetVersion !== V3.datasetVersion
+        || row.historicalDatasetSha256 !== V3.datasetSha256 || typeof row.revision !== 'bigint' || row.revision < 0n) {
+        return { error: safeError({ functionalCode: 'SNAPSHOT_BOOTSTRAP_REQUIRED' }) };
+      }
+      return { data: { businessId: context.authenticated.businessId, scenarioId: V3.scenarioId,
+        datasetVersion: V3.datasetVersion, asOf: context.binding.operationalDate, dataVersion: String(row.revision) } };
+    } catch (error) { return { error: safeError(error) }; }
   };
   const summary = async req => {
     const prepared = await run(req); if (prepared.error) return { error: prepared.error };
@@ -428,7 +448,7 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, cl
       { signal: new AbortController().signal, startDate, endDate, limit }) }; }
     catch (error) { return { error: safeError(error) }; }
   };
-  return Object.freeze({ summary, inventory, sales, customers, customer, suppliers, supplier, associations, productRelated, health, forecastEvaluation, customerClustering, salesAnomalies,
+  return Object.freeze({ revision, summary, inventory, sales, customers, customer, suppliers, supplier, associations, productRelated, health, forecastEvaluation, customerClustering, salesAnomalies,
     forecast: req => product(req, 'forecast'), productInventory: req => product(req, 'inventory') });
 };
 

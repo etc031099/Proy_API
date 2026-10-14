@@ -1,7 +1,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Profiler } from 'react';
 import { apiClient } from '@/lib/api';
-import { ExtendedAnalyticsPanel } from '@/components/business-intelligence/ExtendedAnalyticsPanel';
+import { ExtendedAnalyticsPanel, healthEntries } from '@/components/business-intelligence/ExtendedAnalyticsPanel';
 import type { InventorySummary } from '@/types/businessIntelligence';
 import { AnalyticsErrorBoundary } from '@/components/business-intelligence/AnalyticsErrorBoundary';
 
@@ -14,7 +15,7 @@ vi.mock('recharts', () => ({
   Line: () => null, LineChart: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); localStorage.removeItem('token'); apiClient.invalidateIntelligenceReads(); });
 beforeEach(() => {
   chartProbe.fail = false; chartProbe.formatters = [];
   vi.spyOn(apiClient, 'getCustomerClustering').mockRejectedValue(new Error('ML metadata outside this fixture'));
@@ -193,6 +194,9 @@ describe('G.5 FIX1 supplier isolation and partial contracts', () => {
     vi.spyOn(apiClient, 'getRelatedProducts').mockResolvedValue(envelope({ ...meta, mode: 'FROZEN', cutoff: '2026-10-12', sourceProduct: { sku: 'PAN-FRE-001', name: 'Pan' }, available: false, items: [] } as never));
     render(<ExtendedAnalyticsPanel tab="related" inventory={inventory} />);
     await screen.findByText('SKU: PAN-FRE-001 → DES-LEC-001');
+    expect(apiClient.getRelatedProducts).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Producto relacionado' }), { target: { value: 'PAN-FRE-001' } });
+    await waitFor(() => expect(apiClient.getRelatedProducts).toHaveBeenCalledTimes(1));
     if (namesAvailable) expect(screen.getByText(/Pan francés fresco/)).toBeTruthy();
     else expect(screen.getAllByText(/PAN-FRE-001/).length).toBeGreaterThan(0);
     expect(screen.getAllByText('Confianza').length).toBeGreaterThan(0);
@@ -211,6 +215,8 @@ describe('extended business intelligence smoke panels', () => {
     vi.spyOn(apiClient, 'getAssociations').mockResolvedValue(envelope({ ...meta, mode: 'FROZEN', freshness: { mode: 'FROZEN', cutoff: '2026-10-12' }, dataVersion: null, snapshotHash: null, source: 'M6.7', engineVersion: null, cutoff: '2026-10-12', summary: null, available: false, items: [], total: 0, limit: 10, offset: 0 } as never));
     vi.spyOn(apiClient, 'getRelatedProducts').mockResolvedValue(envelope({ ...meta, mode: 'FROZEN', freshness: { mode: 'FROZEN', cutoff: '2026-10-12' }, dataVersion: null, snapshotHash: null, source: 'M6.7', engineVersion: null, cutoff: '2026-10-12', sourceProduct: { sku: 'PAN-FRE-001', name: 'Pan francés', presentation: null }, available: false, items: [], total: 0 } as never));
     render(<ExtendedAnalyticsPanel tab="related" inventory={inventory} />);
+    expect(apiClient.getRelatedProducts).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Producto relacionado' }), { target: { value: 'PAN-FRE-001' } });
     await waitFor(() => expect(screen.getAllByText(/FROZEN · cutoff 2026-10-12/).length).toBeGreaterThanOrEqual(2));
     expect(await screen.findByText('El análisis histórico no tiene reglas disponibles.')).toBeTruthy();
     expect(await screen.findByText('El análisis histórico no tiene recomendaciones disponibles.')).toBeTruthy();
@@ -285,6 +291,7 @@ describe('extended business intelligence smoke panels', () => {
     expect((await screen.findAllByText('Alto valor')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('Valor monetario').length).toBeGreaterThan(0);
     rerender(<ExtendedAnalyticsPanel tab="related" inventory={inventory} />);
+    fireEvent.change(screen.getByRole('combobox', { name: 'Producto relacionado' }), { target: { value: 'PAN-FRE-001' } });
     await waitFor(() => expect(screen.getByText('Pan Francés')).toBeTruthy());
     expect(screen.getAllByText('Leche Gloria').length).toBeGreaterThan(0);
     expect(screen.getByText('SKU: PAN-FRE-001')).toBeTruthy();
@@ -293,5 +300,52 @@ describe('extended business intelligence smoke panels', () => {
     expect(screen.getAllByText('207').length).toBeGreaterThan(0);
     expect(screen.getAllByText('20%').length).toBeGreaterThan(0);
     expect(screen.getAllByText('FROZEN · cutoff 2026-10-12').length).toBeGreaterThan(0);
+  });
+});
+
+describe('FIX3 Health presentation contracts', () => {
+  it('revisits real panels with revision checks and no repeated operational payloads', async () => {
+    const instance = (apiClient as unknown as { instance: { get: (url: string) => Promise<unknown> } }).instance;
+    localStorage.setItem('token', 'test-only-panel-session');
+    const revision = { businessId: 'test-business', scenarioId: 'minimarket-pasco-v3', datasetVersion: 'v1', dataVersion: '0', asOf: '2026-10-14' };
+    const domains = { sales: { status: 'READY', metrics: { kpis: { revenueCents: 0 } }, freshness: null, insights: [] } };
+    const get = vi.spyOn(instance, 'get').mockImplementation(async url => ({ data: envelope(url.endsWith('/revision') ? revision
+      : url.endsWith('/customers') ? customerFixture() : url.endsWith('/suppliers') ? supplierFixture()
+      : { ...meta, status: 'READY', period: { startDate: meta.asOf, endDate: meta.asOf }, domains, insights: [] }) }));
+    const renders: number[] = [];
+    const panel = (tab: 'customers' | 'suppliers' | 'health') => <Profiler id="navigation" onRender={(_id, _phase, duration) => renders.push(duration)}><ExtendedAnalyticsPanel tab={tab} inventory={inventory} /></Profiler>;
+    const { rerender } = render(panel('customers'));
+    await screen.findByText(/Consumer Final se excluye/);
+    for (const tab of ['suppliers', 'health', 'customers', 'suppliers'] as const) {
+      rerender(panel(tab));
+      await waitFor(() => expect(screen.queryByText('Cargando analítica…')).toBeNull());
+    }
+    expect(get.mock.calls.filter(([url]) => !url.endsWith('/revision'))).toHaveLength(3);
+    expect(get.mock.calls.filter(([url]) => url.endsWith('/revision'))).toHaveLength(8);
+    const ordered = [...renders].sort((a, b) => a - b);
+    console.info('FIX3 fixture render (not cloud)', JSON.stringify({ commits: renders.length, medianMs: ordered[Math.floor(ordered.length / 2)], maxMs: ordered.at(-1) }));
+  });
+  it('labels the remaining engine fields in natural Spanish', () => {
+    const fields = { averageTicket: 12, averageDistinctSkusPerTicket: 2.5, averageUnitsPerTicket: 3,
+      highRevenueLowMargin: [], lowRevenueHighMargin: [], highMarginProducts: [], incomingUnits: 858,
+      lowStock: 8, shouldReorder: 26, forecastAvailability: 'AVAILABLE', abcAvailable: true, purchaseOrders: 2155 };
+    expect(healthEntries(fields).map(row => row.label)).toEqual(['Ticket promedio', 'Productos distintos por ticket', 'Unidades promedio por ticket',
+      'Alto ingreso y bajo margen', 'Bajo ingreso y alto margen', 'Productos con margen alto', 'Unidades por recibir', 'Productos con stock bajo',
+      'Productos que requieren reposición', 'Disponibilidad del pronóstico', 'Clasificación ABC disponible', 'Órdenes de compra']);
+    const supplier = healthEntries({ receivedSpendCents: 1200, committedSpendCents: 2500, pendingCommitmentCents: 1300, exposures: [1, 2] });
+    expect(supplier.map(row => row.label)).toEqual(['Gasto recibido', 'Gasto comprometido', 'Compromiso pendiente', 'Productos expuestos al riesgo']);
+    expect(supplier[0].value).toContain('12.00');
+    expect(healthEntries({ internalUnexpectedField: 'internal text', meaning: 'metadata' })).toEqual([]);
+  });
+  it('removes only equal monetary aliases; preserves distinct values, zero, null and percentage units', () => {
+    const rows = healthEntries({ revenue: 12.34, revenueCents: 1234, grossMargin: 0, grossMarginCents: 0, cogs: null, cogsCents: null,
+      grossMarginPct: .5, averageTicket: 6.17 });
+    expect(rows.filter(row => row.label === 'Ingresos')).toHaveLength(1);
+    expect(rows.filter(row => row.label === 'Margen bruto')).toHaveLength(1);
+    expect(rows.filter(row => row.label === 'Costo de ventas')).toHaveLength(1);
+    expect(rows.find(row => row.label === 'Costo de ventas')?.value).toBe('No disponible');
+    expect(rows.find(row => row.label === 'Margen bruto (%)')?.value).toBe('0.5%');
+    expect(healthEntries({ revenue: 12, revenueCents: 1300 })).toHaveLength(2);
+    expect(healthEntries({ trends: { revenue: { value: 1234, previousValue: 1000, absoluteChange: 234, percentChange: 23.4 } } })[0].value).toContain('12.34');
   });
 });

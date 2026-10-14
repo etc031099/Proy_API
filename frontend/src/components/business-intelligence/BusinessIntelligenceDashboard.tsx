@@ -103,20 +103,25 @@ export function BusinessIntelligenceDashboard() {
   const [detailError, setDetailError] = useState(false);
   const [detailRetry, setDetailRetry] = useState(0);
   const detailsRequest = useRef(0);
+  const overviewRequest = useRef(0);
   const loadOverview = useCallback(async () => {
-    setOverviewState('loading'); setOverviewError(false);
+    const requestId = ++overviewRequest.current;
+    setOverviewState('loading'); setOverviewError(false); setSummary(null); setInventory(null);
     try {
       const [summaryResponse, inventoryResponse] = await Promise.all([apiClient.getBusinessIntelligenceSummary(), apiClient.getInventoryAnalytics({ limit: 20 })]);
+      if (requestId !== overviewRequest.current) return;
       if (!summaryResponse.success || !summaryResponse.data || !inventoryResponse.success || !inventoryResponse.data) throw new Error('Unavailable');
       setSummary(summaryResponse.data); setInventory(inventoryResponse.data); setOverviewState('ready');
-    } catch { setSummary(null); setInventory(null); setOverviewError(true); setOverviewState('error'); }
+    } catch { if (requestId === overviewRequest.current) { setSummary(null); setInventory(null); setOverviewError(true); setOverviewState('error'); } }
   }, []);
-  useEffect(() => { void loadOverview(); }, [loadOverview]);
+  useEffect(() => { if (tab === 'summary' || tab === 'inventory') void loadOverview(); }, [tab, loadOverview]);
+  useEffect(() => () => { overviewRequest.current++; detailsRequest.current++; }, []);
+  const retryOverview = () => { apiClient.invalidateIntelligenceReads(); void loadOverview(); };
 
   useEffect(() => {
     const requestId = ++detailsRequest.current;
     setForecast(null); setProductInventory(null); setDetailError(false);
-    if (!selected || tab === 'summary') { setDetailState('ready'); return; }
+    if (!selected || !['forecast', 'inventory'].includes(tab)) { setDetailState('ready'); return; }
     setDetailState('loading');
     const request = tab === 'forecast' ? apiClient.getBusinessIntelligenceForecast(selected.sku, horizon) : apiClient.getBusinessIntelligenceProductInventory(selected.sku);
     void request.then(response => {
@@ -153,7 +158,7 @@ export function BusinessIntelligenceDashboard() {
       <AnalyticsErrorBoundary key={tab} label={{ summary: 'resumen', forecast: 'predicción', inventory: 'inventario', sales: 'ventas', customers: 'clientes', suppliers: 'proveedores', related: 'productos relacionados', health: 'salud' }[tab]}>
       {tab === 'summary' && <section id="intelligence-panel-summary" role="tabpanel" aria-labelledby="intelligence-tab-summary" tabIndex={0} className="mt-4 space-y-6">
         {overviewState === 'loading' && <SkeletonGrid />}
-        {overviewError && <ErrorPanel retry={() => void loadOverview()} />}
+        {overviewError && <ErrorPanel retry={retryOverview} />}
         {overviewState === 'ready' && summary && inventory && <>
           <section aria-label="Indicadores de hoy" className="space-y-3"><h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Actividad comercial · hoy</h2><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <MetricCard title="Ventas de hoy" value={summary.salesToday ? money(summary.salesToday.value, summary.salesToday.currency) : 'No disponible'} />
@@ -199,19 +204,19 @@ export function BusinessIntelligenceDashboard() {
         <Card><CardContent className="p-5"><ProductPicker selected={selected} onSelect={chooseProduct} /></CardContent></Card>
         {!selected && <EmptyProductState />}
         {selected && detailState === 'loading' && <LoadingDetail label="Cargando predicción…" />}
-        {selected && detailError && <ErrorPanel retry={() => { setDetailError(false); setDetailRetry(value => value + 1); }} />}
+        {selected && detailError && <ErrorPanel retry={() => { apiClient.invalidateIntelligenceReads(); setDetailError(false); setDetailRetry(value => value + 1); }} />}
         {selected && detailState === 'ready' && forecast && <ForecastPanel forecast={forecast} horizon={horizon} setHorizon={setHorizon} />}
         <ForecastEvaluationPanel />
       </section>}
       {tab === 'inventory' && <section id="intelligence-panel-inventory" role="tabpanel" aria-labelledby="intelligence-tab-inventory" tabIndex={0} className="mt-4 space-y-6">
         <Card><CardContent className="p-5"><ProductPicker selected={selected} onSelect={chooseProduct} /></CardContent></Card>
         {!selected && <>
-          {overviewError && <ErrorPanel retry={() => void loadOverview()} />}
+          {overviewError && <ErrorPanel retry={retryOverview} />}
           {overviewState === 'loading' && <LoadingDetail label="Cargando ranking de inventario…" />}
             {inventory && <><Card><CardHeader><CardTitle>Riesgo de inventario</CardTitle><CardDescription>Distribución del análisis de inventario.</CardDescription></CardHeader><CardContent><p className="mb-4 text-sm text-muted-foreground">La reposición combina el pronóstico operativo con reglas de cobertura, stock de seguridad y punto de reorden. ABC/XYZ y estas políticas son analítica operativa, no modelos de Machine Learning.</p><div className="grid grid-cols-2 gap-3 sm:grid-cols-4">{riskRows.map(row => <div key={row.key} className="rounded-lg border p-3"><RiskBadge risk={riskKeyLevels[row.key]} /><p className="mt-2 text-xl font-semibold">{safeNumber(row.value)}</p></div>)}</div><div className="mt-5 grid gap-4 sm:grid-cols-2"><ClassificationChart title="Importancia económica (ABC)" counts={inventory.summary.abcCounts} colors={{ A: '#2563eb', B: '#60a5fa', C: '#bfdbfe' }} help="A representa mayor importancia económica, B importancia intermedia y C menor importancia." /><ClassificationChart title="Estabilidad de demanda (XYZ)" counts={inventory.summary.xyzCounts} colors={{ X: '#16a34a', Y: '#84cc16', Z: '#facc15' }} help="X es una demanda más estable, Y variable y Z irregular." /></div><div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{inventory.summary.reorderCount != null && <div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">Reposición recomendada</p><p className="text-lg font-semibold">{safeNumber(inventory.summary.reorderCount)}</p></div>}{inventory.summary.lowStockCount != null && <div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">Stock bajo</p><p className="text-lg font-semibold">{safeNumber(inventory.summary.lowStockCount)}</p></div>}{inventory.summary.overstockCount != null && <div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">Sobreinventario</p><p className="text-lg font-semibold">{safeNumber(inventory.summary.overstockCount)}</p></div>}{inventory.summary.slowMovingCount != null && <div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">Movimiento lento</p><p className="text-lg font-semibold">{safeNumber(inventory.summary.slowMovingCount)}</p></div>}{inventory.summary.deadStockCount != null && <div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">Sin movimiento</p><p className="text-lg font-semibold">{safeNumber(inventory.summary.deadStockCount)}</p></div>}</div></CardContent></Card><RankingTable rows={inventory.items} onSelect={selectFromRanking} /></>}
         </>}
         {selected && detailState === 'loading' && <LoadingDetail label="Cargando inventario del producto…" />}
-        {selected && detailError && <ErrorPanel retry={() => { setDetailError(false); setDetailRetry(value => value + 1); }} />}
+        {selected && detailError && <ErrorPanel retry={() => { apiClient.invalidateIntelligenceReads(); setDetailError(false); setDetailRetry(value => value + 1); }} />}
         {selected && detailState === 'ready' && productInventory && <ProductInventoryPanel inventory={productInventory} />}
       </section>}
       {(['sales', 'customers', 'suppliers', 'related', 'health'] as const).includes(tab as ExtendedTab) && <section id={`intelligence-panel-${tab}`} role="tabpanel" aria-labelledby={`intelligence-tab-${tab}`} tabIndex={0} className="mt-4"><ExtendedAnalyticsPanel tab={tab as ExtendedTab} inventory={inventory} /></section>}

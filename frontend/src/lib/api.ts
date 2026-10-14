@@ -5,6 +5,7 @@ import type { AgentMessageRequest, AgentResponse, AgentConversationList, AgentCo
 import type { AnalyticsEnvelope, AssociationsAnalytics, BusinessHealthAnalytics, BusinessSummary, CustomerAnalyticsDetail, CustomersAnalytics, ForecastResponse, InventorySummary, ProductInventory, ProductOption, RelatedProductAnalytics, SalesAnalytics, SalesPeriod, SupplierAnalyticsDetail, SuppliersAnalytics } from '@/types/businessIntelligence';
 import type { CustomerClustering } from '@/types/customerClustering';
 import type { SalesAnomalies } from '@/types/salesAnomalies';
+import { IntelligenceReadCache, type IntelligenceRevision } from './intelligenceReadCache';
 
 export class AgentApiError extends Error {
   constructor(readonly status?: number, readonly code?: string, readonly conversationId?: string) {
@@ -25,6 +26,22 @@ export class DemandForecastApiError extends Error {
 }
 
 class ApiClient {
+  private intelligenceSession: string | null = null;
+  private intelligenceCache = new IntelligenceReadCache(async () => {
+    const response = await this.instance.get('/intelligence/revision');
+    const body = response.data as AnalyticsEnvelope<IntelligenceRevision>;
+    if (!body.success || !body.data) throw new Error('Intelligence revision unavailable');
+    return body.data;
+  });
+  invalidateIntelligenceReads() { this.intelligenceCache.clear(); }
+  private intelligenceRead<T>(path: string, params?: object, versioned = true): Promise<T> {
+    const session = this.getToken();
+    if (session !== this.intelligenceSession) { this.invalidateIntelligenceReads(); this.intelligenceSession = session; }
+    const load = async () => (await this.instance.get(path, params ? { params } : undefined)).data as T;
+    if (!session) return load();
+    const normalized = Object.entries(params || {}).filter(([, value]) => value !== undefined).sort(([a], [b]) => a.localeCompare(b));
+    return this.intelligenceCache.read(JSON.stringify([path, normalized]), load, versioned);
+  }
   private instance: AxiosInstance;
 
   constructor() {
@@ -113,12 +130,14 @@ class ApiClient {
   }
 
   private setToken(token: string): void {
+    this.invalidateIntelligenceReads();
     if (typeof window !== 'undefined') {
       localStorage.setItem('token', token);
     }
   }
 
   private removeToken(): void {
+    this.invalidateIntelligenceReads();
     if (typeof window !== 'undefined') {
       localStorage.removeItem('token');
     }
@@ -405,63 +424,58 @@ class ApiClient {
   }
 
   async getBusinessIntelligenceSummary(): Promise<ApiResponse<BusinessSummary> & { code?: string }> {
-    const response = await this.instance.get('/intelligence/summary');
-    return response.data as ApiResponse<BusinessSummary> & { code?: string };
+    return this.intelligenceRead('/intelligence/summary');
   }
 
   async getBusinessIntelligenceInventory(): Promise<ApiResponse<InventorySummary> & { code?: string }> {
-    const response = await this.instance.get('/intelligence/inventory', { params: { limit: 20 } });
-    return response.data as ApiResponse<InventorySummary> & { code?: string };
+    return this.intelligenceRead('/intelligence/inventory', { limit: 20 });
   }
 
   async getBusinessIntelligenceForecast(sku: string, horizonDays: 1 | 7 | 14): Promise<ApiResponse<ForecastResponse> & { code?: string }> {
-    const response = await this.instance.get(`/intelligence/products/${encodeURIComponent(sku)}/forecast`, { params: { horizonDays } });
-    return response.data as ApiResponse<ForecastResponse> & { code?: string };
+    return this.intelligenceRead(`/intelligence/products/${encodeURIComponent(sku)}/forecast`, { horizonDays });
   }
 
   async getForecastModelEvaluation(): Promise<ApiResponse<ForecastEvaluation> & { code?: string }> {
-    const response = await this.instance.get('/intelligence/forecast/evaluation');
-    return response.data as ApiResponse<ForecastEvaluation> & { code?: string };
+    return this.intelligenceRead('/intelligence/forecast/evaluation', undefined, false);
   }
 
   async getBusinessIntelligenceProductInventory(sku: string): Promise<ApiResponse<ProductInventory> & { code?: string }> {
-    const response = await this.instance.get(`/intelligence/products/${encodeURIComponent(sku)}/inventory`);
-    return response.data as ApiResponse<ProductInventory> & { code?: string };
+    return this.intelligenceRead(`/intelligence/products/${encodeURIComponent(sku)}/inventory`);
   }
 
   // Extended V3 analytics use the same authenticated Axios instance and interceptors as the dashboard.
   async getSalesAnalytics(params: { period: SalesPeriod; includeSeries?: boolean; compare?: boolean; limit?: number }): Promise<AnalyticsEnvelope<SalesAnalytics>> {
-    return (await this.instance.get('/intelligence/sales', { params })).data;
+    return this.intelligenceRead('/intelligence/sales', params);
   }
   async getCustomersAnalytics(params?: { sortBy?: 'spend' | 'frequency' | 'recency' | 'gross_margin'; segment?: string; limit?: number; offset?: number }): Promise<AnalyticsEnvelope<CustomersAnalytics>> {
-    return (await this.instance.get('/intelligence/customers', { params })).data;
+    return this.intelligenceRead('/intelligence/customers', params);
   }
   async getCustomerClustering(customerRef?: string): Promise<AnalyticsEnvelope<CustomerClustering>> {
-    return (await this.instance.get('/intelligence/customers/clustering', { params: customerRef ? { customerRef } : undefined })).data;
+    return this.intelligenceRead('/intelligence/customers/clustering', customerRef ? { customerRef } : undefined, Boolean(customerRef));
   }
   async getSalesAnomalies(params?: { startDate?: string; endDate?: string; limit?: number }): Promise<AnalyticsEnvelope<SalesAnomalies>> {
-    return (await this.instance.get('/intelligence/sales/anomalies', { params })).data;
+    return this.intelligenceRead('/intelligence/sales/anomalies', params, false);
   }
   async getCustomerAnalytics(customerRef: string): Promise<AnalyticsEnvelope<CustomerAnalyticsDetail>> {
-    return (await this.instance.get(`/intelligence/customers/${encodeURIComponent(customerRef)}`)).data;
+    return this.intelligenceRead(`/intelligence/customers/${encodeURIComponent(customerRef)}`);
   }
   async getSuppliersAnalytics(params?: { period?: SalesPeriod; limit?: number; offset?: number }): Promise<AnalyticsEnvelope<SuppliersAnalytics>> {
-    return (await this.instance.get('/intelligence/suppliers', { params })).data;
+    return this.intelligenceRead('/intelligence/suppliers', params);
   }
   async getSupplierAnalytics(supplierRef: string): Promise<AnalyticsEnvelope<SupplierAnalyticsDetail>> {
-    return (await this.instance.get(`/intelligence/suppliers/${encodeURIComponent(supplierRef)}`)).data;
+    return this.intelligenceRead(`/intelligence/suppliers/${encodeURIComponent(supplierRef)}`);
   }
   async getAssociations(params?: { limit?: number; offset?: number }): Promise<AnalyticsEnvelope<AssociationsAnalytics>> {
-    return (await this.instance.get('/intelligence/associations', { params })).data;
+    return this.intelligenceRead('/intelligence/associations', params, false);
   }
   async getRelatedProducts(sku: string, limit = 10): Promise<AnalyticsEnvelope<RelatedProductAnalytics>> {
-    return (await this.instance.get(`/intelligence/products/${encodeURIComponent(sku)}/related`, { params: { limit } })).data;
+    return this.intelligenceRead(`/intelligence/products/${encodeURIComponent(sku)}/related`, { limit }, false);
   }
   async getBusinessHealth(params?: { period?: SalesPeriod; limit?: number }): Promise<AnalyticsEnvelope<BusinessHealthAnalytics>> {
-    return (await this.instance.get('/intelligence/health', { params })).data;
+    return this.intelligenceRead('/intelligence/health', params);
   }
   async getInventoryAnalytics(params?: { limit?: number; flag?: 'low_stock' | 'overstock' | 'slow_moving' | 'dead_stock' | 'single_source' | 'should_reorder' }): Promise<AnalyticsEnvelope<InventorySummary>> {
-    return (await this.instance.get('/intelligence/inventory', { params })).data;
+    return this.intelligenceRead('/intelligence/inventory', params);
   }
 
   async searchBusinessIntelligenceProducts(search: string): Promise<ApiResponse<{ products: ProductOption[] }> & { code?: string }> {
