@@ -3,6 +3,9 @@ const { asyncHandler } = require('../middleware/validation');
 const { toFiniteNumber } = require('../utils/numbers');
 const { escapeSearch, listPagination } = require('../utils/listPagination');
 const { assertAllowedFields, pickAllowedFields } = require('../utils/allowedFields');
+const mongoose = require('mongoose');
+const { recordV3ContactChange } = require('../services/v3OperationalSnapshotService');
+const V3_OPERATIONAL = require('../config/v3Operational');
 
 const CONTACT_CREATE_FIELDS = [
   'name', 'phone', 'documentType', 'documentNumber', 'email', 'type', 'address',
@@ -130,7 +133,17 @@ const createContact = asyncHandler(async (req, res) => {
     }
   }
 
-  const contact = await Contact.create(contactData);
+  let contact;
+  if (req.businessId === V3_OPERATIONAL.businessId && !req.historicalContext) {
+    const session = await mongoose.startSession();
+    try {
+      session.startTransaction({ writeConcern: { w: 'majority' } });
+      [contact] = await Contact.create([contactData], { session });
+      await recordV3ContactChange({ businessId: req.businessId, session, after: contact, operation: 'CREATE' });
+      await session.commitTransaction();
+    } catch (error) { if (session.inTransaction()) await session.abortTransaction(); throw error; }
+    finally { await session.endSession(); }
+  } else contact = await Contact.create(contactData);
 
   res.status(201).json({
     success: true,
@@ -182,11 +195,20 @@ const updateContact = asyncHandler(async (req, res) => {
     }
   }
 
-  const contact = await Contact.findOneAndUpdate(
-    { _id: id, businessId: req.businessId },
-    updateData,
-    { new: true, runValidators: true }
-  );
+  let contact;
+  if (req.businessId === V3_OPERATIONAL.businessId && !req.historicalContext) {
+    const session = await mongoose.startSession();
+    try {
+      session.startTransaction({ writeConcern: { w: 'majority' } });
+      const before = await Contact.findOne({ _id: id, businessId: req.businessId }).session(session);
+      if (!before) { await session.abortTransaction(); return res.status(404).json({ success: false, message: 'Contact not found' }); }
+      contact = await Contact.findOneAndUpdate({ _id: id, businessId: req.businessId }, updateData,
+        { new: true, runValidators: true, session });
+      await recordV3ContactChange({ businessId: req.businessId, session, before, after: contact, operation: 'UPDATE' });
+      await session.commitTransaction();
+    } catch (error) { if (session.inTransaction()) await session.abortTransaction(); throw error; }
+    finally { await session.endSession(); }
+  } else contact = await Contact.findOneAndUpdate({ _id: id, businessId: req.businessId }, updateData, { new: true, runValidators: true });
 
   if (!contact) {
     return res.status(404).json({
@@ -208,11 +230,19 @@ const updateContact = asyncHandler(async (req, res) => {
  * @access  Private
  */
 const deleteContact = asyncHandler(async (req, res) => {
-  const contact = await Contact.findOneAndUpdate(
-    { _id: req.params.id, businessId: req.businessId },
-    { isActive: false },
-    { new: true }
-  );
+  let contact;
+  if (req.businessId === V3_OPERATIONAL.businessId && !req.historicalContext) {
+    const session = await mongoose.startSession();
+    try {
+      session.startTransaction({ writeConcern: { w: 'majority' } });
+      const before = await Contact.findOne({ _id: req.params.id, businessId: req.businessId }).session(session);
+      if (!before) { await session.abortTransaction(); return res.status(404).json({ success: false, message: 'Contact not found' }); }
+      contact = await Contact.findOneAndUpdate({ _id: req.params.id, businessId: req.businessId }, { isActive: false }, { new: true, session });
+      if (before.isActive !== false) await recordV3ContactChange({ businessId: req.businessId, session, before, after: contact, operation: 'DEACTIVATE' });
+      await session.commitTransaction();
+    } catch (error) { if (session.inTransaction()) await session.abortTransaction(); throw error; }
+    finally { await session.endSession(); }
+  } else contact = await Contact.findOneAndUpdate({ _id: req.params.id, businessId: req.businessId }, { isActive: false }, { new: true });
 
   if (!contact) {
     return res.status(404).json({

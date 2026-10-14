@@ -4,16 +4,16 @@ const Conversation = require('../models/AgentConversation');
 const { scopeOf, bindingOf, fail, ActionError } = require('./contracts');
 const { writeAudit } = require('./audit');
 const filterFor = context => ({ ...scopeOf(context), ...bindingOf(context) });
-const atomic = async (operation, startSession = () => mongoose.startSession()) => {
+const atomic = async (operation, startSession = () => mongoose.startSession(), transactionOptions = {}) => {
   const session = await startSession();
-  try { session.startTransaction({ maxCommitTimeMS: 10000 }); const result = await operation(session); await session.commitTransaction(); return result; }
+  try { session.startTransaction({ maxCommitTimeMS: 10000, ...transactionOptions }); const result = await operation(session); await session.commitTransaction(); return result; }
   catch (error) { if (session.inTransaction()) { try { await session.abortTransaction(); } catch { /* Preserve uncertain-commit classification. */ } } throw error; }
   finally { try { await session.endSession(); } catch { /* Cleanup must not overwrite a committed result. */ } }
 };
 const createActionRepository = ({ pendingModel = PendingAction, conversationModel = Conversation,
   startSession = () => mongoose.startSession(), audit = writeAudit } = {}) => {
   const PendingAction = pendingModel, Conversation = conversationModel;
-  const transaction = operation => atomic(operation, startSession);
+  const transaction = (operation, transactionOptions) => atomic(operation, startSession, transactionOptions);
   return ({
   async checkConversation(context) {
     if (context.conversationId && !await Conversation.exists({ ...scopeOf(context), conversationId: context.conversationId, status: 'active' }).maxTimeMS(5000)) fail('ACTION_NOT_ALLOWED');
@@ -50,7 +50,7 @@ const createActionRepository = ({ pendingModel = PendingAction, conversationMode
         await row.save({ session });
         await audit(row, context, row.status, clock(), session);
         return row.toObject();
-      });
+      }, context.businessId === require('../config/v3Operational').businessId ? { writeConcern: { w: 'majority' } } : {});
     } catch (error) {
       // Never retry a write automatically; uncertain commits require a status lookup/repeated confirm.
       if ([112, 251].includes(error.code) || (error.code === 11000 && error.keyPattern?.threshold && error.keyPattern?.operator)

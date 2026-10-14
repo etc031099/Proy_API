@@ -6,6 +6,7 @@ const { notifyLowStock } = require('../services/telegramService');
 const { emitEvent } = require('../services/webhookService');
 const { toFiniteNumber } = require('../utils/numbers');
 const { applyStockChange, normalizeDate } = require('../services/inventoryService');
+const { recordV3Transaction } = require('../services/v3OperationalSnapshotService');
 
 const TRANSACTION_CURRENCIES = ['PEN', 'USD', 'EUR'];
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -289,7 +290,7 @@ const updateTransactionStatus = asyncHandler(async (req, res) => {
   const { status } = req.body;
 
   const session = await mongoose.startSession();
-  session.startTransaction();
+  session.startTransaction({ ...(req.businessId === require('../config/v3Operational').businessId && !req.historicalContext ? { writeConcern: { w: 'majority' } } : {}) });
   let transaction;
   try {
     transaction = await Transaction.findOne({
@@ -426,6 +427,7 @@ const updateTransactionStatus = asyncHandler(async (req, res) => {
     transaction.status = status;
     transaction.cancelledAt = cancellationTime;
     await transaction.save({ session });
+    if (!historical) await recordV3Transaction({ businessId: req.businessId, session, transaction, operation: 'CANCEL', effectiveAtUtc: cancellationTime });
     await session.commitTransaction();
   } catch (error) {
     await session.abortTransaction();

@@ -7,6 +7,8 @@ const CreditPayment = require('./CreditPayment');
 const InventoryMovement = require('./InventoryMovement');
 const HistoricalScenario = require('./HistoricalScenario');
 const MinimarketV3Record = require('./MinimarketV3Record');
+const V3OperationalRevision = require('./V3OperationalRevision');
+const V3OperationalChange = require('./V3OperationalChange');
 
 module.exports = {
   User,
@@ -17,5 +19,7 @@ module.exports = {
   CreditPayment,
   InventoryMovement,
   HistoricalScenario,
-  MinimarketV3Record
+  MinimarketV3Record,
+  V3OperationalRevision,
+  V3OperationalChange
 };

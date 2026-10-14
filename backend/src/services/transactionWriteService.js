@@ -3,6 +3,7 @@ const { Transaction, Product, Contact } = require('../models');
 const { validatePaymentMethod, getExchangeRate } = require('./externalApiService');
 const { toFiniteNumber } = require('../utils/numbers');
 const { applyStockChange, normalizeDate } = require('./inventoryService');
+const { recordV3Transaction } = require('./v3OperationalSnapshotService');
 const TRANSACTION_CURRENCIES = ['PEN', 'USD', 'EUR'];
 // One business implementation for CRUD and actions. Caller-owned sessions never commit here.
 // Preview runs the same pricing/contact/credit validation without business writes.
@@ -33,7 +34,7 @@ const writeTransaction = async ({ input, businessId, historical = null, session:
   const ownsSession = !suppliedSession;
 
   try {
-    if (ownsSession) session.startTransaction();
+    if (ownsSession) session.startTransaction({ ...(businessId === require('../config/v3Operational').businessId ? { writeConcern: { w: 'majority' } } : {}) });
 
     // Validate contact based on transaction type
     let contact;
@@ -73,6 +74,7 @@ const writeTransaction = async ({ input, businessId, historical = null, session:
 
     // Validate and process products
     const processedProducts = [];
+    const analyticsProductIdentities = [];
     const lowStockNotifications = [];
     const snapshotItems = [];
     const previewProducts = new Map();
@@ -138,6 +140,7 @@ const writeTransaction = async ({ input, businessId, historical = null, session:
       }
 
       const previousStock = product.stock;
+      analyticsProductIdentities.push({ productId: String(product._id), productKey: product.productKey || null, sku: product.sku || null });
       snapshotItems.push({ productId: String(product._id), sku: product.sku, name: product.name,
         stock: previousStock, quantity: itemQuantity, currency: product.currency,
         price: type === 'sale' ? canonicalSalePrice : canonicalPurchaseCost });
@@ -278,6 +281,8 @@ const writeTransaction = async ({ input, businessId, historical = null, session:
       return { snapshot, transactionData };
     }
     const [transaction] = await Transaction.create([transactionData], { session });
+    if (!historical) await recordV3Transaction({ businessId, session, transaction, contact, productIdentities: analyticsProductIdentities,
+      operation: 'CREATE', effectiveAtUtc: transactionDate });
     if (ownsSession) await session.commitTransaction();
     return { transaction, snapshot, lowStockNotifications, transactionData };
   } catch (error) {

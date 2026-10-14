@@ -9,6 +9,8 @@ const { assertAllowedFields, pickAllowedFields } = require('../utils/allowedFiel
 const { SKU_INDEX_NAME, normalizeSku } = require('../utils/sku');
 const { applyStockChange } = require('../services/inventoryService');
 const { createProductRecord } = require('../services/productCreationService');
+const { recordV3ProductChange, recordV3Movement } = require('../services/v3OperationalSnapshotService');
+const V3_OPERATIONAL = require('../config/v3Operational');
 
 const PRODUCT_CREATE_FIELDS = [
   'name', 'description', 'price', 'currency', 'costPrice', 'stock', 'category',
@@ -218,7 +220,7 @@ const createProduct = asyncHandler(async (req, res) => {
   const session = await mongoose.startSession();
   let product;
   try {
-    session.startTransaction();
+    session.startTransaction({ ...(req.businessId === V3_OPERATIONAL.businessId && !historical ? { writeConcern: { w: 'majority' } } : {}) });
     product = await createProductRecord({ productData, initialStock, historical, session });
     await session.commitTransaction();
   } catch (error) {
@@ -280,11 +282,21 @@ const updateProduct = asyncHandler(async (req, res) => {
 
   let product;
   try {
-    product = await Product.findOneAndUpdate(
-      { _id: id, businessId: req.businessId },
-      updateData,
-      { new: true, runValidators: true }
-    );
+    if (req.businessId === V3_OPERATIONAL.businessId && !req.historicalContext) {
+      const session = await mongoose.startSession();
+      try {
+        session.startTransaction({ writeConcern: { w: 'majority' } });
+        const before = await Product.findOne({ _id: id, businessId: req.businessId, isActive: true }).session(session);
+        if (!before) { await session.abortTransaction(); return res.status(404).json({ success: false, message: 'Product not found' }); }
+        product = await Product.findOneAndUpdate({ _id: id, businessId: req.businessId }, updateData,
+          { new: true, runValidators: true, session });
+        await recordV3ProductChange({ businessId: req.businessId, session, before, after: product, operation: 'UPDATE' });
+        await session.commitTransaction();
+      } catch (error) { if (session.inTransaction()) await session.abortTransaction(); throw error; }
+      finally { await session.endSession(); }
+    } else {
+      product = await Product.findOneAndUpdate({ _id: id, businessId: req.businessId }, updateData, { new: true, runValidators: true });
+    }
   } catch (error) {
     if (isSkuDuplicateKey(error)) return sendSkuConflict(res);
     throw error;
@@ -310,11 +322,22 @@ const updateProduct = asyncHandler(async (req, res) => {
  * @access  Private
  */
 const deleteProduct = asyncHandler(async (req, res) => {
-  const product = await Product.findOneAndUpdate(
-    { _id: req.params.id, businessId: req.businessId },
-    { isActive: false },
-    { new: true }
-  );
+  let product;
+  if (req.businessId === V3_OPERATIONAL.businessId && !req.historicalContext) {
+    const session = await mongoose.startSession();
+    try {
+      session.startTransaction({ writeConcern: { w: 'majority' } });
+      const before = await Product.findOne({ _id: req.params.id, businessId: req.businessId }).session(session);
+      if (before) {
+        product = await Product.findOneAndUpdate({ _id: req.params.id, businessId: req.businessId }, { isActive: false }, { new: true, session });
+        if (before.isActive !== false) await recordV3ProductChange({ businessId: req.businessId, session, before, after: product, operation: 'DEACTIVATE' });
+      }
+      await session.commitTransaction();
+    } catch (error) { if (session.inTransaction()) await session.abortTransaction(); throw error; }
+    finally { await session.endSession(); }
+  } else {
+    product = await Product.findOneAndUpdate({ _id: req.params.id, businessId: req.businessId }, { isActive: false }, { new: true });
+  }
 
   if (!product) {
     return res.status(404).json({
@@ -406,7 +429,7 @@ const updateProductStock = asyncHandler(async (req, res) => {
   let previousStock;
   let newStock;
   try {
-    session.startTransaction();
+    session.startTransaction({ ...(req.businessId === V3_OPERATIONAL.businessId && !req.historicalContext ? { writeConcern: { w: 'majority' } } : {}) });
     product = await Product.findOne({
       _id: id,
       businessId: req.businessId,
@@ -434,13 +457,16 @@ const updateProductStock = asyncHandler(async (req, res) => {
         break;
     }
 
-    await applyStockChange({
+    const movement = await applyStockChange({
       product,
       quantityDelta: newStock - previousStock,
       type: 'manual_adjustment',
       source: 'api',
       session
     });
+    if (movement && !req.historicalContext) {
+      await recordV3Movement({ businessId: req.businessId, session, movement });
+    }
     await session.commitTransaction();
   } catch (error) {
     await session.abortTransaction();
