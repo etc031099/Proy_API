@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictFloat, StrictInt, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictBool, StrictFloat, StrictInt, model_validator
 
 
 BUSINESS_ID = "MINIMARKET-PASCO-V3"
@@ -282,6 +282,7 @@ class ForecastRequest(V3Request, PageRequest):
     mode: Literal["detail", "compare", "rank", "summary"] = "detail"
     skus: list[str] = Field(default_factory=list, max_length=MAX_ENTITY_BATCH)
     horizonDays: StrictInt = Field(default=7, ge=1, le=365)
+    includeObservedSeries: StrictBool = False
 
 
 class CrossSellRequest(V3Request, PageRequest):

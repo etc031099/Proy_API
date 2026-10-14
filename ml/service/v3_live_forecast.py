@@ -53,7 +53,8 @@ class LiveForecastAdapter:
             if unknown:
                 raise LiveDomainError("PRODUCT_NOT_FOUND", 404, "One or more product SKUs were not found.")
             rows = [row for row in rows if row["sku"] in skus]
-        if request.mode in {"detail", "compare"} and any(row["status"] != "READY" for row in rows):
+        if (request.mode in {"detail", "compare"} and any(row["status"] != "READY" for row in rows)
+                and not request.includeObservedSeries):
             raise LiveDomainError("INSUFFICIENT_HISTORY", 422,
                                   "The selected product does not have 28 consecutive certified closed-day observations.")
         key_field = f"expectedUnitsNext{horizon}d"
@@ -137,25 +138,36 @@ class LiveForecastAdapter:
             days = [through - timedelta(days=offset) for offset in range(27, -1, -1)]
             history_map = self.dataset.inventory.get(sku, {})
             values = []
+            observed_series = []
             missing = False
             for day in days:
                 if created and day < created:
                     missing = True
-                    break
+                    observed_series.append({"date": day.isoformat(), "units": None, "status": "MISSING"})
+                    continue
                 if day <= self.HISTORY_CUTOFF:
                     row = history_map.get(day.isoformat())
                     if row is None:
                         missing = True
-                        break
+                        observed_series.append({"date": day.isoformat(), "units": None, "status": "MISSING"})
+                        continue
                     units = int(row["unitsSold"]) - cancelled_units.get((sku, day.isoformat()), 0)
-                    values.append(max(0, units))
+                    units = max(0, units)
+                    values.append(units)
+                    status = "PARTIAL" if row.get("completeness") == "PARTIAL" else ("ZERO" if units == 0 else "CLOSED")
+                    observed_series.append({"date": day.isoformat(), "units": units, "status": status})
                 else:
                     row = closed_by_sku_day.get((sku, day))
                     if row is None:
                         # Never infer a zero from a missing certification row.
                         missing = True
-                        break
-                    values.append(int(row.unitsSold if hasattr(row, "unitsSold") else row["unitsSold"]))
+                        observed_series.append({"date": day.isoformat(), "units": None, "status": "MISSING"})
+                        continue
+                    units = int(row.unitsSold if hasattr(row, "unitsSold") else row["unitsSold"])
+                    values.append(units)
+                    completeness = row.completeness if hasattr(row, "completeness") else row.get("completeness")
+                    status = "PARTIAL" if completeness != "COMPLETE" else ("ZERO" if units == 0 else "CLOSED")
+                    observed_series.append({"date": day.isoformat(), "units": units, "status": status})
             status = "READY" if not missing and len(values) == 28 else ("COLD_START" if sku not in self.dataset.product_by_sku else "INSUFFICIENT_HISTORY")
             record = {"scenarioId": v3_forecast.SCENARIO_ID, "sku": sku, "status": status,
                       "cutoffDate": cutoff.isoformat(), "timezone": "America/Lima",
@@ -164,6 +176,8 @@ class LiveForecastAdapter:
                       "forecastSource": "MOVING_AVERAGE_28", "strategyVersion": v3_baseline_bundle.STRATEGY_VERSION,
                       "observationsThrough": through.isoformat(), "forecastStartDate": cutoff.isoformat(),
                       "confidence": None, "predictionInterval": None}
+            if request.includeObservedSeries:
+                record["observedSeries"] = observed_series
             for h in v3_forecast.PRIMARY_HORIZONS:
                 record[f"expectedUnitsNext{h}d"] = h * (sum(values) / 28) if status == "READY" else None
             if status == "READY":

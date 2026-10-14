@@ -107,7 +107,7 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
       late_share: ['punctuality', 'delayRatePct'], delays: ['punctuality', 'delayedOrderCount'],
       dependency: ['exclusiveOfferedSkuCount']
     }[args.metric] : null;
-    for (const field of ['mode', 'metric', 'offset', 'risk', 'abc', 'xyz', 'flag', 'segment', 'entityType', 'categoryCode', 'subcategoryCode', 'horizonDays']) {
+    for (const field of ['mode', 'metric', 'offset', 'risk', 'abc', 'xyz', 'flag', 'segment', 'entityType', 'categoryCode', 'subcategoryCode', 'horizonDays', 'includeObservedSeries']) {
       if (args[field] !== undefined) request[field] = args[field];
     }
     if (supplierOrder) {
@@ -226,7 +226,9 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
     if (data.kpis && ['revenueCents', 'unitsSold', 'ticketCount'].some(key => !Number.isFinite(data.kpis[key]))) throw unavailable();
     if (spec.domain === 'inventory' && responseItems.some(row => !isPlainObject(row.stock) || !Number.isFinite(row.stock.onHand)
       || !isPlainObject(row.recommendation) || !Number.isSafeInteger(row.recommendation.recommendedQty) || !isPlainObject(row.risk))) throw unavailable();
-    if (spec.domain === 'forecast' && responseItems.some(row => !Number.isFinite(row[`expectedUnitsNext${request.horizonDays || 7}d`]))) throw unavailable();
+    if (spec.domain === 'forecast' && responseItems.some(row => row.status === 'READY'
+      ? !Number.isFinite(row[`expectedUnitsNext${request.horizonDays || 7}d`])
+      : !['COLD_START', 'INSUFFICIENT_HISTORY'].includes(row.status))) throw unavailable();
     if (count > invocation.skill.maxRecords || Array.isArray(data.items) && count > request.limit) throw unavailable();
     if (supplierOrder) {
       const value = row => supplierOrder.reduce((result, field) => result?.[field], row);
@@ -239,6 +241,9 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
     }
     return { status: body.status === 'PARTIAL' ? 'PARTIAL' : count ? 'READY' : 'NO_DATA', data,
       metadata: { asOf: meta.asOfDate, dataMode: request.dataMode,
+        ...(request.dataMode === 'LIVE' ? { updatedAt: liveSnapshot.snapshot.metadata.capturedAtUtc,
+          dataThrough: liveSnapshot.snapshot.metadata.dataThroughUtc || null,
+          observationsClosedThrough: liveSnapshot.snapshot.metadata.observationsClosedThrough } : {}),
         ...(request.dataMode === 'LIVE' ? { dataVersion: String(meta.dataVersion), snapshotHash: meta.snapshotHash } : {}),
         ...(domain === 'cross-sell' ? { freshness: 'FROZEN_HISTORICAL', frozenCutoff: V3.historicalCutoff } : {}),
         period: request.period, returnedCount: count, totalMatches: data.total ?? count,

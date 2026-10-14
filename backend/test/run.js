@@ -11,6 +11,7 @@ require('./cors.test');
 require('./inventoryMovement.test');
 require('./mlServiceClient.test');
 require('./v3Intelligence.test');
+require('./v3BusinessIntelligenceDashboard.test');
 require('./demandForecastService.test');
 require('./transactionsRoutes.test');
 require('./agents.test');

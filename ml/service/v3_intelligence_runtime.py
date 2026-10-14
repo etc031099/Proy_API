@@ -6,7 +6,7 @@ import json
 import os
 import time
 from collections import OrderedDict, deque
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -566,6 +566,21 @@ class V3IntelligenceRuntime:
         def calculate():
             rows = v3_baseline_bundle.predict_many(self.dataset, skus=skus, cutoff=cutoff)
             rows = [row for row in rows if row["status"] == "READY"]
+            if request.mode == "detail" and request.includeObservedSeries:
+                for row in rows:
+                    history = self.dataset.inventory.get(row["sku"], {})
+                    series = []
+                    for offset in range(27, -1, -1):
+                        day = cutoff - timedelta(days=offset)
+                        observed = history.get(day.isoformat())
+                        if observed is None:
+                            series.append({"date": day.isoformat(), "units": None, "status": "MISSING"})
+                        else:
+                            units = int(observed["unitsSold"])
+                            status = ("PARTIAL" if observed.get("completeness") == "PARTIAL"
+                                      else "ZERO" if units == 0 else "CLOSED")
+                            series.append({"date": day.isoformat(), "units": units, "status": status})
+                    row["observedSeries"] = series
             key = f"expectedUnitsNext{request.horizonDays}d"
             if request.mode == "rank":
                 rows.sort(key=lambda row: (-(row.get(key) or 0), row["sku"]))

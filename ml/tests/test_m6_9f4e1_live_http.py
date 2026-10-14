@@ -101,7 +101,8 @@ class M69F4E1LiveHttpTests(unittest.TestCase):
 
     def test_forecast_live_http_horizons_match_direct_and_reject_28d(self):
         for horizon in (1, 7, 14):
-            body = _live_body(self.runtime, mode="detail", skus=["PAN-FRE-001"], horizonDays=horizon)
+            body = _live_body(self.runtime, mode="detail", skus=["PAN-FRE-001"], horizonDays=horizon,
+                              includeObservedSeries=True)
             direct = self._direct_context("forecast", body)
             response = self.client.post("/v3/intelligence/forecast", headers=self.headers, json=body)
             self.assertEqual(response.status_code, 200, response.text)
@@ -112,6 +113,8 @@ class M69F4E1LiveHttpTests(unittest.TestCase):
             self.assertEqual(row["status"], "READY")
             self.assertEqual(row["forecastSource"], "MOVING_AVERAGE_28")
             self.assertIsNotNone(row[f"expectedUnitsNext{horizon}d"])
+            self.assertEqual(len(row["observedSeries"]), 28)
+            self.assertEqual(row["observedSeries"][-1], {"date": "2026-10-13", "units": 0, "status": "ZERO"})
 
         unsupported = _live_body(self.runtime, mode="detail", skus=["PAN-FRE-001"], horizonDays=28)
         response = self.client.post("/v3/intelligence/forecast", headers=self.headers, json=unsupported)
@@ -240,12 +243,15 @@ class M69F4E1LiveHttpTests(unittest.TestCase):
         raw["metadata"]["dataVersion"] = "2"
         body["requestId"] = "m69f4e1-cold-start"
         body["skus"] = ["P2"]
+        body["includeObservedSeries"] = True
         body["operationalSnapshot"] = signed_snapshot(raw).model_dump(mode="json")
         response = self.client.post("/v3/intelligence/forecast", headers=self.headers, json=body)
         self.assertEqual(response.status_code, 200, response.text)
         row = response.json()["data"]["items"][0]
         self.assertEqual(row["status"], "COLD_START")
         self.assertIsNone(row["expectedUnitsNext7d"])
+        self.assertEqual(row["observedSeries"][-1], {"date": "2026-10-13", "units": 0, "status": "ZERO"})
+        self.assertTrue(any(point["status"] == "MISSING" and point["units"] is None for point in row["observedSeries"]))
 
     def test_historical_forecast_inventory_and_health_http_match_direct_runtime(self):
         context = {"businessId": BUSINESS_ID, "scenarioId": SCENARIO_ID,
@@ -253,7 +259,7 @@ class M69F4E1LiveHttpTests(unittest.TestCase):
                    "timezone": TIMEZONE, "asOfDate": REFERENCE_DATE.isoformat()}
         cases = (
             ("forecast", "/v3/intelligence/forecast",
-             {"mode": "detail", "skus": ["PAN-FRE-001"], "horizonDays": 7}),
+             {"mode": "detail", "skus": ["PAN-FRE-001"], "horizonDays": 7, "includeObservedSeries": True}),
             ("inventory", "/v3/intelligence/inventory",
              {"mode": "detail", "skus": ["PAN-FRE-001"]}),
             ("health", "/v3/intelligence/health", {}),
@@ -274,6 +280,8 @@ class M69F4E1LiveHttpTests(unittest.TestCase):
             self.assertEqual(result["data"], json.loads(json.dumps(direct, ensure_ascii=False,
                                                                   allow_nan=False, default=str)))
             self.assertEqual(result["metadata"]["source"], "CANONICAL_V3_BUNDLE")
+            if domain == "forecast":
+                self.assertEqual(len(result["data"]["items"][0]["observedSeries"]), 28)
 
 
 if __name__ == "__main__":
