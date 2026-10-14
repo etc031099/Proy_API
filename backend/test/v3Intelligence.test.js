@@ -92,6 +92,24 @@ test('V3 operational date ignores server date and preserves period in business-o
   assert.equal(routeV3('Y por categoría', state, binding).tasks[0].args.startDate, '2026-09-01');
   assert.equal(routeV3('Qué productos están críticos', state, binding).tasks[0].args.startDate, undefined);
 });
+test('V3 cloud business temporal followup preserves family but not product filters', async () => {
+  const f = fixture(), cid = randomUUID(); zero(await f.run('Cuánto vendí hoy', cid));
+  zero(await f.run('¿Y ayer?', cid));
+  assert.equal(f.calls.at(-1).domain, 'business');
+  assert.deepEqual(f.calls.at(-1).payload.period, { startDate: '2026-10-11', endDate: '2026-10-11' });
+  assert.equal(f.calls.at(-1).payload.skus, undefined);
+  assert.equal(routeV3('¿Y ayer?', {}, binding), null);
+});
+test('V3 cloud product supplier question keeps product filter and does not inherit supplier ranking', async () => {
+  const f = fixture(), cid = randomUUID(); zero(await f.run('Cuánto debería pedir de PAN-FRE-001', cid));
+  zero(await f.run('¿Qué proveedor lo vende?', cid));
+  assert.equal(f.calls.at(-1).domain, 'suppliers');
+  assert.deepEqual(f.calls.at(-1).payload.productSkus, ['PAN-FRE-001']);
+  const explicit = routeV3('Qué proveedor vende BEB-GAS-004', { selectedProduct: { key: 'PAN-FRE-001' } }, binding);
+  assert.equal(explicit.tasks[0].args.productRef, 'BEB-GAS-004');
+  const fresh = await f.run('¿Qué proveedor lo vende?'); zero(fresh); assert.equal(fresh.usage.totalSkillCalls, 0);
+  assert.match(fresh.answer, /producto/);
+});
 test('V3 temporal-only forecast does not become entity or sales', () => {
   assert.ok(routeV3('Cuál es la predicción de ayer', {}, binding).clarificationQuestion);
   assert.equal(routeV3('Y su predicción de ayer', { selectedProduct: { key: 'PAN-FRE-001' } }, binding).tasks[0].args.asOfDate, '2026-10-11');

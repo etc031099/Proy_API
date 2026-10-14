@@ -31,6 +31,15 @@ const routeV3 = (message, state, binding) => {
     return { clarificationQuestion: '¿De qué producto deseas consultar el pronóstico? No hay un pronóstico previo en esta conversación.' };
   }
   if (/confianza|confidence|intervalo.*prediccion/.test(text)) return { clarificationQuestion: 'El pronóstico V3 no expone una confianza exacta ni un intervalo de predicción. WAPE no es una probabilidad de acierto individual.' };
+  if (/^(?:y )?(?:hoy|ayer|anteayer)$/.test(text) && memory.lastFamily === 'get_business_analytics') {
+    const period = queryPeriod(message, binding, memory, true);
+    return period.clarificationQuestion ? period : { tasks: [task('get_business_analytics', { mode: 'summary', metric: 'revenue', ...period })] };
+  }
+  if (/(?:proveedor.*(?:vende|provee)|quien.*(?:provee|abastece))/.test(text)) {
+    const ref = productRef(message) || (/\blo\b/.test(text) ? memory.selectedProduct?.key : null);
+    if (ref) return { tasks: [task('get_supplier_intelligence', { mode: 'rank', productRef: ref })] };
+    if (/\blo\b/.test(text)) return { clarificationQuestion: '¿De qué producto deseas consultar los proveedores?' };
+  }
   if (/^por que/.test(text) && /proveedor/.test(text)) return null;
   if (/alternativas|alternativo/.test(text) && /proveedor/.test(text)) {
     const ref = productRef(message) || trimRef(message.match(/para\s+(.+)$/i)?.[1]) || memory.selectedProduct?.key;
