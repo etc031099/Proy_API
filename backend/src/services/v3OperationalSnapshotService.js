@@ -103,33 +103,51 @@ async function bumpV3OperationalRevision({ businessId, session, changes = [], ef
 // This is an explicit pre-LIVE gate, never called by ordinary reads/writes.
 // It establishes conceptual revision zero only when post-cutoff operational data is absent.
 async function bootstrapV3OperationalRevision({ businessId, attestNoUnjournaledBaseCatalogChanges = false }) {
-  await resolveV3OperationalScenario(businessId);
+  const session = await mongoose.startSession();
+  try {
+    session.startTransaction({ readConcern: { level: 'snapshot' }, readPreference: 'primary', writeConcern: { w: 'majority' } });
+    const revision = await bootstrapV3OperationalRevisionInSession({ businessId, attestNoUnjournaledBaseCatalogChanges, session });
+    await session.commitTransaction();
+    return revision;
+  } catch (error) {
+    if (session.inTransaction()) await session.abortTransaction();
+    throw error;
+  } finally {
+    await session.endSession();
+  }
+}
+
+async function bootstrapV3OperationalRevisionInSession({ businessId, attestNoUnjournaledBaseCatalogChanges, session }) {
+  await resolveV3OperationalScenario(businessId, { session });
   const revision = await V3OperationalRevision.findById(businessId)
+    .session(session)
     .setOptions({ useBigInt64: true }).lean().maxTimeMS(5000);
   if (revision?.bootstrapStatus === 'VERIFIED' && revision.historicalDatasetVersion === config.datasetVersion
       && revision.historicalDatasetSha256 === config.sourceSha256) return revision;
   if (revision && revision.revision !== 0n) throw fail('SNAPSHOT_BOOTSTRAP_AMBIGUOUS', 'Operational revision is already non-zero but is not verified; an audited capture is required.', 409);
   const start = limaDayStart(config.deltaStart);
-  const scenario = await HistoricalScenario.findOne({ businessId, scenarioId: config.scenarioId, status: 'completed' }).lean().maxTimeMS(5000);
   const checks = [
     Transaction.countDocuments({ businessId, date: { $gte: start }, scenarioId: { $ne: config.scenarioId } }),
     InventoryMovement.countDocuments({ businessId, occurredAt: { $gte: start }, source: { $ne: 'historical_import' } }),
     Product.countDocuments({ businessId, createdAt: { $gte: start }, scenarioId: { $ne: config.scenarioId } }),
-    Contact.countDocuments({ businessId, createdAt: { $gte: start }, scenarioId: { $ne: config.scenarioId } })
+    Contact.countDocuments({ businessId, createdAt: { $gte: start }, scenarioId: { $ne: config.scenarioId } }),
+    V3OperationalChange.countDocuments({ businessId })
   ];
-  const counts = await Promise.all(checks);
+  const counts = [];
+  // A transactional session must not execute parallel queries.
+  for (const query of checks) counts.push(await query.session(session).maxTimeMS(5000));
   if (counts.some(Boolean)) throw fail('SNAPSHOT_BOOTSTRAP_AMBIGUOUS', 'Post-cutoff writes or catalog edits predate revision journaling; LIVE bootstrap is blocked pending an audited capture.', 409);
-  const [baseProducts, baseContacts] = await Promise.all([
-    Product.countDocuments({ businessId, scenarioId: config.scenarioId, sourceEventId: { $type: 'string' } }),
-    Contact.countDocuments({ businessId, scenarioId: config.scenarioId, sourceEventId: { $type: 'string' } })
-  ]);
+  const baseProducts = await Product.countDocuments({ businessId, scenarioId: config.scenarioId, sourceEventId: { $type: 'string' } })
+    .session(session).maxTimeMS(5000);
+  const baseContacts = await Contact.countDocuments({ businessId, scenarioId: config.scenarioId, sourceEventId: { $type: 'string' } })
+    .session(session).maxTimeMS(5000);
   if ((baseProducts || baseContacts) && !attestNoUnjournaledBaseCatalogChanges) {
     throw fail('SNAPSHOT_BOOTSTRAP_ATTESTATION_REQUIRED', 'Historical import timestamps cannot prove whether base catalog rows changed after cutoff; an explicitly authorized no-un-journaled-change attestation is required.', 409);
   }
   try {
     return await V3OperationalRevision.findOneAndUpdate({ _id: businessId, revision: 0n }, {
       $set: { revision: 0n, bootstrapStatus: 'VERIFIED', historicalDatasetVersion: config.datasetVersion, historicalDatasetSha256: config.sourceSha256 }
-    }, { upsert: true, new: true, runValidators: true })
+    }, { upsert: true, new: true, runValidators: true, session })
       .setOptions({ useBigInt64: true }).lean().maxTimeMS(5000);
   } catch (error) {
     if (error.code === 11000) throw fail('SNAPSHOT_BOOTSTRAP_RACE', 'V3 operational bootstrap raced another initializer; retry the bootstrap check.', 409);
