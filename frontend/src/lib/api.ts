@@ -1,4 +1,5 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
+import type { ForecastEvaluation } from '@/types/forecastEvaluation';
 import { ApiResponse, DemandForecastResponse, DemoV2RegisterData, DemoV3RegisterData } from '@/types';
 import type { AgentMessageRequest, AgentResponse, AgentConversationList, AgentConversationDetail } from '@/types/agent';
 import type { AnalyticsEnvelope, AssociationsAnalytics, BusinessHealthAnalytics, BusinessSummary, CustomerAnalyticsDetail, CustomersAnalytics, ForecastResponse, InventorySummary, ProductInventory, ProductOption, RelatedProductAnalytics, SalesAnalytics, SalesPeriod, SupplierAnalyticsDetail, SuppliersAnalytics } from '@/types/businessIntelligence';
@@ -414,6 +415,11 @@ class ApiClient {
   async getBusinessIntelligenceForecast(sku: string, horizonDays: 1 | 7 | 14): Promise<ApiResponse<ForecastResponse> & { code?: string }> {
     const response = await this.instance.get(`/intelligence/products/${encodeURIComponent(sku)}/forecast`, { params: { horizonDays } });
     return response.data as ApiResponse<ForecastResponse> & { code?: string };
+  }
+
+  async getForecastModelEvaluation(): Promise<ApiResponse<ForecastEvaluation> & { code?: string }> {
+    const response = await this.instance.get('/intelligence/forecast/evaluation');
+    return response.data as ApiResponse<ForecastEvaluation> & { code?: string };
   }
 
   async getBusinessIntelligenceProductInventory(sku: string): Promise<ApiResponse<ProductInventory> & { code?: string }> {

@@ -54,7 +54,9 @@ async function openForecast() {
 }
 
 describe('business intelligence dashboard', () => {
-  beforeEach(() => { vi.restoreAllMocks(); mockOverview(); });
+  beforeEach(() => { vi.restoreAllMocks(); mockOverview();
+    vi.spyOn(apiClient, 'getForecastModelEvaluation').mockRejectedValue(new Error('Evaluation not part of these LIVE fixtures'));
+  });
 
   it('renames the navigation label and presents the new page title', async () => {
     render(<BusinessIntelligenceDashboard />);
@@ -143,7 +145,7 @@ describe('business intelligence dashboard', () => {
     render(<BusinessIntelligenceDashboard />);
     expect(await screen.findByRole('table', { name: 'Ranking de riesgo y reposición' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /Pan francés.*PAN-FRE-001/ }));
-    expect(await screen.findByText('Método:')).toBeTruthy();
+    expect(await screen.findByText('Método seleccionado:')).toBeTruthy();
     expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenCalledWith('PAN-FRE-001', 7);
   });
 
