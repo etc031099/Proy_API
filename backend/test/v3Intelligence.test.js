@@ -10,6 +10,7 @@ const { createAgentRequestContext } = require('../src/agents/contracts');
 const { createMlServiceClient } = require('../src/services/mlServiceClient');
 const { publicResponse } = require('../src/services/agentHistoryProjection');
 const { resolveOperationalPeriod } = require('../src/agents/intentRouting');
+const { operationalDate, createOperationalClock } = require('../src/utils/operationalClock');
 const id = n => n.toString(16).padStart(24, '0');
 const req = (businessId = V3.businessId, user = 999) => ({ businessId, user: { _id: id(user), businessId, isActive: true, role: 'user' } });
 const binding = { ...V3, asOfDate: V3.referenceDate };
@@ -23,8 +24,9 @@ const contactRows = [...customers.map((row, i) => ({ _id: id(101 + i), name: row
 const scenario = { businessId: V3.businessId, scenarioId: V3.scenarioId, status: 'completed', sourceSha256: V3.datasetSha256,
   metadata: { datasetVersion: V3.datasetVersion, referenceDate: V3.referenceDate, timezone: V3.timezone } };
 function query(value) { return { select() { return this; }, sort() { return this; }, limit() { return this; }, lean() { return this; }, maxTimeMS() { return Promise.resolve(value); } }; }
-function fixture({ corrupt, failed, record = scenario } = {}) {
-  const calls = [], reads = [];
+function fixture({ corrupt, failed, record = scenario, clock = () => new Date('2026-10-12T18:00:00.000Z'), snapshotBuilder,
+  zeroSalesDates = [] } = {}) {
+  const calls = [], reads = [], events = [];
   const models = {
     HistoricalScenario: { findOne: filter => { reads.push(filter); return query(record); } },
     Product: { find: filter => { reads.push(filter); return query(productRows.filter(row => row.businessId === filter.businessId && row.scenarioId === filter.scenarioId)); } },
@@ -35,14 +37,17 @@ function fixture({ corrupt, failed, record = scenario } = {}) {
     calls.push({ domain, payload, signal: options.signal });
     if (failed) { const error = new Error('private driver details'); error.functionalCode = failed; throw error; }
     const skus = payload.skus || productRows.slice(0, 5).map(row => row.sku);
-    const inventory = sku => ({ sku, productName: productRows.find(row => row.sku === sku)?.name, stock: { onHand: 4, incoming: 12 },
+    const inventory = sku => ({ sku, productName: productRows.find(row => row.sku === sku)?.name,
+      stock: { onHand: payload.dataMode === 'LIVE' ? 21 - Number(payload.operationalSnapshot.metadata.dataVersion) : 4, incoming: 12 },
       coverage: { daysCover: 2.2 }, risk: { level: 'CRITICAL', reasonCodes: ['STOCKOUT_RISK'] }, recommendation: { recommendedQty: 9, shouldReorder: true }, supplier: { preferredSupplierCode: 'SUP-05' } });
     const customer = code => ({ customerCode: code, displayName: contactRows.find(row => row.stableCode === code)?.name, segment: 'AT_RISK',
       lastPurchaseDate: '2026-10-10', ticketCount: 10, totalSpentCents: 12345, averageTicketCents: 1234.5, preferences: { categories: [{ name: 'Bebidas' }] } });
     const supplier = code => ({ supplierCode: code, displayName: contactRows.find(row => row.stableCode === code)?.name,
       purchaseOrderCount: 22, receivedSpendCents: 67890, leadTime: { averageDays: code === 'SUP-05' ? 4 : 2, sampleSize: 20 }, punctuality: { onTimeRatePct: 80, delayedOrderCount: code === 'SUP-05' ? 5 : 1, delayRatePct: code === 'SUP-05' ? 25 : 5 }, exclusiveOfferedSkuCount: code === 'SUP-05' ? 2 : 1,
       productsSupplied: [{ sku: 'PAN-FRE-001', name: 'Pan francés' }] });
-    const kpis = { revenueCents: 50000, unitsSold: 100, ticketCount: 20, averageTicket: 25, grossMarginPct: 21 };
+    const zeroPeriod = payload.period && payload.period.startDate === payload.period.endDate && zeroSalesDates.includes(payload.period.startDate);
+    const kpis = zeroPeriod ? { revenueCents: 0, unitsSold: 0, ticketCount: 0, averageTicket: 0, grossMarginPct: null }
+      : { revenueCents: 50000, unitsSold: 100, ticketCount: 20, averageTicket: 25, grossMarginPct: 21 };
     let data;
     if (domain === 'business') data = payload.mode === 'rank' ? payload.entityType === 'category'
       ? { items: [{ categoryCode: 'BEB', metric: 23, metricName: 'units' }], total: 10 }
@@ -53,18 +58,27 @@ function fixture({ corrupt, failed, record = scenario } = {}) {
     if (domain === 'customers') data = { items: (payload.customerCode ? [payload.customerCode] : customers.slice(0, 5).map(row => row.customerCode)).map(customer), total: payload.customerCode ? 1 : 40,
       ...(payload.period ? { periodMetrics: { [payload.customerCode || 'CLI-001']: { revenueCents: 9876 } } } : {}) };
     if (domain === 'suppliers') data = { items: (payload.supplierCode ? [payload.supplierCode] : ['SUP-05', 'SUP-01']).map(supplier), total: payload.supplierCode ? 1 : 10 };
-    if (domain === 'health') data = { businessHealth: { sales: { kpis }, customers: { atRiskCount: 3 }, inventory: { critical: 5 }, suppliers: { summary: { suppliers: 10 } }, marketBasket: { stableCrossSellRuleCount: 33 } }, alerts: [] };
+    if (domain === 'health') data = { businessHealth: { sales: { kpis }, customers: { atRiskCount: 3 }, inventory: { critical: 5 }, suppliers: { summary: { suppliers: 10 } }, marketBasket: { stableCrossSellRuleCount: 33, freshness: { mode: 'HISTORICAL', analysisCutoff: V3.historicalCutoff } } }, alerts: [] };
     if (data.items) data.items = data.items.slice(0, payload.limit);
-    const result = { requestId: payload.requestId, status: 'OK', data, metadata: { ...payload.context, contractVersion: 'm6.9b-v3-intelligence-v1', source: 'CANONICAL_V3_BUNDLE' } };
+    const live = payload.dataMode === 'LIVE';
+    const result = { requestId: payload.requestId, status: 'OK', data, metadata: { ...payload.context,
+      contractVersion: live ? 'm6.9f4-live-intelligence-v1' : 'm6.9b-v3-intelligence-v1',
+      source: live ? 'HISTORICAL_PLUS_OPERATIONAL_SNAPSHOT' : 'CANONICAL_V3_BUNDLE',
+      ...(live ? { dataVersion: payload.operationalSnapshot.metadata.dataVersion,
+        snapshotHash: payload.operationalSnapshot.metadata.snapshotHash } : {}) } };
     return corrupt ? corrupt(result) : result;
   } };
-  const service = createV3IntelligenceService({ models, mlClient });
-  const orchestrator = createAgentOrchestrator({ memory: createConversationMemory(), dependencies: { v3Service: service },
+  const buildSnapshot = snapshotBuilder || (async ({ businessId, asOfDate }) => ({ mode: 'LIVE', dataVersion: '4', snapshot: { metadata: {
+    snapshotVersion: 'v3-operational-snapshot-v2', businessId, scenarioId: V3.scenarioId, asOfDate, dataVersion: '4', snapshotHash: 'f'.repeat(64)
+  } } }));
+  const service = createV3IntelligenceService({ models, mlClient, clock, snapshotBuilder: buildSnapshot });
+  const orchestrator = createAgentOrchestrator({ memory: createConversationMemory(), clock, onEvent: event => events.push(event), dependencies: { v3Service: service, clock },
     provider: { generateStructured() { throw new Error('Unexpected LLM'); }, generateWithTools() { throw new Error('Unexpected LLM'); } } });
   const run = (message, conversationId = randomUUID(), request = req()) => orchestrator.handle(request, { message, conversationId });
-  return { service, orchestrator, calls, reads, run };
+  return { service, orchestrator, calls, reads, events, run };
 }
-const zero = result => { assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0); assert.equal(result.code, null); assert.ok(!result.pendingAction); };
+const zero = result => { assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
+  assert.equal(result.code, null, JSON.stringify({ answer: result.answer, code: result.code, diagnostics: result.diagnostics })); assert.ok(!result.pendingAction); };
 
 const banks = {
   get_business_analytics: ['Cuánto vendí esta semana', 'Cómo van mis ventas', 'Cuántos tickets tengo', 'Qué categoría me deja más margen', 'Cuál fue mi producto más vendido', 'Vendí más que la semana pasada', 'Ventas hoy', 'Ventas ayer', 'Ventas anteayer', 'Ventas últimos 7 días', 'Ventas últimos 30 días', 'Ventas este mes', 'Ventas mes pasado', 'Ingresos este mes', 'Resumen de ventas', 'Margen bruto de ventas', 'Ranking de ventas', 'Top de ventas', 'Ventas por categoría', 'Ventas del 2026-10-01 al 2026-10-12'],
@@ -86,6 +100,138 @@ test('V3 business date and generalization keep entities out of general sales', (
   assert.equal(plan.tasks[0].args.startDate, '2026-10-12'); assert.equal(plan.tasks[0].args.productRef, undefined);
   assert.equal(resolveOperationalPeriod('ayer', V3.referenceDate).period.startDate, '2026-10-11');
   assert.equal(routeV3('Cuánto vendí entre el 1 y el 5', {}, binding).tasks, undefined);
+});
+test('F.5A operational clock resolves Lima today, yesterday and rolling seven days without moving the cutoff', async () => {
+  const clock = () => new Date('2026-10-14T17:30:00.000Z');
+  const f = fixture({ clock });
+  const binding = await f.service.resolveContext(createAgentRequestContext(req()));
+  assert.equal(binding.operationalDate, '2026-10-14');
+  const today = routeV3('¿Cuánto vendí hoy?', {}, binding).tasks[0];
+  assert.deepEqual([today.args.startDate, today.args.endDate], ['2026-10-14', '2026-10-14']);
+  const yesterday = routeV3('¿Cuánto vendí ayer?', {}, binding).tasks[0];
+  assert.deepEqual([yesterday.args.startDate, yesterday.args.endDate], ['2026-10-13', '2026-10-13']);
+  const last7 = routeV3('Ventas de los últimos 7 días', {}, binding).tasks[0];
+  assert.deepEqual([last7.args.startDate, last7.args.endDate], ['2026-10-08', '2026-10-14']);
+  const historical = routeV3('Ventas del 2026-10-10', {}, binding).tasks[0];
+  assert.deepEqual([historical.args.startDate, historical.args.endDate], ['2026-10-10', '2026-10-10']);
+  assert.equal(operationalDate(new Date('2026-10-15T04:59:00.000Z')), '2026-10-14');
+  assert.equal(operationalDate(new Date('2026-10-15T05:01:00.000Z')), '2026-10-15');
+  assert.match(createOperationalClock({ clock, timeZone: 'America/Lima' }).datetime(), /^2026-10-14 12:30:00$/);
+});
+test('F.5A live reads build an authenticated v2 snapshot, preserve hybrid periods, and bind the returned revision', async () => {
+  const built = [], f = fixture({ clock: () => new Date('2026-10-14T17:30:00.000Z'), snapshotBuilder: async input => {
+    built.push(input); return { mode: 'LIVE', dataVersion: String(built.length), snapshot: { metadata: {
+      snapshotVersion: 'v3-operational-snapshot-v2', businessId: input.businessId, scenarioId: V3.scenarioId,
+      asOfDate: input.asOfDate, dataVersion: String(built.length), snapshotHash: String(built.length).padStart(64, 'a')
+    } } };
+  } });
+  const today = await f.run('¿Cuánto vendí hoy?'); zero(today);
+  const todayRequest = f.calls.at(-1).payload;
+  assert.equal(todayRequest.dataMode, 'LIVE'); assert.equal(todayRequest.context.asOfDate, '2026-10-14');
+  assert.equal(todayRequest.operationalSnapshot.metadata.dataVersion, '1');
+  assert.deepEqual(todayRequest.period, { startDate: '2026-10-14', endDate: '2026-10-14' });
+  assert.equal(today.v3Views[0].title, 'Resumen del negocio');
+  const range = await f.run('Ventas de los últimos 7 días'); zero(range);
+  assert.deepEqual(f.calls.at(-1).payload.period, { startDate: '2026-10-08', endDate: '2026-10-14' });
+  assert.equal(Object.hasOwn(f.calls.at(-1).payload, 'productSku'), false);
+  assert.equal(f.calls.at(-1).payload.context.asOfDate, '2026-10-14');
+  assert.equal(range.v3Views[0].metrics.some(metric => metric.label === 'Ventas'), true);
+  assert.equal(built[0].businessId, V3.businessId); assert.equal(built[0].asOfDate, '2026-10-14');
+  assert.equal(built[0].now.toISOString(), '2026-10-14T17:30:00.000Z');
+});
+test('F.5A zero-sales today and yesterday stay on their own LIVE dates, without cutoff fallback', async () => {
+  const f = fixture({ clock: () => new Date('2026-10-14T17:30:00.000Z'), zeroSalesDates: ['2026-10-13', '2026-10-14'] });
+  for (const [message, day] of [['¿Cuánto vendí hoy?', '2026-10-14'], ['¿Cuánto vendí ayer?', '2026-10-13']]) {
+    const result = await f.run(message); zero(result);
+    const payload = f.calls.at(-1).payload;
+    assert.equal(payload.dataMode, 'LIVE'); assert.equal(payload.context.asOfDate, day);
+    assert.deepEqual(payload.period, { startDate: day, endDate: day });
+    assert.equal(result.v3Views[0].metrics.find(metric => metric.label === 'Ventas').value, 'S/ 0.00');
+    assert.doesNotMatch(result.answer, /2026-10-12/);
+  }
+});
+test('F.5A forecast today goes LIVE for the total approved horizon; frozen cutoff remains separate', async () => {
+  const f = fixture({ clock: () => new Date('2026-10-14T17:30:00.000Z') });
+  const result = await f.run('¿Cuál es la predicción de PAN-FRE-001?'); zero(result);
+  const payload = f.calls.at(-1).payload;
+  assert.equal(f.calls.at(-1).domain, 'forecast'); assert.equal(payload.dataMode, 'LIVE');
+  assert.equal(payload.context.asOfDate, '2026-10-14'); assert.equal(payload.horizonDays, 7);
+});
+test('F.5A same-product inventory, forecast and supplier continuations retain entity context in LIVE mode', async () => {
+  const f = fixture({ clock: () => new Date('2026-10-14T17:30:00.000Z') }), cid = randomUUID();
+  const first = await f.run('¿Cuánto stock tiene BEB-GAS-004?', cid); assert.equal(first.code, null, JSON.stringify({ answer: first.answer, calls: f.calls, events: f.events })); zero(first);
+  zero(await f.run('¿Y cuánto venderé en 7 días?', cid));
+  zero(await f.run('¿Qué proveedor lo vende?', cid));
+  assert.deepEqual(f.calls.map(row => row.domain), ['inventory', 'forecast', 'suppliers']);
+  assert.deepEqual(f.calls[0].payload.skus, ['BEB-GAS-004']);
+  assert.deepEqual(f.calls[1].payload.skus, ['BEB-GAS-004']); assert.equal(f.calls[1].payload.horizonDays, 7);
+  assert.deepEqual(f.calls[2].payload.productSkus, ['BEB-GAS-004']);
+  assert.ok(f.calls.every(row => row.payload.dataMode === 'LIVE'));
+});
+test('F.5A Customer and Business Health domains use LIVE snapshots while cross-sell remains frozen', async () => {
+  const f = fixture({ clock: () => new Date('2026-10-14T17:30:00.000Z') });
+  for (const [message, domain] of [['¿Qué clientes están en riesgo?', 'customers'], ['¿Cómo está mi negocio?', 'health']]) {
+    const result = await f.run(message); zero(result);
+    assert.equal(f.calls.at(-1).domain, domain);
+    assert.equal(f.calls.at(-1).payload.dataMode, 'LIVE');
+    assert.equal(f.calls.at(-1).payload.context.asOfDate, '2026-10-14');
+    if (domain === 'health') {
+      assert.match(result.answer, /Market Basket permanece histórico al 2026-10-12/);
+      assert.match(result.v3Views[0].note, /Market Basket permanece histórico al 2026-10-12/);
+    }
+  }
+  const basket = await f.run('¿Qué productos se compran juntos?'); zero(basket);
+  assert.equal(f.calls.at(-1).domain, 'cross-sell');
+  assert.equal(f.calls.at(-1).payload.dataMode, 'HISTORICAL');
+  assert.equal(f.calls.at(-1).payload.context.asOfDate, V3.historicalCutoff);
+});
+test('F.5A bounded Business+Inventory multi-intent preserves the current period and stays deterministic', async () => {
+  let builds = 0;
+  const f = fixture({ clock: () => new Date('2026-10-14T17:30:00.000Z'), snapshotBuilder: async ({ businessId, asOfDate }) => {
+    builds++;
+    return { mode: 'LIVE', dataVersion: '5', snapshot: { metadata: { snapshotVersion: 'v3-operational-snapshot-v2', businessId,
+      scenarioId: V3.scenarioId, asOfDate, dataVersion: '5', snapshotHash: 'e'.repeat(64) } } };
+  } });
+  const result = await f.run('¿Cuánto vendí hoy y qué productos están en riesgo?'); zero(result);
+  assert.deepEqual(f.calls.map(row => row.domain), ['business', 'inventory']);
+  assert.deepEqual(f.calls[0].payload.period, { startDate: '2026-10-14', endDate: '2026-10-14' });
+  assert.ok(f.calls.every(row => row.payload.dataMode === 'LIVE'));
+  assert.equal(builds, 1);
+  assert.equal(f.calls[0].payload.operationalSnapshot.metadata.snapshotHash, f.calls[1].payload.operationalSnapshot.metadata.snapshotHash);
+});
+test('F.5A each READ rebuilds against the latest revision rather than reusing the prior LIVE result', async () => {
+  let revision = 1;
+  const f = fixture({ clock: () => new Date('2026-10-14T17:30:00.000Z'), snapshotBuilder: async ({ businessId, asOfDate }) => {
+    return { mode: 'LIVE', dataVersion: String(revision), snapshot: { metadata: { snapshotVersion: 'v3-operational-snapshot-v2',
+      businessId, scenarioId: V3.scenarioId, asOfDate, dataVersion: String(revision), snapshotHash: String(revision).padStart(64, 'b') } } };
+  } });
+  const first = await f.run('¿Cuánto stock tiene PAN-FRE-001?'); zero(first);
+  const firstVersion = f.calls.at(-1).payload.operationalSnapshot.metadata.dataVersion;
+  assert.equal(first.v3Views[0].items[0].metrics.find(metric => metric.label === 'Stock').value, 20);
+  revision = 2; // Simulated successful WRITE bumps the authoritative revision.
+  const second = await f.run('¿Cuánto stock tiene PAN-FRE-001?'); zero(second);
+  const secondVersion = f.calls.at(-1).payload.operationalSnapshot.metadata.dataVersion;
+  assert.equal(second.v3Views[0].items[0].metrics.find(metric => metric.label === 'Stock').value, 19);
+  assert.notEqual(firstVersion, secondVersion);
+});
+test('F.5A explicit historical reads do not build a snapshot and cross-sell stays frozen at cutoff', async () => {
+  let builds = 0; const f = fixture({ clock: () => new Date('2026-10-14T17:30:00.000Z'),
+    snapshotBuilder: async () => { builds++; throw new Error('must not build'); } });
+  const historical = await f.run('¿Cuántas ventas hubo el 10 de octubre de 2026?'); zero(historical);
+  assert.equal(f.calls.at(-1).payload.dataMode, 'HISTORICAL');
+  assert.equal(f.calls.at(-1).payload.context.asOfDate, '2026-10-10'); assert.equal(builds, 0);
+  const basket = await f.run('¿Qué productos se compran juntos?'); zero(basket);
+  assert.equal(f.calls.at(-1).payload.dataMode, 'HISTORICAL');
+  assert.equal(f.calls.at(-1).payload.context.asOfDate, V3.historicalCutoff); assert.equal(builds, 0);
+  assert.match(basket.v3Views[0].note, /congelado al 2026-10-12/);
+});
+test('F.5A snapshot failure fails closed rather than returning historical cutoff data', async () => {
+  const f = fixture({ clock: () => new Date('2026-10-14T17:30:00.000Z'), snapshotBuilder: async () => {
+    const error = new Error('bootstrap missing'); error.code = 'SNAPSHOT_BOOTSTRAP_REQUIRED'; throw error;
+  } });
+  const result = await f.run('¿Cuánto vendí hoy?'); zero(result);
+  assert.match(result.answer, /todavía no está habilitada.*no usaré el corte histórico/i);
+  assert.equal(f.calls.length, 0);
 });
 test('V3 operational date ignores server date and preserves period in business-only followup', () => {
   const state = { selectedPeriod: { startDate: '2026-09-01', endDate: '2026-09-30' } };

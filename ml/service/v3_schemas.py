@@ -58,8 +58,8 @@ class CostCoverage(FrozenSnapshotSchema):
 
 
 class SnapshotMetadata(FrozenSnapshotSchema):
-    snapshotVersion: Literal["v3-operational-snapshot-v1"]
-    contractVersion: Literal["1"]
+    snapshotVersion: Literal["v3-operational-snapshot-v1", "v3-operational-snapshot-v2"]
+    contractVersion: Literal["1", "2"]
     businessId: str = Field(min_length=1, max_length=100)
     scenarioId: str = Field(min_length=1, max_length=100)
     historicalDatasetVersion: str = Field(min_length=1, max_length=100)
@@ -188,11 +188,20 @@ class LivePurchase(FrozenSnapshotSchema):
     receiptEvidence: Literal["IMMEDIATE_PURCHASE", "DATED_RECEIPT", "NONE"]
     promisedAtUtc: datetime | None
     lines: tuple[PurchaseLine, ...] = Field(min_length=1, max_length=128)
+    contractVersion: Literal[2] | None = None
+    fulfillmentMode: Literal["DEFERRED"] | None = None
+    initialStatus: Literal["pending", "completed", "cancelled"] | None = None
 
 
 class TransactionLineChange(FrozenSnapshotSchema):
     lineKey: str = Field(min_length=1, max_length=200)
     receivedQty: StrictInt | None = Field(default=None, ge=0, le=1_000_000)
+    productKey: str | None = Field(default=None, max_length=160)
+    sku: str | None = Field(default=None, max_length=100)
+    orderedQty: StrictInt | None = Field(default=None, ge=0, le=1_000_000)
+    purchaseUnitCostCents: StrictInt | None = Field(default=None, ge=0, le=1_000_000_000)
+    costBasis: Literal["OBSERVED_RECEIPT_COST", "ORDER_COST", "HISTORICAL_COST", "UNAVAILABLE"] | None = None
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
 
 
 class TransactionChange(FrozenSnapshotSchema):
@@ -205,6 +214,8 @@ class TransactionChange(FrozenSnapshotSchema):
     transactionOrigin: Literal["HISTORICAL", "LIVE"]
     kind: Literal["CANCEL", "RECEIVE"]
     lineChanges: tuple[TransactionLineChange, ...] = Field(max_length=128)
+    receiptKey: str | None = Field(default=None, max_length=200)
+    supplierKey: str | None = Field(default=None, max_length=160)
 
 
 class StockState(FrozenSnapshotSchema):

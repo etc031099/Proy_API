@@ -166,7 +166,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
     const startedAt = performance.now();
     return memory.withConversation(context, async (state, commit) => {
       const v3Service = dependencies?.v3Service || (context.businessId === require('../services/v3IntelligenceService').V3.businessId
-        ? require('../services/v3IntelligenceService').createV3IntelligenceService({ models: dependencies?.models }) : null);
+        ? require('../services/v3IntelligenceService').createV3IntelligenceService({ models: dependencies?.models, clock: dependencies?.clock || clock }) : null);
       const execution = createAgentExecution({ context, onEvent, ...(provider ? { provider } : {}),
         dependencies: { ...dependencies, ...(v3Service ? { v3Service } : {}), clock: dependencies?.clock || clock } });
       const results = [];

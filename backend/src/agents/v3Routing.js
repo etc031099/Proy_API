@@ -5,6 +5,7 @@ const { isObjectId, isDate, validateSkillArgs } = require('./contracts');
 const { ordinalSelection } = require('./ordinalSelection');
 const { normalize } = require('../automations/entityResolution');
 const { resolveOperationalPeriod } = require('./intentRouting');
+const { addCalendarDays } = require('../utils/operationalClock');
 const { contextBinding, TTL_MS } = require('./memory');
 const clean = text => normalize(text).replace(/\bq\b/g, 'que').replace(/\bd\b/g, 'de')
   .replace(/\bprodcutos\b/g, 'productos').replace(/\bstan\b/g, 'estan').replace(/\breposision\b/g, 'reposicion');
@@ -16,11 +17,13 @@ const trimRef = text => {
 const productRef = message => message.match(/\b(?:[A-Z]{2,}(?:-[A-Z0-9]+){1,5}|M5-[A-Z]+_\d+_\d+)\b/)?.[0]
   || trimRef(message.match(/(?:\bde(?:l)?|junto con|junto a|con)\s+(.+?)(?:\s+y\s+|$)/i)?.[1]);
 const task = (skillId, args = {}, extra = {}) => ({ skillId, agent: V3_SKILLS[skillId].agents[0], args: { limit: 5, ...args }, ...extra });
+const operationalDateOf = binding => binding.operationalDate || binding.asOfDate;
 const queryPeriod = (message, binding, memory, followup = false) => {
-  const parsed = resolveOperationalPeriod(message, binding.asOfDate);
+  const operationalDate = operationalDateOf(binding);
+  const parsed = resolveOperationalPeriod(message, operationalDate);
   if (parsed.clarificationQuestion) return parsed;
   if (followup && !parsed.explicit && memory.selectedPeriod) parsed.period = memory.selectedPeriod;
-  if (parsed.period.endDate > binding.asOfDate || parsed.period.startDate < '2025-10-13') return { clarificationQuestion: 'El periodo debe estar dentro del histórico del escenario y no superar su fecha operativa.' };
+  if (parsed.period.endDate > operationalDate || parsed.period.startDate < '2025-10-13') return { clarificationQuestion: 'El periodo debe estar dentro del histórico disponible y no superar la fecha operativa actual.' };
   return { startDate: parsed.period.startDate, endDate: parsed.period.endDate };
 };
 
@@ -52,6 +55,18 @@ const routeV3 = (message, state, binding) => {
   if (/^por que (?:ocurre|pasa) (?:esto|eso)$/.test(text) && memory.lastFamily) return { clarificationQuestion: 'Estos datos muestran hechos y asociaciones observadas; no permiten demostrar su causa. Puedo comparar periodos o ampliar un dominio.' };
   // Only the three approved compound forms; no unbounded general planner.
   if (/ y /.test(text)) {
+    if (/stock/.test(text) && /pronostic|prediccion|forecast|demanda|vendere/.test(text)) {
+      const ref = productRef(message) || memory.selectedProduct?.key;
+      if (!ref) return { clarificationQuestion: '¿De qué producto deseas consultar el stock y el pronóstico?' };
+      const forecast = routeV3(message, memory, binding);
+      if (!forecast?.tasks?.some(row => row.skillId === 'get_product_forecast')) return { clarificationQuestion: 'Indica si deseas el pronóstico de 1, 7 o 14 días.' };
+      return { tasks: [task('get_inventory_intelligence', { mode: 'detail', productRef: ref }), ...forecast.tasks] };
+    }
+    if (/vend[ií]|ventas/.test(text) && /riesgo|critic|agot/.test(text)) {
+      const parts = message.split(/\s+y\s+/i);
+      const first = routeV3(parts[0], memory, binding), second = routeV3(parts.slice(1).join(' y '), memory, binding);
+      if (first?.tasks && second?.tasks) return { tasks: [...first.tasks, ...second.tasks] };
+    }
     if (/vend[ií]|ventas/.test(text) && /reponer|reposicion/.test(text)) {
       const parts = message.split(/\s+y\s+/i);
       const first = routeV3(parts[0], memory, binding), second = routeV3(parts.slice(1).join(' y '), memory, binding);
@@ -99,7 +114,7 @@ const routeV3 = (message, state, binding) => {
     if (/tarda mas|demora mas|mas retras/.test(text)) args.sortDirection = 'desc';
     if (/menor|menos|rapido/.test(text)) args.sortDirection = 'asc';
     if (/que productos/.test(text) && !selected) return null; // ordinary supplier product resolution
-    const parsed = resolveOperationalPeriod(message, binding.asOfDate);
+    const parsed = resolveOperationalPeriod(message, operationalDateOf(binding));
     if (parsed.clarificationQuestion) return parsed;
     if (parsed.explicit) Object.assign(args, parsed.period);
     return { tasks: [task('get_supplier_intelligence', args)] };
@@ -119,10 +134,16 @@ const routeV3 = (message, state, binding) => {
     const args = { mode: ref ? 'detail' : /mayor|mas|top/.test(text) ? 'rank' : 'summary', horizonDays: horizon, ...(ref ? { productRef: ref } : {}) };
     const compare = /compar/.test(text) && message.match(/(?:demanda|forecast|predicci[oó]n|pron[oó]stico)\s+(?:de\s+)?(.+)\s+y\s+(.+)$/i);
     if (compare) { delete args.productRef; args.mode = 'compare'; args.productRefs = [trimRef(compare[1]), trimRef(compare[2])].join('|'); }
-    if (/ayer/.test(text)) args.asOfDate = new Date(Date.parse(binding.asOfDate) - 86400000).toISOString().slice(0, 10);
+    if (/ayer/.test(text)) args.asOfDate = addCalendarDays(operationalDateOf(binding), -1);
     return { tasks: [task('get_product_forecast', args)] };
   }
-  if (/reponer|reposicion|deberia pedir|debo pedir|cuanto pedir|agot|acabando|critic|alto riesgo|sobrestock|lento|sin movimiento|\babc\b|\bxyz\b|\baz\b/.test(text)
+  if (/stock|inventario|disponible/.test(text) && /cuant|queda|qued|tiene|hay|disponible|inventario de|stock de|stock del/.test(text)) {
+    const ref = productRef(message) || (memory.selectedProduct?.key && /^(?:y |cuanto|que|cual|esta|hay|queda)/.test(text)
+      ? memory.selectedProduct.key : null);
+    if (!ref && !/bajo|critico|agot|riesgo|sobre/.test(text)) return { clarificationQuestion: '¿De qué producto deseas consultar el stock disponible?' };
+    if (ref) return { tasks: [task('get_inventory_intelligence', { mode: 'detail', productRef: ref })] };
+  }
+  if (/reponer|reposicion|deberia pedir|debo pedir|cuanto pedir|agot|acabando|critic|alto riesgo|riesgo|sobrestock|lento|sin movimiento|\babc\b|\bxyz\b|\baz\b/.test(text)
     || /stock bajo|bajos.*stock/.test(text)) {
     const ref = productRef(message) || (/cuanto|\bsu\b/.test(text) ? memory.selectedProduct?.key : null);
     const args = { mode: ref ? 'detail' : 'rank', metric: 'reorder', ...(ref ? { productRef: ref } : {}) };
@@ -148,7 +169,9 @@ const routeV3 = (message, state, binding) => {
     const category = trimRef(message.match(/\b(?:de|en)\s+(?:la\s+)?categor[ií]a\s+(.+)$/i)?.[1]), subcategory = trimRef(message.match(/\b(?:de|en)\s+(?:la\s+)?subcategor[ií]a\s+(.+)$/i)?.[1]);
     if (category) args.categoryRef = category;
     if (subcategory) args.subcategoryRef = subcategory;
-    const ref = !category && !subcategory && /vendi de|ventas de/.test(text) ? productRef(message) : null;
+    let ref = !category && !subcategory && /vendi de|ventas de/.test(text) ? productRef(message) : null;
+    if (ref && /^(?:los?\s+)?(?:ultimos?\s+\d+\s+dias?|hoy|ayer|anteayer|esta semana|este mes|mes pasado)$/i
+      .test(normalize(ref))) ref = null;
     if (ref) args.productRef = ref;
     return { tasks: [task('get_business_analytics', args)] };
   }
@@ -291,7 +314,7 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
           metrics: [{ label: 'Tickets observados', value: row.ticketCount ?? 'no disponible' }, ...detail], selectMessage: key });
       }
     }
-    note = d.available === false ? 'No hay asociaciones validadas para este corte.' : 'Son compras conjuntas observadas; no demuestran causalidad ni garantizan ventas futuras.';
+    note = `${d.available === false ? 'No hay asociaciones validadas para este corte.' : 'Son compras conjuntas observadas; no demuestran causalidad ni garantizan ventas futuras.'} Artefacto congelado al ${result.metadata.frozenCutoff || result.metadata.asOf}.`;
   } else if (skillId === 'get_customer_intelligence') {
     kind = 'customer'; title = selected?.label ? `Cliente · ${selected.label}` : 'Inteligencia de clientes';
     for (let i = 0; i < rows.length; i++) {
@@ -327,7 +350,7 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
       { label: 'Asociaciones estables', value: h.marketBasket?.stableCrossSellRuleCount ?? 'no disponible' });
     for (const insight of (d.alerts || []).slice(0, 1)) items.push({ type: 'category', key: String(insight.code || insight.summary || items.length),
       label: insight.summary || insight.code || 'Hallazgo', metrics: [], secondaryLabel: undefined });
-    note = 'Indicadores descriptivos del corte V3; el resumen no asigna un puntaje global.';
+    note = `Indicadores descriptivos del corte V3; el resumen no asigna un puntaje global. Market Basket permanece histórico al ${h.marketBasket?.freshness?.analysisCutoff || '2026-10-12'}.`;
   }
   return { kind, title, ...(subtitle ? { subtitle } : {}), metrics: metrics.slice(0, 8), items: items.slice(0, skillId === 'get_business_health' ? 5 : 5),
     ...(note ? { note } : {}) };
@@ -336,7 +359,9 @@ const renderV3 = (skillId, result, args) => {
   const d = result.data, date = result.metadata.asOf;
   const items = d.items || [];
   const period = result.metadata.period;
-  const heading = `Escenario V3 · corte ${date}${period ? ` · ${period.startDate === period.endDate ? `el ${period.startDate}` : `${period.startDate} → ${period.endDate}`}` : ''}.`;
+  const heading = skillId === 'get_cross_sell_recommendations'
+    ? `Escenario V3 · asociaciones históricas al ${result.metadata.frozenCutoff || date}${period ? ` · ${period.startDate} → ${period.endDate}` : ''}.`
+    : `Escenario V3 · ${result.metadata.dataMode === 'LIVE' ? 'datos operativos' : 'histórico'} al ${date}${period ? ` · ${period.startDate === period.endDate ? `el ${period.startDate}` : `${period.startDate} → ${period.endDate}`}` : ''}.`;
   const lines = items.slice(0, 5).map((r, i) => {
     if (skillId === 'get_inventory_intelligence') return `${i + 1}. ${label(r)} (${r.sku}) · stock ${num(r.stock?.onHand)} · entradas pendientes ${num(r.stock?.incoming)} · cobertura ${num(r.coverage?.daysCover)} días · riesgo ${r.risk?.level} · cantidad sugerida ${num(r.recommendation?.recommendedQty)} · motivos: ${(r.risk?.reasonCodes || []).map(reasonLabel).join(', ') || 'sin indicador adicional'}.`;
     if (skillId === 'get_product_forecast') return `${i + 1}. ${result.metadata.selected?.product?.label || label(r)} (${r.sku}) · estimación de ventas: ${units(r[`expectedUnitsNext${args.horizonDays || 7}d`])} en ${args.horizonDays || 7} ${args.horizonDays === 1 ? 'día' : 'días'} · media móvil de 28 días.`;
@@ -361,6 +386,7 @@ const renderV3 = (skillId, result, args) => {
     if (h) lines.push(`Ventas: ${money(h.sales?.kpis?.revenueCents)}.`, `Margen bruto: ${num(h.sales?.kpis?.grossMarginPct)}%.`,
       `Clientes en riesgo observado: ${num(h.customers?.atRiskCount)}.`, `Inventario: ${num(h.inventory?.critical)} críticos.`,
       `Proveedores: ${num(h.suppliers?.summary?.suppliers)}.`, `Cross-sell: ${num(h.marketBasket?.stableCrossSellRuleCount)} reglas estables.`);
+    if (h.marketBasket?.freshness?.analysisCutoff) lines.push(`Market Basket permanece histórico al ${h.marketBasket.freshness.analysisCutoff}.`);
     for (const insight of (d.alerts || []).slice(0, Math.max(0, 7 - lines.length))) lines.push(insight.summary || insight.code);
   }
   if (!lines.length) lines.push('No hay registros que cumplan los filtros solicitados.');
@@ -472,9 +498,14 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
       scope.pending = null; save();
     } catch (error) {
       const functional = error.functionalCode;
-      const message = ({ UNSUPPORTED_HORIZON: 'Los horizontes aprobados son 1, 7 y 14 días.', INVALID_PERIOD: 'Indica un periodo dentro del histórico disponible.',
+      const message = ({ UNSUPPORTED_HORIZON: 'Los horizontes aprobados son 1, 7 y 14 días.', INVALID_PERIOD: 'Indica un periodo dentro del histórico disponible y no posterior a la fecha operativa actual.',
         PRODUCT_NOT_FOUND: 'No encontré ese producto en tu negocio.', CUSTOMER_NOT_FOUND: 'No encontré ese cliente en tu negocio.', SUPPLIER_NOT_FOUND: 'No encontré ese proveedor en tu negocio.',
-        INSUFFICIENT_HISTORY: 'No hay historia suficiente para ese origen del pronóstico.' })[functional] || 'El módulo analítico no está disponible en este momento.';
+        INSUFFICIENT_HISTORY: 'No hay historia suficiente para ese origen del pronóstico.',
+        SNAPSHOT_BOOTSTRAP_REQUIRED: 'La analítica operativa todavía no está habilitada para este negocio; no usaré el corte histórico como reemplazo.',
+        SNAPSHOT_CONSISTENCY_UNAVAILABLE: 'No pude obtener una lectura operativa consistente. Inténtalo nuevamente; no mostraré datos históricos como si fueran actuales.',
+        SNAPSHOT_TOO_LARGE: 'La lectura operativa excede el tamaño admitido y no se completó.',
+        LIVE_SNAPSHOT_UNAVAILABLE: 'No pude preparar la lectura operativa actual. No usaré datos del corte histórico como reemplazo.' })[functional]
+        || 'El módulo analítico no está disponible en este momento.';
       answers.push(message);
       if (functional === 'UNSUPPORTED_HORIZON') {
         const product = scope.selectedProduct?.key;

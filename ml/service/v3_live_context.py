@@ -138,6 +138,8 @@ def validate_snapshot(snapshot: V3OperationalSnapshot, *, base_records: Mapping[
                       request_body_bytes: int) -> None:
     """Fail closed on lineage, size, time boundaries, hash, duplicates, or refs."""
     meta = snapshot.metadata
+    if ((meta.contractVersion == "1") != (meta.snapshotVersion == "v3-operational-snapshot-v1")):
+        _raise_invalid("Snapshot contract and snapshot version do not agree.")
     if request_body_bytes > SNAPSHOT_MAX_BYTES or meta.payloadBytes > SNAPSHOT_MAX_BYTES:
         _raise_invalid("V3 live snapshot exceeds the request size limit.", 413, "LIVE_SNAPSHOT_TOO_LARGE")
     if (meta.businessId != BUSINESS_ID or request_business_id != BUSINESS_ID
@@ -340,6 +342,10 @@ def validate_snapshot(snapshot: V3OperationalSnapshot, *, base_records: Mapping[
         if target and change.kind == "CANCEL" and effective < _as_utc(target.occurredAtUtc):
             _raise_invalid("Cancellation cannot precede its transaction.")
         if change.kind == "RECEIVE":
+            if (meta.contractVersion != "2" or not change.receiptKey or not change.supplierKey
+                    or any(line.productKey is None or line.orderedQty is None or line.costBasis is None
+                           for line in change.lineChanges)):
+                _raise_invalid("V3 receipt event is missing its versioned receipt evidence.", 422, "POST_CUTOFF_DATA_INVALID")
             purchase = next((item for item in snapshot.purchases if item.purchaseKey == change.transactionKey), None)
             if purchase is None:
                 _raise_invalid("Receipt event must reference a purchase in the live context.", 422, "POST_CUTOFF_DATA_INVALID")

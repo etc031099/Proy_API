@@ -4,9 +4,10 @@ const { AgentError, isDate, isPlainObject } = require('../agents/contracts');
 const { V3_SKILLS } = require('../agents/v3Skills');
 const { rankEntities, normalize } = require('../automations/entityResolution');
 const { AGENT_ML_HTTP_TIMEOUT_MS } = require('../agents/timeouts');
+const { createOperationalClock, operationalDate } = require('../utils/operationalClock');
 const V3 = Object.freeze({ ...require('../config/v3Demo'), scenarioId: 'minimarket-pasco-v3',
   datasetVersion: 'minimarket-pasco-v3-seed2026-v1', datasetSha256: 'a90b913b6ee83174165b39eaab1526525b3aacc53cae1abe6c3f5a54a469cac8',
-  referenceDate: '2026-10-12', timezone: 'America/Lima' });
+  historicalCutoff: '2026-10-12', referenceDate: '2026-10-12', timezone: 'America/Lima', earliestDate: '2025-10-13' });
 const unavailable = () => new AgentError('ML_SERVICE_UNAVAILABLE');
 const safeData = (value, depth = 0) => {
   if (depth > 18) throw unavailable();
@@ -19,10 +20,12 @@ const safeData = (value, depth = 0) => {
 };
 // One request owns the source binding and entity promises. No decisions are cached
 // across users/tenants or across conversation turns.
-const createV3IntelligenceService = ({ models, mlClient } = {}) => {
+const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(), snapshotBuilder } = {}) => {
   const getModels = () => models || require('../models');
   const client = mlClient || require('./mlServiceClient').createMlServiceClient({ timeoutMs: AGENT_ML_HTTP_TIMEOUT_MS });
-  const contexts = new Map(), entities = new Map();
+  const operationalClock = createOperationalClock({ clock, timeZone: V3.timezone });
+  const buildSnapshot = snapshotBuilder || (options => require('./v3OperationalSnapshotService').buildV3OperationalSnapshot(options));
+  const contexts = new Map(), entities = new Map(), turnContexts = new Map(), liveSnapshots = new Map();
   const resolveContext = async context => {
     if (context.businessId !== V3.businessId) return null;
     if (!contexts.has(context.businessId)) contexts.set(context.businessId, Promise.resolve().then(async () => {
@@ -32,9 +35,20 @@ const createV3IntelligenceService = ({ models, mlClient } = {}) => {
         || row.metadata?.datasetVersion !== V3.datasetVersion || row.metadata?.referenceDate !== V3.referenceDate
         || row.metadata?.timezone !== V3.timezone) throw unavailable();
       return Object.freeze({ businessId: context.businessId, scenarioId: V3.scenarioId, datasetVersion: V3.datasetVersion,
-        datasetSha256: V3.datasetSha256, timezone: V3.timezone, asOfDate: V3.referenceDate });
+        datasetSha256: V3.datasetSha256, timezone: V3.timezone, historicalCutoff: V3.historicalCutoff, earliestDate: V3.earliestDate });
     }));
-    return contexts.get(context.businessId);
+    const verified = await contexts.get(context.businessId);
+    if (!verified) return null;
+    const turnKey = `${context.businessId}:${context.requestId || ''}`;
+    const cachedTurn = turnContexts.get(turnKey);
+    if (!cachedTurn || cachedTurn.expiresAt <= Date.now()) {
+      const instant = operationalClock.now();
+      const date = operationalDate(instant, V3.timezone);
+      const binding = Object.freeze({ ...verified, operationalDate: date, asOfDate: date, clockInstant: instant.toISOString() });
+      turnContexts.set(turnKey, { binding, expiresAt: Date.now() + 5 * 60 * 1000 });
+      while (turnContexts.size > 512) turnContexts.delete(turnContexts.keys().next().value);
+    }
+    return turnContexts.get(turnKey).binding;
   };
   const rowsFor = async (type, context) => {
     const key = `${context.businessId}:${type}`;
@@ -52,6 +66,18 @@ const createV3IntelligenceService = ({ models, mlClient } = {}) => {
     }));
     return entities.get(key);
   };
+  const getLiveSnapshot = (binding, requestId, asOfDate) => {
+    const build = () => buildSnapshot({ businessId: binding.businessId, asOfDate, now: new Date(binding.clockInstant) });
+    // Reuse one immutable snapshot only inside a single assistant request (e.g. a
+    // bounded multi-intent). A new requestId always reads a fresh revision.
+    if (!requestId) return build();
+    const key = `${binding.businessId}:${binding.scenarioId}:${binding.datasetVersion}:${requestId}:${asOfDate}`;
+    if (!liveSnapshots.has(key)) {
+      liveSnapshots.set(key, Promise.resolve().then(build));
+      while (liveSnapshots.size > 32) liveSnapshots.delete(liveSnapshots.keys().next().value);
+    }
+    return liveSnapshots.get(key);
+  };
   const resolveEntity = async (type, reference, context, offset = 0) => {
     if (!await resolveContext(context)) throw new AgentError('AGENT_SKILL_NOT_ALLOWED');
     const rows = await rowsFor(type, context);
@@ -67,7 +93,15 @@ const createV3IntelligenceService = ({ models, mlClient } = {}) => {
     if (!binding) throw new AgentError('AGENT_SKILL_NOT_ALLOWED');
     invocation.signal.throwIfAborted();
     const spec = V3_SKILLS[invocation.skill.id], args = invocation.args;
-    const request = { requestId: invocation.context.requestId, context: { ...binding }, limit: args.limit || 5 };
+    const domain = spec.domain, isFrozenDomain = domain === 'cross-sell';
+    const requestedAsOfDate = isFrozenDomain ? V3.historicalCutoff : (args.asOfDate || args.endDate || binding.operationalDate);
+    if (!isDate(requestedAsOfDate) || requestedAsOfDate > binding.operationalDate || requestedAsOfDate < V3.earliestDate) {
+      const error = new AgentError('AGENT_INVALID_SKILL_ARGS'); error.functionalCode = 'INVALID_PERIOD'; throw error;
+    }
+    const request = { requestId: invocation.context.requestId,
+      context: { businessId: binding.businessId, scenarioId: binding.scenarioId, datasetVersion: binding.datasetVersion,
+        datasetSha256: binding.datasetSha256, timezone: binding.timezone, asOfDate: requestedAsOfDate },
+      dataMode: isFrozenDomain || requestedAsOfDate <= V3.historicalCutoff ? 'HISTORICAL' : 'LIVE', limit: args.limit || 5 };
     const supplierOrder = spec.domain === 'suppliers' && args.mode === 'rank' ? {
       lead_time: ['leadTime', 'averageDays'], fastestLeadTime: ['leadTime', 'averageDays'],
       late_share: ['punctuality', 'delayRatePct'], delays: ['punctuality', 'delayedOrderCount'],
@@ -82,14 +116,14 @@ const createV3IntelligenceService = ({ models, mlClient } = {}) => {
       request.mode = 'summary'; request.metric = 'spend'; request.limit = 20; request.offset = 0;
     }
     if (args.asOfDate) {
-      if (!isDate(args.asOfDate) || args.asOfDate > binding.asOfDate || args.asOfDate < '2025-10-13') throw new AgentError('AGENT_INVALID_SKILL_ARGS');
+      if (!isDate(args.asOfDate) || args.asOfDate > binding.operationalDate || args.asOfDate < V3.earliestDate) throw new AgentError('AGENT_INVALID_SKILL_ARGS');
       request.context.asOfDate = args.asOfDate;
     }
     if (args.startDate) {
-      if (args.endDate > request.context.asOfDate || args.startDate < '2025-10-13') throw new AgentError('AGENT_INVALID_SKILL_ARGS');
+      if (!isDate(args.endDate) || args.endDate > request.context.asOfDate || args.startDate < V3.earliestDate || args.startDate > args.endDate) throw new AgentError('AGENT_INVALID_SKILL_ARGS');
       request.period = { startDate: args.startDate, endDate: args.endDate };
     }
-    if (spec.domain === 'suppliers' && !request.period) request.period = { startDate: '2025-10-13', endDate: binding.asOfDate };
+    if (spec.domain === 'suppliers' && !request.period) request.period = { startDate: V3.earliestDate, endDate: request.context.asOfDate };
     if (['detail', 'preferences', 'activity'].includes(request.mode) && spec.domain === 'customers' && !args.customerRef
       || request.mode === 'detail' && spec.domain === 'suppliers' && !args.supplierRef
       || request.mode === 'detail' && ['inventory', 'forecast'].includes(spec.domain) && !args.productRef && !args.productRefs) throw new AgentError('AGENT_INVALID_SKILL_ARGS');
@@ -98,7 +132,7 @@ const createV3IntelligenceService = ({ models, mlClient } = {}) => {
       if (!args[field]) continue;
       const resolution = await resolveEntity(type, args[field], invocation.context);
       if (!resolution.entity) return { status: 'CLARIFICATION', data: [], metadata: { returnedCount: 0,
-        totalMatches: resolution.pagination?.totalMatches || 0, resolution, asOf: binding.asOfDate } };
+        totalMatches: resolution.pagination?.totalMatches || 0, resolution, asOf: binding.operationalDate } };
       selected[type] = resolution.entity;
     }
     if (selected.product) {
@@ -113,7 +147,7 @@ const createV3IntelligenceService = ({ models, mlClient } = {}) => {
       for (let index = 0; index < refs.length; index++) {
         const resolution = await resolveEntity('product', refs[index], invocation.context);
         if (!resolution.entity) return { status: 'CLARIFICATION', data: [], metadata: { returnedCount: 0, totalMatches: resolution.pagination?.totalMatches || 0,
-          asOf: binding.asOfDate, resolution: { ...resolution, referenceField: 'productRefs', selectionIndex: index } } };
+          asOf: binding.operationalDate, resolution: { ...resolution, referenceField: 'productRefs', selectionIndex: index } } };
         skus.push(resolution.entity.key);
       }
       request.skus = [...new Set(skus)];
@@ -128,21 +162,44 @@ const createV3IntelligenceService = ({ models, mlClient } = {}) => {
         // Supplier-scoped inventory uses only authorized offer SKUs, fetched in bulk.
         const products = await getModels().Product.find({ businessId: binding.businessId, scenarioId: binding.scenarioId,
           isActive: true, 'supplierPrices.supplierId': selected.supplier.id }).select('sku').limit(80).lean().maxTimeMS(5000);
-        if (!products.length) return { status: 'NO_DATA', data: { items: [] }, metadata: { returnedCount: 0, totalMatches: 0, asOf: binding.asOfDate, selected } };
+        if (!products.length) return { status: 'NO_DATA', data: { items: [] }, metadata: { returnedCount: 0, totalMatches: 0, asOf: request.context.asOfDate, selected } };
         request.skus = products.map(row => row.sku).filter(sku => !selected.product || sku === selected.product.key);
-        if (!request.skus.length) return { status: 'NO_DATA', data: { items: [] }, metadata: { returnedCount: 0, totalMatches: 0, asOf: binding.asOfDate, selected } };
+        if (!request.skus.length) return { status: 'NO_DATA', data: { items: [] }, metadata: { returnedCount: 0, totalMatches: 0, asOf: request.context.asOfDate, selected } };
       }
     }
     if (request.mode === 'method' && spec.domain === 'forecast') return { status: 'READY',
-      data: { method: 'MOVING_AVERAGE_28', horizons: [1, 7, 14] }, metadata: { returnedCount: 1, totalMatches: 1, asOf: binding.asOfDate, selected } };
+      data: { method: 'MOVING_AVERAGE_28', horizons: [1, 7, 14] }, metadata: { returnedCount: 1, totalMatches: 1, asOf: request.context.asOfDate, selected } };
+    let liveSnapshot = null;
+    if (request.dataMode === 'LIVE') {
+      try {
+        liveSnapshot = await getLiveSnapshot(binding, invocation.context.requestId, requestedAsOfDate);
+      } catch (error) {
+        const safe = unavailable();
+        safe.functionalCode = ['SNAPSHOT_BOOTSTRAP_REQUIRED', 'SNAPSHOT_CONSISTENCY_UNAVAILABLE', 'SNAPSHOT_TOO_LARGE']
+          .includes(error?.code) ? error.code : 'LIVE_SNAPSHOT_UNAVAILABLE';
+        throw safe;
+      }
+      const snapshotMetadata = liveSnapshot?.snapshot?.metadata;
+      if (liveSnapshot?.mode !== 'LIVE' || liveSnapshot.dataVersion == null || snapshotMetadata?.businessId !== binding.businessId
+          || snapshotMetadata?.scenarioId !== binding.scenarioId || snapshotMetadata?.asOfDate !== requestedAsOfDate
+          || String(snapshotMetadata?.dataVersion) !== String(liveSnapshot.dataVersion)
+          || !['v3-operational-snapshot-v1', 'v3-operational-snapshot-v2'].includes(snapshotMetadata?.snapshotVersion)) {
+        const safe = unavailable(); safe.functionalCode = 'LIVE_SNAPSHOT_UNAVAILABLE'; throw safe;
+      }
+      request.operationalSnapshot = liveSnapshot.snapshot;
+    }
     let body;
     try { body = await client.intelligence(spec.domain, request, { signal: invocation.signal }); }
     catch (error) { const safe = unavailable(); if (error?.functionalCode) safe.functionalCode = error.functionalCode; throw safe; }
     const meta = body?.metadata;
+    const expectedSource = request.dataMode === 'LIVE' ? 'HISTORICAL_PLUS_OPERATIONAL_SNAPSHOT' : 'CANONICAL_V3_BUNDLE';
+    const expectedContract = request.dataMode === 'LIVE' ? 'm6.9f4-live-intelligence-v1' : 'm6.9b-v3-intelligence-v1';
     if (body?.requestId !== request.requestId || !['OK', 'PARTIAL'].includes(body?.status) || !isPlainObject(body.data)
       || meta?.scenarioId !== binding.scenarioId || meta?.datasetSha256 !== binding.datasetSha256
       || meta?.datasetVersion !== binding.datasetVersion || meta?.asOfDate !== request.context.asOfDate
-      || meta?.timezone !== binding.timezone || meta?.source !== 'CANONICAL_V3_BUNDLE' || meta?.contractVersion !== 'm6.9b-v3-intelligence-v1') throw unavailable();
+      || meta?.timezone !== binding.timezone || meta?.source !== expectedSource || meta?.contractVersion !== expectedContract
+      || request.dataMode === 'LIVE' && (String(meta?.dataVersion) !== String(liveSnapshot.dataVersion)
+        || meta?.snapshotHash !== liveSnapshot.snapshot.metadata.snapshotHash)) throw unavailable();
     const data = safeData(body.data); let count = Array.isArray(data.items) ? data.items.length : 1;
     const validShape = spec.domain === 'business' ? (isPlainObject(data.kpis) || Array.isArray(data.items))
       : spec.domain === 'inventory' ? (isPlainObject(data.summary) || Array.isArray(data.items))
@@ -181,10 +238,14 @@ const createV3IntelligenceService = ({ models, mlClient } = {}) => {
       data.items = data.items.slice(args.offset || 0, (args.offset || 0) + (args.limit || 5)); count = data.items.length;
     }
     return { status: body.status === 'PARTIAL' ? 'PARTIAL' : count ? 'READY' : 'NO_DATA', data,
-      metadata: { asOf: meta.asOfDate, period: request.period, returnedCount: count, totalMatches: data.total ?? count,
+      metadata: { asOf: meta.asOfDate, dataMode: request.dataMode,
+        ...(request.dataMode === 'LIVE' ? { dataVersion: String(meta.dataVersion), snapshotHash: meta.snapshotHash } : {}),
+        ...(domain === 'cross-sell' ? { freshness: 'FROZEN_HISTORICAL', frozenCutoff: V3.historicalCutoff } : {}),
+        period: request.period, returnedCount: count, totalMatches: data.total ?? count,
         truncated: (data.total || count) > count, selected, domain: spec.domain, source: meta.source,
-        evidenceLabel: `Inteligencia V3 · ${spec.domain} · corte ${meta.asOfDate}` } };
+        evidenceLabel: domain === 'cross-sell' ? `Inteligencia V3 · asociaciones históricas al ${V3.historicalCutoff}`
+          : `Inteligencia V3 · ${spec.domain} · ${request.dataMode === 'LIVE' ? 'operativo' : 'histórico'} al ${meta.asOfDate}` } };
   };
-  return Object.freeze({ resolveContext, resolveEntity, execute });
+  return Object.freeze({ resolveContext, resolveEntity, execute, operationalClock });
 };
 module.exports = { V3, createV3IntelligenceService, safeData };
