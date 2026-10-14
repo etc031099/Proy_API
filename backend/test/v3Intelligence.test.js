@@ -25,7 +25,7 @@ const scenario = { businessId: V3.businessId, scenarioId: V3.scenarioId, status:
   metadata: { datasetVersion: V3.datasetVersion, referenceDate: V3.referenceDate, timezone: V3.timezone } };
 function query(value) { return { select() { return this; }, sort() { return this; }, limit() { return this; }, lean() { return this; }, maxTimeMS() { return Promise.resolve(value); } }; }
 function fixture({ corrupt, failed, record = scenario, clock = () => new Date('2026-10-12T18:00:00.000Z'), snapshotBuilder,
-  zeroSalesDates = [] } = {}) {
+  zeroSalesDates = [], insufficientCustomerRefs = [] } = {}) {
   const calls = [], reads = [], events = [];
   const models = {
     HistoricalScenario: { findOne: filter => { reads.push(filter); return query(record); } },
@@ -41,7 +41,8 @@ function fixture({ corrupt, failed, record = scenario, clock = () => new Date('2
       stock: { onHand: payload.dataMode === 'LIVE' ? 21 - Number(payload.operationalSnapshot.metadata.dataVersion) : 4, incoming: 12 },
       coverage: { daysCover: 2.2 }, risk: { level: 'CRITICAL', reasonCodes: ['STOCKOUT_RISK'] }, recommendation: { recommendedQty: 9, shouldReorder: true }, supplier: { preferredSupplierCode: 'SUP-05' } });
     const customer = code => ({ customerCode: code, displayName: contactRows.find(row => row.stableCode === code)?.name, segment: 'AT_RISK',
-      lastPurchaseDate: '2026-10-10', ticketCount: 10, totalSpentCents: 12345, averageTicketCents: 1234.5, preferences: { categories: [{ name: 'Bebidas' }] } });
+      lastPurchaseDate: '2026-10-10', ticketCount: 10, totalSpentCents: 12345, averageTicketCents: 1234.5,
+      rfm90d: { raw: { recencyDays: 2, frequency90d: 4, monetary90dCents: 12345 } }, preferences: { categories: [{ name: 'Bebidas' }] } });
     const supplier = code => ({ supplierCode: code, displayName: contactRows.find(row => row.stableCode === code)?.name,
       purchaseOrderCount: 22, receivedSpendCents: 67890, leadTime: { averageDays: code === 'SUP-05' ? 4 : 2, sampleSize: 20 }, punctuality: { onTimeRatePct: 80, delayedOrderCount: code === 'SUP-05' ? 5 : 1, delayRatePct: code === 'SUP-05' ? 25 : 5 }, exclusiveOfferedSkuCount: code === 'SUP-05' ? 2 : 1,
       productsSupplied: [{ sku: 'PAN-FRE-001', name: 'Pan francés' }] });
@@ -49,16 +50,58 @@ function fixture({ corrupt, failed, record = scenario, clock = () => new Date('2
     const kpis = zeroPeriod ? { revenueCents: 0, unitsSold: 0, ticketCount: 0, averageTicket: 0, grossMarginPct: null }
       : { revenueCents: 50000, unitsSold: 100, ticketCount: 20, averageTicket: 25, grossMarginPct: 21 };
     let data;
-    if (domain === 'business') data = payload.mode === 'rank' ? payload.entityType === 'category'
+    if (domain === 'forecast' && payload.mode === 'evaluation') data = {
+      contractVersion: 'forecast-model-evaluation-v1', analysisCutoff: V3.historicalCutoff,
+      selectedOperationalMethod: { algorithm: 'MOVING_AVERAGE_28', label: 'Media móvil de 28 días', modelType: 'STATISTICAL_BASELINE', horizons: [1, 7, 14],
+        selectionReason: 'Seleccionado para los horizontes V3 operativos.' },
+      modelEvaluation: [
+        { modelId: 'demand_forecast_v1', algorithm: 'HistGradientBoostingRegressor', modelStatus: 'EVALUATED',
+          dataset: { name: 'M5 / CA_3' }, features: ['lag_1', 'rolling_mean_7'],
+          metrics: { test: { wape: .302878 } }, baseline: { algorithm: 'four_week_average', testMetrics: { wape: .319434 } } },
+        { modelId: 'v3-hgb-28d', algorithm: 'HistGradientBoostingRegressor', modelStatus: 'REJECTED_FOR_OPERATIONAL_USE',
+          dataset: { name: 'Minimarket Pasco V3 · escenario sintético' }, features: ['lag_units_7', 'price'],
+          metrics: { test: { wape: .252295 } }, baseline: { algorithm: 'moving_average_28', testMetrics: { wape: .319637 } } }
+      ]
+    };
+    else if (domain === 'customers' && payload.mode === 'clustering') {
+      const clusters = [{ cluster: 1, name: 'Inactivos últimos 90 días', size: 3 }, { cluster: 2, name: 'Recientes de gasto bajo', size: 6 },
+        { cluster: 3, name: 'Menos recientes de gasto moderado', size: 13 }, { cluster: 4, name: 'Frecuentes de gasto alto', size: 16 }];
+      const assigned = payload.customerCode ? [payload.customerCode] : contactRows.filter(row => row.type === 'customer').slice(0, 38).map(row => row.stableCode);
+      const clusterFor = index => index < 3 ? 1 : index < 9 ? 2 : index < 22 ? 3 : 4;
+      data = { contractVersion: 'customer-kmeans-v3-v1', algorithm: 'KMeans', learningType: 'unsupervised', task: 'customer_segmentation',
+        trainingCutoff: V3.historicalCutoff, sampleCount: 38, excludedCount: 2, features: ['recency', 'frequency', 'monetary'],
+        featureWindow: 'R=days since last purchase; F/M=90 days inclusive', transformations: ['log1p(recency)', 'log1p(frequency)', 'log1p(monetary)'],
+        scaler: 'StandardScaler', k: 4, status: 'EXPLORATORY', metrics: { silhouetteMean: .5493549313831914, subsampleAriMean: .9762265126884901 },
+        clusters, assignments: assigned.map((customerRef, i) => insufficientCustomerRefs.includes(customerRef)
+          ? { customerRef, status: 'INSUFFICIENT_HISTORY' }
+          : { customerRef, status: 'ASSIGNED', cluster: clusterFor(i), clusterName: clusters[clusterFor(i) - 1].name }),
+        assignmentAsOfDate: payload.assignmentAsOfDate || V3.historicalCutoff,
+        assignmentSource: 'approved_customer_kmeans_artifact', limitations: ['Small exploratory sample; no probability output.'] };
+    } else if (domain === 'business' && payload.mode === 'anomalies') {
+      const series = []; const date = new Date(`${payload.period.startDate}T00:00:00.000Z`);
+      while (date <= new Date(`${payload.period.endDate}T00:00:00.000Z`)) {
+        const isAnomaly = series.length < 71, anomalyScore = isAnomaly ? -.7 : 0, decisionFunction = isAnomaly ? -.2 : .5;
+        series.push({ date: date.toISOString().slice(0, 10), anomalyScore, decisionFunction, isAnomaly }); date.setUTCDate(date.getUTCDate() + 1);
+      }
+      const anomalies = series.filter(row => row.isAnomaly);
+      data = { contractVersion: 'sales-isolation-forest-v3-v1', modelId: 'v3-daily-sales-isolation-forest', version: 'sales-isolation-forest-v3-v1',
+        algorithm: 'IsolationForest', learningType: 'unsupervised', task: 'sales_anomaly_detection', mode: 'FROZEN', trainingCutoff: '2026-06-30',
+        analysisCutoff: V3.historicalCutoff, sampleCount: 261, analysisDays: 365, features: ['weekdayLogTicketsDeviation', 'weekdayLogAverageTicketDeviation'],
+        transformations: ['log1p(tickets)', 'subtract TRAIN-only weekday medians'], contamination: 'auto', threshold: -.5, anomalyCount: 71,
+        anomalyRate: 71 / 365, stability: { jaccardMean: .9157458348585177 }, scoreSemantics: 'lower score means more atypical',
+        selectionReason: 'stable approved artifact', status: 'EXPLORATORY', limitations: ['Synthetic scenario; requires contextual review.'],
+        period: payload.period, filteredDays: series.length, filteredAnomalyCount: anomalies.length, series,
+        topAnomalies: anomalies.slice(0, payload.limit).map(row => ({ ...row })) };
+    } else if (domain === 'business') data = payload.mode === 'rank' ? payload.entityType === 'category'
       ? { items: [{ categoryCode: 'BEB', metric: 23, metricName: 'units' }], total: 10 }
       : { items: [{ sku: 'PAN-FRE-001', name: 'Pan francés', metric: 23, metricName: 'units' }], total: 80 } : { kpis, trends: { revenue: { percentChange: 10 } } };
-    if (domain === 'inventory') data = { items: skus.slice(0, payload.limit).map(inventory), total: skus.length };
-    if (domain === 'forecast') data = payload.mode === 'summary' ? { totalExpectedUnits: 33, horizonDays: payload.horizonDays } : { items: skus.slice(0, payload.limit).map(sku => ({ sku, expectedUnitsNext1d: 2, expectedUnitsNext7d: 14, expectedUnitsNext14d: 28, status: 'READY' })), total: skus.length };
-    if (domain === 'cross-sell') data = { available: true, items: [{ recommendedSku: 'BEB-GAS-003', recommendedProduct: 'Inca Kola 500 ml', ticketCount: 100, confidence: .3, lift: 2, stability: 'STABLE' }] };
-    if (domain === 'customers') data = { items: (payload.customerCode ? [payload.customerCode] : customers.slice(0, 5).map(row => row.customerCode)).map(customer), total: payload.customerCode ? 1 : 40,
+    else if (domain === 'inventory') data = { items: skus.slice(0, payload.limit).map(inventory), total: skus.length };
+    else if (domain === 'forecast') data = payload.mode === 'summary' ? { totalExpectedUnits: 33, horizonDays: payload.horizonDays } : { items: skus.slice(0, payload.limit).map(sku => ({ sku, expectedUnitsNext1d: 2, expectedUnitsNext7d: 14, expectedUnitsNext14d: 28, status: 'READY' })), total: skus.length };
+    else if (domain === 'cross-sell') data = { available: true, items: [{ recommendedSku: 'BEB-GAS-003', recommendedProduct: 'Inca Kola 500 ml', ticketCount: 100, support: .08, confidence: .3, lift: 2, stability: 'STABLE' }] };
+    else if (domain === 'customers') data = { items: (payload.customerCode ? [payload.customerCode] : customers.slice(0, 5).map(row => row.customerCode)).map(customer), total: payload.customerCode ? 1 : 40,
       ...(payload.period ? { periodMetrics: { [payload.customerCode || 'CLI-001']: { revenueCents: 9876 } } } : {}) };
-    if (domain === 'suppliers') data = { items: (payload.supplierCode ? [payload.supplierCode] : ['SUP-05', 'SUP-01']).map(supplier), total: payload.supplierCode ? 1 : 10 };
-    if (domain === 'health') data = { businessHealth: { sales: { kpis }, customers: { atRiskCount: 3 }, inventory: { critical: 5 }, suppliers: { summary: { suppliers: 10 } }, marketBasket: { stableCrossSellRuleCount: 33, freshness: { mode: 'HISTORICAL', analysisCutoff: V3.historicalCutoff } } }, alerts: [] };
+    else if (domain === 'suppliers') data = { items: (payload.supplierCode ? [payload.supplierCode] : ['SUP-05', 'SUP-01']).map(supplier), total: payload.supplierCode ? 1 : 10 };
+    else if (domain === 'health') data = { businessHealth: { sales: { kpis }, customers: { atRiskCount: 3 }, inventory: { critical: 5 }, suppliers: { summary: { suppliers: 10 } }, marketBasket: { stableCrossSellRuleCount: 33, freshness: { mode: 'HISTORICAL', analysisCutoff: V3.historicalCutoff } } }, alerts: [] };
     if (data.items) data.items = data.items.slice(0, payload.limit);
     const live = payload.dataMode === 'LIVE';
     const result = { requestId: payload.requestId, status: 'OK', data, metadata: { ...payload.context,
@@ -514,4 +557,121 @@ test('V3 compound ranked customer remains clickable after its preference continu
   assert.equal(first.suggestionsEntityType, 'customer');
   const selected = await f.run(first.v3Views[0].items[0].selectMessage, cid); zero(selected);
   assert.equal(f.calls.at(-1).domain, 'customers'); assert.equal(f.calls.at(-1).payload.mode, 'detail');
+});
+
+test('H.1 ML knowledge questions route to existing READ skills with public evidence', () => {
+  const cases = [
+    ['¿Qué algoritmos de Machine Learning utiliza el sistema?', 'get_product_forecast', 'evaluation'],
+    ['¿Qué modelo usaste para predecir demanda?', 'get_product_forecast', 'evaluation'],
+    ['¿Cuál fue el WAPE del modelo?', 'get_product_forecast', 'evaluation'],
+    ['¿Qué significa WAPE?', 'get_product_forecast', 'evaluation'],
+    ['¿Qué features usa el modelo de predicción?', 'get_product_forecast', 'evaluation'],
+    ['¿Qué es clustering?', 'get_customer_intelligence', 'clustering'],
+    ['¿Qué significa aprendizaje no supervisado?', 'get_customer_intelligence', 'clustering'],
+    ['¿Cuál es el baseline?', 'get_product_forecast', 'evaluation'],
+    ['¿Por qué usas media móvil si entrenaste HGB?', 'get_product_forecast', 'evaluation'],
+    ['¿Qué features tiene el modelo HGB?', 'get_product_forecast', 'evaluation'],
+    ['¿Qué algoritmo usan los clientes?', 'get_customer_intelligence', 'clustering'],
+    ['¿Cuántos clientes hay en cada cluster?', 'get_customer_intelligence', 'clustering'],
+    ['¿Qué significa silhouette?', 'get_customer_intelligence', 'clustering'],
+    ['¿Qué significa ARI?', 'get_customer_intelligence', 'clustering'],
+    ['¿Cuál es la diferencia entre RFM y K-Means?', 'get_customer_intelligence', 'clustering'],
+    ['¿Qué días de venta fueron atípicos?', 'get_business_analytics', 'anomalies'],
+    ['¿Isolation Forest detecta fraude?', 'get_business_analytics', 'anomalies'],
+    ['¿Qué significa contamination?', 'get_business_analytics', 'anomalies'],
+    ['¿Qué significa anomaly score?', 'get_business_analytics', 'anomalies'],
+    ['¿Qué significa support?', 'get_cross_sell_recommendations', 'rules'],
+    ['¿Qué significa confidence?', 'get_cross_sell_recommendations', 'rules'],
+    ['¿Qué significa lift?', 'get_cross_sell_recommendations', 'rules'],
+    ['¿FP-Growth demuestra causalidad?', 'get_cross_sell_recommendations', 'rules'],
+    ['¿Qué modelos usan datos históricos congelados?', 'get_customer_intelligence', 'clustering'],
+    ['¿Qué modelos de Machine Learning son no supervisados?', 'get_customer_intelligence', 'clustering'],
+    ['¿Con qué productos se compra PAN-FRE-001?', 'get_cross_sell_recommendations', 'recommend'],
+    ['¿El inventario usa Machine Learning?', 'get_inventory_intelligence', 'summary'],
+    ['¿Los proveedores usan Machine Learning?', 'get_inventory_intelligence', 'summary']
+  ];
+  for (const [message, skillId, mode] of cases) {
+    const plan = routeV3(message, {}, binding);
+    assert.equal(plan?.tasks?.[0]?.skillId, skillId, `${message}: ${JSON.stringify(plan)}`);
+    assert.equal(plan.tasks[0].args.mode, mode, message);
+  }
+});
+
+test('H.1 approved ML responses use contract evidence and deterministic zero-LLM routing', async () => {
+  const f = fixture();
+  const forecast = await f.run('¿Qué modelo usaste para predecir demanda y cuál fue su WAPE?'); zero(forecast);
+  assert.match(forecast.answer, /HistGradientBoostingRegressor/); assert.match(forecast.answer, /30\.29%/);
+  assert.match(forecast.answer, /MOVING_AVERAGE_28/); assert.match(forecast.answer, /no aprobado para operación/);
+  assert.equal(forecast.v3Views[0].items.length, 2); assert.equal(f.calls.at(-1).payload.mode, 'evaluation');
+
+  const customer = await f.run('¿Cómo están segmentados mis clientes y qué significa silhouette?'); zero(customer);
+  assert.match(customer.answer, /K-Means/); assert.match(customer.answer, /38 clientes/); assert.match(customer.answer, /Silhouette/);
+  assert.match(customer.answer, /ARI de estabilidad/); assert.equal(f.calls.at(-1).payload.mode, 'clustering');
+  assert.equal(customer.v3Views[0].items.length, 4);
+
+  const anomalies = await f.run('¿Qué días fueron los más atípicos?'); zero(anomalies);
+  assert.match(anomalies.answer, /Isolation Forest/); assert.match(anomalies.answer, /revisión contextual/);
+  assert.doesNotMatch(anomalies.answer, /probabilidad de fraude|fraude detectado|incidente confirmado/i);
+  assert.equal(f.calls.at(-1).payload.dataMode, 'HISTORICAL'); assert.equal(f.calls.at(-1).payload.period.endDate, V3.historicalCutoff);
+  const boundedTop = routeV3('Muestra top 100 días atípicos', {}, binding);
+  assert.equal(boundedTop.tasks[0].args.limit, 20);
+  assert.match(routeV3('Muestra top 0 días atípicos', {}, binding).clarificationQuestion, /entre 1 y 20/);
+
+  const fraud = await f.run('¿Isolation Forest detecta fraude?'); zero(fraud);
+  assert.match(fraud.answer, /No\./); assert.match(fraud.answer, /no existen etiquetas de fraude/i);
+
+  const basket = await f.run('¿Qué significa lift en FP-Growth?'); zero(basket);
+  assert.equal(routeV3('¿Qué significa lift en FP-Growth?', {}, binding).tasks[0].args.concept, 'lift');
+  assert.match(basket.answer, /Lift compara/); assert.match(basket.answer, /no efecto causal/i);
+  assert.match(basket.answer, /2026-10-12/); assert.equal(f.calls.at(-1).payload.context.asOfDate, V3.historicalCutoff);
+  const traceSkills = f.events.filter(event => event.type === 'skill_called').map(event => event.skillId);
+  assert.ok(traceSkills.includes('get_cross_sell_recommendations'));
+  assert.ok(f.events.filter(event => event.type === 'skill_called').every(event => !Object.hasOwn(event, 'args')));
+  assert.doesNotMatch(forecast.answer, /chain.of.thought|razonamiento interno/i);
+});
+
+test('H.1 customers by cluster use only structured assignments and preserve insufficient-history status', async () => {
+  const f = fixture();
+  const inactive = await f.run('Muéstrame clientes inactivos del cluster'); zero(inactive);
+  assert.equal(f.calls.at(-1).domain, 'customers'); assert.equal(f.calls.at(-1).payload.mode, 'clustering');
+  assert.ok(inactive.answer.includes('Cliente') || inactive.answer.includes('cluster'));
+  assert.match(inactive.answer, /no se generan probabilidades/i);
+  const one = await f.run('¿En qué cluster está el cliente CLI-001?'); zero(one);
+  assert.match(one.answer, /CLI-001/); assert.match(one.answer, /cluster 1/i); assert.match(one.answer, /disponible al 2026-10-12/);
+  assert.equal(f.calls.at(-1).payload.customerCode, 'CLI-001');
+  const cold = fixture({ insufficientCustomerRefs: ['CLI-040'] });
+  const noHistory = await cold.run('¿En qué cluster está el cliente CLI-040?'); zero(noHistory);
+  assert.match(noHistory.answer, /historial insuficiente/i); assert.doesNotMatch(noHistory.answer, /CLI-040.*cluster \d/i);
+});
+
+test('H.1 multi-intent ML queries are bounded to four deterministic skills and combine with health', async () => {
+  const forecastCustomer = routeV3('Dime qué modelo de predicción uso y cuáles son mis clusters de clientes', {}, binding);
+  assert.deepEqual(forecastCustomer.tasks.map(row => row.skillId), ['get_product_forecast', 'get_customer_intelligence']);
+  const customerAnomaly = routeV3('Compara K-Means e Isolation Forest', {}, binding);
+  assert.deepEqual(customerAnomaly.tasks.map(row => row.skillId), ['get_customer_intelligence', 'get_business_analytics']);
+  const forecastBasket = routeV3('Compara el modelo de predicción con FP-Growth', {}, binding);
+  assert.deepEqual(forecastBasket.tasks.map(row => row.skillId), ['get_product_forecast', 'get_cross_sell_recommendations']);
+  const overviewHealth = routeV3('¿Qué algoritmos de Machine Learning usa el sistema y cómo está la salud del negocio?', {}, binding);
+  assert.ok(overviewHealth.tasks.length <= 4); assert.ok(overviewHealth.tasks.some(row => row.skillId === 'get_business_health'));
+  const result = await fixture().run('Compara K-Means e Isolation Forest'); zero(result);
+  assert.equal(result.v3Views.length, 2); assert.equal(result.usage.totalSkillCalls, 2);
+  const overview = await fixture().run('¿Qué algoritmos de Machine Learning utiliza el sistema?'); zero(overview);
+  assert.equal(overview.usage.totalSkillCalls, 4); assert.equal(overview.v3Views.length, 4);
+  assert.ok(/HistGradientBoostingRegressor/.test(overview.answer) && /K-Means/.test(overview.answer)
+    && /Isolation Forest/.test(overview.answer) && /FP-Growth/.test(overview.answer));
+  const noMl = await fixture().run('¿El inventario usa Machine Learning?'); zero(noMl);
+  assert.match(noMl.answer, /no un modelo de Machine Learning/i);
+  assert.match(noMl.answer, /cobertura, safety stock, reposición y ABC\/XYZ/i);
+  assert.match(noMl.answer, /sin producir un score o calificación de proveedor/i);
+  const unsupervised = await fixture().run('¿Qué modelos de Machine Learning son no supervisados?'); zero(unsupervised);
+  assert.match(unsupervised.answer, /K-Means/); assert.match(unsupervised.answer, /Isolation Forest/);
+  const frozen = await fixture().run('¿Qué modelos usan datos históricos congelados?'); zero(frozen);
+  assert.match(frozen.answer, /entrenado al 2026-10-12/); assert.match(frozen.answer, /congelado al 2026-10-12/);
+  const overviewHealthResponse = await fixture().run('¿Qué algoritmos usa ML y cómo está la salud del negocio?'); zero(overviewHealthResponse);
+  assert.ok(overviewHealthResponse.usage.totalSkillCalls <= 4); assert.ok(overviewHealthResponse.v3Views.some(view => view.kind === 'health'));
+});
+
+test('H.1 READ ML routing leaves WRITE preview and confirmation protocol untouched', async () => {
+  assert.equal(routeV3('compra 3 del producto PAN-FRE-001', {}, binding), null);
+  assert.equal(routeV3('vende 1 del producto PAN-FRE-001', {}, binding), null);
 });
