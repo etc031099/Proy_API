@@ -27,8 +27,88 @@ const queryPeriod = (message, binding, memory, followup = false) => {
   return { startDate: parsed.period.startDate, endDate: parsed.period.endDate };
 };
 
+const machineLearningPlan = (text, message, binding, memory) => {
+  const overview = /(?:que|cuales).{0,45}(?:algoritmos?|tecnicas?|partes|componentes).{0,50}(?:machine learning|\bml\b|aprendizaje)|(?:machine learning|\bml\b).{0,35}(?:utiliza|usa|aplica|sistema)|que partes.{0,30}usan? ml|que partes.{0,30}no usan? ml/.test(text);
+  const noMl = /(?:que partes|que areas|que modulos).{0,45}no usan? (?:ml|machine learning)|inventario.{0,30}(?:usa|utiliza).{0,20}(?:ml|machine learning)|proveedores?.{0,30}(?:usa|utiliza).{0,20}(?:ml|machine learning)/.test(text);
+  const health = /salud|diagnostico/.test(text) && /negocio|sistema|general/.test(text);
+  const supervisedIntent = /supervisad/.test(text) && !/no supervisad/.test(text);
+  const forecastIntent = /histgradient|\bhgb\b|wape|baseline|media movil|\bma28\b|features?|variables?.{0,20}modelo|modelo.{0,24}(?:predic|demanda)|algoritmo.{0,24}(?:predic|demanda)|tecnica.{0,24}(?:predic|demanda)|caracteristicas.{0,20}modelo/.test(text) || supervisedIntent;
+  const unsupervisedIntent = /no supervisad/.test(text) && /modelo|algoritmo|tecnica|machine learning|\bml\b|aprendizaje/.test(text);
+  const customerIntent = /k.?means|cluster|clustering|agrupamiento|silhouette|\bari\b|\brfm\b|algoritmo.{0,25}(?:cliente|segment)|como estan segmentados.{0,25}clientes|segmentacion.{0,25}clientes/.test(text) || unsupervisedIntent;
+  const anomalyIntent = /isolation forest|anomali|anomaly|atipic|fuera del patron|fraude|contamination|contaminacion|score.{0,20}(?:anomali|anomaly|atipic)|(?:anomali|anomaly|atipic).{0,20}score/.test(text) || unsupervisedIntent;
+  const basketIntent = /fp.?growth|support|confidence|\blift\b|asociacion|con que productos se compra|productos.{0,25}compran juntos|productos.{0,25}suelen comprar|compra.{0,20}juntos|causalidad/.test(text);
+  const frozenIntent = /congelad|frozen|cutoff|corte historico/.test(text)
+    && /modelo|algoritmo|tecnica|artifact|historico/.test(text);
+  const tasks = [], add = (id, args = {}) => { if (!tasks.some(row => row.skillId === id && row.args.mode === args.mode)) tasks.push(task(id, args)); };
+  if (noMl) {
+    add('get_inventory_intelligence', { mode: 'summary', concept: 'not_ml' });
+    add('get_supplier_intelligence', { mode: 'summary', concept: 'not_ml' });
+    return { tasks };
+  }
+  if (overview) {
+    add('get_product_forecast', { mode: 'evaluation', concept: 'algorithm' });
+    add('get_customer_intelligence', { mode: 'clustering', concept: 'kmeans' });
+    add('get_business_analytics', { mode: 'anomalies', concept: 'isolation_forest' });
+    add('get_cross_sell_recommendations', { mode: 'rules', concept: 'fp_growth' });
+    if (health) { tasks.pop(); add('get_business_health', {}); }
+    return { tasks };
+  }
+  if (frozenIntent) return { tasks: [task('get_customer_intelligence', { mode: 'clustering', concept: 'kmeans' }),
+    task('get_business_analytics', { mode: 'anomalies', concept: 'isolation_forest' }),
+    task('get_cross_sell_recommendations', { mode: 'rules', concept: 'fp_growth' })] };
+  const domains = [forecastIntent, customerIntent, anomalyIntent, basketIntent].filter(Boolean).length;
+  if (domains > 1) {
+    if (forecastIntent) add('get_product_forecast', { mode: 'evaluation', concept: /wape/.test(text) ? 'wape' : 'algorithm' });
+    if (customerIntent) add('get_customer_intelligence', { mode: 'clustering', concept: /silhouette/.test(text) ? 'silhouette' : /\bari\b/.test(text) ? 'ari' : unsupervisedIntent ? 'unsupervised' : 'kmeans' });
+    if (anomalyIntent) add('get_business_analytics', { mode: 'anomalies', concept: /fraude/.test(text) ? 'fraud' : unsupervisedIntent ? 'unsupervised' : 'anomaly' });
+    if (basketIntent) add('get_cross_sell_recommendations', { mode: 'rules', concept: /support/.test(text) ? 'support' : /confidence/.test(text) ? 'confidence' : /lift/.test(text) ? 'lift' : 'fp_growth' });
+    return tasks.length <= 4 ? { tasks } : { clarificationQuestion: 'Puedo comparar hasta cuatro dominios por consulta. Indica cuáles deseas priorizar.' };
+  }
+  if (forecastIntent) {
+    const concept = /wape/.test(text) ? 'wape' : /baseline/.test(text) ? 'baseline' : /supervisad/.test(text) ? 'supervised'
+      : /caracteristicas|features?|variables del modelo/.test(text) ? 'features' : /por que|media movil|ma28/.test(text) ? 'why_method' : 'algorithm';
+    return { tasks: [task('get_product_forecast', { mode: 'evaluation', concept })] };
+  }
+  if (customerIntent) {
+    if (/consumidor final/.test(text)) return { clarificationQuestion: 'Consumidor Final es un agregado anónimo y no tiene una asignación individual de K-Means.' };
+    const customerRef = message.match(/\bCLI-\d+\b/i)?.[0]
+      || trimRef(message.match(/cliente\s+(.+?)(?:\s+en (?:el )?cluster|[?]|$)/i)?.[1]);
+    const explicitMemberQuery = /quienes?|que clientes|muestrame|lista|en que cluster|cluster tiene/.test(text);
+    const clusterId = Number(text.match(/cluster\s+(?:numero\s+)?(\d+)/)?.[1]);
+    const clusterFilter = /inactiv/.test(text) ? 'inactivos' : /gasto bajo/.test(text) ? 'gasto bajo'
+      : /gasto moderado|moderado/.test(text) ? 'gasto moderado' : /gasto alto|frecuent/.test(text) ? 'gasto alto' : undefined;
+    return { tasks: [task('get_customer_intelligence', { mode: 'clustering', concept: /silhouette/.test(text) ? 'silhouette' : /\bari\b/.test(text) ? 'ari' : /rfm/.test(text) ? 'rfm' : unsupervisedIntent ? 'unsupervised' : 'kmeans',
+      ...(customerRef ? { customerRef } : {}), ...(clusterFilter ? { clusterFilter } : {}),
+      ...(clusterId > 0 ? { clusterId } : {}), ...(explicitMemberQuery && !customerRef && !clusterFilter && !(clusterId > 0) ? { clusterFilter: 'no-exact-match' } : {}) })] };
+  }
+  if (anomalyIntent) {
+    let period = { startDate: binding.earliestDate, endDate: binding.historicalCutoff };
+    if (/(?:ayer|hoy|ultimos|ultimas|desde|entre|periodo|dias|semanas|mes|20\d\d-\d\d-\d\d)/.test(text)) {
+      const parsed = queryPeriod(message, binding, memory);
+      if (parsed.clarificationQuestion) return parsed;
+      if (parsed.endDate > binding.historicalCutoff) return { clarificationQuestion: `Isolation Forest está congelado al ${binding.historicalCutoff}; solicita un periodo dentro de ese histórico.` };
+      period = parsed;
+    }
+    const requestedLimit = Number(text.match(/(?:top|ultimos)\s+(\d+)/)?.[1] || 10);
+    if (!Number.isInteger(requestedLimit) || requestedLimit < 1) return { clarificationQuestion: 'Indica un número de días atípicos entre 1 y 20.' };
+    const limit = Math.min(requestedLimit, 20);
+    return { tasks: [task('get_business_analytics', { mode: 'anomalies', concept: /fraude/.test(text) ? 'fraud' : /score/.test(text) ? 'score' : 'anomaly', ...period, limit })] };
+  }
+  if (basketIntent) {
+    const relatedRef = trimRef(message.match(/(?:con que productos se compra|que productos se compran junto con|productos relacionados (?:a|con)|asociaciones para|cross sell de)\s+(.+)$/i)?.[1]);
+    const ref = productRef(message) || relatedRef || (/(?:el|eso|su)/.test(text) ? memory.selectedProduct?.key : null);
+    const concept = /support/.test(text) ? 'support' : /confidence/.test(text) ? 'confidence' : /lift/.test(text) ? 'lift'
+      : /causal/.test(text) ? 'causality' : 'fp_growth';
+    return { tasks: [task('get_cross_sell_recommendations', { mode: ref ? 'recommend' : 'rules', concept, ...(ref ? { productRef: ref } : {}) })] };
+  }
+  return null;
+};
+
 const routeV3 = (message, state, binding) => {
   const text = clean(message), memory = state || {};
+  if (/^(?:vende|vender|compra|comprar|crea|crear|avisa|avisame|actualiza|ajusta|confirma|confirmar|cancela|cancelar|si hazlo|procede|adelante|no lo hagas|mejor no)\b/.test(text)) return null;
+  const machineLearning = machineLearningPlan(text, message, binding, memory);
+  if (machineLearning) return machineLearning;
   const horizonFollowup = /^(?:y )?(?:para )?(?:los )?proximos? \d+ dias?$/.test(text);
   if (horizonFollowup && memory.lastFamily !== 'get_product_forecast') {
     return { clarificationQuestion: '¿De qué producto deseas consultar el pronóstico? No hay un pronóstico previo en esta conversación.' };
@@ -216,6 +296,30 @@ const segmentLabel = code => ({ AT_RISK: 'en riesgo según actividad observada',
 const reasonLabel = code => ({ LOW_DEMAND: 'ventas observadas bajas', PERISHABLE_CAP: 'cantidad limitada por vida útil', BELOW_REORDER_POINT: 'posición por debajo del punto de reposición', NO_INBOUND: 'sin entradas pendientes', INBOUND_INSUFFICIENT: 'entradas pendientes insuficientes', COVER_BELOW_LEAD_TIME: 'cobertura inferior al plazo observado', LEAD_TIME_EXCEEDS_FORECAST_HORIZON: 'plazo superior al horizonte aprobado', INSUFFICIENT_DEMAND_VARIABILITY_HISTORY: 'historia insuficiente de variabilidad', LOW_STOCK: 'stock bajo', SINGLE_SOURCE: 'un solo proveedor', SLOW_MOVING: 'rotación lenta', DEAD_STOCK: 'sin movimiento observado', OVERSTOCK: 'exceso de stock', STOCKOUT_RISK: 'riesgo de agotamiento' })[code] || 'indicador observado al corte';
 const displayMoney = cents => Number.isFinite(cents) ? `S/ ${(cents / 100).toFixed(2)}` : 'no disponible';
 const displayNumber = value => Number.isFinite(value) ? Number(value.toFixed(2)) : 'no disponible';
+const percent = value => Number.isFinite(value) ? `${displayNumber(value * 100)}%` : 'no disponible';
+const mlExplanation = concept => ({
+  supervised: 'El aprendizaje supervisado ajusta un modelo con ejemplos que incluyen una variable objetivo. En este escenario se evaluó HGB para demanda; el método operativo V3 sigue siendo MA28.',
+  features: 'Las features son variables de entrada que el modelo usa para estimar su objetivo. La lista siguiente procede del contrato de evaluación; no se recalculan ni se interpretan como causas.',
+  wape: 'WAPE es el error absoluto total dividido entre la demanda real total. Es una métrica agregada de error; no es una probabilidad de acierto por producto.',
+  baseline: 'Un baseline es una referencia simple para comprobar si un modelo aporta mejora. Se compara con el mismo corte de evaluación; un valor menor de WAPE indica menor error agregado.',
+  why_method: 'HGB fue entrenado y evaluado, pero MA28 mostró mejor comportamiento operativo en los horizontes V3 aprobados. La evidencia HGB se conserva; su evaluación a 28 días no superó los gates operativos.',
+  kmeans: 'K-Means es aprendizaje no supervisado: agrupa clientes por similitud de Recency, Frequency y Monetary. Es exploratorio y se entrenó con 38 clientes; no asigna probabilidades.',
+  silhouette: 'Silhouette resume qué tan cohesionados y separados quedan los grupos: valores mayores suelen indicar mejor separación. Aquí se interpreta junto con estabilidad y utilidad, no como criterio único.',
+  ari: 'ARI mide cuánto coinciden agrupaciones entre ejecuciones; 1 representa coincidencia completa. El ARI reportado es estabilidad del clustering, no exactitud contra etiquetas reales.',
+  rfm: 'RFM resume recencia, frecuencia y gasto mediante reglas/criterios. K-Means agrupa de forma no supervisada según similitud en esas variables. Ninguno es universalmente mejor.',
+  unsupervised: 'El aprendizaje no supervisado busca estructura sin etiquetas objetivo. En este sistema, K-Means agrupa clientes e Isolation Forest señala días de ventas atípicos.',
+  isolation_forest: 'Isolation Forest es un modelo no supervisado que identifica observaciones aislables respecto al patrón aprendido. Sus señales requieren revisión contextual.',
+  anomaly: 'Una anomalía es una observación estadísticamente alejada del patrón aprendido; no identifica por sí sola la causa ni confirma un incidente.',
+  fraud: 'No. Isolation Forest solo señala comportamientos estadísticamente atípicos que requieren revisión contextual. No existen etiquetas de fraude ni incidentes confirmados.',
+  score: 'El anomaly score ordena observaciones por atipicidad según el artifact. No es una probabilidad de fraude ni de error.',
+  contamination: 'Contamination es un parámetro de Isolation Forest relacionado con la proporción esperada de observaciones atípicas; no es una probabilidad individual.',
+  fp_growth: 'FP-Growth extrae patrones frecuentes de compras y genera reglas de asociación. El artifact de Market Basket está congelado al 2026-10-12; asociación no implica causalidad.',
+  support: 'Support es la proporción de tickets que contienen conjuntamente los productos de una regla; ticketCount muestra evidencia observada en cantidad de tickets.',
+  confidence: 'Confidence estima qué proporción de tickets con el antecedente también contiene el consecuente. Es frecuencia condicional observada, no causalidad.',
+  lift: 'Lift compara la frecuencia conjunta observada con la esperada si antecedente y consecuente fueran independientes. Mayor que 1 indica asociación positiva, no efecto causal.',
+  causality: 'No puede concluirse causalidad: FP-Growth describe compras que aparecen juntas en el histórico congelado al 2026-10-12.',
+  not_ml: 'Este dominio usa analítica operativa/descriptiva, no un modelo de Machine Learning. El inventario calcula cobertura, safety stock, reposición y ABC/XYZ; proveedores resume órdenes, gasto, lead time y puntualidad sin producir un score o calificación de proveedor.'
+})[concept];
 const displayEntityType = (skillId, args) => skillId === 'get_customer_intelligence' ? 'customer'
   : skillId === 'get_supplier_intelligence' ? (args.mode === 'alternatives' ? 'product' : 'supplier')
     : skillId === 'get_cross_sell_recommendations' ? 'product'
@@ -255,7 +359,39 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
       metrics: itemMetrics, ...((args.mode === 'rank' || skillId === 'get_cross_sell_recommendations' || skillId === 'get_supplier_intelligence' && args.mode === 'alternatives') ? { selectMessage: key } : {}) };
   };
   let kind = 'business', title = 'Resumen del negocio', subtitle, note;
-  if (skillId === 'get_business_analytics') {
+  if (skillId === 'get_product_forecast' && args.mode === 'evaluation') {
+    kind = 'forecast'; title = 'Evaluación de modelos de demanda'; subtitle = `Evidencia histórica al ${d.analysisCutoff || result.metadata.frozenCutoff || result.metadata.asOf}`;
+    const selectedMethod = d.selectedOperationalMethod || {};
+    metrics.push({ label: 'Método operativo V3', value: selectedMethod.algorithm || selectedMethod.label || 'no disponible' },
+      { label: 'Horizontes aprobados', value: (selectedMethod.horizons || [1, 7, 14]).map(day => `${day}d`).join(' · ') });
+    for (const row of d.modelEvaluation || []) items.push({ type: 'category', key: row.algorithm, label: row.algorithm,
+      secondaryLabel: row.dataset?.name || row.modelId,
+      metrics: [{ label: 'Estado', value: row.modelStatus === 'REJECTED_FOR_OPERATIONAL_USE' ? 'Evaluado; no aprobado para operación' : row.modelStatus },
+        { label: 'TEST WAPE', value: percent(row.metrics?.test?.wape) },
+        ...(Number.isFinite(row.baseline?.testMetrics?.wape) ? [{ label: 'Baseline WAPE', value: percent(row.baseline.testMetrics.wape) }] : [])] });
+    if (args.concept === 'features') {
+      for (const row of d.modelEvaluation || []) items.push({ type: 'category', key: `${row.modelId}-features`, label: `${row.dataset?.name || row.modelId} · features`,
+        metrics: (row.features || []).slice(0, 5).map((feature, index) => ({ label: `Variable ${index + 1}`, value: feature })) });
+    }
+    note = `HGB fue evaluado como evidencia de Machine Learning. V3 opera con MA28, un método estadístico, en 1, 7 y 14 días; HGB a 28 días no fue aprobado.${selectedMethod.selectionReason ? ` Selección: ${selectedMethod.selectionReason}` : ''}`;
+  } else if (skillId === 'get_customer_intelligence' && args.mode === 'clustering') {
+    kind = 'customer'; title = 'Segmentación exploratoria K-Means'; subtitle = `Corte de entrenamiento ${d.trainingCutoff || result.metadata.asOf}`;
+    metrics.push({ label: 'Clientes entrenables', value: d.sampleCount ?? 'no disponible' }, { label: 'Clusters (k)', value: d.k ?? 'no disponible' },
+      { label: 'Silhouette', value: displayNumber(d.metrics?.silhouetteMean) }, { label: 'Estabilidad ARI', value: displayNumber(d.metrics?.subsampleAriMean) });
+    for (const cluster of d.clusters || []) items.push({ type: 'category', key: `cluster-${cluster.cluster}`, label: cluster.name,
+      metrics: [{ label: 'Cluster', value: cluster.cluster }, { label: 'Clientes', value: cluster.size }] });
+    for (const row of d.assignments || []) items.push({ type: 'customer', key: row.customerRef, label: row.customerName || row.customerRef,
+      secondaryLabel: row.customerRef, metrics: [{ label: 'Asignación', value: row.status === 'INSUFFICIENT_HISTORY' ? 'historia insuficiente' : `Cluster ${row.cluster}: ${row.clusterName || ''}` }] });
+    if (d.requestedClusterFound === false) note = 'No existe un cluster con ese nombre o número en el artifact aprobado; no se infirió una asignación.';
+    else note = `K-Means no supervisado sobre Recency, Frequency y Monetary; muestra pequeña (n=${d.sampleCount ?? '—'}), exploratoria y entrenada al ${d.trainingCutoff || result.metadata.asOf}.${d.assignmentAsOfDate ? ` La asignación individual usa RFM disponible al ${d.assignmentAsOfDate}.` : ''} No se incluyen probabilidades.`;
+  } else if (skillId === 'get_business_analytics' && args.mode === 'anomalies') {
+    kind = 'business'; title = 'Días de ventas atípicos'; subtitle = `Isolation Forest · histórico congelado al ${d.analysisCutoff || result.metadata.asOf}`;
+    metrics.push({ label: 'Días analizados', value: d.analysisDays ?? 'no disponible' }, { label: 'Señales atípicas en el histórico', value: d.anomalyCount ?? 'no disponible' },
+      { label: 'Tasa observada', value: percent(d.anomalyRate) }, { label: 'Estabilidad Jaccard', value: displayNumber(d.stability?.jaccardMean) });
+    for (const row of d.topAnomalies || []) items.push({ type: 'category', key: row.date, label: row.date,
+      metrics: [{ label: 'Score de atipicidad (no probabilidad)', value: displayNumber(row.anomalyScore) }] });
+    note = 'Comportamientos estadísticamente atípicos para revisión contextual; no son fraude, error ni incidentes confirmados.';
+  } else if (skillId === 'get_business_analytics') {
     if (d.kpis) {
       const k = d.kpis;
       metrics.push({ label: 'Ventas', value: displayMoney(k.revenueCents) }, { label: 'Unidades', value: Number.isFinite(k.unitsSold) ? k.unitsSold : 'no disponible' },
@@ -305,8 +441,9 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
     const sourceRows = rows.slice(0, 5);
     for (let i = 0; i < sourceRows.length; i++) {
       const row = sourceRows[i], names = row.consequentProducts || [row.recommendedProduct], keys = row.consequentSkus || [row.recommendedSku || row.sku];
-      const detail = args.mode === 'rules' ? [{ label: 'Frecuencia condicional observada', value: `${displayNumber(row.confidence * 100)}%` },
-        { label: 'Lift', value: displayNumber(row.lift) }, { label: 'Estabilidad', value: row.stability?.status || row.stability || 'según artefacto' }]
+      const detail = args.mode === 'rules' ? [{ label: 'Support', value: percent(row.support) },
+        { label: 'Confidence observada', value: percent(row.confidence) }, { label: 'Lift', value: displayNumber(row.lift) },
+        { label: 'Estabilidad', value: row.stability?.status || row.stability || 'según artefacto' }]
         : [];
       for (let j = 0; j < Math.min((keys || []).length, 5 - items.length); j++) {
         const key = keys[j], name = names?.[j]; if (!key || !name) continue;
@@ -314,7 +451,7 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
           metrics: [{ label: 'Tickets observados', value: row.ticketCount ?? 'no disponible' }, ...detail], selectMessage: key });
       }
     }
-    note = `${d.available === false ? 'No hay asociaciones validadas para este corte.' : 'Son compras conjuntas observadas; no demuestran causalidad ni garantizan ventas futuras.'} Artefacto congelado al ${result.metadata.frozenCutoff || result.metadata.asOf}.`;
+    note = `${d.available === false ? 'No hay asociaciones validadas para este corte.' : 'FP-Growth describe compras conjuntas observadas; las asociaciones no demuestran causalidad ni garantizan ventas futuras.'} Artefacto congelado al ${result.metadata.frozenCutoff || result.metadata.asOf}.`;
   } else if (skillId === 'get_customer_intelligence') {
     kind = 'customer'; title = selected?.label ? `Cliente · ${selected.label}` : 'Inteligencia de clientes';
     for (let i = 0; i < rows.length; i++) {
@@ -338,7 +475,7 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
       ]); if (item) items.push(item);
     }
     if (d.singleSourceCriticalOrHigh) metrics.push({ label: 'Productos de alto riesgo con una sola fuente', value: d.singleSourceCriticalOrHigh.singleSourceCriticalOrHighSkuCount });
-    note = 'Métricas descriptivas observadas; no constituyen una calificación de proveedor.';
+    note = args.concept === 'not_ml' ? mlExplanation(args.concept) : 'Métricas descriptivas observadas; no constituyen una calificación de proveedor.';
   } else if (skillId === 'get_business_health') {
     kind = 'health'; title = 'Resumen de salud del negocio';
     const h = d.businessHealth || {};
@@ -352,6 +489,7 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
       label: insight.summary || insight.code || 'Hallazgo', metrics: [], secondaryLabel: undefined });
     note = `Indicadores descriptivos del corte V3; el resumen no asigna un puntaje global. Market Basket permanece histórico al ${h.marketBasket?.freshness?.analysisCutoff || '2026-10-12'}.`;
   }
+  if (args.concept && mlExplanation(args.concept)) note = [note, mlExplanation(args.concept)].filter(Boolean).join(' ');
   return { kind, title, ...(subtitle ? { subtitle } : {}), metrics: metrics.slice(0, 8), items: items.slice(0, skillId === 'get_business_health' ? 5 : 5),
     ...(note ? { note } : {}) };
 };
@@ -362,13 +500,48 @@ const renderV3 = (skillId, result, args) => {
   const heading = skillId === 'get_cross_sell_recommendations'
     ? `Escenario V3 · asociaciones históricas al ${result.metadata.frozenCutoff || date}${period ? ` · ${period.startDate} → ${period.endDate}` : ''}.`
     : `Escenario V3 · ${result.metadata.dataMode === 'LIVE' ? 'datos operativos' : 'histórico'} al ${date}${period ? ` · ${period.startDate === period.endDate ? `el ${period.startDate}` : `${period.startDate} → ${period.endDate}`}` : ''}.`;
+  if (skillId === 'get_product_forecast' && args.mode === 'evaluation') {
+    const selected = d.selectedOperationalMethod || {}, evaluationRows = d.modelEvaluation || [];
+    const lines = [`Método operativo V3: ${selected.algorithm || selected.label || 'no disponible'} (${(selected.horizons || [1, 7, 14]).join('/')} días).`];
+    for (const row of evaluationRows) {
+      const baseline = row.baseline?.testMetrics?.wape;
+      lines.push(`${row.dataset?.name || row.modelId}: ${row.algorithm} · ${row.modelStatus === 'REJECTED_FOR_OPERATIONAL_USE' ? 'evaluado; no aprobado para operación' : 'evaluado'} · TEST WAPE ${percent(row.metrics?.test?.wape)}${Number.isFinite(baseline) ? ` · baseline ${percent(baseline)}` : ''}.`);
+      if (args.concept === 'features') lines.push(`Features ${row.dataset?.name || row.modelId}: ${(row.features || []).join(', ') || 'no disponibles en el contrato'}.`);
+    }
+    lines.push(`HGB conserva su evaluación como evidencia ML; MA28 es un método estadístico, no ML. ${selected.selectionReason || 'V3 mantiene MA28 en los horizontes operativos aprobados.'} HGB 28d no pasó los gates operativos.`);
+    const explanation = mlExplanation(args.concept); if (explanation && args.concept !== 'algorithm') lines.push(explanation);
+    return `${heading}\n${lines.join('\n')}`;
+  }
+  if (skillId === 'get_customer_intelligence' && args.mode === 'clustering') {
+    const lines = [`K-Means no supervisado · k=${d.k ?? '—'} · n=${d.sampleCount ?? '—'} clientes entrenables · silhouette ${num(d.metrics?.silhouetteMean)} · ARI de estabilidad ${num(d.metrics?.subsampleAriMean)}.`];
+    for (const cluster of d.clusters || []) lines.push(`Cluster ${cluster.cluster}: ${cluster.name} · ${cluster.size} clientes.`);
+    if (d.requestedClusterFound === false) lines.push('No encontré un cluster con ese nombre o número en el artifact aprobado; no inferí miembros.');
+    else if (Array.isArray(d.assignments) && d.assignments.length) {
+      lines.push(...d.assignments.map(row => row.status === 'INSUFFICIENT_HISTORY'
+        ? `${row.customerName || row.customerRef}: historial insuficiente; no se asignó cluster.`
+        : `${row.customerName || row.customerRef} (${row.customerRef}): cluster ${row.cluster} · ${row.clusterName || 'asignación exploratoria'}.`));
+      if (d.assignmentAsOfDate) lines.push(`Asignación individual basada en RFM disponible al ${d.assignmentAsOfDate}; el entrenamiento del modelo permanece en ${d.trainingCutoff || date}.`);
+    } else if (args.clusterFilter || args.clusterId !== undefined) lines.push('No hay asignaciones disponibles para ese filtro.');
+    lines.push(`Modelo exploratorio entrenado al ${d.trainingCutoff || date}; variables RFM: Recency, Frequency, Monetary. No se generan probabilidades.`);
+    const explanation = mlExplanation(args.concept); if (explanation && args.concept !== 'kmeans') lines.push(explanation);
+    return `${heading}\n${lines.join('\n')}`;
+  }
+  if (skillId === 'get_business_analytics' && args.mode === 'anomalies') {
+    const lines = [`Isolation Forest no supervisado · ${d.analysisDays ?? '—'} días evaluados · ${d.anomalyCount ?? '—'} señales atípicas (${percent(d.anomalyRate)}) · estabilidad Jaccard ${num(d.stability?.jaccardMean)}.`];
+    const top = d.topAnomalies || [];
+    if (top.length) lines.push(`Días más atípicos del periodo: ${top.map(row => `${row.date} (score ${num(row.anomalyScore)})`).join('; ')}. El score ordena atipicidad, no es probabilidad.`);
+    else lines.push('No hay días atípicos en el periodo consultado.');
+    lines.push('Son comportamientos estadísticamente atípicos para revisión contextual; no confirman fraude, error ni incidentes. El modelo y su evidencia están congelados al 2026-10-12.');
+    const explanation = mlExplanation(args.concept); if (explanation && !['anomaly', 'isolation_forest'].includes(args.concept)) lines.push(explanation);
+    return `${heading}\n${lines.join('\n')}`;
+  }
   const lines = items.slice(0, 5).map((r, i) => {
     if (skillId === 'get_inventory_intelligence') return `${i + 1}. ${label(r)} (${r.sku}) · stock ${num(r.stock?.onHand)} · entradas pendientes ${num(r.stock?.incoming)} · cobertura ${num(r.coverage?.daysCover)} días · riesgo ${r.risk?.level} · cantidad sugerida ${num(r.recommendation?.recommendedQty)} · motivos: ${(r.risk?.reasonCodes || []).map(reasonLabel).join(', ') || 'sin indicador adicional'}.`;
     if (skillId === 'get_product_forecast') return `${i + 1}. ${result.metadata.selected?.product?.label || label(r)} (${r.sku}) · estimación de ventas: ${units(r[`expectedUnitsNext${args.horizonDays || 7}d`])} en ${args.horizonDays || 7} ${args.horizonDays === 1 ? 'día' : 'días'} · media móvil de 28 días.`;
     if (skillId === 'get_customer_intelligence') return `${i + 1}. ${label(r)} · ${segmentLabel(r.segment)} · última compra ${r.lastPurchaseDate || 'sin compras'} · ${num(r.ticketCount)} tickets históricos · gasto histórico ${money(r.totalSpentCents)} · ticket promedio ${money(r.averageTicketCents)}${args.mode === 'preferences' ? ` · categoría preferida: ${r.preferences?.favoriteCategoryName || 'no disponible'} · productos habituales: ${(r.preferences?.topProducts || []).slice(0, 5).map(p => p.name || p.sku).join(', ') || 'sin datos'}` : ''}.`;
     if (skillId === 'get_supplier_intelligence' && args.mode === 'alternatives') return `${i + 1}. ${r.sku} · ${(r.alternatives || []).slice(0, 5).map(offer => `${offer.supplierName || offer.supplierCode}: ${money(offer.unitCostCents)}`).join('; ') || 'sin alternativas configuradas'}.`;
     if (skillId === 'get_supplier_intelligence') return `${i + 1}. ${label(r)} (${r.supplierCode}) · ${num(r.purchaseOrderCount)} compras históricas · gasto histórico recibido ${money(r.receivedSpendCents)} · lead time observado ${num(r.leadTime?.averageDays)} días con ${num(r.leadTime?.sampleSize)} observaciones · puntualidad ${num(r.punctuality?.onTimeRatePct)}% · catálogo exclusivo: ${num(r.exclusiveOfferedSkuCount)} productos · ${(r.productsSupplied || []).slice(0, 5).map(p => p.name || p.productName || p.sku).join(', ')}.`;
-    if (skillId === 'get_cross_sell_recommendations') return `${i + 1}. ${(r.consequentProducts || [r.recommendedProduct]).filter(Boolean).join(', ')} (${(r.consequentSkus || [r.recommendedSku || r.sku]).filter(Boolean).join(', ')}) · ${num(r.ticketCount)} tickets · frecuencia condicional observada ${num(Number.isFinite(r.confidence) ? r.confidence * 100 : null)}% · lift ${num(r.lift)} · estabilidad ${r.stability?.status || r.stability || 'según artefacto'}.`;
+    if (skillId === 'get_cross_sell_recommendations') return `${i + 1}. ${(r.consequentProducts || [r.recommendedProduct]).filter(Boolean).join(', ')} (${(r.consequentSkus || [r.recommendedSku || r.sku]).filter(Boolean).join(', ')}) · ${num(r.ticketCount)} tickets · support ${percent(r.support)} · confidence ${percent(r.confidence)} · lift ${num(r.lift)} · estabilidad ${r.stability?.status || r.stability || 'según artefacto'}.`;
     return `${i + 1}. ${label(r)} · ${args.metric === 'units' ? units(r.metric ?? r.units ?? r.unitsSold) : args.metric === 'tickets' ? `${num(r.metric ?? r.ticketCount)} tickets` : money(r.metric ?? r[args.metric === 'gross_margin' ? 'grossMarginCents' : 'revenueCents'])}.`;
   });
   if (skillId === 'get_business_analytics' && d.kpis) {
@@ -381,6 +554,7 @@ const renderV3 = (skillId, result, args) => {
   if (skillId === 'get_customer_intelligence' && d.periodMetrics) lines.push(`Gasto del periodo solicitado: ${Object.entries(d.periodMetrics).map(([code, row]) => `${code}: ${money(row.revenueCents)}`).join('; ')}. El segmento RFM corresponde a su ventana de 90 días.`);
   if (skillId === 'get_supplier_intelligence' && d.singleSourceCriticalOrHigh) lines.push(`Dependencia: ${num(d.singleSourceCriticalOrHigh.singleSourceCriticalOrHighSkuCount)} productos críticos o de alto riesgo con un solo proveedor observado/configurado; no es un score de calidad.`);
   if (skillId === 'get_cross_sell_recommendations') lines.push(d.available === false ? 'No hay asociaciones validadas disponibles para ese corte.' : 'Son compras conjuntas observadas; no demuestran causalidad ni garantizan ventas futuras.');
+  if (args.concept && mlExplanation(args.concept)) lines.push(mlExplanation(args.concept));
   if (skillId === 'get_business_health') {
     const h = d.businessHealth;
     if (h) lines.push(`Ventas: ${money(h.sales?.kpis?.revenueCents)}.`, `Margen bruto: ${num(h.sales?.kpis?.grossMarginPct)}%.`,

@@ -94,6 +94,59 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
     invocation.signal.throwIfAborted();
     const spec = V3_SKILLS[invocation.skill.id], args = invocation.args;
     const domain = spec.domain, isFrozenDomain = domain === 'cross-sell';
+    const frozenMetadata = data => ({ status: 'READY', data, metadata: { asOf: V3.historicalCutoff,
+      dataMode: 'HISTORICAL', frozenCutoff: V3.historicalCutoff, returnedCount: Array.isArray(data.assignments)
+        ? data.assignments.length : Array.isArray(data.topAnomalies) ? data.topAnomalies.length : 1,
+      totalMatches: Array.isArray(data.assignments) ? data.assignments.length : Array.isArray(data.topAnomalies) ? data.topAnomalies.length : 1,
+      domain } });
+    // These are existing, validated dashboard contracts exposed through their
+    // owning READ skills. They remain historical evidence and never alter an
+    // operational calculation or feed user-supplied model inputs.
+    if (domain === 'forecast' && args.mode === 'evaluation') {
+      return frozenMetadata(await forecastEvaluation(invocation.context, { signal: invocation.signal }));
+    }
+    if (domain === 'customers' && args.mode === 'clustering') {
+      if (args.clusterFilter && args.clusterId || args.customerRef && (args.clusterFilter || args.clusterId)) throw new AgentError('AGENT_INVALID_SKILL_ARGS');
+      const raw = await customerClustering(invocation.context, { signal: invocation.signal, customerRef: args.customerRef });
+      const customerRows = await rowsFor('customer', invocation.context);
+      const labels = new Map(customerRows.map(row => [row.stableCode, row.name]));
+      if ((raw.assignments || []).some(row => !labels.has(row.customerRef))) throw unavailable();
+      let selectedCluster = null;
+      if (args.clusterId !== undefined) selectedCluster = raw.clusters.find(row => row.cluster === args.clusterId) || null;
+      if (args.clusterFilter) selectedCluster = raw.clusters.find(row => normalize(row.name).includes(normalize(args.clusterFilter))) || null;
+      const assignments = args.customerRef ? raw.assignments
+        : args.clusterId !== undefined || args.clusterFilter ? selectedCluster
+          ? raw.assignments.filter(row => row.cluster === selectedCluster.cluster) : [] : [];
+      const data = { algorithm: raw.algorithm, learningType: raw.learningType, task: raw.task,
+        trainingCutoff: raw.trainingCutoff, sampleCount: raw.sampleCount, excludedCount: raw.excludedCount,
+        features: raw.features, featureWindow: raw.featureWindow, transformations: raw.transformations,
+        scaler: raw.scaler, k: raw.k, status: raw.status,
+        metrics: { silhouetteMean: raw.metrics?.silhouetteMean, subsampleAriMean: raw.metrics?.subsampleAriMean,
+          inertia: raw.metrics?.inertia }, clusters: raw.clusters.map(row => ({ cluster: row.cluster, name: row.name,
+          size: row.size, silhouetteMean: row.silhouetteMean })),
+        assignments: assignments.slice(0, 20).map(row => ({ customerRef: row.customerRef, customerName: labels.get(row.customerRef),
+          status: row.status, ...(row.cluster !== undefined ? { cluster: row.cluster, clusterName: row.clusterName } : {}) })),
+        assignmentAsOfDate: raw.assignmentAsOfDate, assignmentSource: raw.assignmentSource,
+        limitations: raw.limitations };
+      if ((args.clusterFilter || args.clusterId !== undefined) && !selectedCluster) data.requestedClusterFound = false;
+      return frozenMetadata(data);
+    }
+    if (domain === 'business' && args.mode === 'anomalies') {
+      if (Boolean(args.startDate) !== Boolean(args.endDate)) throw new AgentError('AGENT_INVALID_SKILL_ARGS');
+      const startDate = args.startDate || V3.earliestDate, endDate = args.endDate || V3.historicalCutoff;
+      const raw = await salesAnomalies(invocation.context, { signal: invocation.signal, startDate, endDate,
+        limit: args.limit || 10 });
+      const data = { algorithm: raw.algorithm, learningType: raw.learningType, task: raw.task, mode: raw.mode,
+        trainingCutoff: raw.trainingCutoff, analysisCutoff: raw.analysisCutoff, sampleCount: raw.sampleCount,
+        analysisDays: raw.analysisDays, features: raw.features, transformations: raw.transformations,
+        contamination: raw.contamination, threshold: raw.threshold, anomalyCount: raw.anomalyCount,
+        anomalyRate: raw.anomalyRate, filteredDays: raw.filteredDays, filteredAnomalyCount: raw.filteredAnomalyCount,
+        stability: raw.stability, scoreSemantics: raw.scoreSemantics, selectionReason: raw.selectionReason,
+        status: raw.status, limitations: raw.limitations, period: raw.period,
+        topAnomalies: raw.topAnomalies.slice(0, args.limit || 10).map(row => ({ date: row.date,
+          anomalyScore: row.anomalyScore, decisionFunction: row.decisionFunction, isAnomaly: row.isAnomaly })) };
+      return frozenMetadata(data);
+    }
     const requestedAsOfDate = isFrozenDomain ? V3.historicalCutoff : (args.asOfDate || args.endDate || binding.operationalDate);
     if (!isDate(requestedAsOfDate) || requestedAsOfDate > binding.operationalDate || requestedAsOfDate < V3.earliestDate) {
       const error = new AgentError('AGENT_INVALID_SKILL_ARGS'); error.functionalCode = 'INVALID_PERIOD'; throw error;
