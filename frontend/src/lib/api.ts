@@ -1,6 +1,7 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import { ApiResponse, DemandForecastResponse, DemoV2RegisterData, DemoV3RegisterData } from '@/types';
 import type { AgentMessageRequest, AgentResponse, AgentConversationList, AgentConversationDetail } from '@/types/agent';
+import type { BusinessSummary, ForecastResponse, InventorySummary, ProductInventory, ProductOption } from '@/types/businessIntelligence';
 
 export class AgentApiError extends Error {
   constructor(readonly status?: number, readonly code?: string, readonly conversationId?: string) {
@@ -398,6 +399,33 @@ class ApiClient {
       }
       throw error;
     }
+  }
+
+  async getBusinessIntelligenceSummary(): Promise<ApiResponse<BusinessSummary> & { code?: string }> {
+    const response = await this.instance.get('/intelligence/summary');
+    return response.data as ApiResponse<BusinessSummary> & { code?: string };
+  }
+
+  async getBusinessIntelligenceInventory(): Promise<ApiResponse<InventorySummary> & { code?: string }> {
+    const response = await this.instance.get('/intelligence/inventory', { params: { limit: 20 } });
+    return response.data as ApiResponse<InventorySummary> & { code?: string };
+  }
+
+  async getBusinessIntelligenceForecast(sku: string, horizonDays: 1 | 7 | 14): Promise<ApiResponse<ForecastResponse> & { code?: string }> {
+    const response = await this.instance.get(`/intelligence/products/${encodeURIComponent(sku)}/forecast`, { params: { horizonDays } });
+    return response.data as ApiResponse<ForecastResponse> & { code?: string };
+  }
+
+  async getBusinessIntelligenceProductInventory(sku: string): Promise<ApiResponse<ProductInventory> & { code?: string }> {
+    const response = await this.instance.get(`/intelligence/products/${encodeURIComponent(sku)}/inventory`);
+    return response.data as ApiResponse<ProductInventory> & { code?: string };
+  }
+
+  async searchBusinessIntelligenceProducts(search: string): Promise<ApiResponse<{ products: ProductOption[] }> & { code?: string }> {
+    const response = await this.instance.get('/products', { params: { search, page: 1, limit: 20 } });
+    const body = response.data as { success: boolean; data?: { products?: Array<{ _id: string; sku?: string; name: string; presentation?: string | null }> }; code?: string };
+    return { success: body.success, code: body.code, data: { products: (body.data?.products || []).flatMap(product =>
+      product.sku ? [{ id: product._id, sku: product.sku, name: product.name, presentation: product.presentation || null }] : []) } };
   }
 
   async sendAgentMessage(input: AgentMessageRequest, requestKey?: string): Promise<ApiResponse<AgentResponse>> {

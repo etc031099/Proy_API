@@ -19,7 +19,7 @@ export const dictionary = {
       transactions: 'Transactions',
       reports: 'Reports',
       integrations: 'Integrations',
-      demandForecast: 'Demand Forecast',
+      demandForecast: 'Business Intelligence',
       assistant: 'Assistant',
     },
     dashboard: {
@@ -265,7 +265,7 @@ export const dictionary = {
       transactions: 'Transacciones',
       reports: 'Reportes',
       integrations: 'Integraciones',
-      demandForecast: 'Predicción de demanda',
+      demandForecast: 'Inteligencia del Negocio',
       assistant: 'Asistente',
     },
     dashboard: {
