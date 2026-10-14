@@ -30,6 +30,7 @@ const createBusinessIntelligenceDashboardRoutes = ({ service, authenticateMiddle
   router.get('/products/:sku/related', endpoint('productRelated'));
   router.get('/health', endpoint('health'));
   router.get('/inventory', endpoint('inventory'));
+  router.get('/forecast/evaluation', endpoint('forecastEvaluation'));
   router.get('/products/:sku/forecast', endpoint('forecast'));
   router.get('/products/:sku/inventory', endpoint('productInventory'));
   return router;

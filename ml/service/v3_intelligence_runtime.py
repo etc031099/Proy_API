@@ -550,6 +550,12 @@ class V3IntelligenceRuntime:
         }
 
     def forecast_data(self, request):
+        if request.mode == "evaluation":
+            from ml.service.forecast_evaluation import load_forecast_evaluation
+            cutoff = self.resolve_context(request.context)
+            if cutoff != REFERENCE_DATE:
+                raise V3FunctionalError("INVALID_PERIOD", 422, "Evaluation evidence has a fixed historical cutoff.")
+            return load_forecast_evaluation(self.root), cutoff
         cutoff = self.resolve_context(request.context)
         if request.horizonDays not in v3_forecast.PRIMARY_HORIZONS:
             raise V3FunctionalError("UNSUPPORTED_HORIZON", 422, "Only approved 1, 7, and 14 day horizons are supported.")

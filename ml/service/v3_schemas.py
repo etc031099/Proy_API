@@ -279,7 +279,7 @@ class InventoryRequest(V3Request, PageRequest):
 
 
 class ForecastRequest(V3Request, PageRequest):
-    mode: Literal["detail", "compare", "rank", "summary"] = "detail"
+    mode: Literal["detail", "compare", "rank", "summary", "evaluation"] = "detail"
     skus: list[str] = Field(default_factory=list, max_length=MAX_ENTITY_BATCH)
     horizonDays: StrictInt = Field(default=7, ge=1, le=365)
     includeObservedSeries: StrictBool = False

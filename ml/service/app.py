@@ -302,6 +302,9 @@ def create_app(runtime: ModelRuntime | None = None,
     @application.post("/v3/intelligence/forecast", response_model=V3Response,
                       dependencies=[Depends(require_service_secret)])
     async def v3_forecast(request: Request, payload: ForecastRequest) -> V3Response:
+        if payload.mode == "evaluation" and payload.dataMode != "HISTORICAL":
+            raise HTTPException(status_code=422, detail={"code": "INVALID_PERIOD",
+                "message": "Model evaluation is frozen historical evidence, not LIVE analytics."})
         return await execute_v3(request, payload, "forecast", "forecast_data")
 
     @application.post("/v3/intelligence/cross-sell", response_model=V3Response,

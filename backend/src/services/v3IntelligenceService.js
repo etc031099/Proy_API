@@ -251,6 +251,32 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
         evidenceLabel: domain === 'cross-sell' ? `Inteligencia V3 · asociaciones históricas al ${V3.historicalCutoff}`
           : `Inteligencia V3 · ${spec.domain} · ${request.dataMode === 'LIVE' ? 'operativo' : 'histórico'} al ${meta.asOfDate}` } };
   };
-  return Object.freeze({ resolveContext, resolveEntity, execute, operationalClock });
+  const forecastEvaluation = async (context, { signal } = {}) => {
+    const binding = await resolveContext(context);
+    if (!binding) throw new AgentError('AGENT_SKILL_NOT_ALLOWED');
+    const payload = { requestId: context.requestId, dataMode: 'HISTORICAL', mode: 'evaluation',
+      context: { businessId: binding.businessId, scenarioId: binding.scenarioId,
+        datasetVersion: binding.datasetVersion, datasetSha256: binding.datasetSha256,
+        timezone: binding.timezone, asOfDate: V3.historicalCutoff } };
+    let body;
+    try { body = await client.intelligence('forecast', payload, { signal }); }
+    catch (error) { const safe = unavailable(); safe.functionalCode = error?.functionalCode; throw safe; }
+    const meta = body?.metadata;
+    if (body?.requestId !== payload.requestId || body.status !== 'OK'
+      || meta?.scenarioId !== binding.scenarioId || meta?.datasetVersion !== binding.datasetVersion
+      || meta?.datasetSha256 !== binding.datasetSha256 || meta?.timezone !== binding.timezone
+      || meta?.asOfDate !== V3.historicalCutoff || meta?.source !== 'CANONICAL_V3_BUNDLE'
+      || meta?.contractVersion !== 'm6.9b-v3-intelligence-v1') throw unavailable();
+    const data = safeData(body.data);
+    if (data.contractVersion !== 'forecast-model-evaluation-v1' || data.analysisCutoff !== V3.historicalCutoff
+      || data.selectedOperationalMethod?.algorithm !== 'MOVING_AVERAGE_28'
+      || data.selectedOperationalMethod?.modelType !== 'STATISTICAL_BASELINE'
+      || !Array.isArray(data.modelEvaluation) || data.modelEvaluation.length !== 2
+      || data.modelEvaluation.some(row => row.algorithm !== 'HistGradientBoostingRegressor'
+        || !['EVALUATED', 'REJECTED_FOR_OPERATIONAL_USE'].includes(row.modelStatus)
+        || !Number.isFinite(row.metrics?.test?.wape))) throw unavailable();
+    return data;
+  };
+  return Object.freeze({ resolveContext, resolveEntity, execute, operationalClock, forecastEvaluation });
 };
 module.exports = { V3, createV3IntelligenceService, safeData };

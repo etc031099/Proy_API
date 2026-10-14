@@ -397,7 +397,14 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, cl
       return { error: safeError(error) };
     }
   };
-  return Object.freeze({ summary, inventory, sales, customers, customer, suppliers, supplier, associations, productRelated, health,
+  const forecastEvaluation = async req => {
+    const prepared = await run(req, { frozen: true });
+    if (prepared.error) return { error: prepared.error };
+    try { return { data: await service.forecastEvaluation(prepared.context.authenticated,
+      { signal: new AbortController().signal }) }; }
+    catch (error) { return { error: safeError(error) }; }
+  };
+  return Object.freeze({ summary, inventory, sales, customers, customer, suppliers, supplier, associations, productRelated, health, forecastEvaluation,
     forecast: req => product(req, 'forecast'), productInventory: req => product(req, 'inventory') });
 };
 

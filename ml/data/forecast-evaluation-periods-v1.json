@@ -1,0 +1,15 @@
+{
+  "version": "demand-v1-period-evidence-v1",
+  "sourceManifestSha256": "30f0aebaafff3648b7b7fb6aff8fa2643dc19540c6b56722b2886137cf350419",
+  "dataset": {
+    "name": "M5 Forecasting Accuracy · CA_3",
+    "version": "demand-v1",
+    "synthetic": false,
+    "rows": 4522608,
+    "products": 3049,
+    "logicalHash": "8331eea267c4e71bdcffdf53ff40429a75aacf15c70377c46cc0196ea47b6868"
+  },
+  "trainPeriod": { "startDate": "2011-03-26", "endDate": "2015-11-15", "rows": 4010863 },
+  "validationPeriod": { "startDate": "2015-11-23", "endDate": "2016-02-14", "rows": 255756 },
+  "testPeriod": { "startDate": "2016-02-22", "endDate": "2016-05-15", "rows": 255989 }
+}
