@@ -1,5 +1,27 @@
 const mongoose = require('mongoose');
 
+const purchaseReceiptLineSchema = new mongoose.Schema({
+  stableLineKey: { type: String, required: true, trim: true },
+  receivedQty: { type: Number, required: true, min: 1, validate: Number.isSafeInteger },
+  purchaseUnitCostCents: { type: Number, default: null, min: 0, validate: value => value == null || Number.isSafeInteger(value) },
+  costBasis: { type: String, enum: ['OBSERVED_RECEIPT_COST', 'ORDER_COST', 'PRODUCT_CURRENT_COST', 'HISTORICAL_COST', 'UNAVAILABLE'], required: true },
+  currency: { type: String, default: null, trim: true }
+}, { _id: false, strict: 'throw' });
+
+const purchaseReceiptSchema = new mongoose.Schema({
+  receiptKey: { type: String, required: true, trim: true, minlength: 8, maxlength: 160 },
+  receivedAtUtc: { type: Date, required: true },
+  lines: { type: [purchaseReceiptLineSchema], required: true, validate: value => value.length > 0 }
+}, { _id: false, strict: 'throw' });
+
+const purchaseLifecycleSchema = new mongoose.Schema({
+  fulfillmentMode: { type: String, enum: ['IMMEDIATE', 'DEFERRED'], required: true },
+  orderedAtUtc: { type: Date, required: true },
+  promisedAtUtc: { type: Date, default: null },
+  receiptState: { type: String, enum: ['NONE', 'COMPLETE'], required: true, default: 'NONE' },
+  receipts: { type: [purchaseReceiptSchema], default: [] }
+}, { _id: false, strict: 'throw' });
+
 const transactionItemSchema = new mongoose.Schema({
   productId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -133,7 +155,8 @@ const transactionSchema = new mongoose.Schema({
   stableCode: { type: String, default: null, trim: true },
   localDate: { type: String, default: null, trim: true },
   sourceEventId: { type: String, default: null, trim: true },
-  scenarioData: { type: mongoose.Schema.Types.Mixed, default: null }
+  scenarioData: { type: mongoose.Schema.Types.Mixed, default: null },
+  purchaseLifecycle: { type: purchaseLifecycleSchema, default: null }
 }, {
   timestamps: true
 });
@@ -152,6 +175,12 @@ transactionSchema.index(
   } }
 );
 transactionSchema.index({ invoiceNumber: 1 }, { sparse: true });
+transactionSchema.index(
+  { businessId: 1, 'purchaseLifecycle.receipts.receiptKey': 1 },
+  { unique: true, name: 'transaction_v3_receipt_key_uq', partialFilterExpression: {
+    'purchaseLifecycle.receipts.receiptKey': { $type: 'string' }
+  } }
+);
 
 // Pre-save middleware to calculate totals while preserving explicit currency conversions
 transactionSchema.pre('save', function(next) {

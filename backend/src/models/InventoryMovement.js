@@ -34,6 +34,7 @@ const inventoryMovementSchema = new mongoose.Schema({
   currency: { type: String, default: null, trim: true },
   unitCostCents: { type: Number, default: null },
   valueDeltaCents: { type: Number, default: null },
+  costBasis: { type: String, enum: ['OBSERVED_RECEIPT_COST', 'ORDER_COST', 'PRODUCT_CURRENT_COST', 'HISTORICAL_COST', 'UNAVAILABLE', null], default: null },
   scenarioData: { type: mongoose.Schema.Types.Mixed, default: null }
 }, {
   timestamps: { createdAt: true, updatedAt: false }
@@ -75,6 +76,16 @@ inventoryMovementSchema.pre('validate', function validateStockEquation(next) {
   }
   if (this.stockAfter !== this.stockBefore + this.quantityDelta) {
     return next(new Error('Inventory movement violates stockAfter = stockBefore + quantityDelta'));
+  }
+  if (this.costBasis === 'UNAVAILABLE') {
+    if (this.unitCostCents != null || this.valueDeltaCents != null) {
+      return next(new Error('Unavailable movement cost cannot contain fabricated numeric values'));
+    }
+  } else if (this.costBasis) {
+    if (this.type !== 'purchase' || !Number.isSafeInteger(this.unitCostCents) || this.unitCostCents < 0
+        || !Number.isSafeInteger(this.valueDeltaCents) || this.valueDeltaCents !== this.quantityDelta * this.unitCostCents) {
+      return next(new Error('Purchase movement cost evidence must match its quantity and unit cost'));
+    }
   }
   next();
 });

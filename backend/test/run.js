@@ -46,3 +46,4 @@ require('./minimarketV3Definitions.test');
 require('./minimarketV3Generator.test');
 require('./minimarketV3Mongo.test');
 require('./v3OperationalSnapshot.test');
+require('./v3LiveBackendContracts.test');

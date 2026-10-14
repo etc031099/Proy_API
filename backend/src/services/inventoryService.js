@@ -19,6 +19,13 @@ const applyStockChange = async ({
   source = 'api',
   scenarioId = null,
   sourceEventId = null,
+  stableCode = null,
+  localDate = null,
+  reason = null,
+  currency = null,
+  unitCostCents = null,
+  valueDeltaCents = null,
+  costBasis = null,
   evaluateAlerts = source === 'api',
   session
 }) => {
@@ -47,7 +54,14 @@ const applyStockChange = async ({
     occurredAt: normalizeDate(occurredAt),
     source,
     scenarioId,
-    sourceEventId
+    sourceEventId,
+    stableCode,
+    localDate,
+    reason,
+    currency,
+    unitCostCents,
+    valueDeltaCents,
+    costBasis
   }], { session });
   // Historical reconstruction/backfill must never produce or resolve live alerts.
   // This switch is internal only; controllers do not accept it from request bodies.

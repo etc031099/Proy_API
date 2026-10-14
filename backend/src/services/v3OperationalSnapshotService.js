@@ -187,13 +187,131 @@ async function recordV3ContactChange({ businessId, session, before = null, after
 
 async function recordV3Transaction({ businessId, session, transaction, contact = null, productIdentities = [], operation = 'CREATE', effectiveAtUtc }) {
   if (businessId !== config.businessId) return null;
-  const projection = transactionProjection(transaction, contact, productIdentities);
   const isSale = transaction.type === 'sale';
-  const entityType = operation === 'CANCEL' ? 'transaction' : (isSale ? 'sale' : 'purchase');
+  const entityType = operation === 'CANCEL' || operation === 'RECEIVE'
+    ? 'transaction' : (isSale ? 'sale' : 'purchase');
+  let projection;
+  if (operation === 'CANCEL') {
+    const reference = verifiedTransactionReference(transaction);
+    if (reference.origin === 'HISTORICAL' && transaction.type === 'sale'
+        && reference.canonical.status !== 'completed') {
+      throw fail('HISTORICAL_REFERENCE_NOT_FOUND', 'Only a completed frozen sale can be cancelled after the cutoff.', 409);
+    }
+    projection = { contractVersion: 2, transactionKey: reference.transactionKey,
+      transactionOrigin: reference.origin, type: transaction.type, kind: 'CANCEL',
+      affectedStableLineKeys: reference.lineKeys };
+  } else projection = transactionProjection(transaction, contact, productIdentities);
   return bumpV3OperationalRevision({ businessId, session, effectiveAtUtc: effectiveAtUtc || transaction.date || new Date(), changes: [{
-    entityType, entityKey: idOf(transaction._id), operation,
-    projection: operation === 'CANCEL' ? { transactionOrigin: transaction.scenarioId ? 'HISTORICAL' : 'LIVE', type: transaction.type } : projection
+    entityType, entityKey: idOf(transaction._id), operation, projection
   }] });
+}
+
+function verifiedTransactionReference(transaction) {
+  if (transaction.businessId && transaction.businessId !== config.businessId) {
+    throw fail('HISTORICAL_REFERENCE_NOT_FOUND', 'Transaction does not belong to the V3 tenant.', 403);
+  }
+  if (transaction.scenarioId == null) {
+    return { origin: 'LIVE', transactionKey: idOf(transaction._id),
+      lineKeys: (transaction.products || []).map((line, index) => line.stableLineKey || `${idOf(transaction._id)}:${index}`), canonical: null };
+  }
+  const codeField = transaction.type === 'sale' ? 'saleCode' : 'purchaseCode';
+  const lineKeyField = transaction.type === 'sale' ? 'saleLineKey' : 'purchaseLineKey';
+  const canonical = transaction.scenarioData?.canonicalRecord;
+  const canonicalLines = transaction.scenarioData?.canonicalLines;
+  const localDate = transaction.type === 'sale' ? canonical?.localDate : canonical?.orderedLocalDate;
+  if (transaction.scenarioId !== config.scenarioId || !transaction.stableCode
+      || canonical?.scenarioId !== config.scenarioId || canonical?.[codeField] !== transaction.stableCode
+      || !Array.isArray(canonicalLines) || canonicalLines.length !== transaction.products.length
+      || !validIsoDay(localDate) || localDate > config.historicalCutoff
+      || !Number.isFinite(new Date(transaction.date).getTime())
+      || limaDate(new Date(transaction.date)) !== localDate
+      || (canonical.sourceEventId && transaction.sourceEventId !== canonical.sourceEventId)) {
+    throw fail('HISTORICAL_REFERENCE_NOT_FOUND', 'Historical transaction does not match the approved frozen stable reference.', 409);
+  }
+  const canonicalByKey = new Map(canonicalLines.map(line => [line[lineKeyField], line]));
+  if (canonicalByKey.size !== canonicalLines.length) throw fail('HISTORICAL_LINE_REFERENCE_INVALID', 'Frozen transaction line keys are duplicated.', 409);
+  const lineKeys = transaction.products.map(line => {
+    const key = line.stableLineKey;
+    const frozen = key && canonicalByKey.get(key);
+    const frozenProductKey = frozen && (frozen.productKey || null);
+    if (!key || !frozen || frozen[codeField] !== transaction.stableCode
+        || (line.productKey || null) !== frozenProductKey || (line.sku || null) !== (frozen.sku || null)
+        || Number(line.quantity) !== Number(transaction.type === 'sale'
+          ? (frozen.unitsSold ?? frozen.quantity) : frozen.quantityOrdered)
+        || (line.sourceEventId && frozen.sourceEventId && line.sourceEventId !== frozen.sourceEventId)) {
+      throw fail('HISTORICAL_LINE_REFERENCE_INVALID', 'Transaction line does not match its frozen stableLineKey.', 409);
+    }
+    return key;
+  });
+  if (lineKeys.length !== canonicalByKey.size) throw fail('HISTORICAL_LINE_REFERENCE_INVALID', 'Frozen transaction contains an unmapped line.', 409);
+  return { origin: 'HISTORICAL', transactionKey: transaction.stableCode, lineKeys, canonical };
+}
+
+async function resolveTransactionChangeReferences(changes, businessId, session) {
+  const rows = changes.filter(row => row.entityType === 'transaction' && ['CANCEL', 'RECEIVE'].includes(row.operation));
+  if (!rows.length) return changes;
+  const ids = [...new Set(rows.map(row => row.entityKey))];
+  if (ids.some(id => !mongoose.isValidObjectId(id))) {
+    throw fail('HISTORICAL_REFERENCE_NOT_FOUND', 'Operational transaction event has an invalid internal reference.', 409);
+  }
+  const transactions = await Transaction.find({ businessId, _id: { $in: ids } })
+    .select('_id businessId type date status cancelledAt scenarioId sourceEventId stableCode products.productId products.quantity products.productName products.sku products.productKey products.stableLineKey products.sourceEventId purchaseLifecycle scenarioData.canonicalRecord scenarioData.canonicalLines')
+    .session(session).lean().maxTimeMS(10000);
+  const byId = new Map(transactions.map(transaction => [idOf(transaction._id), transaction]));
+  if (transactions.some(transaction => transaction.scenarioId === config.scenarioId)) {
+    await resolveV3OperationalScenario(businessId, { session });
+  }
+  return changes.map(row => {
+    if (row.entityType !== 'transaction' || !['CANCEL', 'RECEIVE'].includes(row.operation)) return row;
+    const transaction = byId.get(row.entityKey);
+    if (!transaction) throw fail('HISTORICAL_REFERENCE_NOT_FOUND', 'Operational transaction event references no tenant-owned transaction.', 409);
+    const identity = verifiedTransactionReference(transaction);
+    const projection = row.projection || {};
+    if ((projection.transactionKey && projection.transactionKey !== identity.transactionKey)
+        || (projection.transactionOrigin && projection.transactionOrigin !== identity.origin)
+        || (projection.type && projection.type !== transaction.type)) {
+      throw fail('HISTORICAL_REFERENCE_NOT_FOUND', 'Operational transaction event disagrees with its stable tenant reference.', 409);
+    }
+    if (row.operation === 'CANCEL' && transaction.type === 'sale'
+        && identity.origin === 'HISTORICAL' && identity.canonical.status !== 'completed') {
+      throw fail('HISTORICAL_REFERENCE_NOT_FOUND', 'Cancellation references a frozen sale that was not completed.', 409);
+    }
+    if (row.operation === 'RECEIVE' && transaction.type !== 'purchase') {
+      throw fail('RECEIPT_REFERENCE_INVALID', 'RECEIVE event does not reference a purchase.', 409);
+    }
+    const expectedLineKeys = new Set(identity.lineKeys);
+    if (row.operation === 'CANCEL' && projection.affectedStableLineKeys
+        && (projection.affectedStableLineKeys.length !== expectedLineKeys.size
+          || projection.affectedStableLineKeys.some(key => !expectedLineKeys.has(key)))) {
+      throw fail('HISTORICAL_LINE_REFERENCE_INVALID', 'Cancellation line references do not match the transaction.');
+    }
+    if (row.operation === 'RECEIVE' && (projection.lines || []).some(line => !expectedLineKeys.has(line.lineKey))) {
+      throw fail('HISTORICAL_LINE_REFERENCE_INVALID', 'Receipt line reference does not match the purchase.');
+    }
+    if (row.operation === 'RECEIVE' && identity.origin === 'HISTORICAL') {
+      const receipt = transaction.purchaseLifecycle?.receipts?.find(item => item.receiptKey === projection.receiptKey);
+      const receiptLines = new Map((receipt?.lines || []).map(line => [line.stableLineKey, line]));
+      if (identity.canonical.status !== 'pending' || !identity.canonical.promisedAt || identity.canonical.receivedAt
+          || transaction.status !== 'completed' || transaction.purchaseLifecycle?.receiptState !== 'COMPLETE'
+          || !receipt || receiptLines.size !== expectedLineKeys.size
+          || (projection.lines || []).length !== expectedLineKeys.size
+          || (projection.lines || []).some(line => {
+            const frozen = transaction.scenarioData.canonicalLines.find(item => item.purchaseLineKey === line.lineKey);
+            const saved = receiptLines.get(line.lineKey);
+            return !frozen || !saved || Number(line.orderedQty) !== Number(frozen.quantityOrdered)
+              || Number(line.receivedQty) !== Number(frozen.quantityOrdered)
+              || Number(saved.receivedQty) !== Number(line.receivedQty)
+              || (saved.purchaseUnitCostCents ?? null) !== (line.purchaseUnitCostCents ?? null)
+              || saved.costBasis !== line.costBasis || (saved.currency ?? null) !== (line.currency ?? null);
+          })) {
+        throw fail('HISTORICAL_LINE_REFERENCE_INVALID', 'Receipt does not match a full first receipt of the frozen pending purchase.', 409);
+      }
+    }
+    return { ...row, projection: { ...projection, contractVersion: projection.contractVersion || 2,
+      transactionKey: identity.transactionKey, transactionOrigin: identity.origin,
+      type: transaction.type,
+      ...(row.operation === 'CANCEL' ? { kind: 'CANCEL', affectedStableLineKeys: identity.lineKeys } : { kind: 'RECEIVE' }) } };
+  });
 }
 
 async function recordV3Movement({ businessId, session, movement, operation = 'ADJUST' }) {
@@ -219,7 +337,7 @@ function transactionProjection(tx, contact = null, productIdentities = []) {
     costKnown: line.costCents != null || line.costPrice != null,
     promo: Boolean(line.promo || line.discountCents)
   }));
-  return isSale ? {
+  const projection = isSale ? {
     saleKey: idOf(tx._id), occurredAtUtc: new Date(tx.date).toISOString(), localDate: limaDate(new Date(tx.date)),
     customerKey: tx.customerId ? (contact?.stableCode || contact?.stableKey || `OP-C-${idOf(tx.customerId)}`) : null,
     currency: tx.currency || 'PEN', totalCents: cents(tx.totalAmount), initialStatus: tx.status || 'completed', lines: products
@@ -230,6 +348,12 @@ function transactionProjection(tx, contact = null, productIdentities = []) {
     lines: products.map(line => ({ lineKey: line.lineKey, productKey: line.productKey, sku: line.sku,
       quantityOrdered: line.quantity, purchaseUnitCostCents: line.unitPriceCents, lineTotalCents: line.lineTotalCents }))
   };
+  if (!isSale && (tx.status === 'pending' || tx.purchaseLifecycle?.fulfillmentMode === 'DEFERRED')) {
+    return { ...projection, contractVersion: 2, fulfillmentMode: 'DEFERRED',
+      initialStatus: tx.status || 'pending', receiptEvidence: 'NONE',
+      promisedAtUtc: tx.purchaseLifecycle?.promisedAtUtc ? new Date(tx.purchaseLifecycle.promisedAtUtc).toISOString() : null };
+  }
+  return projection;
 }
 
 function buildSnapshotSections(changes, asOfDate, closedThrough, visibleProducts = [], throughUtc = null) {
@@ -246,9 +370,21 @@ function buildSnapshotSections(changes, asOfDate, closedThrough, visibleProducts
       catalogChanges.push({ ...common, operation: row.operation, projection: row.projection });
     } else if (row.entityType === 'sale' && row.operation === 'CREATE') sales.push(row.projection);
     else if (row.entityType === 'purchase' && row.operation === 'CREATE') purchases.push(row.projection);
-    else if (row.entityType === 'transaction' && row.operation === 'CANCEL') {
-      transactionChanges.push({ ...common, transactionKey: row.entityKey, transactionOrigin: row.projection?.transactionOrigin || 'LIVE', kind: 'CANCEL', lineChanges: [] });
-      canceled.add(row.entityKey);
+    else if (row.entityType === 'transaction' && ['CANCEL', 'RECEIVE'].includes(row.operation)) {
+      const projection = row.projection || {};
+      const transactionKey = projection.transactionKey || row.entityKey;
+      const kind = row.operation;
+      const lineChanges = kind === 'RECEIVE'
+        ? (projection.lines || []).map(line => ({ lineKey: line.lineKey, receivedQty: line.receivedQty,
+          productKey: line.productKey, sku: line.sku ?? null, orderedQty: line.orderedQty,
+          purchaseUnitCostCents: line.purchaseUnitCostCents ?? null, costBasis: line.costBasis || 'UNAVAILABLE',
+          currency: line.currency ?? null }))
+        : (projection.affectedStableLineKeys || []).map(lineKey => ({ lineKey, receivedQty: null }));
+      transactionChanges.push({ ...common, entityKey: transactionKey, transactionKey,
+        transactionOrigin: projection.transactionOrigin || 'LIVE', kind,
+        ...(kind === 'RECEIVE' ? { receiptKey: projection.receiptKey, supplierKey: projection.supplierKey } : {}),
+        lineChanges });
+      if (kind === 'CANCEL') canceled.add(transactionKey);
     }
   }
   const unitsByDayProduct = new Map();
@@ -270,7 +406,9 @@ function buildSnapshotSections(changes, asOfDate, closedThrough, visibleProducts
   const sortBy = (array, keys) => array.sort((a, b) => keys.map(key => String(a[key] ?? '').localeCompare(String(b[key] ?? ''))).find(result => result !== 0) || 0);
   sortBy(catalogChanges, ['effectiveAtUtc', 'eventKey']); sortBy(sales, ['occurredAtUtc', 'saleKey']);
   sortBy(purchases, ['orderedAtUtc', 'purchaseKey']); sortBy(transactionChanges, ['effectiveAtUtc', 'eventKey']); sortBy(closedSalesDays, ['localDate', 'productKey']);
-  return { catalogChanges, sales, purchases, transactionChanges, closedSalesDays };
+  const contractVersion = changes.some(row => row.projection?.contractVersion === 2
+    || row.operation === 'RECEIVE') ? '2' : '1';
+  return { catalogChanges, sales, purchases, transactionChanges, closedSalesDays, contractVersion };
 }
 
 function enforcePayloadLimit(snapshot) {
@@ -293,9 +431,10 @@ async function readSnapshotData({ businessId, session, asOfDate, capturedAtUtc }
     ? capturedAtUtc
     : new Date(limaDayStart(nextDay(asOfDate)).getTime() - 1);
   // Mongo sessions in a transaction must be used serially (not Promise.all).
-  const changes = await V3OperationalChange.find({ businessId, effectiveAtUtc: { $gte: from, $lte: through } })
+  const journalRows = await V3OperationalChange.find({ businessId, effectiveAtUtc: { $gte: from, $lte: through } })
     .sort({ revision: 1, eventOrdinal: 1 }).limit(config.maxChanges + 1).session(session)
     .setOptions({ useBigInt64: true }).lean().maxTimeMS(15000);
+  const changes = await resolveTransactionChangeReferences(journalRows, businessId, session);
   const futureCatalogChanges = await V3OperationalChange.find({ businessId, entityType: 'product', effectiveAtUtc: { $gt: through }, operation: { $in: ['UPDATE', 'DEACTIVATE'] } })
     .sort({ effectiveAtUtc: 1, revision: 1, eventOrdinal: 1 }).limit(config.maxChanges + 1).session(session)
     .setOptions({ useBigInt64: true }).lean().maxTimeMS(15000);
@@ -366,9 +505,11 @@ async function buildV3OperationalSnapshot({ businessId, asOfDate, now = new Date
       const sections = buildSnapshotSections(data.changes, asOfDate, closedThrough, data.visibleProductKeys, data.through);
       const projectedChanges = sections.catalogChanges.map(change => ({ ...change, projection: change.projection || { before: null, after: null } }));
       sections.catalogChanges = projectedChanges;
+      const contractV2 = sections.contractVersion === '2';
       const payload = {
         metadata: {
-          snapshotVersion: config.snapshotVersion, contractVersion: config.contractVersion,
+          snapshotVersion: contractV2 ? 'v3-operational-snapshot-v2' : config.snapshotVersion,
+          contractVersion: contractV2 ? '2' : config.contractVersion,
           businessId: config.businessId, scenarioId: config.scenarioId,
           historicalDatasetVersion: config.datasetVersion, historicalDatasetSha256: config.sourceSha256,
           historicalCutoff: config.historicalCutoff, deltaStart: config.deltaStart, timezone: config.timezone,
@@ -377,6 +518,8 @@ async function buildV3OperationalSnapshot({ businessId, asOfDate, now = new Date
           dataVersion: version, completeness: 'COMPLETE',
           counts: { catalogChanges: sections.catalogChanges.length, sales: sections.sales.length, purchases: sections.purchases.length,
             transactionChanges: sections.transactionChanges.length, stockStates: data.stockStates.length, closedSalesDays: sections.closedSalesDays.length },
+          ...(contractV2 ? { receiptEvents: sections.transactionChanges.filter(change => change.kind === 'RECEIVE').length,
+            cancellationEvents: sections.transactionChanges.filter(change => change.kind === 'CANCEL').length } : {}),
           costCoverage: { knownSaleLines: sections.sales.flatMap(sale => sale.lines).filter(line => line.costKnown).length,
             unknownSaleLines: sections.sales.flatMap(sale => sale.lines).filter(line => !line.costKnown).length },
           availabilityCoverage: 'UNKNOWN'
@@ -407,5 +550,6 @@ module.exports = {
   config, resolveV3OperationalScenario, getDataVersion, bumpV3OperationalRevision, bootstrapV3OperationalRevision,
   buildV3OperationalSnapshot, productProjection, contactProjection, transactionProjection,
   recordV3ProductChange, recordV3ContactChange, recordV3Transaction, recordV3Movement,
-  buildSnapshotSections, enforcePayloadLimit, limaDate, limaDayStart, logicalHash
+  buildSnapshotSections, enforcePayloadLimit, limaDate, limaDayStart, logicalHash,
+  verifiedTransactionReference, resolveTransactionChangeReferences
 };
