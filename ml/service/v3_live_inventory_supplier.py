@@ -20,6 +20,18 @@ from ml.src import business_customer_supplier_v3 as m68
 from ml.src import inventory_intelligence_v3 as m66
 
 LIMA = ZoneInfo("America/Lima")
+_RISK_LEVELS = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+
+
+def _risk_counts(rows: list[dict[str, Any]]) -> dict[str, int | None]:
+    """Count the same canonical risk levels exposed by inventory ranking rows."""
+    normalized = [str((row.get("risk") or {}).get("level") or "").strip().upper() for row in rows]
+    unavailable = sum(level not in _RISK_LEVELS for level in normalized)
+    counts = {level.lower(): sum(value == level for value in normalized) for level in _RISK_LEVELS}
+    if unavailable:
+        counts = {key: None for key in counts}
+    counts["riskUnavailableCount"] = unavailable
+    return counts
 
 
 def _get(row: Any, key: str, default=None):
@@ -449,18 +461,16 @@ class LiveInventorySupplierAdapter:
             "slowMovingUnavailableCount": sum(row["classification"]["slowMoving"] is None for row in rows),
             "deadStockUnavailableCount": sum(row["classification"]["deadStock"] is None for row in rows)}
         if forecast_rows is not None:
-            risk_unavailable = any(row["risk"].get("level") is None for row in rows)
             for row in rows:
                 if row["demand"].get("expectedDaily") is None:
                     summary["forecastAvailability"] = "PARTIAL"
-            summary.update({key: (None if risk_unavailable else sum(row["risk"].get("level") == key for row in rows))
-                for key in ("critical", "high", "medium", "low")})
+            summary.update(_risk_counts(rows))
+            risk_unavailable = summary["riskUnavailableCount"] > 0
             summary["shouldReorder"] = (None if risk_unavailable else
                 sum(row["recommendation"].get("shouldReorder") is True for row in rows))
             summary["recommendedProducts"] = sum((row["recommendation"].get("recommendedQty") or 0) > 0 for row in rows)
             summary["overstock"] = (None if risk_unavailable else
                 sum(row["classification"].get("overstock") is True for row in rows))
-            summary["riskUnavailableCount"] = sum(row["risk"].get("level") is None for row in rows)
             summary["recommendationUnavailableCount"] = sum(row["recommendation"].get("recommendedQty") is None for row in rows)
             value_complete = all(_get(products[sku], "costPriceCents") is not None for sku in products if _get(products[sku], "active", True))
             summary["inventoryValueCents"] = (sum(int(row["stock"]["onHand"] or 0) * int(_get(products[row["sku"]], "costPriceCents", 0)) for row in rows

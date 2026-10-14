@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from ml.service.v3_live_inventory_supplier import LiveInventorySupplierAdapter
+from ml.service.v3_live_inventory_supplier import LiveInventorySupplierAdapter, _risk_counts
 from ml.service.v3_schemas import InventoryRequest, SupplierRequest, BUSINESS_ID
 from ml.service.app import create_app
 from ml.service.v3_intelligence_runtime import V3IntelligenceRuntime
@@ -101,6 +101,43 @@ def _supplier_request(**kwargs):
 
 
 class M69F4DLiveInventorySupplierTests(unittest.TestCase):
+    def test_risk_summary_counts_match_canonical_ranking_rows(self):
+        rows = [
+            {"sku": "CRIT-1", "risk": {"level": "CRITICAL"}},
+            {"sku": "HIGH-1", "risk": {"level": "HIGH"}},
+            {"sku": "HIGH-2", "risk": {"level": "HIGH"}},
+            {"sku": "MED-1", "risk": {"level": "MEDIUM"}},
+            {"sku": "LOW-1", "risk": {"level": "LOW"}},
+        ]
+        summary = _risk_counts(rows)
+        ranked = [LiveInventorySupplierAdapter._public_inventory({**row, "productName": row["sku"]})
+                  for row in rows]
+        actual_from_ranking = {level.lower(): sum(row["risk"]["level"] == level for row in ranked)
+                               for level in ("CRITICAL", "HIGH", "MEDIUM", "LOW")}
+
+        self.assertEqual(summary, {"critical": 1, "high": 2, "medium": 1, "low": 1,
+                                   "riskUnavailableCount": 0})
+        self.assertEqual({key: summary[key] for key in actual_from_ranking}, actual_from_ranking)
+
+    def test_risk_summary_counts_empty_inventory_as_zero(self):
+        self.assertEqual(_risk_counts([]), {"critical": 0, "high": 0, "medium": 0, "low": 0,
+                                            "riskUnavailableCount": 0})
+
+    def test_risk_summary_normalizes_case_but_marks_missing_or_unknown_unavailable(self):
+        normalized = _risk_counts([
+            {"risk": {"level": "critical"}},
+            {"risk": {"level": "HIGH"}},
+        ])
+        self.assertEqual(normalized, {"critical": 1, "high": 1, "medium": 0, "low": 0,
+                                     "riskUnavailableCount": 0})
+
+        unavailable = _risk_counts([
+            {"risk": {"level": None}},
+            {"risk": {"level": "UNKNOWN"}},
+        ])
+        self.assertEqual(unavailable, {"critical": None, "high": None, "medium": None,
+                                       "low": None, "riskUnavailableCount": 2})
+
     def test_inventory_stock_is_snapshot_authority_and_revision_cache_isolated(self):
         adapter = _adapter()
         first, _ = adapter.inventory_data(_inventory_request(), _context(version="1", stock=21))
