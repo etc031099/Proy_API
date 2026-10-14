@@ -54,7 +54,7 @@ class LiveForecastAdapter:
                 raise LiveDomainError("PRODUCT_NOT_FOUND", 404, "One or more product SKUs were not found.")
             rows = [row for row in rows if row["sku"] in skus]
         if (request.mode in {"detail", "compare"} and any(row["status"] != "READY" for row in rows)
-                and not request.includeObservedSeries):
+                and not getattr(request, "includeObservedSeries", False)):
             raise LiveDomainError("INSUFFICIENT_HISTORY", 422,
                                   "The selected product does not have 28 consecutive certified closed-day observations.")
         key_field = f"expectedUnitsNext{horizon}d"
@@ -176,7 +176,7 @@ class LiveForecastAdapter:
                       "forecastSource": "MOVING_AVERAGE_28", "strategyVersion": v3_baseline_bundle.STRATEGY_VERSION,
                       "observationsThrough": through.isoformat(), "forecastStartDate": cutoff.isoformat(),
                       "confidence": None, "predictionInterval": None}
-            if request.includeObservedSeries:
+            if getattr(request, "includeObservedSeries", False):
                 record["observedSeries"] = observed_series
             for h in v3_forecast.PRIMARY_HORIZONS:
                 record[f"expectedUnitsNext{h}d"] = h * (sum(values) / 28) if status == "READY" else None

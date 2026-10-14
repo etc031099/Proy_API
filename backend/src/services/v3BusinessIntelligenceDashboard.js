@@ -69,9 +69,7 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, cl
         execute(context, 'get_supplier_intelligence', { mode: 'summary', startDate: V3.earliestDate, endDate: today }),
       ]);
       const kpis = business.data?.kpis || {}, inv = inventory.data?.summary || {};
-      const supplierRows = suppliers.data?.items || [];
-      const pendingPurchasesCount = supplierRows.every(row => Number.isFinite(row.pendingOrderCount))
-        ? supplierRows.reduce((sum, row) => sum + row.pendingOrderCount, 0) : null;
+      const pendingPurchasesCount = finiteOrNull(suppliers.data?.summary?.pendingOrders);
       const marginAvailable = Number.isFinite(kpis.grossMarginCents) && Number.isFinite(kpis.grossMarginPct);
       const freshness = business.data?.freshness || inventory.data?.freshness || null;
       return { data: {
@@ -134,6 +132,11 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, cl
     const { context } = prepared, sku = String(req.params?.sku || '').trim();
     if (!/^[A-Za-z0-9._-]{1,100}$/.test(sku)) return { error: { code: 'INVALID_REQUEST', httpStatus: 400, message: 'El SKU no es válido.' } };
     try {
+      const catalogProduct = await getModels().Product.findOne({ businessId: context.authenticated.businessId,
+        scenarioId: V3.scenarioId, isActive: true, sku }).select('name presentation brand sizeValue sizeUnit')
+        .lean().maxTimeMS(3000);
+      if (!catalogProduct) { const error = new Error('Product not found'); error.functionalCode = 'PRODUCT_NOT_FOUND';
+        return { error: safeError(error) }; }
       const args = type === 'forecast'
         ? { mode: 'detail', productRef: sku, horizonDays: horizon, includeObservedSeries: true }
         : { mode: 'detail', productRef: sku };
@@ -143,11 +146,6 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, cl
           mode: result.metadata?.dataMode || null, reason: 'INSUFFICIENT_HISTORY', product: { sku } } };
       }
       const row = result.data.items[0];
-      const catalogProduct = await getModels().Product.findOne({ businessId: context.authenticated.businessId,
-        scenarioId: V3.scenarioId, isActive: true, sku }).select('name presentation brand sizeValue sizeUnit')
-        .lean().maxTimeMS(3000);
-      if (!catalogProduct) { const error = new Error('Product not found'); error.functionalCode = 'PRODUCT_NOT_FOUND';
-        return { error: safeError(error) }; }
       const productIdentity = { sku, name: catalogProduct.name || row.productName || row.name || sku,
         presentation: catalogProduct.presentation || null, brand: catalogProduct.brand || null,
         size: catalogProduct.sizeValue == null ? null : { value: catalogProduct.sizeValue, unit: catalogProduct.sizeUnit || null } };
@@ -160,9 +158,11 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, cl
           '14d': finiteOrNull(row.expectedUnitsNext14d) }, observedSeries: row.observedSeries || [],
         forecastPeriod: { startDate: row.forecastStartDate || null, selectedHorizonDays: horizon,
           units: finiteOrNull(row[`expectedUnitsNext${horizon}d`]) } } };
-      return { data: { status: result.status, availability: result.data?.availabilityStatus || result.data?.fieldAvailability || null,
+      return { data: { status: result.status, availability: result.data?.availabilityStatus || result.data?.fieldAvailability || result.status,
         asOf: context.asOf, timezone: V3.timezone,
         mode: result.metadata.dataMode, updatedAt: result.metadata.updatedAt || null, dataThrough: result.metadata.dataThrough || null,
+        freshness: result.data?.freshness || { mode: result.metadata.dataMode,
+          updatedAt: result.metadata.updatedAt || null, dataThrough: result.metadata.dataThrough || null },
         product: productIdentity,
         stock: { onHand: finiteOrNull(row.stock?.onHand), incoming: finiteOrNull(row.stock?.incoming),
           inventoryPosition: finiteOrNull(row.stock?.inventoryPosition) },

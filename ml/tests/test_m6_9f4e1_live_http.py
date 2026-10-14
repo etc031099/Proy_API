@@ -186,6 +186,20 @@ class M69F4E1LiveHttpTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertEqual(response.json()["detail"]["code"], "SNAPSHOT_HASH_MISMATCH")
 
+    def test_live_snapshot_v2_contract_is_accepted_over_http(self):
+        body = _live_body(self.runtime, mode="detail", skus=["PAN-FRE-001"], horizonDays=7)
+        raw = body["operationalSnapshot"]
+        raw["metadata"]["snapshotVersion"] = "v3-operational-snapshot-v2"
+        raw["metadata"]["contractVersion"] = "2"
+        body["operationalSnapshot"] = signed_snapshot(raw).model_dump(mode="json")
+        response = self.client.post("/v3/intelligence/forecast", headers=self.headers, json=body)
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()
+        json.dumps(result, allow_nan=False)
+        self.assertEqual(result["metadata"]["source"], "HISTORICAL_PLUS_OPERATIONAL_SNAPSHOT")
+        self.assertEqual(result["metadata"]["dataVersion"], "1")
+        self.assertEqual(result["data"]["items"][0]["sku"], "PAN-FRE-001")
+
     def test_partial_day_is_excluded_and_missing_close_is_not_zero_over_http(self):
         baseline = _live_body(self.runtime, mode="detail", skus=["PAN-FRE-001"], horizonDays=7)
         baseline_response = self.client.post("/v3/intelligence/forecast", headers=self.headers, json=baseline)
