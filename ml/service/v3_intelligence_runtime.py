@@ -608,6 +608,18 @@ class V3IntelligenceRuntime:
         if request.categoryCode and request.categoryCode not in self.business.categories:
             raise V3FunctionalError("SCENARIO_NOT_SUPPORTED", 422, "Category is not part of the approved scenario.")
         def calculate():
+            if request.mode == "summary":
+                summary = self.basket.get("summary", {})
+                return {"available": True, "summary": {
+                    "analysisCutoff": self.basket.get("cutoffDate", BASKET_CUTOFF.isoformat()),
+                    "analysisVersion": self.basket.get("analysisVersion"),
+                    "validTickets": summary.get("validTickets"),
+                    "itemsetsCount": summary.get("frequentItemsets"),
+                    "rulesCount": summary.get("rulesAfterRedundancyReduction"),
+                    "qualityRulesCount": summary.get("rulesAfterQualityFilter"),
+                    "crossSellCount": summary.get("skuCrossSellRules"),
+                }, "total": len(self.basket.get("rules", [])), "items": [],
+                    "interpretation": "Frozen observed co-occurrence; not causality or a future sales guarantee."}
             if request.sku:
                 items = list(self.basket["recommendationsBySku"].get(request.sku, []))
                 total = len(items)
@@ -706,6 +718,9 @@ class V3IntelligenceRuntime:
                     "total": len(rows)}
         else:
             data = {"total": len(rows), "items": safe_rows, "summary": result["summary"] if request.mode == "summary" else None}
+        if request.mode == "detail" and request.supplierCode:
+            data["costTrends"] = [row for row in result.get("costIntelligence", [])
+                                  if row.get("supplierCode") == request.supplierCode]
         return data, cutoff
 
     @staticmethod

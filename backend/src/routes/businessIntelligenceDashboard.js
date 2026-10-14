@@ -15,11 +15,20 @@ const createBusinessIntelligenceDashboardRoutes = ({ service, authenticateMiddle
   const endpoint = method => async (req, res) => {
     const result = await dashboard[method](req);
     if (result.error) return res.status(result.error.httpStatus).json({ success: false,
-      code: result.error.code, message: result.error.message });
+      code: result.error.code, message: result.error.message,
+      ...(Array.isArray(result.error.candidates) ? { candidates: result.error.candidates } : {}) });
     return res.json({ success: true, data: result.data });
   };
   router.use(authenticateMiddleware, businessAccessMiddleware, limiter);
   router.get('/summary', endpoint('summary'));
+  router.get('/sales', endpoint('sales'));
+  router.get('/customers', endpoint('customers'));
+  router.get('/customers/:customerRef', endpoint('customer'));
+  router.get('/suppliers', endpoint('suppliers'));
+  router.get('/suppliers/:supplierRef', endpoint('supplier'));
+  router.get('/associations', endpoint('associations'));
+  router.get('/products/:sku/related', endpoint('productRelated'));
+  router.get('/health', endpoint('health'));
   router.get('/inventory', endpoint('inventory'));
   router.get('/products/:sku/forecast', endpoint('forecast'));
   router.get('/products/:sku/inventory', endpoint('productInventory'));

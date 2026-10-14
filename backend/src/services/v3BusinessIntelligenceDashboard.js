@@ -15,7 +15,11 @@ const safeError = (error, status = 503) => {
     ['LIVE_SNAPSHOT_INVALID', [503, 'La lectura operativa no pudo validarse.']],
     ['TENANT_MISMATCH', [403, 'El negocio no está autorizado para este escenario.']],
     ['PRODUCT_NOT_FOUND', [404, 'No se encontró el producto solicitado.']],
-    ['INSUFFICIENT_HISTORY', [200, '']],
+    ['CUSTOMER_NOT_FOUND', [404, 'No se encontró el cliente solicitado.']],
+    ['SUPPLIER_NOT_FOUND', [404, 'No se encontró el proveedor solicitado.']],
+    ['AMBIGUOUS_ENTITY', [409, 'La referencia coincide con más de una entidad.']],
+    ['INSUFFICIENT_HISTORY', [422, 'No hay historial suficiente para esta consulta.']],
+    ['DATA_NOT_AVAILABLE', [503, 'La analítica solicitada no está disponible.']],
     ['UNSUPPORTED_HORIZON', [400, 'El horizonte solicitado no está disponible.']],
     ['INVALID_PERIOD', [400, 'La fecha solicitada no es válida.']],
     ['SCENARIO_NOT_SUPPORTED', [403, 'Este negocio no tiene acceso a la analítica V3.']],
@@ -55,6 +59,206 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, cl
     args: { ...args, asOfDate: context.asOf },
     signal: new AbortController().signal,
   });
+  const responseMeta = (result, context, domain) => ({
+    asOf: context.asOf, timezone: V3.timezone, mode: domain === 'cross-sell' ? 'FROZEN' : result.metadata?.dataMode || null,
+    updatedAt: result.metadata?.updatedAt || null, dataThrough: result.metadata?.dataThrough || null,
+    freshness: domain === 'cross-sell' ? { mode: 'FROZEN', cutoff: V3.historicalCutoff }
+      : result.data?.freshness || { mode: result.metadata?.dataMode || null,
+        updatedAt: result.metadata?.updatedAt || null, dataThrough: result.metadata?.dataThrough || null,
+        dataVersion: result.metadata?.dataVersion || null, snapshotHash: result.metadata?.snapshotHash || null },
+    dataVersion: result.metadata?.dataVersion || null, snapshotHash: result.metadata?.snapshotHash || null,
+    source: result.metadata?.source || null, engineVersion: result.metadata?.engineVersion || null,
+  });
+  const periodRange = (context, query = {}) => {
+    const { startDate, endDate } = query;
+    if (startDate !== undefined || endDate !== undefined) {
+      if (!validDate(startDate) || !validDate(endDate) || startDate > endDate || endDate > context.asOf) return null;
+      return { startDate, endDate };
+    }
+    const period = String(query.period || 'TODAY').toUpperCase();
+    const days = { TODAY: 1, LAST_7_DAYS: 7, LAST_30_DAYS: 30 }[period];
+    if (!days) return null;
+    return { startDate: addDays(context.asOf, -(days - 1)), endDate: context.asOf };
+  };
+  const periodArgs = period => ({ startDate: period.startDate, endDate: period.endDate });
+  const money = cents => Number.isFinite(cents) ? { value: cents / 100, currency: 'PEN' } : null;
+  const kpiContract = data => {
+    const kpis = data?.kpis || {};
+    const marginAvailable = Number.isFinite(kpis.grossMarginCents);
+    return { revenue: money(kpis.revenueCents), units: finiteOrNull(kpis.unitsSold), tickets: finiteOrNull(kpis.ticketCount),
+      averageTicket: money(Number.isFinite(kpis.averageTicket) ? Math.round(kpis.averageTicket * 100) : null),
+      grossMargin: { value: marginAvailable ? kpis.grossMarginCents / 100 : null, currency: marginAvailable ? 'PEN' : null,
+        percent: finiteOrNull(kpis.grossMarginPct), availability: marginAvailable ? data?.availabilityStatus === 'PARTIAL' ? 'PARTIAL' : 'AVAILABLE' : 'UNAVAILABLE' } };
+  };
+  const executionError = result => result.status === 'CLARIFICATION'
+    ? { code: 'AMBIGUOUS_ENTITY', httpStatus: 409, message: 'La referencia coincide con más de una entidad.',
+      candidates: (result.metadata?.resolution?.candidates || []).map(({ key, label, type }) => ({ key, label, type })) }
+    : null;
+  const sales = async req => {
+    const prepared = await run(req); if (prepared.error) return { error: prepared.error };
+    const { context } = prepared, period = periodRange(context, req.query || {});
+    if (!period) return { error: invalidPeriodError() };
+    const limit = parseLimit(req.query?.limit);
+    if (!limit) return { error: invalidLimitError() };
+    const compare = String(req.query?.compare || '').toLowerCase() === 'true';
+    const includeSeries = String(req.query?.includeSeries || '').toLowerCase() === 'true';
+    if (includeSeries && daysBetween(period.startDate, period.endDate) > 29) return { error: invalidPeriodError() };
+    try {
+      const summaryArgs = { ...periodArgs(period), mode: compare ? 'compare' : 'summary' };
+      const summaryResult = await execute(context, 'get_business_analytics', summaryArgs, 1);
+      const summaryClarification = executionError(summaryResult); if (summaryClarification) return { error: summaryClarification };
+      const [productsResult, categoriesResult] = await Promise.all([
+        execute(context, 'get_business_analytics', { ...periodArgs(period), mode: 'rank', entityType: 'product', metric: 'revenue', limit }, limit),
+        execute(context, 'get_business_analytics', { ...periodArgs(period), mode: 'rank', entityType: 'category', metric: 'revenue', limit }, limit),
+      ]);
+      const kpis = kpiContract(summaryResult.data);
+      const series = [];
+      if (includeSeries) {
+        for (let day = period.startDate; day <= period.endDate; day = addDays(day, 1)) {
+          const pointResult = await execute(context, 'get_business_analytics', { mode: 'summary', startDate: day, endDate: day }, 1);
+          const point = kpiContract(pointResult.data);
+          series.push({ date: day, revenue: point.revenue, units: point.units, tickets: point.tickets,
+            status: pointResult.status || 'UNAVAILABLE' });
+        }
+      }
+      const ranking = result => (result.data?.items || []).map(row => ({
+        name: row.name || row.categoryName || row.sku || row.categoryCode || null,
+        sku: row.sku || null, category: row.categoryCode || null, revenue: row.revenueCents !== undefined ? money(row.revenueCents) :
+          String(row.metricName || result.data?.metric || '').toLowerCase().includes('revenue') && Number.isFinite(row.metric) ? money(row.metric) : null,
+        units: finiteOrNull(row.units ?? (String(row.metricName || result.data?.metric || '').toLowerCase().includes('unit') ? row.metric : null)),
+        tickets: finiteOrNull(row.ticketCount ?? (String(row.metricName || result.data?.metric || '').toLowerCase().includes('ticket') ? row.metric : null)),
+        metric: finiteOrNull(row.metric), metricName: row.metricName || result.data?.metric || null,
+      }));
+      return { data: { ...responseMeta(summaryResult, context, 'business'), period,
+        comparisonPeriod: summaryResult.data?.previousPeriod || null, summary: kpis,
+        grossMarginAvailability: kpis.grossMargin.availability,
+        variation: summaryResult.data?.trends || null, comparisonAvailability: summaryResult.data?.comparisonAvailability || null,
+        series: includeSeries ? series : null,
+        seriesStatus: !includeSeries ? 'NOT_REQUESTED'
+          : series.every(point => point.status === 'READY') ? 'READY' : series.every(point => point.status === 'NO_DATA') ? 'NO_DATA' : 'PARTIAL',
+        rankings: { topProducts: ranking(productsResult), topCategories: ranking(categoriesResult) } } };
+    } catch (error) { return { error: safeError(error) }; }
+  };
+  const customers = async req => {
+    const prepared = await run(req); if (prepared.error) return { error: prepared.error };
+    const { context } = prepared, limit = parseLimit(req.query?.limit), offset = parseOffset(req.query?.offset);
+    if (!limit || offset === null) return { error: invalidLimitError() };
+    const segment = req.query?.segment ? String(req.query.segment).toUpperCase() : undefined;
+    if (segment && !['AT_RISK', 'INACTIVE', 'NEW', 'LOYAL', 'TOP_HIGH_VALUE', 'POTENTIAL'].includes(segment)) return { error: invalidRequestError() };
+    const metrics = { spend: 'spend', frequency: 'tickets', recency: 'recency', gross_margin: 'gross_margin' };
+    const metric = metrics[String(req.query?.sortBy || 'spend').toLowerCase()];
+    if (!metric) return { error: invalidRequestError() };
+    try {
+      const [summaryResult, rankResult] = await Promise.all([
+        execute(context, 'get_customer_intelligence', { mode: 'summary', limit: 20 }, 20),
+        execute(context, 'get_customer_intelligence', { mode: 'rank', metric, segment, limit, offset }, limit),
+      ]);
+      const distribution = summaryResult.data?.segmentDistribution || {};
+      const rows = rankResult.data?.items || [];
+      const totalRegistered = finiteOrNull(summaryResult.data?.total), inactive = finiteOrNull(distribution.INACTIVE);
+      return { data: { ...responseMeta(rankResult, context, 'customers'), summary: {
+        totalRegistered, active: totalRegistered !== null && inactive !== null ? totalRegistered - inactive : null,
+        new: finiteOrNull(distribution.NEW), inactive, atRisk: finiteOrNull(distribution.AT_RISK),
+        highValue: finiteOrNull(distribution.TOP_HIGH_VALUE), potential: finiteOrNull(distribution.POTENTIAL), segments: distribution,
+        consumerFinalIncludedInIndividualRfm: false },
+        items: rows.map(customerRow), total: rankResult.data?.total ?? 0, limit, offset } };
+    } catch (error) { return { error: safeError(error) }; }
+  };
+  const customer = async req => entityDetail(req, { domain: 'customers', skill: 'get_customer_intelligence', refArg: 'customerRef', notFound: 'CUSTOMER_NOT_FOUND', mapper: customerRow,
+    args: { mode: 'detail' } });
+  const suppliers = async req => {
+    const prepared = await run(req); if (prepared.error) return { error: prepared.error };
+    const { context } = prepared, period = periodRange(context, req.query || {}), limit = parseLimit(req.query?.limit), offset = parseOffset(req.query?.offset);
+    if (!period) return { error: invalidPeriodError() };
+    if (!limit || offset === null) return { error: invalidLimitError() };
+    try {
+      const args = { mode: 'summary', ...periodArgs(period), limit: 20 };
+      const [summaryResult, rankingResult, dependencyResult] = await Promise.all([
+        execute(context, 'get_supplier_intelligence', args, 20),
+        execute(context, 'get_supplier_intelligence', { mode: 'rank', metric: 'spend', ...periodArgs(period), limit, offset }, limit),
+        execute(context, 'get_supplier_intelligence', { mode: 'dependency', ...periodArgs(period), limit: 20 }, 20),
+      ]);
+      const summary = summaryResult.data?.summary || {};
+      return { data: { ...responseMeta(rankingResult, context, 'suppliers'), period,
+        summary: { totalSuppliers: finiteOrNull(summary.suppliers), totalSpend: money(summary.receivedSpendCents),
+          pendingOrders: finiteOrNull(summary.pendingOrders), receivedOrders: finiteOrNull(summary.receivedOrders),
+          dependency: dependencyResult.data?.singleSourceCriticalOrHigh || null,
+          averageLeadTime: { days: null, sampleSize: null, status: 'NOT_EXPOSED_BY_ENGINE' } },
+        items: (rankingResult.data?.items || []).map(supplierRow), total: rankingResult.data?.total ?? 0, limit, offset } };
+    } catch (error) { return { error: safeError(error) }; }
+  };
+  const supplier = async req => entityDetail(req, { domain: 'suppliers', skill: 'get_supplier_intelligence', refArg: 'supplierRef', notFound: 'SUPPLIER_NOT_FOUND', mapper: supplierRow,
+    args: { mode: 'detail' } });
+  const associations = async req => {
+    const prepared = await run(req); if (prepared.error) return { error: prepared.error };
+    const { context } = prepared, limit = parseLimit(req.query?.limit), offset = parseOffset(req.query?.offset);
+    if (!limit || offset === null) return { error: invalidLimitError() };
+    try {
+      const [summaryResult, result] = await Promise.all([
+        execute(context, 'get_cross_sell_recommendations', { mode: 'summary', limit: 1 }, 1),
+        execute(context, 'get_cross_sell_recommendations', { mode: 'rules', limit, offset }, limit),
+      ]);
+      return { data: { ...responseMeta(summaryResult, context, 'cross-sell'), mode: 'FROZEN', cutoff: V3.historicalCutoff,
+        summary: summaryResult.data?.summary || null, available: result.data?.available === true,
+        items: (result.data?.items || []).map(ruleRow), total: result.data?.total ?? 0, limit, offset } };
+    } catch (error) { return { error: safeError(error) }; }
+  };
+  const productRelated = async req => {
+    const prepared = await run(req); if (prepared.error) return { error: prepared.error };
+    const { context } = prepared, sku = String(req.params?.sku || '').trim(), limit = parseLimit(req.query?.limit);
+    if (!limit) return { error: invalidLimitError() };
+    if (!/^[A-Za-z0-9._-]{1,100}$/.test(sku)) return { error: invalidRequestError() };
+    try {
+      const productRow = await getModels().Product.findOne({ businessId: context.authenticated.businessId, scenarioId: V3.scenarioId,
+        isActive: true, sku }).select('name presentation').lean().maxTimeMS(3000);
+      if (!productRow) return { error: safeError(Object.assign(new Error(), { functionalCode: 'PRODUCT_NOT_FOUND' })) };
+      const result = await execute(context, 'get_cross_sell_recommendations', { mode: 'recommend', productRef: sku, limit }, limit);
+      const ambiguous = executionError(result); if (ambiguous) return { error: ambiguous };
+      return { data: { ...responseMeta(result, context, 'cross-sell'), mode: 'FROZEN', cutoff: V3.historicalCutoff,
+        sourceProduct: { sku, name: productRow.name, presentation: productRow.presentation || null },
+        available: result.data?.available === true,
+        items: (result.data?.items || []).map(row => ({ relatedProduct: { sku: row.recommendedSku || row.sku || null,
+          name: row.recommendedProduct || row.productName || row.name || null }, support: finiteOrNull(row.support),
+          confidence: finiteOrNull(row.confidence), lift: finiteOrNull(row.lift), ticketCount: finiteOrNull(row.ticketCount),
+          stability: row.stability?.status || row.stability || null, classification: row.classification || null })),
+        total: result.data?.total ?? 0 } };
+    } catch (error) { return { error: safeError(error) }; }
+  };
+  const health = async req => {
+    const prepared = await run(req); if (prepared.error) return { error: prepared.error };
+    const { context } = prepared, period = periodRange(context, req.query || {}), limit = req.query?.limit === undefined ? 5 : parseLimit(req.query.limit);
+    if (!period) return { error: invalidPeriodError() };
+    if (!limit || limit > 5) return { error: invalidLimitError('El límite debe estar entre 1 y 5.') };
+    try {
+      const result = await execute(context, 'get_business_health', { ...periodArgs(period), limit }, 5);
+      const data = result.data || {}, sections = data.businessHealth || {};
+      return { data: { ...responseMeta(result, context, 'health'), status: data.availabilityStatus || result.status,
+        period: data.period || period, domains: Object.fromEntries(['sales', 'margin', 'customers', 'inventory', 'suppliers', 'forecast', 'marketBasket']
+          .map(name => [name, sections[name] ? { status: domainStatus(sections[name]), freshness: sections[name].freshness || null, metrics: stripAlerts(sections[name]),
+            insights: sections[name].alerts || [] } : { status: 'UNAVAILABLE', freshness: null, metrics: null, insights: [] }])),
+        insights: Array.isArray(data.alerts) ? data.alerts : [] } };
+    } catch (error) { return { error: safeError(error) }; }
+  };
+  const entityDetail = async (req, options) => {
+    const prepared = await run(req); if (prepared.error) return { error: prepared.error };
+    const { context } = prepared, reference = String(req.params?.[options.refArg] || '').trim();
+    if (!reference || reference.length > 100) return { error: invalidRequestError() };
+    try {
+      const result = await execute(context, options.skill, { ...options.args, [options.refArg]: reference, limit: 1 }, 1);
+      if (result.status === 'CLARIFICATION') return { error: executionError(result) };
+      const row = result.data?.items?.[0];
+      if (!row) return { error: safeError(Object.assign(new Error(), { functionalCode: options.notFound })) };
+      const item = options.mapper(row);
+      if (options.domain === 'suppliers') {
+        item.costTrends = Array.isArray(result.data?.costTrends) ? result.data.costTrends : null;
+        item.historyAvailability = item.costTrends === null ? 'NOT_EXPOSED_BY_ENGINE' : item.costTrends.length ? 'AVAILABLE' : 'INSUFFICIENT_HISTORY';
+      }
+      const historyAvailability = options.domain === 'suppliers' ? item.historyAvailability
+        : result.status === 'PARTIAL' ? 'PARTIAL' : 'AVAILABLE';
+      return { data: { ...responseMeta(result, context, options.domain), status: result.status,
+        item, historyAvailability } };
+    } catch (error) { return { error: safeError(error) }; }
+  };
   const run = async req => {
     try { return { context: await contextFor(req), error: null }; }
     catch (error) { return { context: null, error: safeError(error) }; }
@@ -99,20 +303,26 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, cl
     const prepared = await run(req); if (prepared.error) return { error: prepared.error };
     const { context } = prepared, limit = parseLimit(req.query?.limit);
     if (!limit) return { error: { code: 'INVALID_REQUEST', httpStatus: 400, message: 'El límite debe estar entre 1 y 20.' } };
+    const allowedFlags = ['low_stock', 'overstock', 'slow_moving', 'dead_stock', 'single_source', 'should_reorder'];
+    const flag = req.query?.flag ? String(req.query.flag) : null;
+    if (flag && !allowedFlags.includes(flag)) return { error: invalidRequestError() };
     try {
-      const [summaryResult, rankResult] = await Promise.all([
+      const [summaryResult, rowsResult] = await Promise.all([
         execute(context, 'get_inventory_intelligence', { mode: 'summary' }),
-        execute(context, 'get_inventory_intelligence', { mode: 'rank', metric: 'stockout_risk', limit }),
+        flag ? execute(context, 'get_inventory_intelligence', { mode: 'summary', flag, limit })
+          : execute(context, 'get_inventory_intelligence', { mode: 'rank', metric: 'stockout_risk', limit }),
       ]);
       const summary = summaryResult.data?.summary || {};
-      const rankedItems = rankResult.data?.items || [];
+      const rankedItems = rowsResult.data?.items || [];
       const catalog = await loadCatalogProducts(context.authenticated.businessId, rankedItems.map(row => row.sku), 'name presentation');
-      return { data: { asOf: context.asOf, timezone: V3.timezone, mode: rankResult.metadata.dataMode,
-        updatedAt: rankResult.metadata.updatedAt || null, dataThrough: rankResult.metadata.dataThrough || null,
+      return { data: { ...responseMeta(rowsResult, context, 'inventory'),
         summary: { totalProducts: finiteOrNull(summary.products), riskCounts: { critical: finiteOrNull(summary.critical),
           high: finiteOrNull(summary.high), medium: finiteOrNull(summary.medium), low: finiteOrNull(summary.low) },
           reorderCount: finiteOrNull(summary.shouldReorder), lowStockCount: finiteOrNull(summary.lowStock),
-          overstockCount: finiteOrNull(summary.overstock), incomingUnits: finiteOrNull(summary.incomingUnits) },
+          overstockCount: finiteOrNull(summary.overstock), slowMovingCount: finiteOrNull(summary.slowMoving),
+          deadStockCount: finiteOrNull(summary.deadStock), incomingUnits: finiteOrNull(summary.incomingUnits),
+          abcCounts: summaryResult.data?.abcCounts || null, xyzCounts: summaryResult.data?.xyzCounts || null,
+          abcXyzCounts: summaryResult.data?.abcXyzCounts || null }, flag,
         items: rankedItems.map(row => {
           const catalogProduct = catalog.get(row.sku);
           return { sku: row.sku, productName: catalogProduct?.name || row.productName || row.sku,
@@ -120,7 +330,7 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, cl
             coverageDays: finiteOrNull(row.coverage?.daysCover), risk: row.risk?.level || null,
             riskReasonCodes: row.risk?.reasonCodes || [], recommendedQty: finiteOrNull(row.recommendation?.recommendedQty),
             reorderNow: row.recommendation?.shouldReorder ?? null };
-        }), total: rankResult.data?.total ?? 0 } };
+        }), total: rowsResult.data?.total ?? 0 } };
     } catch (error) { return { error: safeError(error) }; }
   };
   const product = async (req, type) => {
@@ -185,9 +395,42 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, cl
       return { error: safeError(error) };
     }
   };
-  return Object.freeze({ summary, inventory, forecast: req => product(req, 'forecast'), productInventory: req => product(req, 'inventory') });
+  return Object.freeze({ summary, inventory, sales, customers, customer, suppliers, supplier, associations, productRelated, health,
+    forecast: req => product(req, 'forecast'), productInventory: req => product(req, 'inventory') });
 };
 
 const finiteOrNull = value => Number.isFinite(value) ? value : null;
 const parseLimit = value => value === undefined ? 20 : /^\d{1,2}$/.test(String(value)) && Number(value) >= 1 && Number(value) <= 20 ? Number(value) : null;
+const parseOffset = value => value === undefined ? 0 : /^\d{1,5}$/.test(String(value)) && Number(value) <= 10000 ? Number(value) : null;
+const addDays = (value, amount) => { const date = new Date(`${value}T00:00:00.000Z`); date.setUTCDate(date.getUTCDate() + amount); return date.toISOString().slice(0, 10); };
+const daysBetween = (start, end) => Math.round((Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86400000);
+const invalidPeriodError = () => ({ code: 'INVALID_PERIOD', httpStatus: 400, message: 'El período solicitado no es válido.' });
+const invalidRequestError = () => ({ code: 'INVALID_REQUEST', httpStatus: 400, message: 'Los filtros solicitados no son válidos.' });
+const invalidLimitError = (message = 'El límite o desplazamiento solicitado no es válido.') => ({ code: 'INVALID_REQUEST', httpStatus: 400, message });
+const moneyFromCents = cents => Number.isFinite(cents) ? { value: cents / 100, currency: 'PEN' } : null;
+const customerRow = row => ({ customerId: row.customerCode || null, displayName: row.displayName || null,
+  segment: row.segment || null, recency: finiteOrNull(row.rfm90d?.raw?.recencyDays ?? row.recencyDays),
+  frequency: finiteOrNull(row.rfm90d?.raw?.frequency90d ?? row.ticketCount),
+  monetary: moneyFromCents(row.rfm90d?.raw?.monetary90dCents ?? row.totalSpentCents),
+  spend: moneyFromCents(row.totalSpentCents), lifetimeTicketCount: finiteOrNull(row.ticketCount), rfm90d: row.rfm90d || null,
+  averageTicket: moneyFromCents(Number.isFinite(row.averageTicketCents) ? Math.round(row.averageTicketCents) : null),
+  lastPurchaseDate: row.lastPurchaseDate || null, firstPurchaseDate: row.firstPurchaseDate || null,
+  reasonCodes: Array.isArray(row.reasonCodes) ? row.reasonCodes : [], preferences: row.preferences || null,
+  trends: row.trends30d || null, windows: row.windows || null, freshness: row.freshness || null });
+const supplierRow = row => ({ supplierId: row.supplierCode || null, name: row.displayName || null,
+  orders: finiteOrNull(row.purchaseOrderCount), spend: moneyFromCents(row.receivedSpendCents), pending: finiteOrNull(row.pendingOrderCount),
+  received: finiteOrNull(row.receivedOrderCount), leadTime: row.leadTime || null, punctuality: row.punctuality || null,
+  leadTimeAvailability: Number.isFinite(row.leadTime?.averageDays) && Number.isFinite(row.leadTime?.sampleSize) && row.leadTime.sampleSize > 0
+    ? 'AVAILABLE' : 'INSUFFICIENT_HISTORY',
+  dependency: { exclusiveOfferedSkuCount: finiteOrNull(row.exclusiveOfferedSkuCount),
+    offeredSkuCount: finiteOrNull(row.offeredSkuCount), spendSharePct: finiteOrNull(row.purchaseSpendSharePct) },
+  products: Array.isArray(row.productsSupplied) ? row.productsSupplied : [], status: row.status || 'AVAILABLE' });
+const ruleRow = row => ({ antecedent: row.antecedentSkus || row.antecedentCodes || [],
+  antecedentProducts: row.antecedentProducts || [], consequent: row.consequentSkus || row.consequentCodes || [],
+  consequentProducts: row.consequentProducts || [], support: finiteOrNull(row.support),
+  confidence: finiteOrNull(row.confidence), lift: finiteOrNull(row.lift), ticketCount: finiteOrNull(row.ticketCount),
+  stability: row.stability?.status || row.stability || null, status: row.status || row.classification || null });
+const domainStatus = section => section.status || (section.freshness?.status === 'AVAILABLE' ? 'AVAILABLE'
+  : section.freshness?.status || (section.available === false ? 'UNAVAILABLE' : 'AVAILABLE'));
+const stripAlerts = section => Object.fromEntries(Object.entries(section).filter(([key]) => !['alerts', 'freshness', 'status'].includes(key)));
 module.exports = { createV3BusinessIntelligenceDashboard, validDate, safeError };

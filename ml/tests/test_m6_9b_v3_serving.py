@@ -111,6 +111,18 @@ class M69BV3ServingTests(unittest.TestCase):
         self.assertEqual(response.json()["data"]["items"], self.v3.basket["recommendationsBySku"].get("PAN-FRE-001", [])[:5])
         self.assertIn("not causality", response.json()["data"]["interpretation"])
 
+    def test_cross_sell_summary_projects_frozen_artifact_counts_without_remining(self):
+        response = self.post("/v3/intelligence/cross-sell", {"mode": "summary", "limit": 1})
+        self.assertEqual(response.status_code, 200, response.text)
+        summary = response.json()["data"]["summary"]
+        artifact = self.v3.basket["summary"]
+        self.assertEqual(summary["analysisCutoff"], "2026-10-12")
+        self.assertEqual(summary["validTickets"], artifact["validTickets"])
+        self.assertEqual(summary["itemsetsCount"], artifact["frequentItemsets"])
+        self.assertEqual(summary["rulesCount"], artifact["rulesAfterRedundancyReduction"])
+        self.assertEqual(summary["qualityRulesCount"], artifact["rulesAfterQualityFilter"])
+        self.assertEqual(summary["crossSellCount"], artifact["skuCrossSellRules"])
+
     def test_missing_basket_artifact_is_partial_without_disabling_other_domains(self):
         original_artifact = self.v3.basket
         original_flag = self.v3.domains["crossSell"]
