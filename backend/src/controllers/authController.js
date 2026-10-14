@@ -2,6 +2,7 @@ const { User } = require('../models');
 const { generateAuthTokens } = require('../utils/jwt');
 const { asyncHandler } = require('../middleware/validation');
 const { v1, v2 } = require('../config/mlScenarios.json');
+const v3Demo = require('../config/v3Demo');
 
 const isDuplicateField = (error, field, indexName) => error?.code === 11000 && (
   error?.index === indexName
@@ -88,12 +89,33 @@ const registerWithBusiness = async (body, res, businessId) => {
 
 const register = asyncHandler(async (req, res) => {
   const businessId = (req.body.businessId || '').trim();
-  // V2 is reserved: the public registration route must not bypass provisioning.
-  if (businessId.toLowerCase() === v2.businessId.toLowerCase()) {
+  // Demo tenants are reserved: public registration must not bypass provisioning.
+  if ([v2.businessId, v3Demo.businessId].some(id => businessId.toLowerCase() === id.toLowerCase())) {
     return res.status(403).json({ success: false, code: 'DEMO_REGISTRATION_REQUIRED',
       message: 'This demo account requires controlled provisioning.' });
   }
   return registerWithBusiness(req.body, res, businessId);
+});
+
+const registerDemoV3 = asyncHandler(async (req, res) => {
+  if (process.env.DEMO_V3_REGISTRATION_ENABLED !== 'true') {
+    return res.status(404).json({ success: false, message: 'Not found' });
+  }
+  // Only the authenticated V1 owner may provision a V3 demo account.
+  if (req.user?.businessId !== v1.businessId || req.businessId !== v1.businessId) {
+    return res.status(403).json({ success: false, code: 'DEMO_REGISTRATION_DENIED',
+      message: 'Demo registration is not authorized.' });
+  }
+  const allowedEmail = (process.env.DEMO_V3_REGISTRATION_EMAIL || '').trim().toLowerCase();
+  if (!allowedEmail || req.body.email.trim().toLowerCase() !== allowedEmail) {
+    return res.status(403).json({ success: false, code: 'DEMO_REGISTRATION_DENIED',
+      message: 'Demo registration is not authorized.' });
+  }
+  try {
+    return await registerWithBusiness(req.body, res, v3Demo.businessId);
+  } catch {
+    return res.status(500).json({ success: false, message: 'Demo registration could not be completed.' });
+  }
 });
 
 const registerDemoV2 = asyncHandler(async (req, res) => {
@@ -298,6 +320,7 @@ const changePassword = asyncHandler(async (req, res) => {
 module.exports = {
   register,
   registerDemoV2,
+  registerDemoV3,
   login,
   logout,
   getProfile,

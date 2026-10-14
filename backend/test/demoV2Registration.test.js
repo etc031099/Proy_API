@@ -94,9 +94,10 @@ test('unique business race is normalized without leaking raw values', async t =>
   const response = await s.post(); assert.equal(response.status, 409);
   assert.equal((await response.json()).code, 'BUSINESS_EXISTS');
 });
-test('normal public registration cannot claim reserved V2 but normal V1 remains compatible', async t => {
+test('normal public registration cannot claim reserved V2/V3 but normal V1 remains compatible', async t => {
   const s = await setup(t);
   assert.equal((await s.post({ ...input, businessId: 'ML-CLOUD-DEMO-V2' }, false, 'register')).status, 403);
+  assert.equal((await s.post({ ...input, businessId: 'MINIMARKET-PASCO-V3' }, false, 'register')).status, 403);
   assert.equal((await s.post({ ...input, businessId: 'ML-CLOUD-DEMO' }, false, 'register')).status, 201);
   assert.equal(s.created().businessId, 'ML-CLOUD-DEMO');
 });

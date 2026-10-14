@@ -3,6 +3,7 @@ const rateLimit = require("express-rate-limit");
 const {
   register,
   registerDemoV2,
+  registerDemoV3,
   login,
   logout,
   getProfile,
@@ -23,6 +24,8 @@ const {
 const router = express.Router();
 
 const demoEnabled = (req, res, next) => process.env.DEMO_V2_REGISTRATION_ENABLED === 'true'
+  ? next() : res.status(404).json({ success: false, message: 'Not found' });
+const demoV3Enabled = (req, res, next) => process.env.DEMO_V3_REGISTRATION_ENABLED === 'true'
   ? next() : res.status(404).json({ success: false, message: 'Not found' });
 const demoBody = (req, res, next) => {
   if (!req.body || Array.isArray(req.body) || typeof req.body !== 'object'
@@ -63,6 +66,8 @@ router.post(
 router.post("/login", authLimiter, loginValidation, validateRequest, login);
 router.post('/register-demo-v2', demoEnabled, authLimiter, authenticate, checkBusinessAccess,
   demoBody, demoTypes, demoValidation, demoPasswordLimit, safeDemoValidation, registerDemoV2);
+router.post('/register-demo-v3', demoV3Enabled, authLimiter, authenticate, checkBusinessAccess,
+  demoBody, demoTypes, demoValidation, demoPasswordLimit, safeDemoValidation, registerDemoV3);
 
 // Protected routes
 router.use(authenticate); // All routes below require authentication

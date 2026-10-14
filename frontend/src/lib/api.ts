@@ -1,5 +1,5 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
-import { ApiResponse, DemandForecastResponse, DemoV2RegisterData } from '@/types';
+import { ApiResponse, DemandForecastResponse, DemoV2RegisterData, DemoV3RegisterData } from '@/types';
 import type { AgentMessageRequest, AgentResponse, AgentConversationList, AgentConversationDetail } from '@/types/agent';
 
 export class AgentApiError extends Error {
@@ -144,6 +144,13 @@ class ApiClient {
     if (response.data.success && response.data.data.token) {
       this.setToken(response.data.data.token);
     }
+    return response.data;
+  }
+
+  async registerDemoV3(input: DemoV3RegisterData): Promise<ApiResponse> {
+    const { name, email, password } = input;
+    const response = await this.instance.post('/auth/register-demo-v3', { name, email, password });
+    if (response.data.success && response.data.data.token) this.setToken(response.data.data.token);
     return response.data;
   }
 

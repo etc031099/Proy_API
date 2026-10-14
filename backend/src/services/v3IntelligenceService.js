@@ -4,7 +4,7 @@ const { AgentError, isDate, isPlainObject } = require('../agents/contracts');
 const { V3_SKILLS } = require('../agents/v3Skills');
 const { rankEntities, normalize } = require('../automations/entityResolution');
 const { AGENT_ML_HTTP_TIMEOUT_MS } = require('../agents/timeouts');
-const V3 = Object.freeze({ businessId: 'MINIMARKET-PASCO-V3', scenarioId: 'minimarket-pasco-v3',
+const V3 = Object.freeze({ ...require('../config/v3Demo'), scenarioId: 'minimarket-pasco-v3',
   datasetVersion: 'minimarket-pasco-v3-seed2026-v1', datasetSha256: 'a90b913b6ee83174165b39eaab1526525b3aacc53cae1abe6c3f5a54a469cac8',
   referenceDate: '2026-10-12', timezone: 'America/Lima' });
 const unavailable = () => new AgentError('ML_SERVICE_UNAVAILABLE');
