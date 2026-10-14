@@ -162,18 +162,30 @@ describe('G.5 FIX1 supplier isolation and partial contracts', () => {
 
   it('humanizes nested health metrics, real horizons and observations without placeholders', async () => {
     const metrics = { kpis: { cogsCents: 1200 }, segmentDistribution: { AT_RISK: 3 }, atRiskCount: 3, inactiveCount: 2, products: { analyzedCount: 80, unavailableCount: 0 }, summary: { available: true }, topSpendShares: null, analysisVersion: 'v1', stableCrossSellRuleCount: 33, horizons: [1, 7, 14], source: 'MOVING_AVERAGE_28' };
-    const domains = Object.fromEntries(['sales', 'margin', 'customers', 'inventory', 'suppliers', 'forecast', 'marketBasket'].map(name => [name, { status: 'READY', freshness: null, metrics: name === 'forecast' ? metrics : {}, insights: [{ code: 'PRIVATE_KEY' }, { summary: 'Revisar productos con poco stock.' }] }]));
+    const healthMetrics: Record<string, Record<string, unknown>> = {
+      sales: { kpis: { revenueCents: 120000, tickets: 8 } },
+      margin: { classificationMethod: 'relative product percentiles: revenue p75/p25 and gross-margin-rate p25/p75; no net-profit claim' },
+      customers: { segmentDistribution: { AT_RISK: 3 }, atRiskCount: 3 },
+      inventory: { riskUnavailableCount: 0, products: { analyzedCount: 80, unavailableCount: 0 } },
+      suppliers: { criticalInventoryExposure: { singleSourceCriticalOrHighSkuCount: 7, meaning: 'business exposure due to inventory risk plus a single configured supplier; not a supplier-failure prediction' } },
+      forecast: metrics,
+      marketBasket: { usefulRuleCount: 33, analysisVersion: 'm6.7-v1' },
+    };
+    const domains = Object.fromEntries(Object.entries(healthMetrics).map(([name, domainMetrics]) => [name, { status: 'READY', freshness: null, metrics: domainMetrics, insights: [{ code: 'PRIVATE_KEY' }, { summary: 'Revisar productos con poco stock.' }] }]));
     vi.spyOn(apiClient, 'getBusinessHealth').mockResolvedValue(envelope({ ...meta, status: 'READY', period: { startDate: '2026-10-14', endDate: '2026-10-14' }, domains, insights: [{ code: 'HIDDEN' }, { message: 'El margen requiere costos completos.' }] } as never));
     const { container } = render(<ExtendedAnalyticsPanel tab="health" inventory={inventory} />);
     await screen.findByText('Horizontes disponibles');
     expect(screen.getByText('1 día · 7 días · 14 días')).toBeTruthy();
     expect(screen.getByText('Media móvil de 28 días')).toBeTruthy();
     expect(screen.getByText('Indicadores principales · Costo de ventas')).toBeTruthy();
-    expect(screen.getByText('Productos · Productos analizados')).toBeTruthy();
+    expect(screen.getAllByText('Productos · Productos analizados').length).toBeGreaterThan(0);
     expect(screen.getByText('Clientes inactivos')).toBeTruthy();
     expect(screen.getByText('Reglas estables de venta cruzada')).toBeTruthy();
+    expect(screen.getByText('Percentiles relativos de ingresos (p75/p25) y margen bruto (p25/p75); no representa utilidad neta.')).toBeTruthy();
+    expect(screen.getByText('Productos con riesgo crítico · Productos de riesgo alto/crítico con proveedor único')).toBeTruthy();
+    expect(screen.getAllByText('7').length).toBeGreaterThan(0);
     expect(screen.getByText('El margen requiere costos completos.')).toBeTruthy();
-    expect(container.textContent).not.toMatch(/Kpis|Segment Distribution|Cogs Cents|At Risk Count|Hay una observación disponible|PRIVATE_KEY|0: 1|MOVING_AVERAGE_28/);
+    expect(container.textContent).not.toMatch(/Kpis|Segment Distribution|Cogs Cents|At Risk Count|Indicador adicional|Hay una observación disponible|PRIVATE_KEY|relative product percentiles|business exposure due|0: 1|MOVING_AVERAGE_28/);
   });
 
   it.each([true, false])('uses contract basket names (available=%s) and keeps SKU fallback', async namesAvailable => {

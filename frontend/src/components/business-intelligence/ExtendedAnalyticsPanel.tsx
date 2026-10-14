@@ -38,6 +38,19 @@ const healthMetricLabels: Record<string, string> = {
   customers: 'Clientes', activeCount: 'Clientes activos', newCount: 'Clientes nuevos', totalRegistered: 'Clientes registrados',
   revenueShare: 'Participación de ingresos', purchaseSpendCents: 'Gasto en compras', pendingOrders: 'Pedidos pendientes',
   receivedOrders: 'Pedidos recibidos', skuCount: 'Productos', singleSourceSkuCount: 'Productos con una sola fuente',
+  units: 'Unidades vendidas', tickets: 'Tickets',
+  trends: 'Tendencias', customerMix: 'Composición de clientes', forecastHorizons: 'Horizontes del pronóstico',
+  forecastExpectedUnitsNext1d: 'Unidades previstas para el próximo día', forecastExpectedUnitsNext7d: 'Unidades previstas para los próximos 7 días',
+  forecastExpectedUnitsNext14d: 'Unidades previstas para los próximos 14 días', expectedUnitsNext1d: 'Unidades previstas para el próximo día',
+  expectedUnitsNext7d: 'Unidades previstas para los próximos 7 días', expectedUnitsNext14d: 'Unidades previstas para los próximos 14 días',
+  knownCount: 'Pronósticos disponibles', missingCount: 'Pronósticos no disponibles', usefulRuleCount: 'Reglas útiles',
+  topExamples: 'Ejemplos de asociaciones', categoryAssociations: 'Asociaciones entre categorías', sourceArtifactCutoff: 'Corte del análisis',
+  purchaseSpendSharePct: 'Participación del gasto (%)', singleSourceCriticalOrHighSkuCount: 'Productos de riesgo alto/crítico con proveedor único',
+  riskUnavailableCount: 'Riesgo no disponible', recommendationUnavailableCount: 'Reposición no disponible',
+  abcUnavailableCount: 'Clasificación ABC no disponible', xyzUnavailableCount: 'Clasificación XYZ no disponible',
+  slowMovingUnavailableCount: 'Rotación lenta no disponible', deadStockUnavailableCount: 'Inventario sin movimiento no disponible',
+  overstockEstimatedValueCents: 'Valor estimado de sobrestock',
+  classificationMethod: 'Criterio de clasificación', p90Method: 'Método de cálculo del percentil 90',
 };
 const segmentLabels: Record<string, string> = { HIGH_VALUE: 'Alto valor', POTENTIAL: 'Potencial', NEW: 'Nuevo', AT_RISK: 'En riesgo', INACTIVE: 'Inactivo', ACTIVE: 'Activo', LOYAL: 'Fiel', CHAMPION: 'Cliente frecuente', PROMISING: 'Prometedor', NEEDS_ATTENTION: 'Requiere atención', HIBERNATING: 'Inactivo reciente' };
 const chartColors = ['#2563eb', '#0f766e', '#7c3aed', '#d97706', '#db2777', '#0891b2', '#65a30d'];
@@ -68,9 +81,13 @@ function dateText(value: string | null | undefined): string {
 }
 function statusText(value: string | null | undefined): string { return value ? statusLabels[value] || value.replace(/_/g, ' ').toLowerCase() : 'No disponible'; }
 function healthMetricLabel(key: string): string {
-  return healthMetricLabels[key] || segmentLabels[key] || 'Indicador adicional';
+  if (healthMetricLabels[key] || segmentLabels[key]) return healthMetricLabels[key] || segmentLabels[key];
+  return key.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim()
+    .replace(/^./, character => character.toLocaleUpperCase('es-PE'));
 }
 function healthMetricValue(key: string, value: unknown): string {
+  if (key === 'classificationMethod') return 'Percentiles relativos de ingresos (p75/p25) y margen bruto (p25/p75); no representa utilidad neta.';
+  if (key === 'p90Method') return 'Rango más cercano';
   if (key === 'horizons' && Array.isArray(value)) {
     const horizons = value.filter((item): item is number => typeof item === 'number' && Number.isFinite(item) && item > 0);
     return horizons.length ? horizons.map(day => `${day} ${day === 1 ? 'día' : 'días'}`).join(' · ') : 'No disponible';
@@ -91,6 +108,8 @@ function healthMetricValue(key: string, value: unknown): string {
 }
 function healthEntries(metrics: Record<string, unknown>, parent = '', depth = 0): Array<{ label: string; value: string }> {
   return Object.entries(metrics).flatMap(([key, value]) => {
+    // These fields are freshness, routing, or explanatory metadata—not dashboard metrics.
+    if (['alerts', 'freshness', 'meaning', 'interpretation', 'engineVersion', 'datasetVersion', 'datasetSha256', 'contractVersion'].includes(key)) return [];
     const label = [parent, healthMetricLabel(key)].filter(Boolean).join(' · ');
     if (value && typeof value === 'object' && !Array.isArray(value) && depth < 3)
       return healthEntries(value as Record<string, unknown>, label, depth + 1);
