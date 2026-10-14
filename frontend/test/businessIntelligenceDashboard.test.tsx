@@ -160,7 +160,7 @@ describe('business intelligence dashboard', () => {
   it('renders ABC and XYZ distributions returned by the inventory endpoint', async () => {
     render(<BusinessIntelligenceDashboard />);
     fireEvent.click(screen.getByRole('tab', { name: 'Inventario' }));
-    expect(await screen.findByText('Clasificación ABC')).toBeTruthy();
+    expect(await screen.findByText('Importancia económica (ABC)')).toBeTruthy();
     expect(screen.getByText('A: 40')).toBeTruthy();
     expect(screen.getByText('X: 55')).toBeTruthy();
   });
