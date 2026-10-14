@@ -50,7 +50,10 @@ describe('forecast ML evidence and operative method', () => {
     expect(await screen.findByText('Método operativo seleccionado')).toBeTruthy();
     expect(screen.getAllByText('HistGradientBoostingRegressor').length).toBeGreaterThan(0);
     expect(screen.getByText('Media móvil de 28 días · Método estadístico')).toBeTruthy();
-    expect(screen.getByText('No aprobado para uso operativo')).toBeTruthy();
+    expect(screen.getByText(/Evaluado — no aprobado para operación/)).toBeTruthy();
+    expect(screen.getAllByText('Ver metodología y limitaciones').length).toBe(2);
+    fireEvent.click(screen.getAllByText('Ver metodología y limitaciones')[0]);
+    expect(screen.getAllByText(/WAPE TEST 0[.,]123456; baseline 0[.,]234567/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/^0[.,]123456$/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/^0[.,]234567$/).length).toBeGreaterThan(0);
     expect(container.textContent).not.toMatch(/accuracy|precision|recall|No es un modelo ML|100 - WAPE/i);
@@ -67,8 +70,8 @@ describe('forecast ML evidence and operative method', () => {
     expect(screen.getAllByText(/Train:/).length).toBe(2);
     expect(screen.getAllByText(/Validation:/).length).toBe(2);
     expect(screen.getAllByText(/Test:/).length).toBe(2);
-    expect(screen.getByText(/30.*jun.*2026/)).toBeTruthy();
-    expect(screen.getByText(/15.*ago.*2026/)).toBeTruthy();
+    expect(screen.getAllByText(/30.*jun.*2026/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/15.*ago.*2026/).length).toBeGreaterThan(0);
   });
 
   it('reports unavailable evidence and retries without substituted metrics', async () => {

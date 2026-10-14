@@ -20,13 +20,16 @@ describe('K-Means customer panel', () => {
     vi.spyOn(apiClient, 'getCustomerClustering').mockResolvedValue(envelope());
     const onSelect = vi.fn();
     render(<CustomerClusteringPanel onSelect={onSelect} />);
-    await screen.findByText(/Modelo exploratorio entrenado con 38 clientes/);
+    await screen.findByText(/4 clusters · 38 clientes/);
+    fireEvent.click(screen.getByText('Ver metodología y limitaciones'));
     expect(screen.getByText(/2 clientes sin historial/)).toBeTruthy();
-    expect(screen.getByText(/RFM existente usa reglas/)).toBeTruthy();
+    expect(screen.getByText(/RFM tradicional usa reglas/)).toBeTruthy();
     expect(screen.getByText('Distribución por cluster')).toBeTruthy();
     expect(screen.getByText('PCA: proyección de RFM')).toBeTruthy();
     expect(screen.getAllByText('Historial insuficiente')).toHaveLength(2);
-    expect(screen.getByText('Metodología y evaluación')).toBeTruthy();
+    expect(screen.getByText('Ver metodología y limitaciones')).toBeTruthy();
+    expect(screen.getAllByText(/Silhouette 0[.,]549/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Modelo exploratorio con 38 clientes/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: data.assignments[0].customerRef }));
     expect(onSelect).toHaveBeenCalledWith(data.assignments[0].customerRef);
     expect(screen.queryByText(/accuracy/i)).toBeNull();
@@ -52,7 +55,7 @@ describe('K-Means customer panel', () => {
     const get = vi.spyOn(apiClient, 'getCustomerClustering').mockRejectedValueOnce(new Error('unavailable')).mockResolvedValue(envelope());
     render(<CustomerClusteringPanel onSelect={vi.fn()} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Reintentar segmentación' }));
-    await screen.findByText(/Modelo exploratorio entrenado con 38 clientes/);
+    await screen.findByText(/4 clusters · 38 clientes/);
     expect(get).toHaveBeenCalledTimes(2);
   });
   it('uses existing authenticated client and sends only reference', async () => {

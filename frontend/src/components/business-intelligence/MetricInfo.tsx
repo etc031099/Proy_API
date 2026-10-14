@@ -6,7 +6,7 @@ export function MetricInfo({ label, children }: { label: string; children: React
   const id = useId();
   const [open, setOpen] = useState(false);
   const [pinned, setPinned] = useState(false);
-  return <span className="relative inline-flex align-middle" onMouseEnter={() => setOpen(true)} onMouseLeave={() => { if (!pinned) setOpen(false); }} onFocus={() => setOpen(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null) && !pinned) setOpen(false); }}>
+  return <span className="relative inline-flex align-middle" onMouseEnter={() => setOpen(true)} onMouseLeave={() => { if (!pinned) setOpen(false); }} onFocus={() => setOpen(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null) && !pinned) setOpen(false); }} onKeyDown={event => { if (event.key === 'Escape') { setPinned(false); setOpen(false); } }}>
     <button type="button" aria-label={`Ayuda: ${label}`} aria-describedby={open ? id : undefined} aria-expanded={open} onClick={() => { const nextPinned = !pinned; setPinned(nextPinned); setOpen(nextPinned); }} className="inline-flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
       <CircleHelp aria-hidden="true" className="h-4 w-4" />
     </button>

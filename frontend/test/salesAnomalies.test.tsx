@@ -43,12 +43,15 @@ describe('frozen daily sales anomaly panel', () => {
   it('academic help describes unsupervised algorithm and threshold', async () => {
     vi.spyOn(apiClient, 'getSalesAnomalies').mockResolvedValue(envelope);
     render(<SalesAnomalyPanel />);
-    await screen.findByText('Metodología del detector');
+    await screen.findByText('Ver metodología y limitaciones');
     fireEvent.click(screen.getByRole('button', { name: 'Ayuda: Isolation Forest' }));
     expect(screen.getByRole('tooltip').textContent).toMatch(/aislarse más fácilmente/);
-    fireEvent.click(screen.getByText('Metodología del detector'));
+    fireEvent.click(screen.getByText('Ver metodología y limitaciones'));
     fireEvent.click(screen.getByRole('button', { name: 'Ayuda: Contamination' }));
     expect(screen.getAllByRole('tooltip').some(element => element.textContent?.includes('no fija una tasa objetivo'))).toBe(true);
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Ayuda: Contamination' }), { key: 'Escape' });
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Ayuda: Isolation Forest' }), { key: 'Escape' });
+    expect(screen.queryByRole('tooltip')).toBeNull();
   });
   it('safe failure retries and empty anomalies remain valid', async () => {
     const normal = series.find(row => !row.isAnomaly)!;

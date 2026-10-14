@@ -32,7 +32,7 @@ describe('extended business intelligence smoke panels', () => {
     vi.spyOn(apiClient, 'getAssociations').mockResolvedValue(envelope({ ...meta, mode: 'FROZEN', freshness: { mode: 'FROZEN', cutoff: '2026-10-12' }, dataVersion: null, snapshotHash: null, source: 'M6.7', engineVersion: null, cutoff: '2026-10-12', summary: null, available: false, items: [], total: 0, limit: 10, offset: 0 } as never));
     vi.spyOn(apiClient, 'getRelatedProducts').mockResolvedValue(envelope({ ...meta, mode: 'FROZEN', freshness: { mode: 'FROZEN', cutoff: '2026-10-12' }, dataVersion: null, snapshotHash: null, source: 'M6.7', engineVersion: null, cutoff: '2026-10-12', sourceProduct: { sku: 'PAN-FRE-001', name: 'Pan francés', presentation: null }, available: false, items: [], total: 0 } as never));
     render(<ExtendedAnalyticsPanel tab="related" inventory={inventory} />);
-    expect((await screen.findAllByText(/FROZEN · cutoff 2026-10-12/)).length).toBeGreaterThanOrEqual(2);
+    await waitFor(() => expect(screen.getAllByText(/FROZEN · cutoff 2026-10-12/).length).toBeGreaterThanOrEqual(2));
     expect(await screen.findByText('El análisis histórico no tiene reglas disponibles.')).toBeTruthy();
     expect(await screen.findByText('El análisis histórico no tiene recomendaciones disponibles.')).toBeTruthy();
     expect(apiClient.getRelatedProducts).toHaveBeenCalledWith('PAN-FRE-001');
@@ -62,12 +62,17 @@ describe('extended business intelligence smoke panels', () => {
   });
 
   it('renders health freshness by domain without creating a composite score', async () => {
-    const domains = Object.fromEntries(['sales', 'margin', 'customers', 'inventory', 'suppliers', 'forecast', 'marketBasket'].map(name => [name, { status: name === 'marketBasket' ? 'FROZEN' : 'READY', freshness: { mode: name === 'marketBasket' ? 'FROZEN' : 'LIVE', cutoff: name === 'marketBasket' ? '2026-10-12' : undefined }, metrics: {}, insights: [] }]));
+    const domains = Object.fromEntries(['sales', 'margin', 'customers', 'inventory', 'suppliers', 'forecast', 'marketBasket'].map(name => [name, { status: name === 'marketBasket' ? 'FROZEN' : 'READY', freshness: { mode: name === 'marketBasket' ? 'FROZEN' : 'LIVE', cutoff: name === 'marketBasket' ? '2026-10-12' : undefined }, metrics: name === 'sales' ? { grossMarginCents: 12345, CUSTOMER_AT_RISK_COUNT: 3, forecastSource: 'MOVING_AVERAGE_28' } : {}, insights: [] }]));
     vi.spyOn(apiClient, 'getBusinessHealth').mockResolvedValue(envelope({ ...meta, freshness: { mode: 'LIVE', updatedAt: null, dataThrough: null }, dataVersion: 0, snapshotHash: 'h', source: 'LIVE', engineVersion: 'v3', status: 'PARTIAL', period: { startDate: '2026-10-14', endDate: '2026-10-14' }, domains, insights: [] } as never));
     render(<ExtendedAnalyticsPanel tab="health" inventory={inventory} />);
     expect(await screen.findByText(/No se calcula una puntuación global/)).toBeTruthy();
     expect(screen.getByText('Productos relacionados')).toBeTruthy();
     expect(screen.getByText(/FROZEN/)).toBeTruthy();
+    expect(screen.getByText('Margen bruto')).toBeTruthy();
+    expect(screen.getByText('Clientes en riesgo')).toBeTruthy();
+    expect(screen.getByText('Media móvil de 28 días')).toBeTruthy();
+    expect(screen.queryByText('grossMarginCents')).toBeNull();
+    expect(screen.queryByText('CUSTOMER_AT_RISK_COUNT')).toBeNull();
     expect(screen.queryByText(/score: \d/i)).toBeNull();
   });
 
@@ -104,6 +109,9 @@ describe('extended business intelligence smoke panels', () => {
     await waitFor(() => expect(screen.getByText('Pan Francés')).toBeTruthy());
     expect(screen.getAllByText('Leche Gloria').length).toBeGreaterThan(0);
     expect(screen.getByText('SKU: PAN-FRE-001')).toBeTruthy();
+    expect(screen.getAllByText('Soporte').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Lift').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('207').length).toBeGreaterThan(0);
     expect(screen.getAllByText('20%').length).toBeGreaterThan(0);
     expect(screen.getAllByText('FROZEN · cutoff 2026-10-12').length).toBeGreaterThan(0);
   });

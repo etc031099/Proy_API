@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { MetricLabel } from './MetricInfo';
+import { MethodologyCard } from './MethodologyCard';
 
 const wapeHelp = 'WAPE mide el error total de predicción en relación con la demanda real. Un valor menor indica mejor desempeño.';
 const metric = (value: number | null | undefined) => typeof value === 'number' && Number.isFinite(value)
@@ -16,8 +17,18 @@ const baselineLabel = (value: string) => ['four_week_average', 'B3_MEAN_28'].inc
 
 function EvaluationCard({ model }: { model: ModelEvaluation }) {
   return <Card>
-    <CardHeader><div className="flex flex-wrap items-center justify-between gap-2"><CardTitle className="text-lg">{model.dataset.name} · {model.horizonDays} días</CardTitle><Badge variant="outline">{model.modelStatus === 'EVALUATED' ? 'Evaluado' : 'No aprobado para uso operativo'}</Badge></div><CardDescription>Evaluación histórica del modelo ML · {model.algorithm}</CardDescription></CardHeader>
+    <CardHeader><div className="flex flex-wrap items-center justify-between gap-2"><CardTitle className="text-lg">{model.dataset.name} · {model.horizonDays} días</CardTitle><Badge variant="outline">{model.modelStatus === 'EVALUATED' ? 'Modelo ML evaluado' : 'Evaluado — no aprobado para operación'}</Badge></div><CardDescription>Evaluación histórica · {model.algorithm}</CardDescription></CardHeader>
     <CardContent className="space-y-4 text-sm">
+      <MethodologyCard algorithm={model.algorithm} learningType="Aprendizaje supervisado · regresión" objective="Predicción de demanda" explanation="Modelo supervisado basado en árboles que aprende patrones de demanda a partir de variables históricas y contextuales. Construye árboles secuenciales; cada nuevo árbol intenta corregir parte del error anterior." summary={<>{'WAPE TEST: '}{metric(model.metrics.test.wape)} · baseline: {metric(model.baseline.testMetrics.wape)}</>} fields={[
+        { label: 'Cómo funciona', value: 'Construye árboles de decisión secuenciales para modelar relaciones no lineales entre variables y demanda.' },
+        { label: 'Variables', value: model.features.join(', ') },
+        { label: 'Train', value: `${calendarDate(model.trainPeriod.startDate)} → ${calendarDate(model.trainPeriod.endDate)}` },
+        { label: 'Validation', value: `${calendarDate(model.validationPeriod.startDate)} → ${calendarDate(model.validationPeriod.endDate)}` },
+        { label: 'Test', value: `${calendarDate(model.testPeriod.startDate)} → ${calendarDate(model.testPeriod.endDate)}` },
+        { label: 'Evaluación', value: `WAPE TEST ${metric(model.metrics.test.wape)}; baseline ${metric(model.baseline.testMetrics.wape)}. WAPE expresa error relativo a la demanda real; no representa una tasa de aciertos.` },
+        { label: 'Estado', value: model.modelStatus === 'EVALUATED' ? 'Evaluado históricamente; la operación usa el método estadístico seleccionado.' : 'Evaluado y no aprobado para uso operativo.' },
+        { label: 'Limitaciones', value: model.limitations.join(' ') },
+      ]} />
       <dl className="grid gap-3 sm:grid-cols-2">
         <div><dt className="font-medium"><MetricLabel label="Algoritmo" help="HistGradientBoosting aprende relaciones entre las variables y las ventas futuras mediante árboles que corrigen errores de predicción." /></dt><dd className="break-words text-muted-foreground">{model.algorithm}</dd></div>
         <div><dt className="font-medium"><MetricLabel label="Tipo de aprendizaje" help="La regresión supervisada aprende con ejemplos que incluyen las unidades vendidas en el horizonte futuro como resultado conocido." /></dt><dd className="text-muted-foreground">Aprendizaje supervisado — regresión</dd></div>
@@ -59,7 +70,7 @@ export function ForecastEvaluationPanel() {
   return <section aria-label="Machine Learning aplicado" className="space-y-4">
     <div><h2 className="text-xl font-semibold">Machine Learning aplicado</h2><p className="text-sm text-muted-foreground">Modelos evaluados y método operativo seleccionado, con evidencia histórica.</p></div>
     {error ? <Card role="alert"><CardContent className="space-y-3 p-5"><p>No se pudo cargar la evaluación histórica de modelos.</p><Button variant="outline" onClick={() => setRetry(value => value + 1)}>Reintentar evaluación</Button></CardContent></Card> : !evaluation ? <p role="status" className="text-sm text-muted-foreground">Cargando evidencia de evaluación…</p> : <>
-      <Card><CardHeader><CardTitle className="text-lg">Método operativo seleccionado</CardTitle><CardDescription>{evaluation.selectedOperationalMethod.label} · Método estadístico</CardDescription></CardHeader><CardContent className="space-y-2 text-sm"><p>{evaluation.selectedOperationalMethod.selectionReason}</p><p>Horizontes aprobados: {evaluation.selectedOperationalMethod.horizons.join(' / ')} días.</p><p className="break-words text-xs text-muted-foreground">Versión: {evaluation.selectedOperationalMethod.version}</p></CardContent></Card>
+      <Card><CardHeader><div className="flex flex-wrap items-center gap-2"><CardTitle className="text-lg">Método operativo seleccionado</CardTitle><Badge variant="outline">Método estadístico</Badge></div><CardDescription>{evaluation.selectedOperationalMethod.label} · Método estadístico</CardDescription></CardHeader><CardContent className="space-y-2 text-sm"><p>{evaluation.selectedOperationalMethod.selectionReason}</p><p>Horizontes aprobados: {evaluation.selectedOperationalMethod.horizons.join(' / ')} días.</p><p className="break-words text-xs text-muted-foreground">Versión: {evaluation.selectedOperationalMethod.version}</p><MetricLabel label="Por qué MA28" help="Se compararon métodos estadísticos y modelos de Machine Learning. Para los horizontes operativos actuales se seleccionó la media móvil de 28 días según los resultados de validación." /></CardContent></Card>
       {evaluation.modelEvaluation.map(model => <EvaluationCard key={model.modelId} model={model} />)}
       <details className="rounded-xl border p-4"><summary className="cursor-pointer font-medium">Evaluación histórica del método operativo V3</summary><p className="my-3 text-sm text-muted-foreground">MA28 · TEST sintético V3 · corte {calendarDate(evaluation.analysisCutoff)}. Cada horizonte tiene un target distinto.</p><div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="border-b"><th className="p-2">Horizonte</th><th className="p-2"><MetricLabel label="WAPE" help={wapeHelp} /></th><th className="p-2">MAE</th><th className="p-2">RMSE</th></tr></thead><tbody>{evaluation.operationalEvaluation.map(row => <tr key={row.horizonDays} className="border-b last:border-0"><td className="p-2">{row.horizonDays} {row.horizonDays === 1 ? 'día' : 'días'}</td><td className="p-2">{metric(row.testMetrics.wape)}</td><td className="p-2">{metric(row.testMetrics.mae)}</td><td className="p-2">{metric(row.testMetrics.rmse)}</td></tr>)}</tbody></table></div></details>
       <p className="rounded-md bg-muted/50 p-3 text-sm text-muted-foreground">Real vs. predicho: los reportes conservan métricas agregadas, pero no una serie TEST de predicciones por fecha. Esa curva histórica no está disponible.</p>

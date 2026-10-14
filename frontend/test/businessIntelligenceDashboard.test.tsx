@@ -74,6 +74,19 @@ describe('business intelligence dashboard', () => {
     expect(screen.getByText('No disponible')).toBeTruthy();
   });
 
+  it('summarizes four correctly classified techniques and navigates without adding a tab', async () => {
+    render(<BusinessIntelligenceDashboard />);
+    expect(await screen.findByRole('heading', { name: 'Técnicas analíticas utilizadas' })).toBeTruthy();
+    expect(screen.getByText('3 técnicas de Machine Learning y 1 técnica de minería de patrones, elegidas según el problema.')).toBeTruthy();
+    expect(screen.getByText('HistGradientBoostingRegressor')).toBeTruthy();
+    expect(screen.getByText('K-Means')).toBeTruthy();
+    expect(screen.getByText('Isolation Forest')).toBeTruthy();
+    expect(screen.getByText('FP-Growth')).toBeTruthy();
+    expect(screen.getAllByRole('tab')).toHaveLength(8);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Ver análisis' })[0]);
+    expect(screen.getByRole('tab', { name: 'Predicción' }).getAttribute('aria-selected')).toBe('true');
+  });
+
   it('shows unavailable and partial gross margin distinctly', async () => {
     render(<BusinessIntelligenceDashboard />);
     expect(await screen.findByText('Margen bruto')).toBeTruthy();
