@@ -1,0 +1,1576 @@
+{
+  "contractVersion": "customer-kmeans-v3-v1",
+  "modelId": "v3-customer-rfm-kmeans",
+  "version": "customer-kmeans-v3-v1",
+  "algorithm": "KMeans",
+  "task": "customer_segmentation",
+  "learningType": "unsupervised",
+  "scenarioId": "minimarket-pasco-v3",
+  "datasetVersion": "minimarket-pasco-v3-seed2026-v1",
+  "sourceLogicalHash": "a90b913b6ee83174165b39eaab1526525b3aacc53cae1abe6c3f5a54a469cac8",
+  "trainingDataHash": "d9dc6fb25ca8379b0e53c6c6643299ec6eb2fb43b0a7171d7037c164d592f952",
+  "trainingCutoff": "2026-10-12",
+  "sampleCount": 38,
+  "excludedCount": 2,
+  "features": [
+    "recency",
+    "frequency",
+    "monetary"
+  ],
+  "featureWindow": "R=days since last completed purchase; F/M=90 days inclusive; M=PEN",
+  "transformations": [
+    "log1p(recency)",
+    "log1p(frequency)",
+    "log1p(monetary)"
+  ],
+  "scaler": "StandardScaler",
+  "k": 4,
+  "randomState": 2026,
+  "nInit": 20,
+  "sklearnVersion": "1.7.2",
+  "metrics": {
+    "k": 4,
+    "scaler": "StandardScaler",
+    "silhouetteMean": 0.5493549313831914,
+    "silhouetteStd": 1.1102230246251565e-16,
+    "inertia": 12.606120251077003,
+    "seedAriMean": 1.0,
+    "subsampleAriMean": 0.9762265126884901,
+    "subsampleAriMin": 0.87984934086629,
+    "clusterSizes": [
+      13,
+      16,
+      3,
+      6
+    ],
+    "sizesBySeed": [
+      [
+        13,
+        16,
+        3,
+        6
+      ],
+      [
+        16,
+        3,
+        6,
+        13
+      ],
+      [
+        6,
+        3,
+        13,
+        16
+      ],
+      [
+        16,
+        13,
+        3,
+        6
+      ],
+      [
+        13,
+        16,
+        6,
+        3
+      ],
+      [
+        16,
+        3,
+        13,
+        6
+      ],
+      [
+        16,
+        3,
+        13,
+        6
+      ],
+      [
+        6,
+        16,
+        3,
+        13
+      ],
+      [
+        6,
+        16,
+        3,
+        13
+      ],
+      [
+        16,
+        6,
+        3,
+        13
+      ]
+    ],
+    "minimumSizeAcrossSeeds": 3,
+    "smallClusterJustified": true
+  },
+  "candidates": [
+    {
+      "k": 2,
+      "scaler": "StandardScaler",
+      "silhouetteMean": 0.6951595380281682,
+      "silhouetteStd": 0.0,
+      "inertia": 50.76697780191484,
+      "seedAriMean": 1.0,
+      "subsampleAriMean": 0.8984280532043531,
+      "subsampleAriMin": -0.015719467956469165,
+      "clusterSizes": [
+        3,
+        35
+      ],
+      "sizesBySeed": [
+        [
+          3,
+          35
+        ],
+        [
+          35,
+          3
+        ],
+        [
+          3,
+          35
+        ],
+        [
+          35,
+          3
+        ],
+        [
+          35,
+          3
+        ],
+        [
+          35,
+          3
+        ],
+        [
+          35,
+          3
+        ],
+        [
+          35,
+          3
+        ],
+        [
+          3,
+          35
+        ],
+        [
+          35,
+          3
+        ]
+      ],
+      "minimumSizeAcrossSeeds": 3,
+      "smallClusterJustified": true
+    },
+    {
+      "k": 3,
+      "scaler": "StandardScaler",
+      "silhouetteMean": 0.4611854037434073,
+      "silhouetteStd": 0.0,
+      "inertia": 26.816269373525017,
+      "seedAriMean": 1.0,
+      "subsampleAriMean": 0.9067213594974997,
+      "subsampleAriMin": 0.19677703638423769,
+      "clusterSizes": [
+        20,
+        15,
+        3
+      ],
+      "sizesBySeed": [
+        [
+          20,
+          15,
+          3
+        ],
+        [
+          15,
+          20,
+          3
+        ],
+        [
+          3,
+          20,
+          15
+        ],
+        [
+          15,
+          20,
+          3
+        ],
+        [
+          20,
+          3,
+          15
+        ],
+        [
+          20,
+          3,
+          15
+        ],
+        [
+          15,
+          3,
+          20
+        ],
+        [
+          15,
+          3,
+          20
+        ],
+        [
+          3,
+          15,
+          20
+        ],
+        [
+          20,
+          3,
+          15
+        ]
+      ],
+      "minimumSizeAcrossSeeds": 3,
+      "smallClusterJustified": true
+    },
+    {
+      "k": 4,
+      "scaler": "StandardScaler",
+      "silhouetteMean": 0.5493549313831914,
+      "silhouetteStd": 1.1102230246251565e-16,
+      "inertia": 12.606120251077003,
+      "seedAriMean": 1.0,
+      "subsampleAriMean": 0.9762265126884901,
+      "subsampleAriMin": 0.87984934086629,
+      "clusterSizes": [
+        13,
+        16,
+        3,
+        6
+      ],
+      "sizesBySeed": [
+        [
+          13,
+          16,
+          3,
+          6
+        ],
+        [
+          16,
+          3,
+          6,
+          13
+        ],
+        [
+          6,
+          3,
+          13,
+          16
+        ],
+        [
+          16,
+          13,
+          3,
+          6
+        ],
+        [
+          13,
+          16,
+          6,
+          3
+        ],
+        [
+          16,
+          3,
+          13,
+          6
+        ],
+        [
+          16,
+          3,
+          13,
+          6
+        ],
+        [
+          6,
+          16,
+          3,
+          13
+        ],
+        [
+          6,
+          16,
+          3,
+          13
+        ],
+        [
+          16,
+          6,
+          3,
+          13
+        ]
+      ],
+      "minimumSizeAcrossSeeds": 3,
+      "smallClusterJustified": true
+    },
+    {
+      "k": 5,
+      "scaler": "StandardScaler",
+      "silhouetteMean": 0.48642551384031246,
+      "silhouetteStd": 5.551115123125783e-17,
+      "inertia": 8.630222582009267,
+      "seedAriMean": 1.0,
+      "subsampleAriMean": 0.9512608618975621,
+      "subsampleAriMin": 0.9070100143061517,
+      "clusterSizes": [
+        14,
+        3,
+        6,
+        8,
+        7
+      ],
+      "sizesBySeed": [
+        [
+          14,
+          3,
+          6,
+          8,
+          7
+        ],
+        [
+          14,
+          7,
+          3,
+          8,
+          6
+        ],
+        [
+          7,
+          8,
+          3,
+          14,
+          6
+        ],
+        [
+          14,
+          7,
+          3,
+          6,
+          8
+        ],
+        [
+          8,
+          3,
+          6,
+          14,
+          7
+        ],
+        [
+          14,
+          3,
+          6,
+          8,
+          7
+        ],
+        [
+          7,
+          14,
+          3,
+          6,
+          8
+        ],
+        [
+          3,
+          14,
+          7,
+          6,
+          8
+        ],
+        [
+          8,
+          3,
+          14,
+          6,
+          7
+        ],
+        [
+          14,
+          6,
+          3,
+          7,
+          8
+        ]
+      ],
+      "minimumSizeAcrossSeeds": 3,
+      "smallClusterJustified": true
+    },
+    {
+      "k": 2,
+      "scaler": "RobustScaler",
+      "silhouetteMean": 0.7191901342347118,
+      "silhouetteStd": 1.1102230246251565e-16,
+      "inertia": 43.70932924384799,
+      "seedAriMean": 1.0,
+      "subsampleAriMean": 0.9145569620253164,
+      "subsampleAriMin": 0.14556962025316456,
+      "clusterSizes": [
+        3,
+        35
+      ],
+      "sizesBySeed": [
+        [
+          3,
+          35
+        ],
+        [
+          35,
+          3
+        ],
+        [
+          3,
+          35
+        ],
+        [
+          35,
+          3
+        ],
+        [
+          35,
+          3
+        ],
+        [
+          35,
+          3
+        ],
+        [
+          35,
+          3
+        ],
+        [
+          3,
+          35
+        ],
+        [
+          3,
+          35
+        ],
+        [
+          35,
+          3
+        ]
+      ],
+      "minimumSizeAcrossSeeds": 3,
+      "smallClusterJustified": true
+    },
+    {
+      "k": 3,
+      "scaler": "RobustScaler",
+      "silhouetteMean": 0.45772761510628224,
+      "silhouetteStd": 5.551115123125783e-17,
+      "inertia": 22.872823488476172,
+      "seedAriMean": 1.0,
+      "subsampleAriMean": 0.9102203649485311,
+      "subsampleAriMin": 0.22518388131011505,
+      "clusterSizes": [
+        19,
+        3,
+        16
+      ],
+      "sizesBySeed": [
+        [
+          19,
+          3,
+          16
+        ],
+        [
+          16,
+          19,
+          3
+        ],
+        [
+          3,
+          19,
+          16
+        ],
+        [
+          16,
+          3,
+          19
+        ],
+        [
+          19,
+          3,
+          16
+        ],
+        [
+          19,
+          3,
+          16
+        ],
+        [
+          16,
+          3,
+          19
+        ],
+        [
+          16,
+          3,
+          19
+        ],
+        [
+          3,
+          16,
+          19
+        ],
+        [
+          19,
+          3,
+          16
+        ]
+      ],
+      "minimumSizeAcrossSeeds": 3,
+      "smallClusterJustified": true
+    },
+    {
+      "k": 4,
+      "scaler": "RobustScaler",
+      "silhouetteMean": 0.5459327088078163,
+      "silhouetteStd": 1.1102230246251565e-16,
+      "inertia": 10.691512543518657,
+      "seedAriMean": 1.0,
+      "subsampleAriMean": 0.975969868173258,
+      "subsampleAriMin": 0.87984934086629,
+      "clusterSizes": [
+        13,
+        3,
+        16,
+        6
+      ],
+      "sizesBySeed": [
+        [
+          13,
+          3,
+          16,
+          6
+        ],
+        [
+          16,
+          6,
+          3,
+          13
+        ],
+        [
+          3,
+          6,
+          16,
+          13
+        ],
+        [
+          16,
+          3,
+          6,
+          13
+        ],
+        [
+          13,
+          3,
+          6,
+          16
+        ],
+        [
+          6,
+          3,
+          16,
+          13
+        ],
+        [
+          16,
+          3,
+          13,
+          6
+        ],
+        [
+          6,
+          16,
+          3,
+          13
+        ],
+        [
+          3,
+          16,
+          13,
+          6
+        ],
+        [
+          16,
+          6,
+          3,
+          13
+        ]
+      ],
+      "minimumSizeAcrossSeeds": 3,
+      "smallClusterJustified": true
+    },
+    {
+      "k": 5,
+      "scaler": "RobustScaler",
+      "silhouetteMean": 0.4737804304911165,
+      "silhouetteStd": 5.551115123125783e-17,
+      "inertia": 7.57941817932341,
+      "seedAriMean": 1.0,
+      "subsampleAriMean": 0.8327339028469535,
+      "subsampleAriMin": 0.4939271255060729,
+      "clusterSizes": [
+        14,
+        3,
+        8,
+        6,
+        7
+      ],
+      "sizesBySeed": [
+        [
+          14,
+          3,
+          8,
+          6,
+          7
+        ],
+        [
+          14,
+          7,
+          3,
+          8,
+          6
+        ],
+        [
+          3,
+          8,
+          14,
+          7,
+          6
+        ],
+        [
+          14,
+          3,
+          6,
+          7,
+          8
+        ],
+        [
+          6,
+          3,
+          14,
+          7,
+          8
+        ],
+        [
+          7,
+          14,
+          3,
+          6,
+          8
+        ],
+        [
+          14,
+          3,
+          6,
+          8,
+          7
+        ],
+        [
+          7,
+          14,
+          6,
+          3,
+          8
+        ],
+        [
+          7,
+          3,
+          14,
+          6,
+          8
+        ],
+        [
+          6,
+          14,
+          3,
+          7,
+          8
+        ]
+      ],
+      "minimumSizeAcrossSeeds": 3,
+      "smallClusterJustified": true
+    }
+  ],
+  "scalerSensitivityAri": 1.0,
+  "robustSensitivity": {
+    "k": 4,
+    "scaler": "RobustScaler",
+    "silhouetteMean": 0.5459327088078163,
+    "silhouetteStd": 1.1102230246251565e-16,
+    "inertia": 10.691512543518657,
+    "seedAriMean": 1.0,
+    "subsampleAriMean": 0.975969868173258,
+    "subsampleAriMin": 0.87984934086629,
+    "clusterSizes": [
+      13,
+      3,
+      16,
+      6
+    ],
+    "sizesBySeed": [
+      [
+        13,
+        3,
+        16,
+        6
+      ],
+      [
+        16,
+        6,
+        3,
+        13
+      ],
+      [
+        3,
+        6,
+        16,
+        13
+      ],
+      [
+        16,
+        3,
+        6,
+        13
+      ],
+      [
+        13,
+        3,
+        6,
+        16
+      ],
+      [
+        6,
+        3,
+        16,
+        13
+      ],
+      [
+        16,
+        3,
+        13,
+        6
+      ],
+      [
+        6,
+        16,
+        3,
+        13
+      ],
+      [
+        3,
+        16,
+        13,
+        6
+      ],
+      [
+        16,
+        6,
+        3,
+        13
+      ]
+    ],
+    "minimumSizeAcrossSeeds": 3,
+    "smallClusterJustified": true
+  },
+  "selectionReason": "StandardScaler predeclared; seed ARI >=0.8, minimum subsample ARI >=0.8, silhouette >0.25; smallest k within 0.03 of best eligible silhouette. Documented size exception: a group of three is accepted only if exactly all F90=M90=0 and R>90 observations; every other group requires >=5.",
+  "protocolDeviation": "G.1 proposed >=5 per group. All candidates isolate 3 inactive customers. No candidate met that heuristic. Exception adopted after inspection for exactly those 3, with stricter minimum subsample ARI=0.8; exploratory post-inspection decision, not independent validation.",
+  "quality": {
+    "original": {
+      "recency": {
+        "min": 0.0,
+        "q25": 2.0,
+        "median": 4.0,
+        "q75": 11.5,
+        "max": 142.0,
+        "mean": 18.42105263157895,
+        "skewness": 2.7377085624837303,
+        "zeros": 1,
+        "nulls": 0,
+        "iqrOutliers": 6
+      },
+      "frequency": {
+        "min": 0.0,
+        "q25": 6.75,
+        "median": 11.0,
+        "q75": 28.5,
+        "max": 42.0,
+        "mean": 16.0,
+        "skewness": 0.5908258065967927,
+        "zeros": 3,
+        "nulls": 0,
+        "iqrOutliers": 0
+      },
+      "monetary": {
+        "min": 0.0,
+        "q25": 97.76499999999999,
+        "median": 219.285,
+        "q75": 413.685,
+        "max": 1262.21,
+        "mean": 324.40631578947375,
+        "skewness": 1.6206405248893898,
+        "zeros": 3,
+        "nulls": 0,
+        "iqrOutliers": 4
+      }
+    },
+    "log1p": {
+      "recency": {
+        "min": 0.0,
+        "q25": 1.0986122886681098,
+        "median": 1.6094379124341003,
+        "q75": 2.5231858362957453,
+        "max": 4.962844630259907,
+        "mean": 1.9263456925798466,
+        "skewness": 1.0328604739182878,
+        "zeros": 1,
+        "nulls": 0,
+        "iqrOutliers": 3
+      },
+      "frequency": {
+        "min": 0.0,
+        "q25": 2.0350788850399963,
+        "median": 2.4849066497880004,
+        "q75": 3.3839491637904175,
+        "max": 3.7612001156935624,
+        "mean": 2.434460591276828,
+        "skewness": -0.893227241128687,
+        "zeros": 3,
+        "nulls": 0,
+        "iqrOutliers": 3
+      },
+      "monetary": {
+        "min": 0.0,
+        "q25": 4.577195295170603,
+        "median": 5.394703610747168,
+        "q75": 6.025611615663756,
+        "max": 7.141411379312884,
+        "mean": 5.001042100405699,
+        "skewness": -1.6702725695327068,
+        "zeros": 3,
+        "nulls": 0,
+        "iqrOutliers": 3
+      }
+    },
+    "positiveActivityOriginal": {
+      "recency": {
+        "min": 0.0,
+        "q25": 1.5,
+        "median": 4.0,
+        "q75": 7.5,
+        "max": 51.0,
+        "mean": 7.828571428571428,
+        "skewness": 2.490547009058244,
+        "zeros": 1,
+        "nulls": 0,
+        "iqrOutliers": 4
+      },
+      "frequency": {
+        "min": 1.0,
+        "q25": 9.0,
+        "median": 12.0,
+        "q75": 30.0,
+        "max": 42.0,
+        "mean": 17.37142857142857,
+        "skewness": 0.5624109804226354,
+        "zeros": 0,
+        "nulls": 0,
+        "iqrOutliers": 0
+      },
+      "monetary": {
+        "min": 21.36,
+        "q25": 135.565,
+        "median": 224.89,
+        "q75": 441.23,
+        "max": 1262.21,
+        "mean": 352.21257142857144,
+        "skewness": 1.5907258662410206,
+        "zeros": 0,
+        "nulls": 0,
+        "iqrOutliers": 4
+      }
+    },
+    "positiveActivityLog1p": {
+      "recency": {
+        "min": 0.0,
+        "q25": 0.8958797346140275,
+        "median": 1.6094379124341003,
+        "q75": 2.1383330595080277,
+        "max": 3.9512437185814275,
+        "mean": 1.6660743550644128,
+        "skewness": 0.6946861840656376,
+        "zeros": 1,
+        "nulls": 0,
+        "iqrOutliers": 0
+      },
+      "frequency": {
+        "min": 0.6931471805599453,
+        "q25": 2.302585092994046,
+        "median": 2.5649493574615367,
+        "q75": 3.433466642230941,
+        "max": 3.7612001156935624,
+        "mean": 2.643128641957699,
+        "skewness": -0.525327253313199,
+        "zeros": 0,
+        "nulls": 0,
+        "iqrOutliers": 0
+      },
+      "monetary": {
+        "min": 3.1072736482868986,
+        "q25": 4.916214406448989,
+        "median": 5.420048155119184,
+        "q75": 6.091389825165382,
+        "max": 7.141411379312884,
+        "mean": 5.4297028518690444,
+        "skewness": -0.3198916790832376,
+        "zeros": 0,
+        "nulls": 0,
+        "iqrOutliers": 1
+      }
+    },
+    "excludedNoHistory": 2,
+    "consumerFinalExcluded": true,
+    "outliersRemoved": 0
+  },
+  "clusters": [
+    {
+      "cluster": 1,
+      "name": "Inactivos en los últimos 90 días",
+      "size": 3,
+      "proportion": 0.07894736842105263,
+      "centroidOriginal": {
+        "recency": 141.99999999999994,
+        "frequency": 0.0,
+        "monetary": 0.0
+      },
+      "mean": {
+        "recency": 142.0,
+        "frequency": 0.0,
+        "monetary": 0.0
+      },
+      "median": {
+        "recency": 142.0,
+        "frequency": 0.0,
+        "monetary": 0.0
+      },
+      "silhouetteMean": 1.0
+    },
+    {
+      "cluster": 2,
+      "name": "Recientes de gasto bajo",
+      "size": 6,
+      "proportion": 0.15789473684210525,
+      "centroidOriginal": {
+        "recency": 1.4928828716784341,
+        "frequency": 2.828703708669865,
+        "monetary": 43.130295586445236
+      },
+      "mean": {
+        "recency": 1.6666666666666667,
+        "frequency": 3.1666666666666665,
+        "monetary": 46.205000000000005
+      },
+      "median": {
+        "recency": 1.0,
+        "frequency": 3.0,
+        "monetary": 47.655
+      },
+      "silhouetteMean": 0.5959393725063298
+    },
+    {
+      "cluster": 3,
+      "name": "Menos recientes de gasto moderado",
+      "size": 13,
+      "proportion": 0.34210526315789475,
+      "centroidOriginal": {
+        "recency": 12.808061487138326,
+        "frequency": 10.094574482624846,
+        "monetary": 173.53771112083888
+      },
+      "mean": {
+        "recency": 17.076923076923077,
+        "frequency": 10.23076923076923,
+        "monetary": 180.50615384615386
+      },
+      "median": {
+        "recency": 12.0,
+        "frequency": 11.0,
+        "monetary": 203.07
+      },
+      "silhouetteMean": 0.5081117051535066
+    },
+    {
+      "cluster": 4,
+      "name": "Frecuentes de gasto alto",
+      "size": 16,
+      "proportion": 0.42105263157894735,
+      "centroidOriginal": {
+        "recency": 2.2187078550942454,
+        "frequency": 26.747642474803712,
+        "monetary": 523.8201436203649
+      },
+      "mean": {
+        "recency": 2.625,
+        "frequency": 28.5,
+        "monetary": 606.476875
+      },
+      "median": {
+        "recency": 2.5,
+        "frequency": 31.0,
+        "monetary": 463.685
+      },
+      "silhouetteMean": 0.48089993690798183
+    }
+  ],
+  "assignments": [
+    {
+      "customerRef": "CLI-001",
+      "status": "ELIGIBLE",
+      "recency": 51,
+      "frequency": 9,
+      "monetary": 211.78,
+      "rfmSegment": "AT_RISK",
+      "cluster": 3,
+      "clusterName": "Menos recientes de gasto moderado",
+      "distance": 1.0593070428857705,
+      "pc1": -0.7498029334705657,
+      "pc2": 1.3811052005368454
+    },
+    {
+      "customerRef": "CLI-002",
+      "status": "ELIGIBLE",
+      "recency": 32,
+      "frequency": 9,
+      "monetary": 130.89,
+      "rfmSegment": "AT_RISK",
+      "cluster": 3,
+      "clusterName": "Menos recientes de gasto moderado",
+      "distance": 0.7143190443589956,
+      "pc1": -0.7398141115485068,
+      "pc2": 0.995382846815687
+    },
+    {
+      "customerRef": "CLI-003",
+      "status": "ELIGIBLE",
+      "recency": 142,
+      "frequency": 0,
+      "monetary": 0.0,
+      "rfmSegment": "INACTIVE",
+      "cluster": 1,
+      "clusterName": "Inactivos en los últimos 90 días",
+      "distance": 0.0,
+      "pc1": -4.388140286685375,
+      "pc2": 0.27167109079253304
+    },
+    {
+      "customerRef": "CLI-004",
+      "status": "ELIGIBLE",
+      "recency": 142,
+      "frequency": 0,
+      "monetary": 0.0,
+      "rfmSegment": "INACTIVE",
+      "cluster": 1,
+      "clusterName": "Inactivos en los últimos 90 días",
+      "distance": 0.0,
+      "pc1": -4.388140286685375,
+      "pc2": 0.27167109079253304
+    },
+    {
+      "customerRef": "CLI-005",
+      "status": "ELIGIBLE",
+      "recency": 0,
+      "frequency": 27,
+      "monetary": 370.41,
+      "rfmSegment": "AT_RISK",
+      "cluster": 4,
+      "clusterName": "Frecuentes de gasto alto",
+      "distance": 0.9453091545981301,
+      "pc1": 1.607645443098903,
+      "pc2": -0.7970566280260105
+    },
+    {
+      "customerRef": "CLI-006",
+      "status": "ELIGIBLE",
+      "recency": 4,
+      "frequency": 31,
+      "monetary": 484.76,
+      "rfmSegment": "AT_RISK",
+      "cluster": 4,
+      "clusterName": "Frecuentes de gasto alto",
+      "distance": 0.37682426307268096,
+      "pc1": 1.1437161328217087,
+      "pc2": 0.39551039796354237
+    },
+    {
+      "customerRef": "CLI-007",
+      "status": "ELIGIBLE",
+      "recency": 5,
+      "frequency": 29,
+      "monetary": 353.94,
+      "rfmSegment": "AT_RISK",
+      "cluster": 4,
+      "clusterName": "Frecuentes de gasto alto",
+      "distance": 0.5460627582518536,
+      "pc1": 0.9227491299996431,
+      "pc2": 0.44308509232455084
+    },
+    {
+      "customerRef": "CLI-008",
+      "status": "ELIGIBLE",
+      "recency": 18,
+      "frequency": 10,
+      "monetary": 223.89,
+      "rfmSegment": "AT_RISK",
+      "cluster": 3,
+      "clusterName": "Menos recientes de gasto moderado",
+      "distance": 0.2911974264956079,
+      "pc1": -0.2766559237730511,
+      "pc2": 0.7439047617462056
+    },
+    {
+      "customerRef": "CLI-009",
+      "status": "ELIGIBLE",
+      "recency": 16,
+      "frequency": 9,
+      "monetary": 147.69,
+      "rfmSegment": "AT_RISK",
+      "cluster": 3,
+      "clusterName": "Menos recientes de gasto moderado",
+      "distance": 0.21305658585848972,
+      "pc1": -0.43484921434181684,
+      "pc2": 0.5631978145738101
+    },
+    {
+      "customerRef": "CLI-010",
+      "status": "ELIGIBLE",
+      "recency": 7,
+      "frequency": 24,
+      "monetary": 748.15,
+      "rfmSegment": "AT_RISK",
+      "cluster": 4,
+      "clusterName": "Frecuentes de gasto alto",
+      "distance": 0.7548294668104187,
+      "pc1": 0.9686406523865687,
+      "pc2": 0.6833862863956932
+    },
+    {
+      "customerRef": "CLI-011",
+      "status": "ELIGIBLE",
+      "recency": 6,
+      "frequency": 10,
+      "monetary": 129.76,
+      "rfmSegment": "POTENTIAL",
+      "cluster": 3,
+      "clusterName": "Menos recientes de gasto moderado",
+      "distance": 0.5620648567450992,
+      "pc1": -0.07427810981155746,
+      "pc2": -0.02202656881561388
+    },
+    {
+      "customerRef": "CLI-012",
+      "status": "ELIGIBLE",
+      "recency": 10,
+      "frequency": 11,
+      "monetary": 251.65,
+      "rfmSegment": "AT_RISK",
+      "cluster": 3,
+      "clusterName": "Menos recientes de gasto moderado",
+      "distance": 0.2876934361702077,
+      "pc1": 0.03130004550653308,
+      "pc2": 0.4262150426602529
+    },
+    {
+      "customerRef": "CLI-013",
+      "status": "ELIGIBLE",
+      "recency": 1,
+      "frequency": 33,
+      "monetary": 1181.61,
+      "rfmSegment": "TOP_HIGH_VALUE",
+      "cluster": 4,
+      "clusterName": "Frecuentes de gasto alto",
+      "distance": 0.6290141239831207,
+      "pc1": 1.8573459960742813,
+      "pc2": -0.0611663244268664
+    },
+    {
+      "customerRef": "CLI-014",
+      "status": "ELIGIBLE",
+      "recency": 5,
+      "frequency": 12,
+      "monetary": 224.89,
+      "rfmSegment": "AT_RISK",
+      "cluster": 3,
+      "clusterName": "Menos recientes de gasto moderado",
+      "distance": 0.6923074958131478,
+      "pc1": 0.27768002418671195,
+      "pc2": 0.028691241334234605
+    },
+    {
+      "customerRef": "CLI-015",
+      "status": "ELIGIBLE",
+      "recency": 2,
+      "frequency": 6,
+      "monetary": 61.92,
+      "rfmSegment": "POTENTIAL",
+      "cluster": 2,
+      "clusterName": "Recientes de gasto bajo",
+      "distance": 0.6310269650252507,
+      "pc1": -0.260841853002614,
+      "pc2": -0.9002596370934115
+    },
+    {
+      "customerRef": "CLI-016",
+      "status": "ELIGIBLE",
+      "recency": 1,
+      "frequency": 35,
+      "monetary": 428.11,
+      "rfmSegment": "AT_RISK",
+      "cluster": 4,
+      "clusterName": "Frecuentes de gasto alto",
+      "distance": 0.46617549493239374,
+      "pc1": 1.5303732961426382,
+      "pc2": -0.19952120435205198
+    },
+    {
+      "customerRef": "CLI-017",
+      "status": "ELIGIBLE",
+      "recency": 2,
+      "frequency": 32,
+      "monetary": 328.2,
+      "rfmSegment": "AT_RISK",
+      "cluster": 4,
+      "clusterName": "Frecuentes de gasto alto",
+      "distance": 0.3193604090580758,
+      "pc1": 1.2254211209724573,
+      "pc2": -0.0015417986647025832
+    },
+    {
+      "customerRef": "CLI-018",
+      "status": "ELIGIBLE",
+      "recency": 3,
+      "frequency": 31,
+      "monetary": 454.35,
+      "rfmSegment": "TOP_HIGH_VALUE",
+      "cluster": 4,
+      "clusterName": "Frecuentes de gasto alto",
+      "distance": 0.23423359137627128,
+      "pc1": 1.2090212454641207,
+      "pc2": 0.23336540975298178
+    },
+    {
+      "customerRef": "CLI-019",
+      "status": "ELIGIBLE",
+      "recency": 142,
+      "frequency": 0,
+      "monetary": 0.0,
+      "rfmSegment": "INACTIVE",
+      "cluster": 1,
+      "clusterName": "Inactivos en los últimos 90 días",
+      "distance": 0.0,
+      "pc1": -4.388140286685375,
+      "pc2": 0.27167109079253304
+    },
+    {
+      "customerRef": "CLI-020",
+      "status": "ELIGIBLE",
+      "recency": 3,
+      "frequency": 11,
+      "monetary": 287.35,
+      "rfmSegment": "POTENTIAL",
+      "cluster": 4,
+      "clusterName": "Frecuentes de gasto alto",
+      "distance": 0.8913858348065736,
+      "pc1": 0.4784037516167337,
+      "pc2": -0.24100438832357451
+    },
+    {
+      "customerRef": "CLI-021",
+      "status": "ELIGIBLE",
+      "recency": 2,
+      "frequency": 13,
+      "monetary": 263.11,
+      "rfmSegment": "POTENTIAL",
+      "cluster": 4,
+      "clusterName": "Frecuentes de gasto alto",
+      "distance": 0.7673231821286901,
+      "pc1": 0.6503319188318747,
+      "pc2": -0.3876611517589697
+    },
+    {
+      "customerRef": "CLI-022",
+      "status": "ELIGIBLE",
+      "recency": 4,
+      "frequency": 31,
+      "monetary": 984.66,
+      "rfmSegment": "AT_RISK",
+      "cluster": 4,
+      "clusterName": "Frecuentes de gasto alto",
+      "distance": 0.5196643717943717,
+      "pc1": 1.3950564361067492,
+      "pc2": 0.5084105998664027
+    },
+    {
+      "customerRef": "CLI-023",
+      "status": "ELIGIBLE",
+      "recency": 1,
+      "frequency": 4,
+      "monetary": 38.14,
+      "rfmSegment": "POTENTIAL",
+      "cluster": 2,
+      "clusterName": "Recientes de gasto bajo",
+      "distance": 0.31736555800823774,
+      "pc1": -0.46403884726378813,
+      "pc2": -1.389611468459474
+    },
+    {
+      "customerRef": "CLI-024",
+      "status": "ELIGIBLE",
+      "recency": 40,
+      "frequency": 11,
+      "monetary": 140.24,
+      "rfmSegment": "AT_RISK",
+      "cluster": 3,
+      "clusterName": "Menos recientes de gasto moderado",
+      "distance": 0.8722982961804895,
+      "pc1": -0.6957053494940567,
+      "pc2": 1.228632331886012
+    },
+    {
+      "customerRef": "CLI-025",
+      "status": "INSUFFICIENT_HISTORY",
+      "recency": null,
+      "frequency": 0,
+      "monetary": 0.0,
+      "rfmSegment": "INACTIVE",
+      "cluster": null,
+      "clusterName": null,
+      "distance": null,
+      "pc1": null,
+      "pc2": null
+    },
+    {
+      "customerRef": "CLI-026",
+      "status": "ELIGIBLE",
+      "recency": 8,
+      "frequency": 12,
+      "monetary": 214.68,
+      "rfmSegment": "AT_RISK",
+      "cluster": 3,
+      "clusterName": "Menos recientes de gasto moderado",
+      "distance": 0.39034117263501916,
+      "pc1": 0.10086218892992449,
+      "pc2": 0.2971957336869499
+    },
+    {
+      "customerRef": "CLI-027",
+      "status": "ELIGIBLE",
+      "recency": 12,
+      "frequency": 12,
+      "monetary": 173.44,
+      "rfmSegment": "AT_RISK",
+      "cluster": 3,
+      "clusterName": "Menos recientes de gasto moderado",
+      "distance": 0.159460108511006,
+      "pc1": -0.11997718000427411,
+      "pc2": 0.5135410903990449
+    },
+    {
+      "customerRef": "CLI-028",
+      "status": "ELIGIBLE",
+      "recency": 5,
+      "frequency": 11,
+      "monetary": 207.5,
+      "rfmSegment": "AT_RISK",
+      "cluster": 3,
+      "clusterName": "Menos recientes de gasto moderado",
+      "distance": 0.6711068846550972,
+      "pc1": 0.20284536811172774,
+      "pc2": -0.016853418615337273
+    },
+    {
+      "customerRef": "CLI-029",
+      "status": "ELIGIBLE",
+      "recency": 2,
+      "frequency": 39,
+      "monetary": 1262.21,
+      "rfmSegment": "AT_RISK",
+      "cluster": 4,
+      "clusterName": "Frecuentes de gasto alto",
+      "distance": 0.6155491372856027,
+      "pc1": 1.8145458536797152,
+      "pc2": 0.29175958498433413
+    },
+    {
+      "customerRef": "CLI-030",
+      "status": "ELIGIBLE",
+      "recency": 5,
+      "frequency": 11,
+      "monetary": 203.07,
+      "rfmSegment": "POTENTIAL",
+      "cluster": 3,
+      "clusterName": "Menos recientes de gasto moderado",
+      "distance": 0.6693548114928436,
+      "pc1": 0.19521704557505137,
+      "pc2": -0.020280004575942985
+    },
+    {
+      "customerRef": "CLI-031",
+      "status": "ELIGIBLE",
+      "recency": 1,
+      "frequency": 4,
+      "monetary": 57.17,
+      "rfmSegment": "POTENTIAL",
+      "cluster": 2,
+      "clusterName": "Recientes de gasto bajo",
+      "distance": 0.3478227022685861,
+      "pc1": -0.32329872322689696,
+      "pc2": -1.32639204757106
+    },
+    {
+      "customerRef": "CLI-032",
+      "status": "ELIGIBLE",
+      "recency": 3,
+      "frequency": 40,
+      "monetary": 1244.61,
+      "rfmSegment": "AT_RISK",
+      "cluster": 4,
+      "clusterName": "Frecuentes de gasto alto",
+      "distance": 0.6438471564791078,
+      "pc1": 1.7100721822137679,
+      "pc2": 0.49537103763999046
+    },
+    {
+      "customerRef": "CLI-033",
+      "status": "ELIGIBLE",
+      "recency": 3,
+      "frequency": 42,
+      "monetary": 541.01,
+      "rfmSegment": "TOP_HIGH_VALUE",
+      "cluster": 4,
+      "clusterName": "Frecuentes de gasto alto",
+      "distance": 0.4546802449636921,
+      "pc1": 1.4421067909990362,
+      "pc2": 0.3821014073049672
+    },
+    {
+      "customerRef": "CLI-034",
+      "status": "ELIGIBLE",
+      "recency": 4,
+      "frequency": 2,
+      "monetary": 34.28,
+      "rfmSegment": "NEW",
+      "cluster": 2,
+      "clusterName": "Recientes de gasto bajo",
+      "distance": 0.6116471628165291,
+      "pc1": -1.1593651786248684,
+      "pc2": -0.9918104525714648
+    },
+    {
+      "customerRef": "CLI-035",
+      "status": "ELIGIBLE",
+      "recency": 14,
+      "frequency": 6,
+      "monetary": 87.1,
+      "rfmSegment": "AT_RISK",
+      "cluster": 3,
+      "clusterName": "Menos recientes de gasto moderado",
+      "distance": 0.5939431881322816,
+      "pc1": -0.7779191998086997,
+      "pc2": 0.2485322964199829
+    },
+    {
+      "customerRef": "CLI-036",
+      "status": "ELIGIBLE",
+      "recency": 1,
+      "frequency": 2,
+      "monetary": 64.36,
+      "rfmSegment": "NEW",
+      "cluster": 2,
+      "clusterName": "Recientes de gasto bajo",
+      "distance": 0.36833466175195195,
+      "pc1": -0.577894258501296,
+      "pc2": -1.5168874273643873
+    },
+    {
+      "customerRef": "CLI-037",
+      "status": "ELIGIBLE",
+      "recency": 1,
+      "frequency": 24,
+      "monetary": 298.13,
+      "rfmSegment": "POTENTIAL",
+      "cluster": 4,
+      "clusterName": "Frecuentes de gasto alto",
+      "distance": 0.5050054154171252,
+      "pc1": 1.1909161145560792,
+      "pc2": -0.4063489084061134
+    },
+    {
+      "customerRef": "CLI-038",
+      "status": "ELIGIBLE",
+      "recency": 1,
+      "frequency": 14,
+      "monetary": 473.02,
+      "rfmSegment": "TOP_HIGH_VALUE",
+      "cluster": 4,
+      "clusterName": "Frecuentes de gasto alto",
+      "distance": 0.7026314582565863,
+      "pc1": 1.0584501286260515,
+      "pc2": -0.541984599565869
+    },
+    {
+      "customerRef": "CLI-039",
+      "status": "ELIGIBLE",
+      "recency": 1,
+      "frequency": 1,
+      "monetary": 21.36,
+      "rfmSegment": "NEW",
+      "cluster": 2,
+      "clusterName": "Recientes de gasto bajo",
+      "distance": 0.7551920216915724,
+      "pc1": -1.1938391229721586,
+      "pc2": -1.8539954200782363
+    },
+    {
+      "customerRef": "CLI-040",
+      "status": "INSUFFICIENT_HISTORY",
+      "recency": null,
+      "frequency": 0,
+      "monetary": 0.0,
+      "rfmSegment": "INACTIVE",
+      "cluster": null,
+      "clusterName": null,
+      "distance": null,
+      "pc1": null,
+      "pc2": null
+    }
+  ],
+  "pca": {
+    "explainedVarianceRatio": [
+      0.8050964618023247,
+      0.17785357127201956
+    ],
+    "visualizationOnly": true
+  },
+  "artifactHash": "2a701dff6e4c38ae8fe028778c568f98696700a1cc84aa52d765475816e7e4b2",
+  "status": "EXPLORATORY",
+  "limitations": [
+    "38 clientes con historial en un escenario sintético; muestra pequeña y sin validación externa.",
+    "Clustering no implica churn, probabilidad ni superioridad sobre RFM por reglas.",
+    "RFM por reglas se conserva; IDs de clusters son arbitrarios.",
+    "Asignaciones actuales reutilizan el modelo congelado, sin reentrenamiento automático."
+  ]
+}

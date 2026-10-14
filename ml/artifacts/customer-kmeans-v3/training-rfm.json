@@ -1,0 +1,322 @@
+[
+  {
+    "customerRef": "CLI-001",
+    "status": "ELIGIBLE",
+    "recency": 51,
+    "frequency": 9,
+    "monetary": 211.78,
+    "rfmSegment": "AT_RISK"
+  },
+  {
+    "customerRef": "CLI-002",
+    "status": "ELIGIBLE",
+    "recency": 32,
+    "frequency": 9,
+    "monetary": 130.89,
+    "rfmSegment": "AT_RISK"
+  },
+  {
+    "customerRef": "CLI-003",
+    "status": "ELIGIBLE",
+    "recency": 142,
+    "frequency": 0,
+    "monetary": 0.0,
+    "rfmSegment": "INACTIVE"
+  },
+  {
+    "customerRef": "CLI-004",
+    "status": "ELIGIBLE",
+    "recency": 142,
+    "frequency": 0,
+    "monetary": 0.0,
+    "rfmSegment": "INACTIVE"
+  },
+  {
+    "customerRef": "CLI-005",
+    "status": "ELIGIBLE",
+    "recency": 0,
+    "frequency": 27,
+    "monetary": 370.41,
+    "rfmSegment": "AT_RISK"
+  },
+  {
+    "customerRef": "CLI-006",
+    "status": "ELIGIBLE",
+    "recency": 4,
+    "frequency": 31,
+    "monetary": 484.76,
+    "rfmSegment": "AT_RISK"
+  },
+  {
+    "customerRef": "CLI-007",
+    "status": "ELIGIBLE",
+    "recency": 5,
+    "frequency": 29,
+    "monetary": 353.94,
+    "rfmSegment": "AT_RISK"
+  },
+  {
+    "customerRef": "CLI-008",
+    "status": "ELIGIBLE",
+    "recency": 18,
+    "frequency": 10,
+    "monetary": 223.89,
+    "rfmSegment": "AT_RISK"
+  },
+  {
+    "customerRef": "CLI-009",
+    "status": "ELIGIBLE",
+    "recency": 16,
+    "frequency": 9,
+    "monetary": 147.69,
+    "rfmSegment": "AT_RISK"
+  },
+  {
+    "customerRef": "CLI-010",
+    "status": "ELIGIBLE",
+    "recency": 7,
+    "frequency": 24,
+    "monetary": 748.15,
+    "rfmSegment": "AT_RISK"
+  },
+  {
+    "customerRef": "CLI-011",
+    "status": "ELIGIBLE",
+    "recency": 6,
+    "frequency": 10,
+    "monetary": 129.76,
+    "rfmSegment": "POTENTIAL"
+  },
+  {
+    "customerRef": "CLI-012",
+    "status": "ELIGIBLE",
+    "recency": 10,
+    "frequency": 11,
+    "monetary": 251.65,
+    "rfmSegment": "AT_RISK"
+  },
+  {
+    "customerRef": "CLI-013",
+    "status": "ELIGIBLE",
+    "recency": 1,
+    "frequency": 33,
+    "monetary": 1181.61,
+    "rfmSegment": "TOP_HIGH_VALUE"
+  },
+  {
+    "customerRef": "CLI-014",
+    "status": "ELIGIBLE",
+    "recency": 5,
+    "frequency": 12,
+    "monetary": 224.89,
+    "rfmSegment": "AT_RISK"
+  },
+  {
+    "customerRef": "CLI-015",
+    "status": "ELIGIBLE",
+    "recency": 2,
+    "frequency": 6,
+    "monetary": 61.92,
+    "rfmSegment": "POTENTIAL"
+  },
+  {
+    "customerRef": "CLI-016",
+    "status": "ELIGIBLE",
+    "recency": 1,
+    "frequency": 35,
+    "monetary": 428.11,
+    "rfmSegment": "AT_RISK"
+  },
+  {
+    "customerRef": "CLI-017",
+    "status": "ELIGIBLE",
+    "recency": 2,
+    "frequency": 32,
+    "monetary": 328.2,
+    "rfmSegment": "AT_RISK"
+  },
+  {
+    "customerRef": "CLI-018",
+    "status": "ELIGIBLE",
+    "recency": 3,
+    "frequency": 31,
+    "monetary": 454.35,
+    "rfmSegment": "TOP_HIGH_VALUE"
+  },
+  {
+    "customerRef": "CLI-019",
+    "status": "ELIGIBLE",
+    "recency": 142,
+    "frequency": 0,
+    "monetary": 0.0,
+    "rfmSegment": "INACTIVE"
+  },
+  {
+    "customerRef": "CLI-020",
+    "status": "ELIGIBLE",
+    "recency": 3,
+    "frequency": 11,
+    "monetary": 287.35,
+    "rfmSegment": "POTENTIAL"
+  },
+  {
+    "customerRef": "CLI-021",
+    "status": "ELIGIBLE",
+    "recency": 2,
+    "frequency": 13,
+    "monetary": 263.11,
+    "rfmSegment": "POTENTIAL"
+  },
+  {
+    "customerRef": "CLI-022",
+    "status": "ELIGIBLE",
+    "recency": 4,
+    "frequency": 31,
+    "monetary": 984.66,
+    "rfmSegment": "AT_RISK"
+  },
+  {
+    "customerRef": "CLI-023",
+    "status": "ELIGIBLE",
+    "recency": 1,
+    "frequency": 4,
+    "monetary": 38.14,
+    "rfmSegment": "POTENTIAL"
+  },
+  {
+    "customerRef": "CLI-024",
+    "status": "ELIGIBLE",
+    "recency": 40,
+    "frequency": 11,
+    "monetary": 140.24,
+    "rfmSegment": "AT_RISK"
+  },
+  {
+    "customerRef": "CLI-025",
+    "status": "INSUFFICIENT_HISTORY",
+    "recency": null,
+    "frequency": 0,
+    "monetary": 0.0,
+    "rfmSegment": "INACTIVE"
+  },
+  {
+    "customerRef": "CLI-026",
+    "status": "ELIGIBLE",
+    "recency": 8,
+    "frequency": 12,
+    "monetary": 214.68,
+    "rfmSegment": "AT_RISK"
+  },
+  {
+    "customerRef": "CLI-027",
+    "status": "ELIGIBLE",
+    "recency": 12,
+    "frequency": 12,
+    "monetary": 173.44,
+    "rfmSegment": "AT_RISK"
+  },
+  {
+    "customerRef": "CLI-028",
+    "status": "ELIGIBLE",
+    "recency": 5,
+    "frequency": 11,
+    "monetary": 207.5,
+    "rfmSegment": "AT_RISK"
+  },
+  {
+    "customerRef": "CLI-029",
+    "status": "ELIGIBLE",
+    "recency": 2,
+    "frequency": 39,
+    "monetary": 1262.21,
+    "rfmSegment": "AT_RISK"
+  },
+  {
+    "customerRef": "CLI-030",
+    "status": "ELIGIBLE",
+    "recency": 5,
+    "frequency": 11,
+    "monetary": 203.07,
+    "rfmSegment": "POTENTIAL"
+  },
+  {
+    "customerRef": "CLI-031",
+    "status": "ELIGIBLE",
+    "recency": 1,
+    "frequency": 4,
+    "monetary": 57.17,
+    "rfmSegment": "POTENTIAL"
+  },
+  {
+    "customerRef": "CLI-032",
+    "status": "ELIGIBLE",
+    "recency": 3,
+    "frequency": 40,
+    "monetary": 1244.61,
+    "rfmSegment": "AT_RISK"
+  },
+  {
+    "customerRef": "CLI-033",
+    "status": "ELIGIBLE",
+    "recency": 3,
+    "frequency": 42,
+    "monetary": 541.01,
+    "rfmSegment": "TOP_HIGH_VALUE"
+  },
+  {
+    "customerRef": "CLI-034",
+    "status": "ELIGIBLE",
+    "recency": 4,
+    "frequency": 2,
+    "monetary": 34.28,
+    "rfmSegment": "NEW"
+  },
+  {
+    "customerRef": "CLI-035",
+    "status": "ELIGIBLE",
+    "recency": 14,
+    "frequency": 6,
+    "monetary": 87.1,
+    "rfmSegment": "AT_RISK"
+  },
+  {
+    "customerRef": "CLI-036",
+    "status": "ELIGIBLE",
+    "recency": 1,
+    "frequency": 2,
+    "monetary": 64.36,
+    "rfmSegment": "NEW"
+  },
+  {
+    "customerRef": "CLI-037",
+    "status": "ELIGIBLE",
+    "recency": 1,
+    "frequency": 24,
+    "monetary": 298.13,
+    "rfmSegment": "POTENTIAL"
+  },
+  {
+    "customerRef": "CLI-038",
+    "status": "ELIGIBLE",
+    "recency": 1,
+    "frequency": 14,
+    "monetary": 473.02,
+    "rfmSegment": "TOP_HIGH_VALUE"
+  },
+  {
+    "customerRef": "CLI-039",
+    "status": "ELIGIBLE",
+    "recency": 1,
+    "frequency": 1,
+    "monetary": 21.36,
+    "rfmSegment": "NEW"
+  },
+  {
+    "customerRef": "CLI-040",
+    "status": "INSUFFICIENT_HISTORY",
+    "recency": null,
+    "frequency": 0,
+    "monetary": 0.0,
+    "rfmSegment": "INACTIVE"
+  }
+]
