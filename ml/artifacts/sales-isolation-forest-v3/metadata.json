@@ -1,0 +1,619 @@
+{
+  "contractVersion": "sales-isolation-forest-v3-v1",
+  "modelId": "v3-daily-sales-isolation-forest",
+  "version": "sales-isolation-forest-v3-v1",
+  "algorithm": "IsolationForest",
+  "learningType": "unsupervised",
+  "task": "sales_anomaly_detection",
+  "scenarioId": "minimarket-pasco-v3",
+  "datasetVersion": "minimarket-pasco-v3-seed2026-v1",
+  "sourceLogicalHash": "a90b913b6ee83174165b39eaab1526525b3aacc53cae1abe6c3f5a54a469cac8",
+  "dailyDataHash": "1ea55266576e27835794551f67bdcaaf1b40d7f3a443960292b47735caa2b2bd",
+  "resultsHash": "d832e9cd5d6a6651e1a425a5dfeca3bb615dd336898502038a7872e2e9c4a53e",
+  "learnedModelHash": "caf3aef55e59f1c28a770911e1c91a8c56e2799d0e821b77fbb0d3a512abc64a",
+  "features": [
+    "weekdayLogTicketsDeviation",
+    "weekdayLogAverageTicketDeviation"
+  ],
+  "transformations": [
+    "log1p(tickets)",
+    "log1p(averageTicketPEN)",
+    "subtract TRAIN-only weekday medians"
+  ],
+  "scaler": null,
+  "params": {
+    "n_estimators": 200,
+    "max_samples": 256,
+    "max_features": 1.0,
+    "bootstrap": false,
+    "n_jobs": 1,
+    "random_state": 2026,
+    "contamination": "auto",
+    "warm_start": false
+  },
+  "contamination": "auto",
+  "threshold": -0.5,
+  "trainingCutoff": "2026-06-30",
+  "analysisCutoff": "2026-10-12",
+  "sampleCount": 261,
+  "analysisDays": 365,
+  "splits": {
+    "train": [
+      "2025-10-13",
+      "2026-06-30"
+    ],
+    "validation": [
+      "2026-07-01",
+      "2026-08-15"
+    ],
+    "retrospective": [
+      "2026-08-16",
+      "2026-10-12"
+    ]
+  },
+  "splitCounts": {
+    "train": 261,
+    "validation": 46,
+    "retrospective": 58
+  },
+  "trainingTimestamp": "2026-10-14T20:39:38.414195+00:00",
+  "sklearnVersion": "1.7.2",
+  "anomalyCount": 71,
+  "anomalyRate": 0.19452054794520549,
+  "stability": {
+    "jaccardMean": 0.9157458348585177,
+    "jaccardMin": 0.8607594936708861,
+    "top10JaccardMean": 0.7188811188811188,
+    "rankCorrelationMean": 0.982698837704452,
+    "developmentJaccardMean": 0.9178080577114817,
+    "developmentRankCorrelationMean": 0.9834081745750649
+  },
+  "candidates": [
+    {
+      "contamination": "auto",
+      "threshold": -0.5,
+      "anomalyCount": 71,
+      "anomalyRate": 0.19452054794520549,
+      "dates": [
+        "2025-10-18",
+        "2025-10-25",
+        "2025-10-31",
+        "2025-11-02",
+        "2025-11-03",
+        "2025-11-05",
+        "2025-11-11",
+        "2025-11-17",
+        "2025-11-24",
+        "2025-12-02",
+        "2025-12-08",
+        "2025-12-10",
+        "2025-12-11",
+        "2025-12-13",
+        "2025-12-14",
+        "2025-12-19",
+        "2025-12-22",
+        "2026-01-01",
+        "2026-01-06",
+        "2026-01-11",
+        "2026-01-16",
+        "2026-02-07",
+        "2026-02-10",
+        "2026-02-12",
+        "2026-02-13",
+        "2026-02-20",
+        "2026-02-21",
+        "2026-02-25",
+        "2026-03-02",
+        "2026-03-04",
+        "2026-03-19",
+        "2026-03-27",
+        "2026-03-29",
+        "2026-04-10",
+        "2026-04-11",
+        "2026-04-16",
+        "2026-04-19",
+        "2026-05-06",
+        "2026-05-11",
+        "2026-05-14",
+        "2026-05-17",
+        "2026-05-31",
+        "2026-06-06",
+        "2026-06-09",
+        "2026-06-10",
+        "2026-06-14",
+        "2026-06-15",
+        "2026-06-18",
+        "2026-06-28",
+        "2026-06-30",
+        "2026-07-01",
+        "2026-07-06",
+        "2026-07-14",
+        "2026-07-16",
+        "2026-07-21",
+        "2026-07-29",
+        "2026-07-30",
+        "2026-07-31",
+        "2026-08-06",
+        "2026-08-07",
+        "2026-08-12",
+        "2026-08-13",
+        "2026-08-20",
+        "2026-08-31",
+        "2026-09-02",
+        "2026-09-11",
+        "2026-09-20",
+        "2026-09-25",
+        "2026-10-02",
+        "2026-10-06",
+        "2026-10-12"
+      ],
+      "countsBySeed": [
+        71,
+        73,
+        73,
+        75,
+        71,
+        72,
+        72,
+        71,
+        74,
+        75
+      ],
+      "jaccardMean": 0.9157458348585177,
+      "jaccardMin": 0.8607594936708861,
+      "top10JaccardMean": 0.7188811188811188,
+      "rankCorrelationMean": 0.982698837704452,
+      "scoreDistribution": {
+        "min": -0.7156698613760742,
+        "q25": -0.4872981877451354,
+        "median": -0.4474744112246525,
+        "q75": -0.41898718162767234,
+        "p90": -0.4069501004036047,
+        "max": -0.39357996156063046,
+        "mean": -0.4629225443405469,
+        "skewness": -1.3547738828447808,
+        "zeros": 0,
+        "iqrOutliers": 18
+      },
+      "countsBySplit": {
+        "train": 50,
+        "validation": 12,
+        "retrospective": 9
+      },
+      "developmentJaccardMean": 0.9178080577114817,
+      "developmentRankCorrelationMean": 0.9834081745750649
+    },
+    {
+      "contamination": 0.01,
+      "threshold": -0.6498414363001821,
+      "anomalyCount": 3,
+      "anomalyRate": 0.00821917808219178,
+      "dates": [
+        "2025-10-31",
+        "2025-11-11",
+        "2025-12-10"
+      ],
+      "countsBySeed": [
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3
+      ],
+      "jaccardMean": 0.7333333333333333,
+      "jaccardMin": 0.5,
+      "top10JaccardMean": 0.7188811188811188,
+      "rankCorrelationMean": 0.982698837704452,
+      "scoreDistribution": {
+        "min": -0.7156698613760742,
+        "q25": -0.4872981877451354,
+        "median": -0.4474744112246525,
+        "q75": -0.41898718162767234,
+        "p90": -0.4069501004036047,
+        "max": -0.39357996156063046,
+        "mean": -0.4629225443405469,
+        "skewness": -1.3547738828447808,
+        "zeros": 0,
+        "iqrOutliers": 18
+      },
+      "countsBySplit": {
+        "train": 3,
+        "validation": 0,
+        "retrospective": 0
+      },
+      "developmentJaccardMean": 0.7333333333333333,
+      "developmentRankCorrelationMean": 0.9834081745750649
+    },
+    {
+      "contamination": 0.02,
+      "threshold": -0.6121395434968903,
+      "anomalyCount": 9,
+      "anomalyRate": 0.024657534246575342,
+      "dates": [
+        "2025-10-31",
+        "2025-11-11",
+        "2025-12-02",
+        "2025-12-10",
+        "2026-02-25",
+        "2026-06-10",
+        "2026-07-01",
+        "2026-07-06",
+        "2026-10-02"
+      ],
+      "countsBySeed": [
+        9,
+        9,
+        7,
+        9,
+        8,
+        9,
+        8,
+        9,
+        9,
+        9
+      ],
+      "jaccardMean": 0.7656790123456788,
+      "jaccardMin": 0.6,
+      "top10JaccardMean": 0.7188811188811188,
+      "rankCorrelationMean": 0.982698837704452,
+      "scoreDistribution": {
+        "min": -0.7156698613760742,
+        "q25": -0.4872981877451354,
+        "median": -0.4474744112246525,
+        "q75": -0.41898718162767234,
+        "p90": -0.4069501004036047,
+        "max": -0.39357996156063046,
+        "mean": -0.4629225443405469,
+        "skewness": -1.3547738828447808,
+        "zeros": 0,
+        "iqrOutliers": 18
+      },
+      "countsBySplit": {
+        "train": 6,
+        "validation": 2,
+        "retrospective": 1
+      },
+      "developmentJaccardMean": 0.7947530864197532,
+      "developmentRankCorrelationMean": 0.9834081745750649
+    },
+    {
+      "contamination": 0.03,
+      "threshold": -0.6016199264838745,
+      "anomalyCount": 12,
+      "anomalyRate": 0.03287671232876712,
+      "dates": [
+        "2025-10-31",
+        "2025-11-11",
+        "2025-12-02",
+        "2025-12-10",
+        "2026-02-25",
+        "2026-03-02",
+        "2026-05-17",
+        "2026-06-10",
+        "2026-07-01",
+        "2026-07-06",
+        "2026-10-02",
+        "2026-10-12"
+      ],
+      "countsBySeed": [
+        12,
+        12,
+        12,
+        11,
+        11,
+        12,
+        12,
+        12,
+        12,
+        12
+      ],
+      "jaccardMean": 0.7916768416768418,
+      "jaccardMin": 0.6428571428571429,
+      "top10JaccardMean": 0.7188811188811188,
+      "rankCorrelationMean": 0.982698837704452,
+      "scoreDistribution": {
+        "min": -0.7156698613760742,
+        "q25": -0.4872981877451354,
+        "median": -0.4474744112246525,
+        "q75": -0.41898718162767234,
+        "p90": -0.4069501004036047,
+        "max": -0.39357996156063046,
+        "mean": -0.4629225443405469,
+        "skewness": -1.3547738828447808,
+        "zeros": 0,
+        "iqrOutliers": 18
+      },
+      "countsBySplit": {
+        "train": 8,
+        "validation": 2,
+        "retrospective": 2
+      },
+      "developmentJaccardMean": 0.7905723905723906,
+      "developmentRankCorrelationMean": 0.9834081745750649
+    },
+    {
+      "contamination": 0.05,
+      "threshold": -0.590593355358534,
+      "anomalyCount": 17,
+      "anomalyRate": 0.04657534246575343,
+      "dates": [
+        "2025-10-31",
+        "2025-11-11",
+        "2025-12-02",
+        "2025-12-08",
+        "2025-12-10",
+        "2025-12-22",
+        "2026-01-01",
+        "2026-01-11",
+        "2026-01-16",
+        "2026-02-25",
+        "2026-03-02",
+        "2026-05-17",
+        "2026-06-10",
+        "2026-07-01",
+        "2026-07-06",
+        "2026-10-02",
+        "2026-10-12"
+      ],
+      "countsBySeed": [
+        17,
+        17,
+        18,
+        17,
+        17,
+        17,
+        17,
+        17,
+        17,
+        17
+      ],
+      "jaccardMean": 0.8214230019493175,
+      "jaccardMin": 0.7,
+      "top10JaccardMean": 0.7188811188811188,
+      "rankCorrelationMean": 0.982698837704452,
+      "scoreDistribution": {
+        "min": -0.7156698613760742,
+        "q25": -0.4872981877451354,
+        "median": -0.4474744112246525,
+        "q75": -0.41898718162767234,
+        "p90": -0.4069501004036047,
+        "max": -0.39357996156063046,
+        "mean": -0.4629225443405469,
+        "skewness": -1.3547738828447808,
+        "zeros": 0,
+        "iqrOutliers": 18
+      },
+      "countsBySplit": {
+        "train": 13,
+        "validation": 2,
+        "retrospective": 2
+      },
+      "developmentJaccardMean": 0.809967320261438,
+      "developmentRankCorrelationMean": 0.9834081745750649
+    }
+  ],
+  "quality": {
+    "missingDays": 0,
+    "zeroDays": 0,
+    "excludedDays": 0,
+    "outliersRemoved": 0,
+    "original": {
+      "revenue": {
+        "min": 174.56,
+        "q25": 491.34,
+        "median": 630.72,
+        "q75": 803.34,
+        "p90": 947.1320000000002,
+        "max": 1294.03,
+        "mean": 647.1647671232877,
+        "skewness": 0.31870139910518713,
+        "zeros": 0,
+        "iqrOutliers": 4
+      },
+      "units": {
+        "min": 42.0,
+        "q25": 117.0,
+        "median": 147.0,
+        "q75": 179.0,
+        "p90": 211.20000000000005,
+        "max": 297.0,
+        "mean": 148.98356164383563,
+        "skewness": 0.22005174675393405,
+        "zeros": 0,
+        "iqrOutliers": 2
+      },
+      "tickets": {
+        "min": 10.0,
+        "q25": 26.0,
+        "median": 34.0,
+        "q75": 42.0,
+        "p90": 49.0,
+        "max": 66.0,
+        "mean": 34.64931506849315,
+        "skewness": 0.29856853801044486,
+        "zeros": 0,
+        "iqrOutliers": 0
+      },
+      "averageTicket": {
+        "min": 11.76705882352941,
+        "q25": 17.07185185185185,
+        "median": 18.558333333333334,
+        "q75": 20.27885714285714,
+        "p90": 22.096918181818182,
+        "max": 25.63423076923077,
+        "mean": 18.687240593060107,
+        "skewness": 0.22683821592083112,
+        "zeros": 0,
+        "iqrOutliers": 4
+      }
+    },
+    "log1p": {
+      "revenue": {
+        "min": 5.167980864820033,
+        "q25": 6.1991695347330005,
+        "median": 6.448446258001854,
+        "q75": 6.6900220653602025,
+        "p90": 6.854490093036511,
+        "max": 7.166289139888476,
+        "mean": 6.4114146723550745,
+        "skewness": -0.6611059737944966,
+        "zeros": 0,
+        "iqrOutliers": 7
+      },
+      "units": {
+        "min": 3.7612001156935624,
+        "q25": 4.770684624465665,
+        "median": 4.997212273764115,
+        "q75": 5.19295685089021,
+        "p90": 5.3575185528160825,
+        "max": 5.697093486505405,
+        "mean": 4.951998023111371,
+        "skewness": -0.7606029147486626,
+        "zeros": 0,
+        "iqrOutliers": 12
+      },
+      "tickets": {
+        "min": 2.3978952727983707,
+        "q25": 3.295836866004329,
+        "median": 3.5553480614894135,
+        "q75": 3.7612001156935624,
+        "p90": 3.912023005428146,
+        "max": 4.204692619390966,
+        "mean": 3.522736226812988,
+        "skewness": -0.5157716302469426,
+        "zeros": 0,
+        "iqrOutliers": 3
+      },
+      "averageTicket": {
+        "min": 2.54686832429446,
+        "q25": 2.8943555814700743,
+        "median": 2.9734014530689774,
+        "q75": 3.057713957338438,
+        "p90": 3.1396991287587706,
+        "max": 3.2821972595025346,
+        "mean": 2.9717743662933125,
+        "skewness": -0.14540857849565766,
+        "zeros": 0,
+        "iqrOutliers": 4
+      }
+    },
+    "correlationFeatures": [
+      "revenue",
+      "units",
+      "tickets",
+      "averageTicket"
+    ],
+    "correlationMatrix": [
+      [
+        0.9999999999999999,
+        0.9707035455890096,
+        0.9271521801271794,
+        0.3450369598916071
+      ],
+      [
+        0.9707035455890097,
+        1.0,
+        0.9600877320504577,
+        0.1934090998495106
+      ],
+      [
+        0.9271521801271794,
+        0.9600877320504578,
+        1.0,
+        -0.01213154083893468
+      ],
+      [
+        0.34503695989160715,
+        0.1934090998495106,
+        -0.012131540838934682,
+        0.9999999999999998
+      ]
+    ]
+  },
+  "reference": {
+    "revenue": {
+      "min": 174.56,
+      "q25": 491.34,
+      "median": 630.72,
+      "q75": 803.34,
+      "p90": 947.1320000000002,
+      "max": 1294.03,
+      "mean": 647.1647671232877,
+      "skewness": 0.31870139910518713,
+      "zeros": 0,
+      "iqrOutliers": 4
+    },
+    "units": {
+      "min": 42.0,
+      "q25": 117.0,
+      "median": 147.0,
+      "q75": 179.0,
+      "p90": 211.20000000000005,
+      "max": 297.0,
+      "mean": 148.98356164383563,
+      "skewness": 0.22005174675393405,
+      "zeros": 0,
+      "iqrOutliers": 2
+    },
+    "tickets": {
+      "min": 10.0,
+      "q25": 26.0,
+      "median": 34.0,
+      "q75": 42.0,
+      "p90": 49.0,
+      "max": 66.0,
+      "mean": 34.64931506849315,
+      "skewness": 0.29856853801044486,
+      "zeros": 0,
+      "iqrOutliers": 0
+    },
+    "averageTicket": {
+      "min": 11.76705882352941,
+      "q25": 17.07185185185185,
+      "median": 18.558333333333334,
+      "q75": 20.27885714285714,
+      "p90": 22.096918181818182,
+      "max": 25.63423076923077,
+      "mean": 18.687240593060107,
+      "skewness": 0.22683821592083112,
+      "zeros": 0,
+      "iqrOutliers": 4
+    }
+  },
+  "temporalFolds": [
+    {
+      "fitCutoff": "2026-03-31",
+      "trainCount": 170,
+      "comparisonDays": 91,
+      "foldAnomalyCount": 24,
+      "referenceAnomalyCount": 17,
+      "jaccard": 0.64,
+      "comparisonNote": "Frozen full-TRAIN comparator uses more history; not a future-independent performance estimate."
+    },
+    {
+      "fitCutoff": "2026-05-31",
+      "trainCount": 231,
+      "comparisonDays": 30,
+      "foldAnomalyCount": 9,
+      "referenceAnomalyCount": 8,
+      "jaccard": 0.8888888888888888,
+      "comparisonNote": "Frozen full-TRAIN comparator uses more history; not a future-independent performance estimate."
+    }
+  ],
+  "weekdaySensitivityJaccard": 0.759493670886076,
+  "selectionReason": "Auto was predeclared in G.1; no labels justify a fixed anomaly proportion. Retained when development (TRAIN+VALIDATION only) seed Jaccard mean >=0.7 and score rank correlation >=0.9. Numeric candidates are threshold sensitivity only; retrospective block is descriptive, not used for tuning.",
+  "scoreSemantics": "anomalyScore=sklearn.score_samples; lower/more negative means more atypical. decisionFunction=score-offset; isAnomaly iff decisionFunction<0. No calibrated probability.",
+  "status": "EXPLORATORY",
+  "artifactHash": "7136846379701ecc2bccc427973613188620ed05e35ec040dd135c7334cd2cf4",
+  "limitations": [
+    "Escenario sintético de un año, sin etiquetas independientes ni validación externa.",
+    "TRAIN, validación y bloque retrospectivo ya fueron inspeccionados en G.1; no son un holdout virgen.",
+    "El umbral auto es heurístico; una señal requiere revisar el contexto y no determina su causa.",
+    "El modelo solo puntúa el histórico congelado; no se aplica automáticamente a operaciones posteriores."
+  ]
+}
