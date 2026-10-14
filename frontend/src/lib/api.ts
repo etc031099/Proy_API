@@ -1,7 +1,7 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import { ApiResponse, DemandForecastResponse, DemoV2RegisterData, DemoV3RegisterData } from '@/types';
 import type { AgentMessageRequest, AgentResponse, AgentConversationList, AgentConversationDetail } from '@/types/agent';
-import type { BusinessSummary, ForecastResponse, InventorySummary, ProductInventory, ProductOption } from '@/types/businessIntelligence';
+import type { AnalyticsEnvelope, AssociationsAnalytics, BusinessHealthAnalytics, BusinessSummary, CustomerAnalyticsDetail, CustomersAnalytics, ForecastResponse, InventorySummary, ProductInventory, ProductOption, RelatedProductAnalytics, SalesAnalytics, SalesPeriod, SupplierAnalyticsDetail, SuppliersAnalytics } from '@/types/businessIntelligence';
 
 export class AgentApiError extends Error {
   constructor(readonly status?: number, readonly code?: string, readonly conversationId?: string) {
@@ -419,6 +419,35 @@ class ApiClient {
   async getBusinessIntelligenceProductInventory(sku: string): Promise<ApiResponse<ProductInventory> & { code?: string }> {
     const response = await this.instance.get(`/intelligence/products/${encodeURIComponent(sku)}/inventory`);
     return response.data as ApiResponse<ProductInventory> & { code?: string };
+  }
+
+  // Extended V3 analytics use the same authenticated Axios instance and interceptors as the dashboard.
+  async getSalesAnalytics(params: { period: SalesPeriod; includeSeries?: boolean; compare?: boolean; limit?: number }): Promise<AnalyticsEnvelope<SalesAnalytics>> {
+    return (await this.instance.get('/intelligence/sales', { params })).data;
+  }
+  async getCustomersAnalytics(params?: { sortBy?: 'spend' | 'frequency' | 'recency' | 'gross_margin'; segment?: string; limit?: number; offset?: number }): Promise<AnalyticsEnvelope<CustomersAnalytics>> {
+    return (await this.instance.get('/intelligence/customers', { params })).data;
+  }
+  async getCustomerAnalytics(customerRef: string): Promise<AnalyticsEnvelope<CustomerAnalyticsDetail>> {
+    return (await this.instance.get(`/intelligence/customers/${encodeURIComponent(customerRef)}`)).data;
+  }
+  async getSuppliersAnalytics(params?: { period?: SalesPeriod; limit?: number; offset?: number }): Promise<AnalyticsEnvelope<SuppliersAnalytics>> {
+    return (await this.instance.get('/intelligence/suppliers', { params })).data;
+  }
+  async getSupplierAnalytics(supplierRef: string): Promise<AnalyticsEnvelope<SupplierAnalyticsDetail>> {
+    return (await this.instance.get(`/intelligence/suppliers/${encodeURIComponent(supplierRef)}`)).data;
+  }
+  async getAssociations(params?: { limit?: number; offset?: number }): Promise<AnalyticsEnvelope<AssociationsAnalytics>> {
+    return (await this.instance.get('/intelligence/associations', { params })).data;
+  }
+  async getRelatedProducts(sku: string, limit = 10): Promise<AnalyticsEnvelope<RelatedProductAnalytics>> {
+    return (await this.instance.get(`/intelligence/products/${encodeURIComponent(sku)}/related`, { params: { limit } })).data;
+  }
+  async getBusinessHealth(params?: { period?: SalesPeriod; limit?: number }): Promise<AnalyticsEnvelope<BusinessHealthAnalytics>> {
+    return (await this.instance.get('/intelligence/health', { params })).data;
+  }
+  async getInventoryAnalytics(params?: { limit?: number; flag?: 'low_stock' | 'overstock' | 'slow_moving' | 'dead_stock' | 'single_source' | 'should_reorder' }): Promise<AnalyticsEnvelope<InventorySummary>> {
+    return (await this.instance.get('/intelligence/inventory', { params })).data;
   }
 
   async searchBusinessIntelligenceProducts(search: string): Promise<ApiResponse<{ products: ProductOption[] }> & { code?: string }> {

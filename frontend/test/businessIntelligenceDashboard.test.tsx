@@ -19,7 +19,7 @@ const summaryFixture: BusinessSummary = {
   inventory: { totalProducts: 80, riskCounts: { critical: 5, high: 6, medium: 43, low: 26 }, reorderCount: 9, lowStockCount: 8, overstockCount: 6, pendingPurchasesCount: 29 },
 };
 const inventoryFixture: InventorySummary = {
-  ...temporal, summary: { totalProducts: 80, riskCounts: { critical: 5, high: 6, medium: 43, low: 26 }, reorderCount: 9, lowStockCount: 8, overstockCount: 6, incomingUnits: 858 },
+  ...temporal, summary: { totalProducts: 80, riskCounts: { critical: 5, high: 6, medium: 43, low: 26 }, reorderCount: 9, lowStockCount: 8, overstockCount: 6, incomingUnits: 858, abcCounts: { A: 40, B: 24, C: 16 }, xyzCounts: { X: 55, Y: 22, Z: 3 }, abcXyzCounts: { AX: 20 } },
   items: [{ sku: 'PAN-FRE-001', productName: 'Pan francés', presentation: 'Unidad', stock: 21, coverageDays: 3.5, risk: 'HIGH', riskReasonCodes: ['LOW_COVERAGE'], recommendedQty: 12, reorderNow: true }], total: 1,
 };
 const productOption = { id: 'product-1', sku: 'PAN-FRE-001', name: 'Pan francés', presentation: 'Unidad' };
@@ -44,7 +44,7 @@ const productInventoryFixture: ProductInventory = {
 function success<T>(data: T) { return { success: true, data }; }
 function mockOverview() {
   vi.spyOn(apiClient, 'getBusinessIntelligenceSummary').mockResolvedValue(success(summaryFixture));
-  vi.spyOn(apiClient, 'getBusinessIntelligenceInventory').mockResolvedValue(success(inventoryFixture));
+  vi.spyOn(apiClient, 'getInventoryAnalytics').mockResolvedValue(success(inventoryFixture));
 }
 async function openForecast() {
   fireEvent.click(screen.getByRole('tab', { name: 'Predicción' }));
@@ -80,7 +80,7 @@ describe('business intelligence dashboard', () => {
     vi.restoreAllMocks();
     const partial = { ...summaryFixture, grossMargin: { value: null, currency: null, percent: null, availability: 'PARTIAL' as const } };
     vi.spyOn(apiClient, 'getBusinessIntelligenceSummary').mockResolvedValue(success(partial));
-    vi.spyOn(apiClient, 'getBusinessIntelligenceInventory').mockResolvedValue(success(inventoryFixture));
+    vi.spyOn(apiClient, 'getInventoryAnalytics').mockResolvedValue(success(inventoryFixture));
     render(<BusinessIntelligenceDashboard />);
     expect(await screen.findByText('Parcial · No disponible')).toBeTruthy();
     expect(screen.getByText('Algunos costos no están disponibles.')).toBeTruthy();
@@ -150,10 +150,18 @@ describe('business intelligence dashboard', () => {
   it('shows a safe retry state on dashboard API failure', async () => {
     vi.restoreAllMocks();
     vi.spyOn(apiClient, 'getBusinessIntelligenceSummary').mockRejectedValue(new Error('private backend detail'));
-    vi.spyOn(apiClient, 'getBusinessIntelligenceInventory').mockResolvedValue(success(inventoryFixture));
+    vi.spyOn(apiClient, 'getInventoryAnalytics').mockResolvedValue(success(inventoryFixture));
     render(<BusinessIntelligenceDashboard />);
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.getByText('No se pudo cargar la inteligencia del negocio.')).toBeTruthy();
     expect(screen.queryByText('private backend detail')).toBeNull();
+  });
+
+  it('renders ABC and XYZ distributions returned by the inventory endpoint', async () => {
+    render(<BusinessIntelligenceDashboard />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Inventario' }));
+    expect(await screen.findByText('Clasificación ABC')).toBeTruthy();
+    expect(screen.getByText('A: 40')).toBeTruthy();
+    expect(screen.getByText('X: 55')).toBeTruthy();
   });
 });

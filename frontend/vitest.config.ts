@@ -23,6 +23,8 @@ export default defineConfig({
       'test/demoV2Registration.test.tsx',
       'test/demoV3Registration.test.tsx',
       'test/businessIntelligenceDashboard.test.tsx',
+      'test/businessIntelligenceExtended.api.test.ts',
+      'test/businessIntelligenceExtended.component.test.tsx',
     ],
     environment: 'jsdom',
     setupFiles: ['./test/setup.ts'],

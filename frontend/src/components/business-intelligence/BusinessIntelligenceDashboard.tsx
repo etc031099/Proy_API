@@ -9,8 +9,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { apiClient } from '@/lib/api';
 import type { BusinessSummary, ForecastResponse, IntelligenceMode, InventorySummary, ProductInventory, ProductOption, RiskLevel, SeriesStatus } from '@/types/businessIntelligence';
+import { ExtendedAnalyticsPanel, type ExtendedTab } from './ExtendedAnalyticsPanel';
 
-type TabKey = 'summary' | 'forecast' | 'inventory';
+type TabKey = 'summary' | 'forecast' | 'inventory' | ExtendedTab;
 type LoadState = 'loading' | 'ready' | 'error';
 type Horizon = 1 | 7 | 14;
 const horizons: Horizon[] = [1, 7, 14];
@@ -102,7 +103,7 @@ export function BusinessIntelligenceDashboard() {
   const loadOverview = useCallback(async () => {
     setOverviewState('loading'); setOverviewError(false);
     try {
-      const [summaryResponse, inventoryResponse] = await Promise.all([apiClient.getBusinessIntelligenceSummary(), apiClient.getBusinessIntelligenceInventory()]);
+      const [summaryResponse, inventoryResponse] = await Promise.all([apiClient.getBusinessIntelligenceSummary(), apiClient.getInventoryAnalytics({ limit: 20 })]);
       if (!summaryResponse.success || !summaryResponse.data || !inventoryResponse.success || !inventoryResponse.data) throw new Error('Unavailable');
       setSummary(summaryResponse.data); setInventory(inventoryResponse.data); setOverviewState('ready');
     } catch { setSummary(null); setInventory(null); setOverviewError(true); setOverviewState('error'); }
@@ -141,8 +142,10 @@ export function BusinessIntelligenceDashboard() {
     <header className="space-y-2"><div className="flex items-center gap-2 text-primary"><BarChart3 className="h-5 w-5" aria-hidden="true" /><span className="text-sm font-semibold uppercase tracking-wider">Inteligencia del negocio</span></div><h1 className="text-3xl font-bold tracking-tight sm:text-4xl">Analítica e Inteligencia del Negocio</h1><p className="max-w-3xl text-muted-foreground">Pronósticos, inventario y análisis del negocio en una sola vista.</p></header>
     {freshness && <p className="flex items-center gap-2 text-xs text-muted-foreground"><CalendarClock aria-hidden="true" className="h-4 w-4" />{freshness}</p>}
     <div>
-      <div role="tablist" aria-label="Secciones de inteligencia del negocio" className="grid w-full grid-cols-3 gap-1 rounded-lg bg-muted p-1 sm:w-auto sm:inline-grid">
-        {([{ key: 'summary', label: 'Resumen' }, { key: 'forecast', label: 'Predicción' }, { key: 'inventory', label: 'Inventario' }] as const).map(item => <button key={item.key} id={`intelligence-tab-${item.key}`} type="button" role="tab" aria-controls={`intelligence-panel-${item.key}`} aria-selected={tab === item.key} onClick={() => setTab(item.key)} className={`rounded-md px-3 py-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${tab === item.key ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground'}`}>{item.label}</button>)}
+      <div role="tablist" aria-label="Secciones de inteligencia del negocio" className="grid w-full grid-cols-2 gap-1 rounded-lg bg-muted p-1 sm:grid-cols-4 xl:inline-grid xl:grid-cols-8">
+        {([{ key: 'summary', label: 'Resumen' }, { key: 'forecast', label: 'Predicción' }, { key: 'inventory', label: 'Inventario' },
+          { key: 'sales', label: 'Ventas' }, { key: 'customers', label: 'Clientes' }, { key: 'suppliers', label: 'Proveedores' },
+          { key: 'related', label: 'Productos relacionados' }, { key: 'health', label: 'Salud' }] as const).map(item => <button key={item.key} id={`intelligence-tab-${item.key}`} type="button" role="tab" aria-controls={`intelligence-panel-${item.key}`} aria-selected={tab === item.key} onClick={() => setTab(item.key)} className={`rounded-md px-3 py-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${tab === item.key ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground'}`}>{item.label}</button>)}
       </div>
       {tab === 'summary' && <section id="intelligence-panel-summary" role="tabpanel" aria-labelledby="intelligence-tab-summary" tabIndex={0} className="mt-4 space-y-6">
         {overviewState === 'loading' && <SkeletonGrid />}
@@ -177,17 +180,19 @@ export function BusinessIntelligenceDashboard() {
         {!selected && <>
           {overviewError && <ErrorPanel retry={() => void loadOverview()} />}
           {overviewState === 'loading' && <LoadingDetail label="Cargando ranking de inventario…" />}
-          {inventory && <><Card><CardHeader><CardTitle>Riesgo de inventario</CardTitle><CardDescription>Distribución del análisis de inventario.</CardDescription></CardHeader><CardContent><div className="grid grid-cols-2 gap-3 sm:grid-cols-4">{riskRows.map(row => <div key={row.key} className="rounded-lg border p-3"><RiskBadge risk={riskKeyLevels[row.key]} /><p className="mt-2 text-xl font-semibold">{safeNumber(row.value)}</p></div>)}</div></CardContent></Card><RankingTable rows={inventory.items} onSelect={selectFromRanking} /></>}
+          {inventory && <><Card><CardHeader><CardTitle>Riesgo de inventario</CardTitle><CardDescription>Distribución del análisis de inventario.</CardDescription></CardHeader><CardContent><div className="grid grid-cols-2 gap-3 sm:grid-cols-4">{riskRows.map(row => <div key={row.key} className="rounded-lg border p-3"><RiskBadge risk={riskKeyLevels[row.key]} /><p className="mt-2 text-xl font-semibold">{safeNumber(row.value)}</p></div>)}</div><div className="mt-5 grid gap-4 sm:grid-cols-2"><ClassificationCounts title="ABC" counts={inventory.summary.abcCounts} /><ClassificationCounts title="XYZ" counts={inventory.summary.xyzCounts} /></div><div className="mt-4 flex flex-wrap gap-2 text-sm text-muted-foreground">{inventory.summary.overstockCount != null && <span>Sobreinventario: {safeNumber(inventory.summary.overstockCount)}</span>}{inventory.summary.slowMovingCount != null && <span>· Movimiento lento: {safeNumber(inventory.summary.slowMovingCount)}</span>}{inventory.summary.deadStockCount != null && <span>· Sin movimiento: {safeNumber(inventory.summary.deadStockCount)}</span>}</div></CardContent></Card><RankingTable rows={inventory.items} onSelect={selectFromRanking} /></>}
         </>}
         {selected && detailState === 'loading' && <LoadingDetail label="Cargando inventario del producto…" />}
         {selected && detailError && <ErrorPanel retry={() => { setDetailError(false); setDetailRetry(value => value + 1); }} />}
         {selected && detailState === 'ready' && productInventory && <ProductInventoryPanel inventory={productInventory} />}
       </section>}
+      {(['sales', 'customers', 'suppliers', 'related', 'health'] as const).includes(tab as ExtendedTab) && <section id={`intelligence-panel-${tab}`} role="tabpanel" aria-labelledby={`intelligence-tab-${tab}`} tabIndex={0} className="mt-4"><ExtendedAnalyticsPanel tab={tab as ExtendedTab} inventory={inventory} /></section>}
     </div>
   </div>;
 }
 
 function EmptyProductState() { return <Card><CardContent className="flex min-h-40 flex-col items-center justify-center gap-2 p-6 text-center"><PackageSearch className="h-8 w-8 text-muted-foreground" aria-hidden="true" /><p className="font-medium">Elige un producto para consultar su pronóstico.</p><p className="text-sm text-muted-foreground">No se seleccionó ningún producto automáticamente.</p></CardContent></Card>; }
+function ClassificationCounts({ title, counts }: { title: string; counts?: Record<string, number> | null }) { return <div><h3 className="mb-2 text-sm font-medium">Clasificación {title}</h3>{counts ? <div className="flex flex-wrap gap-2">{Object.entries(counts).map(([key, value]) => <span key={key} className="rounded-md border px-2 py-1 text-xs">{key}: {safeNumber(value)}</span>)}</div> : <p className="text-sm text-muted-foreground">No disponible en este contrato.</p>}</div>; }
 function LoadingDetail({ label }: { label: string }) { return <Card role="status"><CardContent className="flex min-h-40 items-center justify-center gap-3 p-6"><Loader2 className="h-5 w-5 animate-spin text-primary" aria-hidden="true" />{label}</CardContent></Card>; }
 function RankingTable({ rows, onSelect }: { rows: InventorySummary['items']; onSelect: (row: InventorySummary['items'][number]) => void }) {
   return <Card><CardHeader><CardTitle>Productos que requieren atención</CardTitle><CardDescription>Ranking entregado por la analítica de inventario; selecciona un producto para ver su detalle.</CardDescription></CardHeader><CardContent>{rows.length ? <div className="overflow-x-auto"><table className="w-full min-w-[700px] text-sm"><caption className="sr-only">Ranking de riesgo y reposición</caption><thead><tr className="border-b text-left text-muted-foreground">{['Producto', 'Stock', 'Cobertura', 'Riesgo', 'Reposición', 'Cantidad sugerida'].map(label => <th key={label} scope="col" className="px-3 py-3 font-medium">{label}</th>)}</tr></thead><tbody>{rows.map(row => <tr key={row.sku} className="border-b last:border-0"><td className="px-3 py-3"><button type="button" onClick={() => onSelect(row)} className="text-left font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{row.productName}{row.presentation ? <span className="block text-xs font-normal text-muted-foreground">{row.presentation}</span> : null}<span className="block text-xs font-normal text-muted-foreground">{row.sku}</span></button></td><td className="px-3 py-3">{safeNumber(row.stock)}</td><td className="px-3 py-3">{row.coverageDays === null ? 'No disponible' : `${safeNumber(row.coverageDays, 1)} días`}</td><td className="px-3 py-3"><RiskBadge risk={row.risk} /></td><td className="px-3 py-3">{row.reorderNow === null ? 'No disponible' : row.reorderNow ? 'Sí' : 'No'}</td><td className="px-3 py-3">{row.recommendedQty === null ? 'No disponible' : `${safeNumber(row.recommendedQty)} unidades`}</td></tr>)}</tbody></table></div> : <p className="rounded-md border border-dashed p-5 text-center text-sm text-muted-foreground">El análisis no devolvió productos en el ranking.</p>}</CardContent></Card>;
