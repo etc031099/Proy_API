@@ -46,12 +46,15 @@ test('H.6-FIX3 nearest-above-minimum query uses the approved ranking and exclude
   assert.equal(plan.tasks[0].args.flag, undefined);
 });
 
-test('H.6-FIX3 low-stock list shows only name, current stock and configured minimum without entity resolution', async () => {
+test('H.6-FIX3 low-stock list shows name and stock values, resolving only returned SKU identities', async () => {
   const calls = [];
   const state = {};
   const response = await handleV3({
     message: globalQueries[0][0], state, context: { businessId: V3.businessId, userId: 'fix3', conversationId: 'list' },
-    service: { resolveContext: async () => binding, resolveEntity: async (...args) => { calls.push(['resolve', ...args]); return {}; } },
+    service: { resolveContext: async () => binding, resolveEntity: async (type, reference, context) => {
+      calls.push(['resolve', type, reference, context]);
+      return reference === 'PAN-FRE-001' ? { entity:{ type:'product', id:'bbbbbbbbbbbbbbbbbbbbbbbb', key:reference, label:'Pan francés' } } : {};
+    } },
     run: async (...args) => {
       calls.push(['run', ...args]);
       return { status: 'READY', data: { total: 1, items: [{ sku: 'PAN-FRE-001', productName: 'Pan francés',
@@ -60,7 +63,8 @@ test('H.6-FIX3 low-stock list shows only name, current stock and configured mini
     },
     commit: patch => Object.assign(state, patch)
   });
-  assert.equal(calls.filter(call => call[0] === 'resolve').length, 0);
+  assert.deepEqual(calls.filter(call => call[0] === 'resolve').map(call => call[2]), ['PAN-FRE-001'],
+    'resolve only the returned SKU, never the global natural-language filter');
   assert.equal(calls.filter(call => call[0] === 'run').length, 1);
   assert.equal(calls[0][1], 'operations');
   assert.equal(calls[0][2], 'get_inventory_intelligence');

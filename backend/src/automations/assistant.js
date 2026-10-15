@@ -63,6 +63,15 @@ const withActionAssistant = (runtime, service, options = {}) => {
     const draftKey = keyFor(req, input.conversationId);
     let previous = drafts.get(draftKey);
     const explicit = actionIntent(input.message);
+    const contextualQuantity = /^(?:vende|vender|compra|comprar|compre)\s+([\p{L}\d]+)(?:\s+unidades?)?[.!]?$/iu.exec(input.message.trim());
+    if (!previous && v3State?.selectedProduct?.key && contextualQuantity
+      && ['create_sale', 'create_purchase'].includes(explicit)) {
+      const verb = explicit === 'create_sale' ? 'vende' : 'compra';
+      const proposal = parseAction(`${verb} ${contextualQuantity[1]} del ${v3State.selectedProduct.key}`, explicit);
+      const quantity = proposal.items?.[0]?.quantity;
+      if (Number.isSafeInteger(quantity) && quantity > 0)
+        input = { ...input, message:`${verb} ${quantity} del ${v3State.selectedProduct.key}` };
+    }
     const actionOrdinal = ordinalSelection(input.message);
     let selectionActionProblem = null;
     if (explicit && ['create_sale', 'create_purchase'].includes(explicit) && actionOrdinal.matched && v3State?.pending

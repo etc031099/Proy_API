@@ -93,7 +93,7 @@ const naturalInventoryConditionList = message => {
     || /\bcuales\b/.test(normalized) && /\b(?:reponer|pedir|reabastecer|por debajo del? minimo|por debajo de su minimo)\b/.test(normalized)
     || /^stock bajo$/.test(normalized)
     || /\bque se (?:me )?esta acabando\b/.test(normalized);
-  if (!listLanguage || specificReference && !/\b(?:stock|baj[oa]s?|por debajo|reponer|pedir)\b/.test(normalized)) return null;
+  if (!listLanguage || specificReference) return null;
   const condition = /\b(?:deberia reponer|deberian reponer|debo reponer|deberia pedir|deberian pedir|deberia reabastecer)\b/.test(normalized)
     ? 'should_reorder'
     : /\b(?:stock bajo|poco stock|por debajo del minimo|por debajo de su minimo|por debajo del? minimo|por acabarse|acabandose|acabando|se (?:me )?esta acabando|bajos? de stock)\b/.test(normalized)
@@ -730,13 +730,17 @@ const renderV3 = (skillId, result, args, responseMode = null) => {
     if (!items.length) return args.flag === 'should_reorder'
       ? 'No encontré productos con recomendación de reposición disponible.'
       : 'No encontré productos con stock en el mínimo configurado o por debajo.';
-    return items.map(item => `${label(item)}\nStock actual: ${units(item.stock?.onHand)} · Stock mínimo: ${units(item.inventoryPolicy?.configuredMinimumStock)}`
-      + (item.sku ? `\nSKU: ${item.sku}` : '')).join('\n\n');
+    const visible = items.slice(0, 5);
+    return visible.map(item => `${label(item)}\nStock actual: ${units(item.stock?.onHand)} · Stock mínimo: ${units(item.inventoryPolicy?.configuredMinimumStock)}`
+      + (item.sku ? `\nSKU: ${item.sku}` : '')).join('\n\n')
+      + (items.length > visible.length ? `\n\nMostrando ${visible.length} de ${d.total || items.length} opciones.` : '');
   }
   if (responseMode === 'inventory-filter' && skillId === 'get_inventory_intelligence') {
     if (result.status === 'PARTIAL' || d.reasonCode === 'LIVE_FORECAST_REQUIRED') return 'No pude verificar qué productos reponer porque falta evidencia de pronóstico para esa recomendación. No inferí una cantidad.';
     if (!items.length) return `No encontré productos que coincidan con esa marca o categoría ${args.flag === 'should_reorder' ? 'recomendados para reposición' : 'bajo la condición de bajo stock'}.`;
-    return items.map(item => `${label(item)}: ${units(item.stock?.onHand)} disponibles; ${args.flag === 'should_reorder' ? 'reposición recomendada' : 'bajo stock'}.`).join('\n');
+    const visible = items.slice(0, 5);
+    return visible.map(item => `${label(item)}: ${units(item.stock?.onHand)} disponibles; ${args.flag === 'should_reorder' ? 'reposición recomendada' : 'bajo stock'}.`).join('\n')
+      + (items.length > visible.length ? `\nMostrando ${visible.length} de ${d.total || items.length} opciones.` : '');
   }
   if (responseMode === 'minimal' && skillId === 'get_inventory_intelligence' && items.length === 1) {
     return `${label(items[0])}: ${units(items[0].stock?.onHand)} disponibles.`;
@@ -831,11 +835,14 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
   if (memory.pending && /^(?:si(?: ese)?|ok|vale|dale|correcto)$/.test(clean(message))) return { answer: 'Elige una entidad por nombre, código o número. Esta selección no confirma una operación.', clarification: true, intent: 'v3_selection', agent: 'coordinator' };
   let plan = routeV3(message, memory, binding);
   let responseMode = plan?.responseMode || null;
-  const ordinal = ordinalSelection(message), numeric = /^(?:opcion\s+)?([1-5])$/.exec(clean(message));
+  const ordinal = ordinalSelection(message), numeric = /^(?:(?:opcion|numero)\s+)?([1-5])$/.exec(clean(message));
   const choiceLike = ordinal.matched || Boolean(numeric);
   const candidates = memory.ranking?.items || [];
   const match = candidates.find(row => normalize(row.key) === normalize(message) || normalize(row.label) === normalize(message));
   const index = numeric ? Number(numeric[1]) - 1 : ordinal.index === -1 ? candidates.length - 1 : ordinal.index;
+  if (choiceLike && index !== null && index >= candidates.length && memory.ranking?.type === 'product')
+    return { answer:`La lista tiene ${candidates.length} opciones; esa opción no está en la lista vigente.`,
+      clarification:true, intent:'v3_selection', agent:'coordinator' };
   const chooseOther = /^(?:esa no,? la otra|no,? esa,? la otra|no es esa,? la otra)$/.test(clean(message).replace(/[?.!]/g, '').trim());
   let selected = match || (choiceLike && index !== null ? candidates[index] : null);
   if (!selected && chooseOther && memory.ranking?.type === 'product' && memory.selectedProduct) {
@@ -911,6 +918,8 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
   if (plan.clarificationQuestion) return { answer: plan.clarificationQuestion, clarification: true, intent: 'v3_clarification', agent: 'coordinator',
     ...(plan.suggestions ? { suggestions: plan.suggestions } : {}) };
   if (plan.tasks.length > 4) return { answer: 'Indica qué dominio deseas priorizar.', clarification: true, intent: 'v3_clarification', agent: 'coordinator' };
+  const visibleProductList = ['inventory-condition-list', 'inventory-filter'].includes(responseMode);
+  if (visibleProductList) { scope.ranking = null; scope.selectedProduct = null; }
   const answers = [], v3Views = [], nearestMinimumRows = []; let previous, rankedForResponse = null;
   for (let i = 0; i < plan.tasks.length; i++) {
     const current = plan.tasks[i];
@@ -981,6 +990,16 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
           { label: 'Stock mínimo', value: displayNumber(result.data.items?.find(row => row.sku === item.key)?.inventoryPolicy?.configuredMinimumStock) }
         ] }));
         view.note = undefined;
+      }
+      if (visibleProductList && current.skillId === 'get_inventory_intelligence') {
+        const visibleRows = (result.data.items || []).slice(0, 5);
+        if (visibleRows.length && visibleRows.every(row => typeof row.sku === 'string' && row.sku)) {
+          const resolved = await Promise.all(visibleRows.map(row => service.resolveEntity('product', row.sku, context)));
+          const entities = resolved.map(row => row.entity);
+          scope.ranking = entities.length === visibleRows.length && entities.every(row => row?.type === 'product'
+            && isObjectId(row.id) && typeof row.key === 'string' && typeof row.label === 'string')
+            ? { type:'product', items:entities } : null;
+        }
       }
       v3Views.push(view);
       scope.pending = null; save();
