@@ -23,7 +23,7 @@ const transactionExecutor = type => ({
           total: Number((item.quantity * item.convertedPrice).toFixed(2)) })) };
     } catch { fail('ACTION_VALIDATION_FAILED'); }
   },
-  async execute(args, context, session, actionId, expectedSnapshot) {
+  async execute(args, context, session, actionId, expectedSnapshot, onCommitted) {
     if (!expectedSnapshot) fail('ACTION_CONFLICT');
     let result;
     try {
@@ -33,6 +33,11 @@ const transactionExecutor = type => ({
       throw error;
     }
     await recordEvents(context, actionId, result.transaction._id, [type === 'sale' ? 'SALE_CREATED' : 'PURCHASE_CREATED', 'INVENTORY_CHANGED'], session);
+    if (type === 'sale' && onCommitted) {
+      for (const { product, previousStock } of result.lowStockNotifications || []) {
+        onCommitted(() => require('../services/telegramService').notifyLowStock(context.businessId, product, previousStock));
+      }
+    }
     return { id: String(result.transaction._id), type, currency: result.snapshot.currency, total: result.snapshot.totalAmount,
       items: result.snapshot.items.map(item => ({ sku: item.sku, name: redact(item.name), quantity: item.quantity, stock: item.resultingStock })) };
   }

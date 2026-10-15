@@ -16,19 +16,24 @@ const createActionService = ({ repository = createActionRepository(), executors 
     scopeOf(context); if (!isTraceId(id)) fail('ACTION_VALIDATION_FAILED');
     await repository.checkConversation(context);
     const started = performance.now();
+    const afterCommit = [];
     const row = await repository.transition(context, id, decision, clock, async (stored, session) => {
       const { skill, args } = validateActionInvocation({ agentId: 'operations', skillId: stored.actionSkillId, args: stored.validatedArgs, context });
       if (hashArgs(args) !== stored.argsHash) fail('ACTION_CONFLICT');
       if (stored.preview.snapshot && stored.snapshotHash !== hashArgs(stored.preview.snapshot)) fail('ACTION_CONFLICT');
       if (skill.requiresConfirmation && (!confirmedByHuman || context.actorType !== 'USER')) fail('ACTION_CONFIRMATION_REQUIRED');
       if (!executors[skill.id]) fail('ACTION_NOT_ALLOWED');
-      const result = await executors[skill.id].execute(deepFreeze(structuredClone(args)), context, session, stored.pendingActionId, stored.preview.snapshot);
+      const result = await executors[skill.id].execute(deepFreeze(structuredClone(args)), context, session,
+        stored.pendingActionId, stored.preview.snapshot, callback => afterCommit.push(callback));
       // Do not use Promise.race for writes: a timed-out promise could still commit a mutation.
       // This deadline is checked before the atomic commit and rolls back late work.
       if (performance.now() - started > skill.timeoutMs) fail('ACTION_EXECUTION_FAILED');
       return result;
     });
     if (row.status === 'EXPIRED') fail('ACTION_EXPIRED');
+    for (const callback of afterCommit) {
+      Promise.resolve().then(callback).catch(error => console.error('[Telegram] low-stock notification failed:', error.category || 'UNAVAILABLE'));
+    }
     return { ...view(row), latencyMs: performance.now() - started };
   };
   const service = {
