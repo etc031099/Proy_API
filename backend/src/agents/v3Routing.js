@@ -135,6 +135,16 @@ const routeV3 = (message, state, binding) => {
   const text = clean(message), memory = state || {};
   if (/^(?:vende|vender|compra|comprar|crea|crear|avisa|avisame|actualiza|ajusta|confirma|confirmar|confirmo|hazlo|correcto|cancela|cancelar|si hazlo|procede|adelante|no lo hagas|no hagas nada|mejor no)\b/.test(text)
     || /^(?:ese|el segundo)$/.test(text)) return null;
+  const coverageQuestion = /\b(?:cobertura|coverage)\b/.test(text)
+    && !/que es|que significa|interpreta|como se calcula|modelo|hgb|ma28|machine learning|\bml\b/.test(text);
+  if (coverageQuestion) {
+    const rawRef = productRef(message);
+    const ref = message.match(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b|\bM5-[A-Z]+_\d+_\d+\b/)?.[0]
+      || (rawRef && !/inventario|stock|cobertura|coverage|producto|los dias|dias/i.test(normalize(rawRef)) ? rawRef : null)
+      || (memory.selectedProduct?.key && /\b(?:ese|este|su)\b/.test(text) ? memory.selectedProduct.key : null);
+    return ref ? { tasks: [task('get_inventory_intelligence', { mode: 'detail', productRef: ref })] }
+      : { clarificationQuestion: '¿De qué producto deseas consultar los días de cobertura?' };
+  }
   const machineLearning = machineLearningPlan(text, message, binding, memory);
   if (machineLearning) return machineLearning;
   if (/producto.{0,25}mas importante/.test(text) && !/ventas|vendido|revenue|abc|riesgo|critic/.test(text))
