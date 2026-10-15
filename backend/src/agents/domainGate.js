@@ -12,6 +12,7 @@ const isOutOfDomain = message => {
   if (/^(?:clima|bitcoin|peliculas|musica|cuentame algo)$/.test(text)) return true;
   if (/^(?:hola[ ,]*)?(?:como estas|que tal|buenos dias|buenas tardes|buenas noches|hola)$/.test(text)) return true;
   if (/\b(?:ventas?|inventario|stock|clientes?|proveedores?|catalogo|productos?|negocio|empresa)\b/.test(text)) return false;
+  if (/^(?:si pudieras viajar a cualquier pais cual elegirias|cual es tu animal favorito|que harias si ganaras la loteria|quien ganara el mundial|recomiendame una pelicula|que musica te gusta)$/.test(text)) return true;
   if (/^(?:de (?:q|que) equipo eres hincha|(?:cual es )?tu equipo favorito|cual es tu equipo favorito|cual es tu comida favorita|cuentame un (?:chiste|cuento)|resultado del partido|clima de hoy|quien es el presidente|receta de pollo|dame una pelicula|que musica escuchas)$/.test(text)
     || /\b(?:eres hincha|equipo favorito|comida favorita|musica escuchas)\b/.test(text)
     || /^(?:cuentame|dime|dame|recomiendame)\b.{0,25}\b(?:chiste|cuento|pelicula|receta)\b/.test(text)

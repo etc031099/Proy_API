@@ -406,6 +406,8 @@ const routeV3 = (message, state, binding) => {
       ...(ref || memory.selectedSupplier ? { supplierRef: ref || memory.selectedSupplier.key } : {}) })] };
     const general = /que proveedor|proveedores|quien.*abastece|de que proveedor/.test(text);
     const selected = ref || (!general && /\bsu\b|ese proveedor|el anterior|me vende|productos|lead time|puntual|llego tarde|se atraso/.test(text) ? memory.selectedSupplier?.key : null);
+    if (!selected && /\b(?:ese|este|su) proveedor\b/.test(text))
+      return { clarificationQuestion: '¿A qué proveedor te refieres? Indica su nombre o código; un producto no identifica por sí solo un proveedor.' };
     const pendingOnly = /(?:pedido|orden|compra).{0,20}pendient|pendient.{0,20}(?:pedido|orden|compra)/.test(text) && !selected;
     const args = { mode: selected ? 'detail' : 'rank', metric: /tarda|demora|retras|llego tarde|se atraso/.test(text) ? 'delays' : /lead time|tiempo de entrega|plazo de entrega/.test(text) ? 'lead_time' : /puntual/.test(text) ? 'punctuality' : /depend/.test(text) ? 'dependency' : /orden|pedido/.test(text) ? 'orders' : 'spend', ...(selected ? { supplierRef: selected } : {}), ...(pendingOnly ? { limit: 20 } : {}) };
     if (/tarda/.test(text)) args.metric = 'lead_time';
@@ -924,8 +926,8 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
   if (memory.pending && /^(?:si(?: ese)?|ok|vale|dale|correcto)$/.test(clean(message))) return { answer: 'Elige una entidad por nombre, código o número. Esta selección no confirma una operación.', clarification: true, intent: 'v3_selection', agent: 'coordinator' };
   let plan = routeV3(message, memory, binding);
   const language = require('./languageNlu');
-  if (/^pan[?!.]*$/i.test(message.trim()) && !memory.pending && !memory.selectedProduct)
-    plan = { clarificationQuestion: '¿Quieres consultar stock, pronóstico, productos relacionados o preparar una venta de pan?' };
+  if (/^(?:pan|primor)[?!.]*$/i.test(message.trim()) && !memory.pending && !memory.selectedProduct)
+    plan = { clarificationQuestion: '¿Quieres consultar stock, pronóstico, productos relacionados o preparar una venta de ese producto?' };
   if (execution?.hasSemanticProvider() && language.fallbackDecision(message, plan, memory)) {
     const legacy = deterministicProbe?.();
     if (legacy && !['search_product', 'ambiguous_query', 'unsupported'].includes(legacy.intent)) return null;
@@ -1084,6 +1086,11 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
       current.args = { ...current.args, [`${current.fromPrevious}Ref`]: key };
     }
     try {
+      const resolvedProduct = current.args.productRef;
+      execution?.recordLanguageDecision?.({ detectedIntent: current.skillId,
+        entitySource: resolvedProduct ? message.includes(resolvedProduct) ? 'explicit'
+          : productResolution?.status === 'CONTEXT_MATCH' && !selected ? 'active_context' : 'resolver' : 'none',
+        ...(resolvedProduct ? { contextEntityType: 'product', contextEntityId: resolvedProduct } : {}) });
       let result = await run(current.agent, current.skillId, current.args);
       if (result.metadata.resolution) {
         const resolution = result.metadata.resolution;

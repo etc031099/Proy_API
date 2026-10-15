@@ -62,6 +62,8 @@ export interface AgentEvidence {
 }
 export interface AgentResponse {
   routingMode?: 'deterministic' | 'semantic_fallback';
+  languageDecision?: { detectedIntent: string; entitySource: 'explicit' | 'active_context' | 'resolver' | 'none';
+    contextEntityType?: 'product'; contextEntityId?: string; semanticFallbackUsed: boolean };
   semanticClassification?: ProviderStageUsage;
   groundedAnswer?: ProviderStageUsage;
   grounded?: { route: string; responseDiagnostic?: {

@@ -17,7 +17,9 @@ const instance = (apiClient as unknown as { instance: {
 it('J4 preserves separate semantic and grounded telemetry without changing authenticated transport', async () => {
   const stage = { provider: 'deepseek', model: 'deepseek-flash', calls: 1, inputTokens: 300, outputTokens: 50,
     totalTokens: 350, latencyMs: 10, finishReason: 'stop', accepted: true, fallbackReason: null, estimatedCostUsd: null };
-  const data = { answer: 'Ranking verificado', routingMode: 'semantic_fallback', semanticClassification: stage, groundedAnswer: stage };
+  const data = { answer: 'Ranking verificado', routingMode: 'semantic_fallback', semanticClassification: stage, groundedAnswer: stage,
+    languageDecision: { detectedIntent: 'FORECAST', entitySource: 'active_context', contextEntityType: 'product',
+      contextEntityId: 'ABA-ACE-002', semanticFallbackUsed: true } };
   const post = vi.spyOn(instance, 'post').mockResolvedValue({ data: { success: true, data } });
   const get = vi.spyOn(instance, 'get').mockResolvedValue({ data: { success: true, data: { messages: [{ response: data }] } } });
   try {

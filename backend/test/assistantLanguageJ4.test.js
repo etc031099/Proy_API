@@ -91,7 +91,8 @@ for (const [message, intent, patch, domain] of [
   ['a quienes debería llamar xq ya no vienen', 'CUSTOMERS_AT_RISK', {}, 'customers'],
   ['q tengo q comprar para no quedarme corto', 'REPLENISHMENT', {}, 'inventory'],
   ['q me conviene mirar hoy', 'BUSINESS_HEALTH', { period: 'TODAY' }, 'health'],
-  ['cuanto crees q salga este', 'FORECAST', {}, 'forecast'],
+  // J4.1: an unresolved contextual product must clarify, never forecast the entire catalogue.
+  ['cuanto crees q salga este', 'FORECAST', {}, null],
   ['hay existencias de cocinero en el depósito', 'INVENTORY_LOOKUP', { productQuery: 'cocinero' }, 'inventory'],
   ['a quien debería llamar?', 'AMBIGUOUS', {}, null],
   ['q peli da risa', 'OUT_OF_DOMAIN', {}, null]

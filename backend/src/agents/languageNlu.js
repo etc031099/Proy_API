@@ -104,7 +104,8 @@ function fallbackDecision(message, plan, memory = {}) {
   }
   if (plan?.responseMode && !plan.lookup) return false;
   if (ordinalSelection(message).matched || /^\d+[.!?]?$/.test(t)
-    || /^(?:si|no|ok|vale|dale|ya dale|mejor no|dejalo|cancelalo|confirma|confirmo|hazlo|vende|compra|saca|retira|registrame|ponme)\b/.test(t)) return false;
+    || /^si(?: ese| hazlo)?$/.test(t)
+    || /^(?:no|ok|vale|dale|ya dale|mejor no|dejalo|cancelalo|confirma|confirmo|hazlo|vende|compra|saca|retira|registrame|ponme)\b/.test(t)) return false;
   if (plan?.lookup && (/^(?:busca|buscar|producto|sku)\b/.test(t) || /^[A-Z]{2,}(?:-[A-Z0-9]+)+$/.test(message.trim())
     || t.split(/\s+/).length <= 3 && !/[?¿]/.test(message)
       && !/^(?:como|que|quien|cuanto|cual|hay|me|esto|con|a quien|mis)\b/.test(t))) return false;
@@ -124,9 +125,15 @@ function nluPlan(v, message, memory, binding) {
     return { semanticAction: { action: 'create_sale', productQuery: v.productQuery, quantity: v.quantity } };
   if (['CREATE_SALE', 'CONFIRM_WRITE', 'CANCEL_WRITE'].includes(v.intent)) return clarification('AMBIGUOUS_ACTION');
   if (v.intent === 'OUT_OF_DOMAIN') return { outOfDomain: true };
-  const contextual = /\b(?:ese|este|esto|eso)\b/.test(normalize(message));
+  const source = normalize(message);
+  const contextual = /\b(?:ese|este|esto|eso)\b/.test(source)
+    || /^y\b/.test(source) && /\b(?:salga|viene|vendera|saldr[aá]|stock|pronostico|forecast|compra con)\b/.test(source);
+  const global = /\b(?:todos|global|agregado|negocio|catalogo completo)\b/.test(source);
   const ref = v.productQuery && !isContextualProductReference(v.productQuery) ? v.productQuery
-    : contextual ? memory.selectedProduct?.key : null;
+    : contextual && !global && PRODUCT_INTENTS.includes(v.intent) ? memory.selectedProduct?.key : null;
+  if (v.intent === 'FORECAST' && contextual && !global && !ref) return clarification('MISSING_PRODUCT');
+  if (v.intent === 'SUPPLIER_PERFORMANCE' && /\b(?:ese|este|su) proveedor\b/.test(source)
+    && !memory.selectedSupplier?.key) return clarification('MISSING_CONTEXT');
   if (['INVENTORY_LOOKUP', 'CROSS_SELL', 'PRODUCT_SEARCH'].includes(v.intent) && !ref) return clarification('MISSING_PRODUCT');
   if (v.intent === 'PRODUCT_SEARCH') return { lookup: ref };
   const period = resolveOperationalPeriod(message, binding.operationalDate || binding.asOfDate);
@@ -149,7 +156,8 @@ function nluPlan(v, message, memory, binding) {
     case 'CUSTOMER_ACTIVITY': return memory.selectedCustomer?.key
       ? make('get_customer_intelligence', { mode: 'activity', customerRef: memory.selectedCustomer.key, ...period.period })
       : clarification('MISSING_CONTEXT');
-    case 'SUPPLIER_PERFORMANCE': return make('get_supplier_intelligence', { mode: 'rank', metric: 'punctuality', ...period.period });
+    case 'SUPPLIER_PERFORMANCE': return make('get_supplier_intelligence', { mode: 'rank', metric: 'punctuality', ...period.period,
+      ...(/\b(?:ese|este|su) proveedor\b/.test(source) && memory.selectedSupplier?.key ? { supplierRef: memory.selectedSupplier.key } : {}) });
     case 'CROSS_SELL': return make('get_cross_sell_recommendations', { mode: 'recommend', productRef: ref });
     case 'BUSINESS_HEALTH': return make('get_business_health', { ...period.period });
     default: return clarification('MISSING_INTENT');
@@ -167,7 +175,12 @@ async function semanticPlan({ message, memory, binding, execution }) {
       }) }] });
     const value = validateNlu(generated.text, message);
     execution.recordSemanticOutcome(true, null);
-    return nluPlan(value, message, memory, binding);
+    const plan = nluPlan(value, message, memory, binding);
+    const reference = plan.tasks?.find(row => row.args.productRef)?.args.productRef;
+    execution.recordLanguageDecision?.({ detectedIntent: value.intent,
+      entitySource: reference ? reference === memory.selectedProduct?.key && !value.productQuery ? 'active_context' : 'explicit' : 'none',
+      ...(reference && reference === memory.selectedProduct?.key ? { contextEntityType: 'product', contextEntityId: memory.selectedProduct.key } : {}) });
+    return plan;
   } catch (error) {
     if (error?.code === 'NLU_SCHEMA_INVALID') execution.recordSemanticOutcome(false, 'NLU_SCHEMA_INVALID');
     return clarification('MISSING_INTENT');

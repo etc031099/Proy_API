@@ -68,6 +68,7 @@ const createAgentExecution = options => {
     || !/^[\w.-]{1,100}$/.test(neutralProvider.model || ''))) throw new AgentError('AGENT_INVALID_REQUEST');
   let groundedCalled = false;
   let semanticCalled = false;
+  let languageDecision = null;
   let semanticDiagnostic = null;
   let groundedDiagnostic = null;
   const executors = createSkillExecutors(options.dependencies);
@@ -138,7 +139,13 @@ const createAgentExecution = options => {
     async generateWithTools(input) { return runLlmCall('generateWithTools', input); },
     hasGroundedProvider: () => Boolean(neutralProvider),
     hasSemanticProvider: () => neutralProvider?.provider === 'deepseek',
+    recordLanguageDecision(diagnostic) {
+      languageDecision = { ...diagnostic, ...(languageDecision || {}),
+        ...(diagnostic.contextEntityId ? { contextEntityType: diagnostic.contextEntityType,
+          contextEntityId: diagnostic.contextEntityId, entitySource: diagnostic.entitySource } : {}) };
+    },
     languageRouting: () => ({ routingMode: semanticCalled ? 'semantic_fallback' : 'deterministic',
+      ...(languageDecision ? { languageDecision: { ...languageDecision, semanticFallbackUsed: semanticCalled } } : {}),
       ...(semanticDiagnostic ? { semanticClassification: semanticDiagnostic } : {}),
       ...(groundedDiagnostic ? { groundedAnswer: groundedDiagnostic } : {}) }),
     recordSemanticOutcome(accepted, reason) {

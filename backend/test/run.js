@@ -15,6 +15,7 @@ require('./productResolutionJ2S.test');
 require('./assistantRobustnessJ3.test');
 require('./assistantRobustnessJ3.http.test');
 require('./assistantLanguageJ4.test');
+require('./assistantLanguageJ41.test');
 require('./assistantNaturalLanguageH6.test');
 require('./assistantNaturalLanguageH6Fix1.test');
 require('./v3BusinessIntelligenceDashboard.test');

@@ -9,6 +9,7 @@ const period = { startDate: true, endDate: true };
 const actionItem = { sku: true, name: true, quantity: true, stock: true, resultingStock: true, price: true, total: true };
 const shape = {
   routingMode: true,
+  languageDecision: { detectedIntent: true, entitySource: true, contextEntityType: true, contextEntityId: true, semanticFallbackUsed: true },
   groundedAnswer: { provider: true, model: true, calls: true, inputTokens: true, outputTokens: true, totalTokens: true,
     cachedInputTokens: true, cacheMissInputTokens: true, reasoningTokens: true, latencyMs: true, finishReason: true,
     accepted: true, fallbackReason: true, estimatedCostUsd: true, estimatedCostRangeUsd: { min: true, max: true } },
