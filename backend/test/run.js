@@ -26,6 +26,7 @@ require('./visibleProductContinuations.test');
 require('./conversationalP3E.test');
 require('./replenishmentPlanning.test');
 require('./agentGemini.test');
+require('./groundedJ2A.test');
 require('./agentFailover.test');
 require('./agentSmoke.test');
 require('./agentOrchestrator.test');

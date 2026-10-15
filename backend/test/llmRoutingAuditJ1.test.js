@@ -12,7 +12,7 @@ const { DEFAULT_GEMINI_MODEL } = require('../src/config/env');
 const { routeV3 } = require('../src/agents/v3Routing');
 const { routeDeterministically } = require('../src/agents/intentRouting');
 
-// Characterization only: every provider method is injected; no SDK, DB or HTTP.
+// J.1 findings retained as regressions after J.2A; every provider is injected.
 const prompts = [
   '¿Quién ganó el partido ayer?', '¿Cuál es la capital de Francia?', 'Cuéntame un cuento.',
   '¿Qué laptop me recomiendas?', '¿Cuánto cuesta Bitcoin?', '¿Quién es el presidente de X?',
@@ -45,32 +45,31 @@ const fixture = ({ classification = 'out_of_scope', fail = false } = {}) => {
   { message, conversationId: randomUUID() }) };
 };
 
-for (const message of prompts.filter((_, index) => ![2, 4].includes(index))) test(`J1 current OOD reaches mocked classifier: ${message}`, async () => {
+for (const message of prompts.filter((_, index) => ![2, 4].includes(index))) test(`J1 finding closed: OOD avoids provider: ${message}`, async () => {
   const f = fixture(), result = await f.run(message);
-  assert.equal(f.calls.length, 1);
-  assert.equal(f.calls[0].input.agentId, 'coordinator');
-  assert.equal(f.calls[0].input.messages[0].text, message);
-  assert.equal(result.intent, 'unsupported');
-  assert.equal(result.usage.totalLlmCalls, 1);
-  assert.equal(result.usage.totalTokens, 16); // synthetic usage, never real spend
+  assert.equal(f.calls.length, 0);
+  assert.equal(result.intent, 'out_of_domain');
+  assert.equal(result.usage.totalLlmCalls, 0);
+  assert.equal(result.usage.totalTokens, 0);
   assert.equal(result.usage.totalSkillCalls, 0);
 });
 
-test('J1 cuento currently enters V3 product resolution instead of an OOD rejection', () => {
+test('J1 cuento finding closed: no V3 product lookup', () => {
   const plan = routeV3(prompts[2], {}, { ...V3, operationalDate: '2026-10-15' });
-  assert.equal(plan.lookup, prompts[2]);
+  assert.equal(plan.lookup, undefined);
+  assert.ok(plan.clarificationQuestion);
   assert.equal(plan.tasks, undefined);
 });
 
-test('J1 Bitcoin currently enters legacy product price lookup instead of an OOD rejection', () => {
-  assert.equal(routeV3(prompts[4], {}, { ...V3, operationalDate: '2026-10-15' }), null);
+test('J1 Bitcoin finding closed: no legacy product price lookup', () => {
+  assert.ok(routeV3(prompts[4], {}, { ...V3, operationalDate: '2026-10-15' }).clarificationQuestion);
   const plan = routeDeterministically(prompts[4], {}, new Date('2026-10-15T12:00:00Z'), undefined, undefined, V3.businessId);
-  assert.equal(plan.intent, 'product_details');
-  assert.equal(plan.lookupQuery, 'bitcoin');
+  assert.equal(plan.intent, 'unsupported');
+  assert.equal(plan.lookupQuery, undefined);
 });
 
 test('J1 classifier business_query admits a second mocked selection call, without grounded skills first', async () => {
-  const f = fixture({ classification: 'business_query' }), result = await f.run(prompts[1]);
+  const f = fixture({ classification: 'business_query' }), result = await f.run('¿Qué es zzzexterno?');
   assert.deepEqual(f.calls.map(call => call.method), ['structured', 'tools']);
   assert.equal(result.usage.totalLlmCalls, 2);
   assert.equal(result.usage.totalSkillCalls, 0);
@@ -78,7 +77,7 @@ test('J1 classifier business_query admits a second mocked selection call, withou
 });
 
 test('J1 classifier failure returns controlled provider error and does not dispatch skills', async () => {
-  const f = fixture({ fail: true }), result = await f.run(prompts[1]);
+  const f = fixture({ fail: true }), result = await f.run('¿Qué es zzzexterno?');
   assert.equal(result.code, 'AGENT_PROVIDER_FAILED');
   assert.equal(f.calls.length, 1);
   assert.equal(result.usage.totalTokens, null);
@@ -103,19 +102,19 @@ test('J1 generic provider tools exclude WRITE and the seven V3 families', () => 
   }
 });
 
-test('J1 existing deterministic usage is zero but has no provider/cost fields', () => {
+test('J1 telemetry gap closed for deterministic usage', () => {
   const value = createRequestUsage();
   assert.equal(value.totalLlmCalls, 0);
   assert.equal(value.totalTokens, 0);
   assert.equal(value.totalProviderLatencyMs, 0);
-  assert.equal(Object.hasOwn(value, 'provider'), false);
-  assert.equal(Object.hasOwn(value, 'estimatedCost'), false);
+  assert.equal(value.provider, 'none');
+  assert.equal(value.estimatedCostUsd, 0);
 });
 
-test('J1 valid analytical questions currently use coarse V3 routes, not a grounded synthesis policy', () => {
+test('J1 analytical routing gaps closed without displacing simple ML explanations', () => {
   const cases = [
     ['¿Cómo puedo mejorar mis ventas?', 'get_business_analytics', 'summary'],
-    ['¿Qué debería priorizar en inventario?', 'get_business_analytics', 'summary'],
+    ['¿Qué debería priorizar en inventario?', 'get_inventory_intelligence', 'recommendations'],
     ['¿Qué clientes debería intentar retener?', 'get_customer_intelligence', 'rank'],
     ['¿Qué significa WAPE en mi modelo?', 'get_product_forecast', 'evaluation'],
     ['¿Por qué se eligieron 4 clusters?', 'get_customer_intelligence', 'clustering'],
