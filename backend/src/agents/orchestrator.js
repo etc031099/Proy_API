@@ -132,7 +132,7 @@ const errorCode = error => error?.code === 'AGENT_BUDGET_EXCEEDED' || error?.cod
 /** Internal authenticated API. No HTTP endpoint, writes or autonomous actions.
  * .handle(authenticatedReq, {message, conversationId?}) is the future UI boundary.
  */
-const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencies, onEvent = () => {}, clock = () => new Date() } = {}) => Object.freeze({
+const createAgentOrchestrator = ({ memory = defaultMemory, provider, neutralProvider, dependencies, onEvent = () => {}, clock = () => new Date() } = {}) => Object.freeze({
   async clearV3Selection(req, conversationId) {
     return memory.withConversation(createAgentRequestContext(req, { conversationId }), (state, commit) => {
       if (state.v3Context) commit({ v3Context: { ...state.v3Context, pending: null, ranking: null } });
@@ -168,6 +168,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
       const v3Service = dependencies?.v3Service || (context.businessId === require('../services/v3IntelligenceService').V3.businessId
         ? require('../services/v3IntelligenceService').createV3IntelligenceService({ models: dependencies?.models, clock: dependencies?.clock || clock }) : null);
       const execution = createAgentExecution({ context, onEvent, ...(provider ? { provider } : {}),
+        ...(neutralProvider ? { neutralProvider } : {}),
         dependencies: { ...dependencies, ...(v3Service ? { v3Service } : {}), clock: dependencies?.clock || clock } });
       const results = [];
       let plan = { intent: 'ambiguous_query', agent: 'coordinator' }, answer, code = null, question = null;
@@ -186,8 +187,12 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
       try {
         // Access-scope requests are rejected before consulting conversation snapshots, routing LLM, or skills.
         const securityPlan = tenantScopeViolation(message);
-        v3Response = !securityPlan && v3Service ? await execution.runAgent('coordinator', () => require('./v3Routing').handleV3({
-          message, state, context, service: v3Service, run, commit })) : null;
+        const { isOutOfDomain, OUT_OF_DOMAIN_ANSWER } = require('./domainGate');
+        v3Response = !securityPlan && isOutOfDomain(message)
+          ? { intent: 'out_of_domain', agent: 'coordinator', answer: OUT_OF_DOMAIN_ANSWER }
+          : !securityPlan && v3Service ? await execution.runAgent('coordinator', async () =>
+            await require('./grounded').handleGrounded({ message, context, service: v3Service, run, execution })
+            || require('./v3Routing').handleV3({ message, state, context, service: v3Service, run, commit })) : null;
         if (v3Response) {
           answer = v3Response.answer; plan = { intent: v3Response.intent, agent: v3Response.agent, contextProvenance: v3Response.contextProvenance };
           question = v3Response.clarification ? answer : null;
@@ -815,6 +820,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, dependencie
         ...(v3Response?.suggestions ? { suggestions: v3Response.suggestions, suggestionsEntityType: v3Response.suggestionsEntityType,
           suggestionsExpiresAt: v3Response.suggestionsExpiresAt, ...(v3Response.suggestionsPagination ? { suggestionsPagination: v3Response.suggestionsPagination } : {}) } : {}),
         ...(v3Response?.v3Views ? { v3Views: v3Response.v3Views } : {}),
+        ...(v3Response?.grounded ? { grounded: v3Response.grounded } : {}),
         participants, actions, evidence: results.map(({ result }) => ({ ...result.evidence, recordCount: result.metadata.returnedCount })),
         usage: { ...usage, toolSelectionCycles: execution.getBudget().toolSelectionCycles, totalLatencyMs: latencyMs }, requiresClarification: Boolean(question), clarificationQuestion: question,
         code, latencyMs });

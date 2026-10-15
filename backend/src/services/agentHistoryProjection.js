@@ -8,6 +8,8 @@ const tokenUsage = { ...tokens, usageAvailable: true };
 const period = { startDate: true, endDate: true };
 const actionItem = { sku: true, name: true, quantity: true, stock: true, resultingStock: true, price: true, total: true };
 const shape = {
+  grounded: { route: true, responseIntent: true, domains: [true], skills: [true], noHistoricalSkuData: true,
+    contextMetrics: { bytes: true, chars: true, estimatedTokens: true, tokenCountIsEstimate: true } },
   v3Views: [{ kind: true, title: true, subtitle: true, metrics: [{ label: true, value: true }],
     items: [{ type: true, key: true, label: true, secondaryLabel: true, selectMessage: true, metrics: [{ label: true, value: true }] }], note: true }],
   suggestions: [{ label: true, message: true, detail: true }],
@@ -25,7 +27,8 @@ const shape = {
   participants: [{ ...agent, skillCalls: true, providerLatencyMs: true }],
   actions: [{ skillId: true, agentId: true, status: true, durationMs: true }],
   evidence: [{ evidenceId: true, sourceType: true, skillId: true, label: true, asOf: true, period, recordCount: true }],
-  usage: { totalLlmCalls: true, totalSkillCalls: true, totalInputTokens: true, totalOutputTokens: true,
+  usage: { provider: true, model: true, llmCalls: true, inputTokens: true, outputTokens: true, estimatedCostUsd: true,
+    providerLatencyMs: true, pricingVersions: [true], totalLlmCalls: true, totalSkillCalls: true, totalInputTokens: true, totalOutputTokens: true,
     totalThoughtTokens: true, totalCachedInputTokens: true, totalToolUseTokens: true, totalTokens: true,
     metricsComplete: true, totalProviderLatencyMs: true, totalLatencyMs: true, toolSelectionCycles: true,
     agents: [agent], providerGenerations: [{ agentId: true, requestedModel: true, finalModel: true,

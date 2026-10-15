@@ -163,7 +163,11 @@ const createRequestUsage = (options = {}) => {
     if (typeof record.model !== 'string' || !/^[\w.:/-]{1,100}$/.test(record.model)
       || typeof record.usageAvailable !== 'boolean' || !safeDuration(record.latencyMs)) invalid();
     const copy = { agentId: record.agentId, model: record.model,
-      usageAvailable: record.usageAvailable, latencyMs: record.latencyMs };
+      usageAvailable: record.usageAvailable, latencyMs: record.latencyMs,
+      provider: record.provider || 'gemini', estimatedCostUsd: record.estimatedCostUsd ?? null,
+      pricingVersion: record.pricingVersion || null };
+    if (typeof copy.provider !== 'string' || !/^[\w.-]{1,100}$/.test(copy.provider)
+      || copy.estimatedCostUsd !== null && (!Number.isFinite(copy.estimatedCostUsd) || copy.estimatedCostUsd < 0)) invalid();
     for (const field of TOKEN_FIELDS) {
       if (record.usageAvailable) {
         if (record[field] !== null && !safeCount(record[field])) invalid();
@@ -196,14 +200,24 @@ const createRequestUsage = (options = {}) => {
   });
   const totalProviderLatencyMs = records.reduce((total, record) => total + record.latencyMs, 0);
   if (!safeDuration(totalProviderLatencyMs)) invalid();
+  const providers = [...new Set(records.map(record => record.provider))];
+  const models = [...new Set(records.map(record => record.model))];
+  const estimatedCostUsd = records.some(record => record.estimatedCostUsd === null)
+    ? null : records.reduce((sum, record) => sum + record.estimatedCostUsd, 0);
   return deepFreeze({
+    provider: providers.length === 0 ? 'none' : providers.length === 1 ? providers[0] : 'mixed',
+    model: models.length === 1 ? models[0] : null,
+    llmCalls: records.length, inputTokens: sum(records, 'inputTokens'), outputTokens: sum(records, 'outputTokens'),
+    estimatedCostUsd, providerLatencyMs: totalProviderLatencyMs,
+    pricingVersions: [...new Set(records.map(record => record.pricingVersion).filter(Boolean))],
     totalLlmCalls: records.length, totalSkillCalls,
     totalInputTokens: sum(records, 'inputTokens'), totalOutputTokens: sum(records, 'outputTokens'),
     totalTokens: sum(records, 'totalTokens'),
     totalThoughtTokens: sum(records, 'thoughtTokens'), totalCachedInputTokens: sum(records, 'cachedInputTokens'),
     totalProviderLatencyMs,
     totalToolUseTokens: sum(records, 'toolUseTokens'),
-    metricsComplete: records.every(record => record.usageAvailable && TOKEN_FIELDS.every(field => record[field] !== null)), agents
+    metricsComplete: records.every(record => record.usageAvailable
+      && (record.provider === 'gemini' ? TOKEN_FIELDS : ['inputTokens', 'outputTokens', 'totalTokens']).every(field => record[field] !== null)), agents
   });
 };
 

@@ -459,6 +459,7 @@ const routeUnsupportedClaim = message => {
 const routeDeterministically = (message, memory = {}, now = new Date(), conversationId, scopeBinding, businessId) => {
   const tenantGuard = tenantScopeViolation(message);
   if (tenantGuard) return tenantGuard;
+  if (require('./domainGate').isOutOfDomain(message)) return { intent: 'unsupported', agent: 'coordinator' };
   const alertText = normalize(message);
   const recognizedRelativePeriod = relativeSalesPeriod(alertText, now);
   // Forecast dates must win before a product/context route can request replay.

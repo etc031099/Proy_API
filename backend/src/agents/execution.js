@@ -47,7 +47,7 @@ const withSkillTimeout = async (operation, timeoutMs) => {
 
 /** Internal request lifecycle. Dependencies are supplied by trusted server code. */
 const createAgentExecution = options => {
-  if (!isPlainObject(options) || Reflect.ownKeys(options).some(key => !['context', 'onEvent', 'dependencies', 'provider'].includes(key))) {
+  if (!isPlainObject(options) || Reflect.ownKeys(options).some(key => !['context', 'onEvent', 'dependencies', 'provider', 'neutralProvider'].includes(key))) {
     throw new AgentError('AGENT_INVALID_REQUEST');
   }
   const { context, onEvent = () => {} } = options;
@@ -62,6 +62,10 @@ const createAgentExecution = options => {
     throw new AgentError('AGENT_INVALID_REQUEST');
   }
   const provider = options.provider;
+  const neutralProvider = options.neutralProvider;
+  if (neutralProvider && (typeof neutralProvider.generate !== 'function' || !/^[\w.-]{1,100}$/.test(neutralProvider.provider || '')
+    || !/^[\w.-]{1,100}$/.test(neutralProvider.model || ''))) throw new AgentError('AGENT_INVALID_REQUEST');
+  let groundedCalled = false;
   const executors = createSkillExecutors(options.dependencies);
   const budget = createExecutionBudget();
   const participants = new Set();
@@ -128,6 +132,33 @@ const createAgentExecution = options => {
     },
     async generateStructured(input) { return runLlmCall('generateStructured', input); },
     async generateWithTools(input) { return runLlmCall('generateWithTools', input); },
+    hasGroundedProvider: () => Boolean(neutralProvider),
+    async generateGrounded(input) {
+      if (closed || !neutralProvider || groundedCalled) throw new AgentError('AGENT_INVALID_REQUEST');
+      budget.consume('llmCalls'); groundedCalled = true;
+      participants.add('analyst');
+      const agentRunId = randomUUID(), start = performance.now();
+      emit('agent_started', { agentId: 'analyst', agentRunId, status: 'STARTED' });
+      emit('llm_started', { agentId: 'analyst', agentRunId, status: 'STARTED' });
+      active++;
+      try {
+        const result = await neutralProvider.generate(input);
+        llmRecords.push({ agentId: 'analyst', provider: result.provider, model: result.model, latencyMs: result.latencyMs,
+          estimatedCostUsd: result.estimatedCostUsd, pricingVersion: result.pricingVersion,
+          usageAvailable: ['inputTokens', 'outputTokens', 'totalTokens'].some(key => Number.isSafeInteger(result.usage[key])),
+          ...result.usage, thoughtTokens: null, toolUseTokens: null });
+        emit('llm_finished', { agentId: 'analyst', agentRunId, model: result.model, durationMs: result.latencyMs, status: 'SUCCEEDED', ...result.usage });
+        emit('agent_finished', { agentId: 'analyst', agentRunId, durationMs: performance.now() - start, status: 'SUCCEEDED' });
+        return result;
+      } catch {
+        failed = true;
+        llmRecords.push({ agentId: 'analyst', provider: neutralProvider.provider, model: neutralProvider.model,
+          latencyMs: performance.now() - start, usageAvailable: false });
+        emit('llm_finished', { agentId: 'analyst', agentRunId, model: neutralProvider.model, durationMs: performance.now() - start, status: 'FAILED' });
+        emit('agent_finished', { agentId: 'analyst', agentRunId, durationMs: performance.now() - start, status: 'FAILED' });
+        throw new AgentError('AGENT_PROVIDER_FAILED');
+      } finally { active--; }
+    },
     async executeSkill(input) {
       if (closed) throw new AgentError('AGENT_INVALID_REQUEST');
       let invocation;

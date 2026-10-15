@@ -218,12 +218,16 @@ const machineLearningPlan = (text, message, binding, memory) => {
 };
 
 const routeV3 = (message, state, binding) => {
+  const { isOutOfDomain, OUT_OF_DOMAIN_ANSWER } = require('./domainGate');
+  if (isOutOfDomain(message)) return { clarificationQuestion: OUT_OF_DOMAIN_ANSWER };
   const text = clean(message), memory = state || {};
   if (/^saca\s+(?:\d+|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\b/.test(text))
     return { clarificationQuestion: '¿Quieres registrar una venta para descontar esas unidades o solo corregir el stock? «Saca» puede referirse a movimientos distintos; no prepararé una operación hasta que lo aclares.' };
   if (/^(?:quien gano el partido de ayer|cual es la capital de japon|escribeme una historia(?: de .+)?|que laptop me recomiendas)$/.test(text.replace(/[¿?¡!.]/g, '').trim())) return null;
   if (/^(?:vende|vender|compra|comprar|prepara(?:r)? (?:una )?compra|crea|crear|avisa|avisame|actualiza|ajusta|confirma|confirmar|confirmo|hazlo|correcto|cancela|cancelar|si hazlo|procede|adelante|no lo hagas|no hagas nada|mejor no)\b/.test(text)
     || /^(?:ese|el segundo)$/.test(text)) return null;
+  const groundedPlan = require('./groundedRouting').buildGroundedPlan(message, binding);
+  if (groundedPlan) return groundedPlan;
   if (/^(?:y )?(?:cual|cuales)\b/.test(text) && /\b(?:mas|menos) stock\b/.test(text)
     && memory.ranking?.type === 'product' && memory.ranking.items?.length) {
     const productRefs = memory.ranking.items.map(row => row.key).filter(Boolean).slice(0, 20);

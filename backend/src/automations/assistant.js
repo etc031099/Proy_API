@@ -95,7 +95,8 @@ const withActionAssistant = (runtime, service, options = {}) => {
       ? pendingQuestionType(input.message) : null;
     // A newer READ owns subsequent selections. Keep the frozen PendingAction
     // intact; only an explicit new action can re-enter the write flow.
-    const newRead = !explicit && (/^(?:mejor\s+)?(?:dame|muestrame|busca|dime|cuanto|que|resume|explica|lista|cuales)\b/.test(normalized) || /[¿?]/.test(input.message))
+    const newRead = !explicit && (/^(?:mejor\s+)?(?:dame|muestrame|busca|dime|cuanto|que|resume|explica|lista|cuales)\b/.test(normalized) || /[¿?]/.test(input.message)
+      || require('../agents/groundedRouting').classifyGrounded(input.message).route === 'GROUNDED_LLM')
       && !/que me falta|que datos|que proveedores/.test(normalized)
       && !(previous?.selection?.slot === 'product' && /^busca(?:r)?\b/.test(normalized))
       && !ordinalSelection(input.message).matched;
@@ -285,7 +286,8 @@ const withActionAssistant = (runtime, service, options = {}) => {
       const participant = { agentId: 'operations', model: null, llmCalls: 0, skillCalls: 0, ...zeroUsage(), usageAvailable: true, latencyMs, providerLatencyMs: 0 };
       if (realUsage) Object.assign(participant, realUsage.agents.find(agent => agent.agentId === 'operations'));
       return { requestId: context.requestId, conversationId, answer: text, intent: 'action', agent: 'operations', participants: [participant], actions: [], evidence: [],
-        usage: { totalLlmCalls: 0, totalSkillCalls: 0, totalInputTokens: 0, totalOutputTokens: 0, totalThoughtTokens: 0,
+        usage: { provider: 'none', model: null, llmCalls: 0, inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0, providerLatencyMs: 0,
+          totalLlmCalls: 0, totalSkillCalls: 0, totalInputTokens: 0, totalOutputTokens: 0, totalThoughtTokens: 0,
           totalCachedInputTokens: 0, totalToolUseTokens: 0, totalTokens: 0, metricsComplete: true, totalProviderLatencyMs: 0,
           totalLatencyMs: latencyMs, toolSelectionCycles: 0, agents: [participant], ...(realUsage || {}) },
         requiresClarification: needsClarification, clarificationQuestion: needsClarification ? text : null, latencyMs,
