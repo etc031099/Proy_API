@@ -74,7 +74,12 @@ test('J2H prompt and validator share exact schema; compact result renders with s
   assert.match(request.messages[0].content, /no uses listas numeradas ni índices numéricos/);
   assert.match(request.messages[0].content, /No conviertas evidenceRefs en referencias de evidencia numeradas visibles/);
   assert.match(request.messages[0].content, /Identifica productos con nombres o SKU/);
-  assert.equal(request.maxTokens, 300); assert.equal(accepted, true);
+  assert.match(request.messages[0].content, /prosa concisa/);
+  assert.match(request.messages[0].content, /una sola oración breve, directa y sustentada solo por sus evidenceRefs/);
+  assert.match(request.messages[0].content, /una sola oración breve y accionable/);
+  assert.match(request.messages[0].content, /sin repetir esos hechos/);
+  assert.match(request.messages[0].content, /limitación material aplicable/);
+  assert.equal(request.maxTokens, 600); assert.equal(accepted, true);
   assert.equal(response.grounded.responseDiagnostic.finishReason, 'stop');
   assert.equal(response.grounded.responseDiagnostic.usagePresent, true);
   assert.match(response.answer, /Cocinero/); assert.doesNotMatch(response.answer, /observations|evidenceRefs/);

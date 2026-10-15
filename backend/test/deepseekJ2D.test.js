@@ -43,9 +43,9 @@ const usage = { prompt_tokens: 1000, completion_tokens: 200, total_tokens: 1200,
 const envelope = patch => ({ model: 'deepseek-flash', choices: [{ finish_reason: 'stop', message: {
   role: 'assistant', content: JSON.stringify(output()), reasoning_content: 'PRIVATE-REASONING' } }], usage, ...patch });
 const request = { route: 'GROUNDED_LLM', messages: [{ role: 'user', content: '{}' }], maxTokens: 300, temperature: 0 };
-const provider = data => createDeepSeekProvider({ env: { DEEPSEEK_API_KEY: 'fictional-only' }, fetchImpl: async (_url, options) => {
+const provider = (data, expectedMaxTokens = 300) => createDeepSeekProvider({ env: { DEEPSEEK_API_KEY: 'fictional-only' }, fetchImpl: async (_url, options) => {
   const body = JSON.parse(options.body);
-  assert.equal(body.reasoning_effort, 'none'); assert.equal(body.max_tokens, 300);
+  assert.equal(body.reasoning_effort, 'none'); assert.equal(body.max_tokens, expectedMaxTokens);
   return { ok: true, status: 200, json: async () => data };
 } });
 test('J2D exact inventory/forecast + fixture supplier: paraphrase, combined evidence, decimal rounding accepted', async () => {
@@ -117,7 +117,7 @@ test('J2D JSON error differs from schema mismatch and invented number', () => {
     assert.throws(() => validateGroundedOutput(text, compact), error => error.validationReason === reason);
 });
 test('J2D accepted synthesis is the main answer; sanitized diagnostics survive public projection', async () => {
-  const p = provider(envelope()); let accepted;
+  const p = provider(envelope(), 500); let accepted;
   const response = await handleGrounded({ message: question, context: {}, service: { resolveContext: async () => binding },
     run: async (_agent, skillId) => results.find(row => row.skillId === skillId).result,
     execution: { hasGroundedProvider: () => true, generateGrounded: input => p.generate({ ...input, route: 'GROUNDED_LLM' }),
@@ -130,7 +130,7 @@ test('J2D accepted synthesis is the main answer; sanitized diagnostics survive p
 });
 test('J2D grounding rejection retains safe adapter diagnostic and compact verified fallback', async () => {
   const bad = output(); bad.observations[0].interpretation = 'Compra 9999 unidades.';
-  const p = provider(envelope({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify(bad) } }] }));
+  const p = provider(envelope({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify(bad) } }] }), 500);
   const response = await handleGrounded({ message: question, context: {}, service: { resolveContext: async () => binding },
     run: async (_agent, skillId) => results.find(row => row.skillId === skillId).result,
     execution: { hasGroundedProvider: () => true, generateGrounded: input => p.generate({ ...input, route: 'GROUNDED_LLM' }), recordGroundedSynthesis() {} } });

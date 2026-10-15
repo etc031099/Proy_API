@@ -195,7 +195,7 @@ const mockedProvider = generate => createNeutralProvider({ provider: 'test-provi
 test('J2A neutral provider gets only compact READ evidence, one generation and measured neutral usage', async () => {
   let calls = 0;
   const f = fixture({ neutralProvider: mockedProvider(async request => {
-    calls++; assert.equal(request.maxTokens, 300); assert.equal(Object.hasOwn(request, 'tools'), false);
+    calls++; assert.equal(request.maxTokens, 600); assert.equal(Object.hasOwn(request, 'tools'), false);
     const compact = JSON.parse(request.messages[1].content);
     assert.deepEqual(compact.evidence.map(row => row.skillId), [C]);
     return { text: responseFor(compact), usage: { inputTokens: 300, outputTokens: 40, totalTokens: 340 } };

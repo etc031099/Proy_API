@@ -2,7 +2,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
-const { createDeepSeekProvider, readDeepSeekConfig, normalizeDeepSeekUsage } = require('../src/agents/providers/deepseekProvider');
+const { createDeepSeekProvider, readDeepSeekConfig, normalizeDeepSeekUsage,
+  DEFAULT_MAX_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS } = require('../src/agents/providers/deepseekProvider');
 const { configuredGroundedProvider, selectedProvider } = require('../src/agents/providers/selection');
 const { estimateCostUsd } = require('../src/agents/providers/neutralProvider');
 const { DEEPSEEK_PRICES } = require('../src/config/deepseekPricing');
@@ -77,14 +78,25 @@ test('J2B official transport: non-beta URL, JSON, thinking disabled, no tools, b
   assert.ok(Math.abs(result.estimatedCostRangeUsd.max - 0.0003024) < 1e-12);
 });
 
-test('J2B configured output can be lower than 300; rejects paid thinking, untrusted URLs, legacy model and oversized config', async () => {
+test('J2B output cap defaults to 500, is configurable through 600, and rejects larger values', async () => {
   for (const patch of [{ DEEPSEEK_BASE_URL: 'https://evil.example' }, { DEEPSEEK_BASE_URL: 'https://api.deepseek.com/beta' },
     { DEEPSEEK_BASE_URL: 'https://user:private@api.deepseek.com' }, { DEEPSEEK_MODEL: 'deepseek-chat' },
-    { DEEPSEEK_REASONING_EFFORT: 'high' }, { DEEPSEEK_MAX_OUTPUT_TOKENS: '301' }]) assert.throws(() => readDeepSeekConfig(patch));
+    { DEEPSEEK_REASONING_EFFORT: 'high' }, { DEEPSEEK_MAX_OUTPUT_TOKENS: '601' }]) assert.throws(() => readDeepSeekConfig(patch));
+  assert.equal(DEFAULT_MAX_OUTPUT_TOKENS, 500); assert.equal(MAX_OUTPUT_TOKENS, 600);
+  assert.equal(readDeepSeekConfig({}).maxOutputTokens, 500);
+  assert.equal(readDeepSeekConfig({ DEEPSEEK_MAX_OUTPUT_TOKENS: '450' }).maxOutputTokens, 450);
+  assert.equal(readDeepSeekConfig({ DEEPSEEK_MAX_OUTPUT_TOKENS: '500' }).maxOutputTokens, 500);
+  assert.equal(readDeepSeekConfig({ DEEPSEEK_MAX_OUTPUT_TOKENS: '600' }).maxOutputTokens, 600);
   let cap;
   await providerFor(async (_url, options) => { cap = JSON.parse(options.body).max_tokens; return reply(envelope()); },
     { env: { ...env, DEEPSEEK_MAX_OUTPUT_TOKENS: '200' } }).generate(request);
   assert.equal(cap, 200);
+  await providerFor(async (_url, options) => { cap = JSON.parse(options.body).max_tokens; return reply(envelope()); },
+    { env: { ...env, DEEPSEEK_MAX_OUTPUT_TOKENS: '500' } }).generate({ ...request, maxTokens: 600 });
+  assert.equal(cap, 500);
+  await providerFor(async (_url, options) => { cap = JSON.parse(options.body).max_tokens; return reply(envelope()); },
+    { env: { ...env, DEEPSEEK_MAX_OUTPUT_TOKENS: '600' } }).generate({ ...request, maxTokens: 600 });
+  assert.equal(cap, 600);
   assert.equal(readDeepSeekConfig({ DEEPSEEK_BASE_URL: 'https://api.deepseek.com/v1' }).endpoint, 'https://api.deepseek.com/v1/chat/completions');
 });
 
@@ -128,7 +140,7 @@ for (const [message, skills] of groundedCases) test(`J2B grounded -> approved sk
   assert.equal(result.code, null); assert.deepEqual(f.calls.map(row => row.skill), skills); assert.equal(f.requests.length, 1);
   const body = f.requests[0], compact = JSON.parse(body.messages[1].content);
   assert.ok(Buffer.byteLength(body.messages[1].content) <= 6400); assert.match(body.messages[0].content, /español/);
-  assert.deepEqual(compact.evidence.map(row => row.skillId), skills); assert.equal(body.max_tokens, 300);
+  assert.deepEqual(compact.evidence.map(row => row.skillId), skills); assert.equal(body.max_tokens, 500);
   assert.equal(result.usage.provider, 'deepseek'); assert.equal(result.usage.llmCalls, 1); assert.equal(result.usage.totalTokens, 1100);
   assert.equal(result.usage.cacheMissInputTokens, 600); assert.equal(result.usage.cachedInputTokens, 400);
   assert.equal(result.usage.reasoningTokens, 0); assert.equal(result.usage.estimatedCostUsd, null);

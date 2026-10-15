@@ -40,8 +40,8 @@ const usage = { prompt_tokens: 2085, completion_tokens: 150, total_tokens: 2235,
   prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 2085 };
 const envelope = (finish = 'stop', patch = {}) => ({ model: 'deepseek-flash', choices: [{ finish_reason: finish,
   message: { role: 'assistant', content: JSON.stringify(synthesis()) } }], usage, ...patch });
-const providerFor = data => createDeepSeekProvider({ env: { DEEPSEEK_API_KEY: 'fictional-only' }, fetchImpl: async (_url, options) => {
-  assert.equal(JSON.parse(options.body).max_tokens, 300);
+const providerFor = (data, expectedMaxTokens = 300) => createDeepSeekProvider({ env: { DEEPSEEK_API_KEY: 'fictional-only' }, fetchImpl: async (_url, options) => {
+  assert.equal(JSON.parse(options.body).max_tokens, expectedMaxTokens);
   return { ok: true, status: 200, json: async () => data };
 } });
 const request = { route: 'GROUNDED_LLM', messages: [{ role: 'user', content: '{}' }], maxTokens: 300, temperature: 0 };
@@ -100,12 +100,13 @@ for (const claim of ['Pide 9999 unidades.', 'Revisa ABA-FAKE-999.']) test(`J2E s
 });
 for (const fail of [false, true]) test(`J2E compact prompt, same three READ skills, primary answer/fallback: ${fail}`, async () => {
   const rows = resultRows(), calls = []; let recorded;
-  const p = providerFor(envelope(fail ? 'length' : 'stop'));
+  const p = providerFor(envelope(fail ? 'length' : 'stop'), 500);
   const response = await handleGrounded({ message: question, context: {}, service: { resolveContext: async () => binding },
     run: async (_agent, skillId) => { calls.push(skillId); return rows.find(row => row.skillId === skillId).result; },
     execution: { hasGroundedProvider: () => true, recordGroundedSynthesis: accepted => { recorded = accepted; },
       generateGrounded: async input => {
-        assert.match(input.messages[0].content, /Máximo 3 recomendaciones/); assert.match(input.messages[0].content, /100–180 tokens/);
+        assert.match(input.messages[0].content, /Prefiere agrupar hechos relacionados/);
+        assert.match(input.messages[0].content, /80–150 tokens/);
         assert.match(input.messages[0].content, /no promesas para un SKU/);
         return p.generate({ ...input, route: 'GROUNDED_LLM' });
       } } });

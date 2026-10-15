@@ -4,19 +4,21 @@ const { isPlainObject } = require('../contracts');
 const { DEEPSEEK_PRICES } = require('../../config/deepseekPricing');
 const failure = code => Object.assign(new Error('DeepSeek response unavailable'), { code });
 const count = value => Number.isSafeInteger(value) && value >= 0;
+const DEFAULT_MAX_OUTPUT_TOKENS = 500;
+const MAX_OUTPUT_TOKENS = 600;
 
 const readDeepSeekConfig = (env = process.env) => {
   const model = env.DEEPSEEK_MODEL || 'deepseek-flash';
   let base;
   try { base = new URL(env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com'); }
   catch { throw failure('DEEPSEEK_CONFIGURATION_INVALID'); }
-  const maxOutputTokens = Number(env.DEEPSEEK_MAX_OUTPUT_TOKENS || 300);
+  const maxOutputTokens = Number(env.DEEPSEEK_MAX_OUTPUT_TOKENS || DEFAULT_MAX_OUTPUT_TOKENS);
   const timeoutMs = Number(env.DEEPSEEK_TIMEOUT_MS || 15000);
   if (base.origin !== 'https://api.deepseek.com' || !['/', '/v1', '/v1/'].includes(base.pathname)
     || base.username || base.password || base.search || base.hash
     || !['deepseek-flash', 'deepseek-v4-pro'].includes(model)
     || (env.DEEPSEEK_REASONING_EFFORT || 'none') !== 'none'
-    || !Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 1 || maxOutputTokens > 300
+    || !Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 1 || maxOutputTokens > MAX_OUTPUT_TOKENS
     || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 20000)
     throw failure('DEEPSEEK_CONFIGURATION_INVALID');
   return Object.freeze({ model, endpoint: `${base.href.replace(/\/$/, '')}/chat/completions`, maxOutputTokens, timeoutMs });
@@ -95,4 +97,5 @@ const createDeepSeekProvider = ({ env = process.env, fetchImpl = globalThis.fetc
         responseDiagnostic: { ...diagnostic, validationResult: 'ACCEPTED', validationReason: 'NONE' } };
     } });
 };
-module.exports = { createDeepSeekProvider, readDeepSeekConfig, normalizeDeepSeekUsage };
+module.exports = { createDeepSeekProvider, readDeepSeekConfig, normalizeDeepSeekUsage,
+  DEFAULT_MAX_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS };

@@ -68,9 +68,9 @@ const grouped = 'Cocinero tiene riesgo alto y cobertura de 5,03 días, frente a 
   + 'Arroz Costeño tiene riesgo medio, cobertura de 3,42 días y 57 unidades pendientes; su cantidad sugerida es 12. '
   + 'La demanda esperada es 9,75 para Cocinero, 10,75 para Primor y 34,75 para Arroz. '
   + 'Estas diferencias permiten revisar prioridades considerando las entradas de cada candidato.';
-const providerFor = content => createDeepSeekProvider({ env: { DEEPSEEK_API_KEY: 'fictional-only' },
+const providerFor = (content, expectedMaxTokens = 300) => createDeepSeekProvider({ env: { DEEPSEEK_API_KEY: 'fictional-only' },
   fetchImpl: async (_url, options) => {
-    assert.equal(JSON.parse(options.body).max_tokens, 300);
+    assert.equal(JSON.parse(options.body).max_tokens, expectedMaxTokens);
     return { ok: true, status: 200, json: async () => ({ model: 'deepseek-flash', choices: [{ finish_reason: 'stop',
       message: { role: 'assistant', content, reasoning_content: 'PRIVATE-REASONING' } }],
       usage: { prompt_tokens: 1374, completion_tokens: 242, total_tokens: 1616,
@@ -98,7 +98,7 @@ test('J2G length and safety bounds remain enforced with distinct reasons', () =>
 });
 test('J2G rejected synthesis logs and projects only safe diagnostics; known paid usage survives', async t => {
   const logs = []; t.mock.method(console, 'info', (...values) => logs.push(values.join(' ')));
-  const provider = providerFor(JSON.stringify(output('Compra 9999 unidades.')));
+  const provider = providerFor(JSON.stringify(output('Compra 9999 unidades.')), 500);
   const execution = createAgentExecution({ context: createAgentRequestContext({ businessId: V3.businessId,
     user: { _id: '507f1f77bcf86cd799439011', businessId: V3.businessId, role: 'user', isActive: true } },
   { conversationId: randomUUID() }), neutralProvider: provider, dependencies: { models: {} } });
