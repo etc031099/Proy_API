@@ -6,6 +6,19 @@ const { numericEvidence, unsupportedNumberDetails } = require('./groundedNumbers
 const { buildAllowedLimitations, validateLimitations } = require('./groundedLimitations');
 const { MAX_PROVIDER_MESSAGE_BYTES } = require('./providers/neutralProvider');
 const MAX_CONTEXT_BYTES = 6400;
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+const inclusivePeriodDays = period => {
+  if (!isPlainObject(period) || !ISO_DAY.test(period.startDate || '') || !ISO_DAY.test(period.endDate || '')
+    || !Number.isFinite(Date.parse(`${period.startDate}T00:00:00Z`))
+    || !Number.isFinite(Date.parse(`${period.endDate}T00:00:00Z`))
+    || new Date(`${period.startDate}T00:00:00Z`).toISOString().slice(0, 10) !== period.startDate
+    || new Date(`${period.endDate}T00:00:00Z`).toISOString().slice(0, 10) !== period.endDate
+    || period.startDate > period.endDate) return null;
+  const days = (Date.parse(`${period.endDate}T00:00:00Z`) - Date.parse(`${period.startDate}T00:00:00Z`)) / 86400000 + 1;
+  if (!Number.isSafeInteger(days) || days < 1) return null;
+  // Prefer a materialized inclusive count when it agrees with the verified endpoints.
+  return Number.isSafeInteger(period.days) && period.inclusive === true && period.days === days ? period.days : days;
+};
 const HALLUCINATION_CONTRACT = Object.freeze([
   'Usa exclusivamente los hechos y referencias entregados; no inventes cifras ni entidades.',
   'Si falta evidencia, indica que no hay datos suficientes. Distingue hechos de recomendaciones; no ejecutes acciones.',
@@ -79,10 +92,12 @@ const buildGroundedContext = ({ question, plan, results, binding, systemPrompt }
     .map(row => row.sku).filter(sku => typeof sku === 'string' && sku.length > 0));
   const evidence = results.filter(row => wanted.has(row.skillId) && V3_IDS.includes(row.skillId)).slice(0, 4).map(({ skillId, result }, index) => {
     const meta = result.metadata || {};
+    const period = meta.period ? { startDate: meta.period.startDate, endDate: meta.period.endDate } : null;
+    const analysisWindowDays = inclusivePeriodDays(meta.period);
     const data = replenishment ? replenishmentFacts(skillId, result.data, skus) : result.data;
     return { ref: `E${index + 1}`, skillId, status: result.status,
       scope: { asOfDate: meta.asOf || binding.operationalDate,
-        period: meta.period ? { startDate: meta.period.startDate, endDate: meta.period.endDate } : null,
+        period, ...(analysisWindowDays !== null ? { analysisWindowDays } : {}),
         mode: meta.freshness === 'FROZEN_HISTORICAL' ? 'FROZEN' : meta.dataMode || 'UNKNOWN',
         source: meta.source ? cleanText(meta.source) : null, frozenCutoff: meta.frozenCutoff || null,
         dataVersion: meta.dataVersion || null, snapshotHash: meta.snapshotHash || null,
@@ -131,7 +146,7 @@ const validateGroundedOutput = (text, context) => {
       const evidence = refs.get(ref), scope = evidence.scope || {};
       return [evidence.facts, { asOfDate: scope.asOfDate, frozenCutoff: scope.frozenCutoff,
         observationsClosedThrough: scope.observationsClosedThrough, period: scope.period }];
-    }));
+    }), { analysisWindowDays: row.evidenceRefs.map(ref => refs.get(ref).scope?.analysisWindowDays).filter(Number.isSafeInteger) });
     const skus = new Set(allowed.match(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/g) || []);
     for (const field of ['interpretation', 'advisoryRecommendation']) {
       const value = row[field];

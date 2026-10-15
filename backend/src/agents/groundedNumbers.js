@@ -32,7 +32,7 @@ const stripExplicitIndexLabels = text => text.replace(
     // A bare quantity/unit after the label is ambiguous; preserve it for grounding.
     return UNIT_START.test(following) || /^\d|^%/.test(following) ? marker : `${line}${indent}`;
   });
-const numericEvidence = facts => {
+const numericEvidence = (facts, temporalMetadata = {}) => {
   const numbers = [], presentations = [], dates = [], monetaryAmounts = [], percentages = [];
   const collect = (value, currency = 'PEN') => {
     if (typeof value === 'number' && Number.isFinite(value)) numbers.push(value);
@@ -60,7 +60,9 @@ const numericEvidence = facts => {
     }
   };
   facts.forEach(fact => collect(fact));
-  return { numbers, presentations, dates, monetaryAmounts, percentages };
+  const analysisWindowDays = [...new Set((temporalMetadata.analysisWindowDays || [])
+    .filter(value => Number.isSafeInteger(value) && value > 0))];
+  return { numbers, presentations, dates, monetaryAmounts, percentages, analysisWindowDays };
 };
 const withoutPresentationNumbers = (text, presentations) => text.replace(PACK, (match, amount, unit, offset) => {
   // A shortened name must retain >=2 consecutive words from the generated name,
@@ -86,7 +88,14 @@ const unsupportedNumberDetails = (text, evidence) => {
       || decimals >= 1 && decimals <= 2 && Number(fact.toFixed(decimals)) === claim);
   };
   const typedRejected = [];
-  let metricText = withoutPresentationNumbers(stripExplicitIndexLabels(stripStructuralListMarkers(text)), evidence.presentations);
+  let metricText = normalize(withoutPresentationNumbers(stripExplicitIndexLabels(stripStructuralListMarkers(text)), evidence.presentations));
+  // Rolling-window phrases must match an explicit, validated period in the cited
+  // evidence. The duration stays typed and is never added to general metric numbers.
+  metricText = metricText.replace(/\b(?:ultimos?\s+|ultimas?\s+)(\d+(?:[.,]\d+)?)\s+dias?\b/giu, (match, number, index) => {
+    const supportedWindow = evidence.analysisWindowDays?.some(days => days === numberValue(number));
+    if (!supportedWindow) typedRejected.push({ value: numberValue(number), pattern: 'QUANTITY_WITH_UNIT', index });
+    return ' '.repeat(match.length);
+  });
   // Exact cited dates authorize only that date token, never its year/month as quantities.
   metricText = metricText.replace(/\b\d{4}-\d{2}-\d{2}\b/g, (date, index) => {
     if (!evidence.dates.includes(date)) typedRejected.push({ value: Number(date.slice(0, 4)), pattern: 'DATE_VALUE', index });
