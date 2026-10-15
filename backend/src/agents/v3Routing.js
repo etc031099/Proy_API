@@ -75,6 +75,31 @@ const naturalInventoryFilter = message => {
     ? 'should_reorder' : 'low_stock';
   return { lookup, brandFilter, condition, responseMode: 'inventory-filter' };
 };
+const naturalInventoryConditionList = message => {
+  const normalized = clean(message).replace(/[¿?¡!.]/g, '').trim();
+  if (/\b(?:mas cerca|mas proximo|menor diferencia)\b/.test(normalized)
+    && /stock minimo/.test(normalized) && /sin haberlo alcanzado|por encima|sobre el minimo/.test(normalized)) {
+    return { responseMode: 'inventory-nearest-minimum', tasks: [0, 20, 40, 60].map(offset => task('get_inventory_intelligence', {
+      mode: 'rank', metric: 'low_stock', limit: 20, offset
+    })) };
+  }
+  // Preserve the existing bounded compound planner for sales + replenishment.
+  if (/\b(?:ventas?|vendi|vendimos)\b/.test(normalized) && /\b(?:reponer|reposicion)\b/.test(normalized)) return null;
+  const specificReference = /\b(?:coca cola|coca-cola|gloria|inca kola|gaseosas?|galletas?|leches?|pan frances|panes?)\b/.test(normalized);
+  const listLanguage = /\bproductos\b/.test(normalized) && /\b(?:que|cuales|lista|muestrame|dime)\b/.test(normalized)
+    || /\bcuales\b/.test(normalized) && /\b(?:reponer|pedir|reabastecer)\b/.test(normalized)
+    || /^stock bajo$/.test(normalized)
+    || /\bque se esta acabando\b/.test(normalized);
+  if (!listLanguage || specificReference) return null;
+  const condition = /\b(?:deberia reponer|deberian reponer|debo reponer|deberia pedir|deberian pedir|deberia reabastecer)\b/.test(normalized)
+    ? 'should_reorder'
+    : /\b(?:stock bajo|poco stock|por debajo del minimo|por debajo de su minimo|por acabarse|acabandose|acabando|se esta acabando)\b/.test(normalized)
+      ? 'low_stock' : null;
+  if (!condition) return null;
+  return { responseMode: 'inventory-condition-list', tasks: [task('get_inventory_intelligence', {
+    mode: 'rank', metric: condition === 'low_stock' ? 'low_stock' : 'reorder', flag: condition, limit: 20
+  })] };
+};
 const operationalDateOf = binding => binding.operationalDate || binding.asOfDate;
 const queryPeriod = (message, binding, memory, followup = false) => {
   const operationalDate = operationalDateOf(binding);
@@ -208,6 +233,8 @@ const routeV3 = (message, state, binding) => {
   }
   const machineLearning = machineLearningPlan(text, message, binding, memory);
   if (machineLearning) return machineLearning;
+  const inventoryConditionList = naturalInventoryConditionList(message);
+  if (inventoryConditionList) return inventoryConditionList;
   const inventoryFilter = naturalInventoryFilter(message);
   if (inventoryFilter) return inventoryFilter;
   const stockReference = naturalStockReference(message);
@@ -574,7 +601,9 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
     }
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i], item = itemFor(row, i, [
-        { label: 'Stock', value: displayNumber(row.stock?.onHand) }, { label: 'Entradas', value: displayNumber(row.stock?.incoming) },
+        { label: 'Stock', value: displayNumber(row.stock?.onHand) },
+        ...(Number.isFinite(row.inventoryPolicy?.configuredMinimumStock) ? [{ label: 'Stock mínimo', value: displayNumber(row.inventoryPolicy.configuredMinimumStock) }] : []),
+        { label: 'Entradas', value: displayNumber(row.stock?.incoming) },
         { label: 'Cobertura', value: Number.isFinite(row.coverage?.daysCover) ? `${displayNumber(row.coverage.daysCover)} días` : 'no disponible' },
         { label: 'Riesgo', value: row.risk?.level || 'no disponible' }, { label: 'Reponer', value: row.recommendation?.shouldReorder ? 'Sí' : 'No' },
         { label: 'Cantidad sugerida', value: displayNumber(row.recommendation?.recommendedQty) },
@@ -656,6 +685,13 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
 const renderV3 = (skillId, result, args, responseMode = null) => {
   const d = result.data, date = result.metadata.asOf;
   const items = d.items || [];
+  if (responseMode === 'inventory-condition-list' && skillId === 'get_inventory_intelligence') {
+    if (!items.length) return args.flag === 'should_reorder'
+      ? 'No encontré productos con recomendación de reposición disponible.'
+      : 'No encontré productos con stock en el mínimo configurado o por debajo.';
+    return items.map(item => `${label(item)}\nStock actual: ${units(item.stock?.onHand)} · Stock mínimo: ${units(item.inventoryPolicy?.configuredMinimumStock)}`
+      + (item.sku ? `\nSKU: ${item.sku}` : '')).join('\n\n');
+  }
   if (responseMode === 'inventory-filter' && skillId === 'get_inventory_intelligence') {
     if (result.status === 'PARTIAL' || d.reasonCode === 'LIVE_FORECAST_REQUIRED') return 'No pude verificar qué productos reponer porque falta evidencia de pronóstico para esa recomendación. No inferí una cantidad.';
     if (!items.length) return `No encontré productos que coincidan con esa marca o categoría ${args.flag === 'should_reorder' ? 'recomendados para reposición' : 'bajo la condición de bajo stock'}.`;
@@ -834,7 +870,7 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
   if (plan.clarificationQuestion) return { answer: plan.clarificationQuestion, clarification: true, intent: 'v3_clarification', agent: 'coordinator',
     ...(plan.suggestions ? { suggestions: plan.suggestions } : {}) };
   if (plan.tasks.length > 4) return { answer: 'Indica qué dominio deseas priorizar.', clarification: true, intent: 'v3_clarification', agent: 'coordinator' };
-  const answers = [], v3Views = []; let previous, rankedForResponse = null;
+  const answers = [], v3Views = [], nearestMinimumRows = []; let previous, rankedForResponse = null;
   for (let i = 0; i < plan.tasks.length; i++) {
     const current = plan.tasks[i];
     if (current.fromPrevious) {
@@ -854,6 +890,9 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
       }
       const displayArgs = current.pendingOnly ? { ...current.args, pendingOnly: true } : current.args;
       previous = result; answers.push(renderV3(current.skillId, result, displayArgs, responseMode));
+      if (responseMode === 'inventory-nearest-minimum' && current.skillId === 'get_inventory_intelligence') {
+        nearestMinimumRows.push(...(result.data.items || []));
+      }
       let rankedEntities = [];
       scope.lastFamily = current.skillId;
       if (current.skillId === 'get_supplier_intelligence' && !current.args.productRef && current.args.mode !== 'alternatives') {
@@ -870,7 +909,8 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
       if (current.skillId === 'get_business_analytics' && current.args.startDate) scope.selectedPeriod = { startDate: current.args.startDate, endDate: current.args.endDate };
       const type = displayEntityType(current.skillId, current.args);
       const ranked = result.data.items || [];
-      if (type && ranked.length && (!result.metadata.selected?.[type] || current.skillId === 'get_cross_sell_recommendations')
+      if (type && ranked.length && !['inventory-condition-list', 'inventory-nearest-minimum'].includes(responseMode)
+        && (!result.metadata.selected?.[type] || current.skillId === 'get_cross_sell_recommendations')
         && (current.args.mode === 'rank' || current.skillId === 'get_cross_sell_recommendations')) {
         if (current.skillId !== 'get_cross_sell_recommendations') scope[`selected${type[0].toUpperCase()}${type.slice(1)}`] = null;
         if (type === 'product' && current.skillId !== 'get_cross_sell_recommendations') scope.readRecommendation = null;
@@ -890,6 +930,15 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
       if (responseMode === 'inventory-filter' && current.skillId === 'get_inventory_intelligence') {
         view.metrics = [];
         view.items = view.items.map(item => ({ ...item, metrics: item.metrics.filter(metric => ['Stock', 'Riesgo'].includes(metric.label)) }));
+        view.note = undefined;
+      }
+      if (['inventory-condition-list', 'inventory-nearest-minimum'].includes(responseMode)
+        && current.skillId === 'get_inventory_intelligence') {
+        view.metrics = [];
+        view.items = view.items.map(item => ({ ...item, metrics: [
+          { label: 'Stock actual', value: displayNumber(result.data.items?.find(row => row.sku === item.key)?.stock?.onHand) },
+          { label: 'Stock mínimo', value: displayNumber(result.data.items?.find(row => row.sku === item.key)?.inventoryPolicy?.configuredMinimumStock) }
+        ] }));
         view.note = undefined;
       }
       v3Views.push(view);
@@ -913,6 +962,22 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
           suggestions: [7, 14].map(days => ({ label: `Consultar ${days} días`, message: product ? `pronóstico de ${product} próximos ${days} días` : `pronóstico próximos ${days} días` })) };
       }
     }
+  }
+  if (responseMode === 'inventory-nearest-minimum') {
+    const eligible = nearestMinimumRows.filter(row => Number.isFinite(row.stock?.onHand)
+      && Number.isFinite(row.inventoryPolicy?.configuredMinimumStock)
+      && row.stock.onHand > row.inventoryPolicy.configuredMinimumStock)
+      .sort((left, right) => (left.stock.onHand - left.inventoryPolicy.configuredMinimumStock)
+        - (right.stock.onHand - right.inventoryPolicy.configuredMinimumStock) || String(left.sku).localeCompare(String(right.sku)));
+    const nearest = eligible[0];
+    answers.splice(0, answers.length, nearest
+      ? `${nearest.productName || nearest.name}: stock actual ${units(nearest.stock.onHand)}; stock mínimo ${units(nearest.inventoryPolicy.configuredMinimumStock)}.`
+      : 'No encontré un producto por encima de su mínimo de stock en los datos consultados.');
+    v3Views.splice(0, v3Views.length, nearest ? { kind: 'inventory', title: 'Producto más cercano al mínimo', metrics: [], items: [{
+      type: 'product', key: nearest.sku, secondaryLabel: nearest.sku, label: nearest.productName || nearest.name,
+      metrics: [{ label: 'Stock actual', value: displayNumber(nearest.stock.onHand) },
+        { label: 'Stock mínimo', value: displayNumber(nearest.inventoryPolicy.configuredMinimumStock) }]
+    }] } : { kind: 'inventory', title: 'Producto más cercano al mínimo', metrics: [], items: [] });
   }
   const suggestions = rankedForResponse?.length ? rankedForResponse.slice(0, 5).map(row => ({ label: row.label, message: row.key,
     ...(row.type === 'product' || row.type === 'customer' || row.type === 'supplier' ? { detail: row.key } : {}) })) : undefined;

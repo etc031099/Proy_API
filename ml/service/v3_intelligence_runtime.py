@@ -548,7 +548,7 @@ class V3IntelligenceRuntime:
             "coverage": {key: row["coverage"].get(key) for key in ("daysCover", "status")},
             "demand": {key: row["demand"].get(key) for key in ("expectedDaily", "expectedUnitsNext1d",
                                                                  "expectedUnitsNext7d", "expectedUnitsNext14d")},
-            "inventoryPolicy": {key: row["inventoryPolicy"].get(key) for key in ("safetyStock", "reorderPoint")},
+            "inventoryPolicy": {key: row["inventoryPolicy"].get(key) for key in ("configuredMinimumStock", "safetyStock", "reorderPoint")},
             "risk": {key: row["risk"].get(key) for key in ("level", "reasonCodes", "lowStock")},
             "classification": {key: row["classification"].get(key) for key in ("abc", "xyz", "abcXyz", "overstock",
                                                                                 "slowMoving", "deadStock")},
