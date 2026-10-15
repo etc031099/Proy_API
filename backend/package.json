@@ -7,7 +7,7 @@
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
     "test": "node test/run.js",
-    "test:grounded-acceptance": "node --test test/groundedJ2O.test.js test/groundedJ2N.test.js test/groundedJ2NContracts.test.js test/groundedJ2M.test.js test/deepseekJ2L.test.js test/groundedJ2K.test.js test/groundedJ2I.test.js test/groundedJ2H.test.js test/deepseekJ2B.test.js test/deepseekJ2D.test.js test/deepseekJ2E.test.js test/groundedJ2A.test.js test/groundedJ2G.test.js test/groundedJ2C.test.js",
+    "test:grounded-acceptance": "node --test test/groundedJ2Q.test.js test/groundedJ2P.test.js test/groundedJ2O.test.js test/groundedJ2N.test.js test/groundedJ2NContracts.test.js test/groundedJ2M.test.js test/deepseekJ2L.test.js test/groundedJ2K.test.js test/groundedJ2I.test.js test/groundedJ2H.test.js test/deepseekJ2B.test.js test/deepseekJ2D.test.js test/deepseekJ2E.test.js test/groundedJ2A.test.js test/groundedJ2G.test.js test/groundedJ2C.test.js",
     "validate:v3-definitions": "node ../scripts/validate-minimarket-v3-definitions.js",
     "seed:v3:generate": "node ../scripts/generate-minimarket-v3.js",
     "seed:v3:validate": "node ../scripts/validate-minimarket-v3-dataset.js",

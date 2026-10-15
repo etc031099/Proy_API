@@ -10,6 +10,7 @@ const NUMBER_PATTERNS = Object.freeze(['LINE_LIST_MARKER', 'PAREN_INDEX', 'BRACK
   'ORDINAL_INDEX', 'ENTITY_PRESENTATION', 'QUANTITY_WITH_UNIT', 'PERCENTAGE', 'DECIMAL_METRIC',
   'STANDALONE_NUMBER', 'UNKNOWN_CONTEXT', 'EVIDENCE_REFERENCE', 'CURRENCY_AMOUNT', 'DATE_VALUE']);
 const UNIT_START = /^(?:unidad(?:es)?|proveedor(?:es)?|productos?|tickets?|dias?|semanas?|ml|kg|mg|g|l|%|por ciento)\b/u;
+const DAY_DURATION_FIELDS = new Set(['horizonDays', 'forecastHorizonDays', 'daysCover', 'coverageDays', 'recencyDays', 'averageDays', 'meanDays']);
 const numberPattern = (text, match) => {
   const before = normalize(text.slice(Math.max(0, match.index - 45), match.index));
   const after = normalize(text.slice(match.index + match[0].length, match.index + match[0].length + 45));
@@ -33,7 +34,7 @@ const stripExplicitIndexLabels = text => text.replace(
     return UNIT_START.test(following) || /^\d|^%/.test(following) ? marker : `${line}${indent}`;
   });
 const numericEvidence = (facts, temporalMetadata = {}) => {
-  const numbers = [], presentations = [], dates = [], monetaryAmounts = [], percentages = [];
+  const numbers = [], presentations = [], dates = [], monetaryAmounts = [], percentages = [], dayDurations = [];
   const collect = (value, currency = 'PEN') => {
     if (typeof value === 'number' && Number.isFinite(value)) numbers.push(value);
     else if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
@@ -51,6 +52,7 @@ const numericEvidence = (facts, temporalMetadata = {}) => {
       }
       for (const [key, item] of Object.entries(value)) {
         if (typeof item === 'number' && Number.isFinite(item)) {
+          if (DAY_DURATION_FIELDS.has(key) && item >= 0) dayDurations.push(item);
           if (/Cents$/.test(key) && localCurrency === 'PEN') monetaryAmounts.push(item / 100);
           if (['support', 'confidence'].includes(key) && item >= 0 && item <= 1) percentages.push(Number((item * 100).toFixed(12)));
           else if (/(?:Pct|Percent|Percentage)$/.test(key)) percentages.push(item);
@@ -62,7 +64,8 @@ const numericEvidence = (facts, temporalMetadata = {}) => {
   facts.forEach(fact => collect(fact));
   const analysisWindowDays = [...new Set((temporalMetadata.analysisWindowDays || [])
     .filter(value => Number.isSafeInteger(value) && value > 0))];
-  return { numbers, presentations, dates, monetaryAmounts, percentages, analysisWindowDays };
+  return { numbers, presentations, dates, monetaryAmounts, percentages, analysisWindowDays,
+    dayDurations: [...new Set([...dayDurations, ...analysisWindowDays])] };
 };
 const withoutPresentationNumbers = (text, presentations) => text.replace(PACK, (match, amount, unit, offset) => {
   // A shortened name must retain >=2 consecutive words from the generated name,
@@ -89,13 +92,6 @@ const unsupportedNumberDetails = (text, evidence) => {
   };
   const typedRejected = [];
   let metricText = normalize(withoutPresentationNumbers(stripExplicitIndexLabels(stripStructuralListMarkers(text)), evidence.presentations));
-  // Rolling-window phrases must match an explicit, validated period in the cited
-  // evidence. The duration stays typed and is never added to general metric numbers.
-  metricText = metricText.replace(/\b(?:ultimos?\s+|ultimas?\s+)(\d+(?:[.,]\d+)?)\s+dias?\b/giu, (match, number, index) => {
-    const supportedWindow = evidence.analysisWindowDays?.some(days => days === numberValue(number));
-    if (!supportedWindow) typedRejected.push({ value: numberValue(number), pattern: 'QUANTITY_WITH_UNIT', index });
-    return ' '.repeat(match.length);
-  });
   // Exact cited dates authorize only that date token, never its year/month as quantities.
   metricText = metricText.replace(/\b\d{4}-\d{2}-\d{2}\b/g, (date, index) => {
     if (!evidence.dates.includes(date)) typedRejected.push({ value: Number(date.slice(0, 4)), pattern: 'DATE_VALUE', index });
@@ -110,6 +106,14 @@ const unsupportedNumberDetails = (text, evidence) => {
     return ' '.repeat(match.length);
   }).replace(/(?<![\w.,])(-?\d+(?:[.,]\d+)?)\s*(?:%|por ciento\b)/gi, (match, number, index) => {
     if (!supported(number, evidence.percentages)) typedRejected.push({ value: numberValue(number), pattern: 'PERCENTAGE', index });
+    return ' '.repeat(match.length);
+  });
+  // Value + day unit, independent of surrounding prose. Only cited periods,
+  // horizons and explicitly day-valued metrics authorize durations. Process after
+  // currency/percentage tokens so e.g. "S/ 30 días" cannot bypass money grounding.
+  metricText = metricText.replace(/(?<![\p{L}\p{N}_.,+\-])(-?\d+(?:[.,]\d+)?)\s*dias?\b/gu, (match, number, index) => {
+    if (!supported(number, evidence.dayDurations || []))
+      typedRejected.push({ value: numberValue(number), pattern: 'QUANTITY_WITH_UNIT', index });
     return ' '.repeat(match.length);
   });
   return [...typedRejected, ...[...metricText.matchAll(/-?\d+(?:[.,]\d+)?/g)]

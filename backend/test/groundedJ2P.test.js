@@ -16,7 +16,7 @@ const customers = [
 ];
 const chain = value => ({ select() { return this; }, sort() { return this; }, limit() { return this; }, lean() { return this; }, maxTimeMS: async () => value });
 
-test('J2P production path trace at the published J2O baseline (no runtime fix)', async t => {
+test('J2P production path trace with J2Q temporal duration regression', async t => {
   t.mock.method(console, 'info', () => {});
   let trace;
   // Observe real validator inputs locally, before its destructured imports load.
@@ -103,10 +103,10 @@ test('J2P production path trace at the published J2O baseline (no runtime fix)',
       assert.equal(trace.numeric[0].analysisWindowDaysValue, 30);
     });
   }
-  await t.test('same diagnostic can occur with the window present when prose differs; cloud wording remains unknown', async () => {
+  await t.test('J2Q: period phrasing is authorized by the cited temporal evidence', async () => {
     const result = await fixture('El período analizado comprende 30 días.');
-    assert.equal(result.grounded.responseDiagnostic.validationReason, 'UNSUPPORTED_NUMBER');
-    assert.deepEqual(result.grounded.responseDiagnostic.unsupportedNumberDetails, [{ value: 30, pattern: 'QUANTITY_WITH_UNIT' }]);
+    assert.equal(result.grounded.responseDiagnostic.validationResult, 'ACCEPTED');
+    assert.match(result.answer, /El período analizado comprende 30 días/);
     assert.equal(trace.numeric[0].analysisWindowDaysValue, 30);
     assert.equal(trace.numeric[0].temporalNumberAuthorizedForObservation, true);
   });
