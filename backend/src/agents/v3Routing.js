@@ -14,7 +14,7 @@ const clean = text => normalize(text).replace(/\bq\b/g, 'que').replace(/\bd\b/g,
   .replace(/\bfrnaces\b/g, 'frances').replace(/\blehes\b/g, 'leches');
 const trimRef = text => {
   const ref = String(text || '').replace(/[¿?¡!]/g, '').trim()
-    .replace(/\s+(?:para\s+(?:los\s+)?pr[oó]ximos?\s+\d+\s+d[ií]as?|hoy|ayer|anteayer|esta semana|este mes|el mes pasado|los proximos|los próximos|los ultimos|los últimos|en los|durante|para mañana|manana|mañana|por favor|el \d+ de).*$/i, '').trim();
+    .replace(/\s+(?:para\s+(?:los\s+)?pr[oó]ximos?\s+\d+\s+d[ií]as?|(?:a|en)\s+\d+\s+d[ií]as?|hoy|ayer|anteayer|esta semana|este mes|el mes pasado|los proximos|los próximos|los ultimos|los últimos|en los|durante|para mañana|manana|mañana|por favor|el \d+ de).*$/i, '').trim();
   return /^(?:el|ella|ellos|eso|ayer|hoy|anteayer|manana|\d+ dias?|los? ultimos? \d+ dias?)$/.test(normalize(ref)) ? null : ref;
 };
 const productRef = message => message.match(/\b(?:[A-Z]{2,}(?:-[A-Z0-9]+){1,5}|M5-[A-Z]+_\d+_\d+)\b/)?.[0]
@@ -22,6 +22,7 @@ const productRef = message => message.match(/\b(?:[A-Z]{2,}(?:-[A-Z0-9]+){1,5}|M
 const task = (skillId, args = {}, extra = {}) => ({ skillId, agent: V3_SKILLS[skillId].agents[0], args: { limit: 5, ...args }, ...extra });
 const naturalStockReference = message => {
   const normalized = clean(message).replace(/[¿?¡!.]/g, '').trim().replace(/\s+disponibles?$/, '');
+  if (/\b(?:y|ademas)\b/.test(normalized) && /\b(?:ventas?|margen|pronostico|prediccion|forecast|proveedor|pedidos? pendientes?)\b/.test(normalized)) return null;
   const patterns = [
     /^(?:cuanto stock (?:queda|hay|tiene) (?:de )?)(.+)$/,
     /^cuanto stock de (.+?)(?: hay)?$/,
@@ -42,6 +43,7 @@ const naturalStockReference = message => {
 };
 const naturalProductListReference = message => {
   const normalized = clean(message).replace(/[¿?¡!.]/g, '').trim();
+  if (/\b(?:pronostico|prediccion|forecast)\b/.test(normalized)) return null;
   const match = normalized.match(/^(?:que|cuales) (?:productos? )?(?:de )?(.+?) (?:tengo|vendo|quedan|hay|me quedan)$/)
     || normalized.match(/^(?:muestrame|muestra|lista|dame) (?:los |las |el |la )?(.+?)(?: tengo| que tengo)?$/);
   if (!match) return null;
@@ -54,8 +56,8 @@ const naturalProductListReference = message => {
 };
 const naturalInventoryFilter = message => {
   const normalized = clean(message).replace(/[¿?¡!.]/g, '').trim();
-  if (!/\b(?:por acabarse|acabando|con poco stock|stock bajo|deberia reponer|deberian reponer|debo reponer|deberia pedir|deberian pedir)\b/.test(normalized)) return null;
-  const prefix = normalized.match(/^(?:cual(?:es)?|que) (.+?) (?:esta|estan|deberia|deberian|debo)\b/);
+  if (!/\b(?:por acabarse|acabando|poco stock|bajos? de stock|bajos?\b|stock bajo|deberia reponer|deberian reponer|debo reponer|deberia pedir|deberian pedir)\b/.test(normalized)) return null;
+  const prefix = normalized.match(/^(?:cual(?:es)?|que) (.+?) (?:esta|estan|tiene|tienen|deberia|deberian|debo)\b/);
   if (!prefix) return null;
   let reference = prefix[1].replace(/^(?:los |las |el |la )/, '').trim();
   reference = reference.replace(/^productos? (?:de )?/, '').trim();
@@ -78,22 +80,23 @@ const naturalInventoryFilter = message => {
 const naturalInventoryConditionList = message => {
   const normalized = clean(message).replace(/[¿?¡!.]/g, '').trim();
   if (/\b(?:mas cerca|mas proximo|menor diferencia)\b/.test(normalized)
-    && /stock minimo/.test(normalized) && /sin haberlo alcanzado|por encima|sobre el minimo/.test(normalized)) {
+    && /(?:stock )?minimo/.test(normalized) && /sin haberlo alcanzado|por encima|sobre el minimo|sin alcanzarlo/.test(normalized)) {
     return { responseMode: 'inventory-nearest-minimum', tasks: [0, 20, 40, 60].map(offset => task('get_inventory_intelligence', {
       mode: 'rank', metric: 'low_stock', limit: 20, offset
     })) };
   }
   // Preserve the existing bounded compound planner for sales + replenishment.
   if (/\b(?:ventas?|vendi|vendimos)\b/.test(normalized) && /\b(?:reponer|reposicion)\b/.test(normalized)) return null;
+  if (/\bpedidos? pendientes?\b/.test(normalized) && /\by\b/.test(normalized)) return null;
   const specificReference = /\b(?:coca cola|coca-cola|gloria|inca kola|gaseosas?|galletas?|leches?|pan frances|panes?)\b/.test(normalized);
   const listLanguage = /\bproductos\b/.test(normalized) && /\b(?:que|cuales|lista|muestrame|dime)\b/.test(normalized)
-    || /\bcuales\b/.test(normalized) && /\b(?:reponer|pedir|reabastecer)\b/.test(normalized)
+    || /\bcuales\b/.test(normalized) && /\b(?:reponer|pedir|reabastecer|por debajo del? minimo|por debajo de su minimo)\b/.test(normalized)
     || /^stock bajo$/.test(normalized)
-    || /\bque se esta acabando\b/.test(normalized);
-  if (!listLanguage || specificReference) return null;
+    || /\bque se (?:me )?esta acabando\b/.test(normalized);
+  if (!listLanguage || specificReference && !/\b(?:stock|baj[oa]s?|por debajo|reponer|pedir)\b/.test(normalized)) return null;
   const condition = /\b(?:deberia reponer|deberian reponer|debo reponer|deberia pedir|deberian pedir|deberia reabastecer)\b/.test(normalized)
     ? 'should_reorder'
-    : /\b(?:stock bajo|poco stock|por debajo del minimo|por debajo de su minimo|por acabarse|acabandose|acabando|se esta acabando)\b/.test(normalized)
+    : /\b(?:stock bajo|poco stock|por debajo del minimo|por debajo de su minimo|por debajo del? minimo|por acabarse|acabandose|acabando|se (?:me )?esta acabando|bajos? de stock)\b/.test(normalized)
       ? 'low_stock' : null;
   if (!condition) return null;
   return { responseMode: 'inventory-condition-list', tasks: [task('get_inventory_intelligence', {
@@ -207,8 +210,8 @@ const machineLearningPlan = (text, message, binding, memory) => {
   if (basketIntent) {
     const relatedRef = trimRef(message.match(/(?:con que productos se compra|que productos se compran junto con|productos relacionados (?:a|con)|asociaciones para|cross sell de)\s+(.+)$/i)?.[1]);
     const ref = productRef(message) || relatedRef || (/(?:el|eso|su)/.test(text) ? memory.selectedProduct?.key : null);
-    const concept = /support/.test(text) ? 'support' : /confidence/.test(text) ? 'confidence' : /lift/.test(text) ? 'lift'
-      : /causal/.test(text) ? 'causality' : 'fp_growth';
+    const concept = /causal/.test(text) ? 'causality' : /support/.test(text) ? 'support'
+      : /confidence/.test(text) ? 'confidence' : /lift/.test(text) ? 'lift' : 'fp_growth';
     return { tasks: [task('get_cross_sell_recommendations', { mode: ref ? 'recommend' : 'rules', concept, ...(ref ? { productRef: ref } : {}) })] };
   }
   return null;
@@ -221,6 +224,13 @@ const routeV3 = (message, state, binding) => {
   if (/^(?:quien gano el partido de ayer|cual es la capital de japon|escribeme una historia(?: de .+)?|que laptop me recomiendas)$/.test(text.replace(/[¿?¡!.]/g, '').trim())) return null;
   if (/^(?:vende|vender|compra|comprar|prepara(?:r)? (?:una )?compra|crea|crear|avisa|avisame|actualiza|ajusta|confirma|confirmar|confirmo|hazlo|correcto|cancela|cancelar|si hazlo|procede|adelante|no lo hagas|no hagas nada|mejor no)\b/.test(text)
     || /^(?:ese|el segundo)$/.test(text)) return null;
+  if (/^(?:y )?(?:cual|cuales)\b/.test(text) && /\b(?:mas|menos) stock\b/.test(text)
+    && memory.ranking?.type === 'product' && memory.ranking.items?.length) {
+    const productRefs = memory.ranking.items.map(row => row.key).filter(Boolean).slice(0, 20);
+    if (productRefs.length) return { responseMode: 'inventory-context-stock-extreme',
+      sortDirection: /\bmenos stock\b/.test(text) ? 'asc' : 'desc',
+      tasks: [task('get_inventory_intelligence', { mode: 'summary', productRefs: productRefs.join('|'), limit: productRefs.length })] };
+  }
   const coverageQuestion = /\b(?:cobertura|coverage)\b/.test(text)
     && !/que es|que significa|interpreta|como se calcula|modelo|hgb|ma28|machine learning|\bml\b/.test(text);
   if (coverageQuestion) {
@@ -233,10 +243,34 @@ const routeV3 = (message, state, binding) => {
   }
   const machineLearning = machineLearningPlan(text, message, binding, memory);
   if (machineLearning) return machineLearning;
+  // Small bounded cross-domain combinations used during the business presentation.
+  if (/\b(?:mejores? clientes?|clientes? de alto valor|clientes? con mayor gasto)\b/.test(text)
+    && /\b(?:ventas?|vendi|vendimos)\b/.test(text)) {
+    const period = queryPeriod(message, binding, memory);
+    if (period.clarificationQuestion) return period;
+    return { tasks: [task('get_customer_intelligence', { mode: 'rank', metric: 'spend', limit: 5 }),
+      task('get_business_analytics', { mode: 'summary', metric: 'revenue', ...period })] };
+  }
+  if (/\bventas?\b/.test(text) && /\bmargen\b/.test(text) && /\bstock\b/.test(text)) {
+    const ref = productRef(message) || memory.selectedProduct?.key;
+    if (!ref) return { clarificationQuestion: '¿De qué producto deseas consultar ventas, margen y stock?' };
+    const period = queryPeriod(message, binding, memory);
+    if (period.clarificationQuestion) return period;
+    return { tasks: [task('get_business_analytics', { mode: 'summary', metric: 'gross_margin', productRef: ref, ...period }),
+      task('get_inventory_intelligence', { mode: 'detail', productRef: ref })] };
+  }
+  if (/\bpedidos? pendientes?\b/.test(text) && /\bproductos?\b/.test(text) && /\b(?:poco stock|stock bajo|por acabarse|reponer)\b/.test(text)) {
+    return { tasks: [task('get_inventory_intelligence', { mode: 'rank', metric: 'low_stock', flag: 'low_stock', limit: 20 }),
+      task('get_supplier_intelligence', { mode: 'rank', metric: 'orders', limit: 20 }, { pendingOnly: true })] };
+  }
+  if (/\b(?:pedidos?|ordenes?|órdenes?)\b/.test(text) && /\bpendient/.test(text))
+    return { tasks: [task('get_supplier_intelligence', { mode: 'rank', metric: 'orders', limit: 20 }, { pendingOnly: true })] };
   const inventoryConditionList = naturalInventoryConditionList(message);
   if (inventoryConditionList) return inventoryConditionList;
   const inventoryFilter = naturalInventoryFilter(message);
   if (inventoryFilter) return inventoryFilter;
+  if (!productRef(message) && /\b(?:stock cero|stock zero|exactamente (?:su )?minimo|igual a (?:su )?minimo|menor stock|menos stock|mayor stock|mas stock)\b/.test(text))
+    return { clarificationQuestion: 'El escenario permite consultar riesgo bajo y reposición, pero no tiene un filtro global aprobado para stock cero, igualdad exacta al mínimo ni extremos de unidades en stock. Indica un producto para consultar su valor.' };
   const stockReference = naturalStockReference(message);
   if (stockReference) return { lookup: stockReference, responseMode: 'minimal' };
   const productListReference = naturalProductListReference(message);
@@ -244,7 +278,7 @@ const routeV3 = (message, state, binding) => {
   if (/producto.{0,25}mas importante/.test(text) && !/ventas|vendido|revenue|abc|riesgo|critic/.test(text))
     return { clarificationQuestion: '¿A qué te refieres con “más importante”: más vendido, mayor ingreso, clase ABC o mayor riesgo de inventario?' };
   const horizonFollowup = /^[¿¡ ]*(?:y )?(?:para )?(?:los )?(?:proximos? )?\d+ dias?[?!. ]*$/.test(text);
-  if (horizonFollowup && memory.lastFamily !== 'get_product_forecast') {
+  if (horizonFollowup && memory.lastFamily !== 'get_product_forecast' && !memory.selectedProduct?.key) {
     return { clarificationQuestion: '¿De qué producto deseas consultar el pronóstico? No hay un pronóstico previo en esta conversación.' };
   }
   if (/confianza|confidence|intervalo.*prediccion/.test(text)) return { clarificationQuestion: 'El pronóstico V3 no expone una confianza exacta ni un intervalo de predicción. WAPE no es una probabilidad de acierto individual.' };
@@ -319,13 +353,13 @@ const routeV3 = (message, state, binding) => {
   if (/amplia (?:el )?inventario/.test(text)) return { tasks: [task('get_inventory_intelligence', { mode: 'rank', metric: 'stockout_risk' })] };
   if (/amplia (?:los )?clientes/.test(text)) return { tasks: [task('get_customer_intelligence', { mode: 'rank', metric: 'spend' })] };
   const contextualCustomerFollowup = memory.lastFamily === 'get_customer_intelligence'
-    && /^(?:y )?(?:su riesgo|cual de esos compra mas|quien de esos compra mas|que compra|cuanto gasto|su detalle)/.test(text);
+    && /^(?:y )?(?:su riesgo|cual de esos compra mas|quien de esos compra mas|que compra|cuanto gasto|su detalle|cuando compro|cuando fue su ultima compra)/.test(text);
   const customerLanguage = /clientes?|gast[oó]|gasto|suele comprar|suelen comprar|preferencias|recencia|frecuencia|quien me compra|que compra /.test(text)
-    || contextualCustomerFollowup;
+    || /\bCLI-\d+\b/i.test(message) || contextualCustomerFollowup;
   if (customerLanguage && !/negocio|categoria|producto.*vendido|proveedor|sup \d+/.test(text)) {
     const ref = message.match(/\bCLI-\d+\b/i)?.[0] || trimRef(message.match(/(?:busca a|cliente|gasto|gastó|comprar|compra)\s+([A-ZÁÉÍÓÚÑ][\p{L}\s]+?)(?:\s+(?:en|este|el mes|los últimos)|[?]|$)/u)?.[1]);
     const general = /clientes|quienes|quien.*compra mas|mejor cliente/.test(text);
-    const selected = ref || (!general && memory.lastFamily === 'get_customer_intelligence' && /\bsu\b|que suele|cuanto gasto|que compra|que prefiere/.test(text) ? memory.selectedCustomer?.key : null);
+    const selected = ref || (!general && memory.lastFamily === 'get_customer_intelligence' && /\bsu\b|que suele|cuanto gasto|que compra|que prefiere|cuando compro/.test(text) ? memory.selectedCustomer?.key : null);
     const mode = /prefer|suele comprar|suelen comprar|que compra/.test(text) ? 'preferences' : selected ? 'detail' : 'rank';
     const args = { mode, metric: /frecuencia|frecuente/.test(text) ? 'tickets' : /recencia/.test(text) ? 'recency' : 'spend', ...(selected ? { customerRef: selected } : {}) };
     if (/riesgo/.test(text)) args.segment = 'AT_RISK';
@@ -359,12 +393,13 @@ const routeV3 = (message, state, binding) => {
     if (parsed.explicit) Object.assign(args, parsed.period);
     return { tasks: [task('get_supplier_intelligence', args, pendingOnly ? { pendingOnly: true } : {})] };
   }
-  if (/junt[oa]s|junto con|junto a|cross sell|canasta|acompan|asociacion/.test(text)) {
-    const ref = productRef(message) || (/\bel\b|\beso\b|\bsu\b/.test(text) ? memory.selectedProduct?.key : null);
+  if (/junt[oa]s|junto con|junto a|cross sell|canasta|acompan|asociacion|combinacion/.test(text)) {
+    const ref = /\bcombinacion\b/.test(text) ? null : productRef(message) || (/\bel\b|\beso\b|\bsu\b/.test(text) ? memory.selectedProduct?.key : null);
     return { tasks: [task('get_cross_sell_recommendations', { mode: ref ? 'recommend' : 'rules', ...(ref ? { productRef: ref } : {}) })] };
   }
-  if (horizonFollowup || /pronostic|prediccion|forecast|demanda|cuanto vendere|manana|proxima semana/.test(text)) {
-    const ref = productRef(message) || (horizonFollowup || /\bsu\b|^y |manana/.test(text) ? memory.selectedProduct?.key : null);
+  if (horizonFollowup || /pronostic|prediccion|forecast|demanda|cuanto vendere|se vendera|manana|proxima semana/.test(text)) {
+    const ref = productRef(message) || (horizonFollowup || /\bsu\b|^y |manana/.test(text)
+      || memory.selectedProduct?.key && /^(?:pronostico|prediccion|forecast)(?: a | para )/.test(text) ? memory.selectedProduct?.key : null);
     const horizon = Number(text.match(/\b(\d+) dias?\b/)?.[1] || (/manana/.test(text) ? 1 : /14|dos semanas/.test(text) ? 14 : 7));
     if (/como calcul|metodo|metodologia/.test(text)) return { tasks: [task('get_product_forecast', { mode: 'method' })] };
     if (![1, 7, 14].includes(horizon) || /proximo mes|28 dias/.test(text)) return { clarificationQuestion: 'El horizonte validado para este escenario llega a 14 días.',
@@ -386,14 +421,15 @@ const routeV3 = (message, state, binding) => {
     if (!ref && !/bajo|critico|agot|riesgo|sobre/.test(text)) return { clarificationQuestion: '¿De qué producto deseas consultar el stock disponible?' };
     if (ref) return { tasks: [task('get_inventory_intelligence', { mode: 'detail', productRef: ref })] };
   }
-  if (/reponer|reposicion|deberia pedir|debo pedir|cuanto pedir|agot|acabando|critic|alto riesgo|riesgo|sobrestock|lento|sin movimiento|\babc\b|\bxyz\b|\baz\b/.test(text)
+  if (/reponer|reposicion|deberia pedir|debo pedir|cuanto pedir|agot|acabando|critic|alto riesgo|riesgo|sobrestock|sobrad|lento|sin movimiento|\babc\b|\bxyz\b|\baz\b/.test(text)
     || /stock bajo|bajos.*stock/.test(text)) {
-    const ref = productRef(message) || (/cuanto|\bsu\b/.test(text) ? memory.selectedProduct?.key : null);
+    const ref = productRef(message) || (/cuanto|\bsu\b|\breponerlo\b|\bpedirlo\b/.test(text) ? memory.selectedProduct?.key : null);
     const args = { mode: ref ? 'detail' : 'rank', metric: 'reorder', ...(ref ? { productRef: ref } : {}) };
     if (/critic/.test(text)) args.risk = 'CRITICAL';
     if (/alto riesgo/.test(text)) args.risk = 'HIGH';
     if (/stock bajo|bajos.*stock/.test(text)) args.flag = 'low_stock';
-    if (/sobrestock/.test(text)) args.flag = 'overstock';
+    if (/deberia reponer|deberian reponer|debo reponer|deberia pedir|deberian pedir/.test(text)) args.flag = 'should_reorder';
+    if (/sobrestock|sobrad/.test(text)) { args.flag = 'overstock'; args.metric = 'overstock'; }
     if (/lento/.test(text)) args.flag = 'slow_moving';
     if (/sin movimiento/.test(text)) args.flag = 'dead_stock';
     if (/\baz\b/.test(text)) { args.abc = 'A'; args.xyz = 'Z'; }
@@ -403,10 +439,15 @@ const routeV3 = (message, state, binding) => {
     if (!ref && /cuanto.*pedir/.test(text)) return { clarificationQuestion: '¿De qué producto deseas consultar la cantidad sugerida?' };
     return { tasks: [task('get_inventory_intelligence', args)] };
   }
-  if (/ventas|vendi|vendimos|vendio|mas vendido|venta|margen|ticket|ingreso|por categoria/.test(text)) {
+  if (memory.selectedProduct?.key && /^(?:y )?(?:cuanto vende|cuanto vendio|que ventas tuvo)/.test(text)) {
+    const period = queryPeriod(message, binding, memory, true);
+    if (period.clarificationQuestion) return period;
+    return { tasks: [task('get_business_analytics', { mode: 'summary', metric: 'revenue', productRef: memory.selectedProduct.key, ...period })] };
+  }
+  if (/ventas|vendi|vendimos|vendio|mas vendido|venta|margen|ticket|ingreso|por categoria|categoria.{0,20}(?:vende|venta).{0,12}mas/.test(text)) {
     const followup = /^y |por categoria/.test(text);
     const period = queryPeriod(/mas que.*semana pasada/.test(text) ? message.replace(/semana pasada/i, 'esta semana') : message, binding, memory, followup); if (period.clarificationQuestion) return period;
-    const args = { mode: /mas vendido|categoria.*margen|por categoria|ranking|top/.test(text) ? 'rank' : /mas que|compar|semana pasada/.test(text) ? 'compare' : 'summary',
+    const args = { mode: /mas vendido|categoria.*(?:margen|vende|venta)|por categoria|ranking|top/.test(text) ? 'rank' : /mas que|compar|semana pasada/.test(text) ? 'compare' : 'summary',
       metric: /margen/.test(text) ? 'gross_margin' : /tickets/.test(text) ? 'tickets' : /unidades|mas vendido/.test(text) ? 'units' : 'revenue', ...period };
     if (args.mode === 'rank') args.entityType = /categoria/.test(text) ? 'category' : 'product';
     const category = trimRef(message.match(/\b(?:de|en)\s+(?:la\s+)?categor[ií]a\s+(.+)$/i)?.[1]), subcategory = trimRef(message.match(/\b(?:de|en)\s+(?:la\s+)?subcategor[ií]a\s+(.+)$/i)?.[1]);
@@ -962,6 +1003,20 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
           suggestions: [7, 14].map(days => ({ label: `Consultar ${days} días`, message: product ? `pronóstico de ${product} próximos ${days} días` : `pronóstico próximos ${days} días` })) };
       }
     }
+  }
+  if (responseMode === 'inventory-context-stock-extreme') {
+    const rows = (previous?.data?.items || []).filter(row => Number.isFinite(row.stock?.onHand));
+    const direction = plan.sortDirection === 'desc' ? -1 : 1;
+    rows.sort((left, right) => direction * (left.stock.onHand - right.stock.onHand)
+      || String(left.sku).localeCompare(String(right.sku)));
+    const selected = rows[0];
+    answers.splice(0, answers.length, selected
+      ? `${plan.sortDirection === 'desc' ? 'El producto con más' : 'El producto con menos'} stock de la lista es ${selected.productName || selected.name}: ${units(selected.stock.onHand)} unidades.`
+      : 'No hay datos de stock suficientes en la lista anterior para compararlos.');
+    v3Views.splice(0, v3Views.length, selected ? { kind: 'inventory', title: 'Comparación de stock', metrics: [], items: [{
+      type: 'product', key: selected.sku, secondaryLabel: selected.sku, label: selected.productName || selected.name,
+      metrics: [{ label: 'Stock actual', value: displayNumber(selected.stock.onHand) }]
+    }] } : { kind: 'inventory', title: 'Comparación de stock', metrics: [], items: [] });
   }
   if (responseMode === 'inventory-nearest-minimum') {
     const eligible = nearestMinimumRows.filter(row => Number.isFinite(row.stock?.onHand)
