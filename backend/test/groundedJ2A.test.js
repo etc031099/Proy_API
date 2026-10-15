@@ -171,7 +171,7 @@ test('J2A projected evidence remains parseable, scoped to cutoff/revision and ma
   const basket = compact.evidence.find(row => row.skillId === M);
   assert.equal(basket.scope.mode, 'FROZEN'); assert.equal(basket.scope.frozenCutoff, '2026-10-12');
   assert.equal(compact.evidence.find(row => row.skillId === I).scope.dataVersion, '4');
-  assert.equal(JSON.parse(JSON.stringify(compact)).contractVersion, 'grounded-v3-context-v1');
+  assert.equal(JSON.parse(JSON.stringify(compact)).contractVersion, 'grounded-v3-context-v2');
 });
 
 test('J2A oversize evidence is explicitly omitted as a whole object and null margins stay null', () => {

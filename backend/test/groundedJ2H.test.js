@@ -79,6 +79,10 @@ test('J2H prompt and validator share exact schema; compact result renders with s
   assert.match(request.messages[0].content, /una sola oración breve y accionable/);
   assert.match(request.messages[0].content, /sin repetir esos hechos/);
   assert.match(request.messages[0].content, /limitación material aplicable/);
+  assert.match(request.messages[0].content, /limitations contiene solo códigos de allowedLimitations/);
+  assert.match(request.messages[0].content, /No son observaciones generales, advertencias genéricas ni incertidumbre habitual/);
+  assert.match(request.messages[0].content, /si allowedLimitations está vacío, devuelve exactamente "limitations": \[\]/);
+  assert.doesNotMatch(request.messages[0].content, /cadena literal de constraints/);
   assert.equal(request.maxTokens, 600); assert.equal(accepted, true);
   assert.equal(response.grounded.responseDiagnostic.finishReason, 'stop');
   assert.equal(response.grounded.responseDiagnostic.usagePresent, true);

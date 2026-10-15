@@ -5,6 +5,7 @@ const { createDeepSeekProvider } = require('../src/agents/providers/deepseekProv
 const { validateGroundedOutput, HALLUCINATION_CONTRACT } = require('../src/agents/groundedContext');
 const { DEEPSEEK_PRICES } = require('../src/config/deepseekPricing');
 const { estimateCostUsd } = require('../src/agents/providers/neutralProvider');
+const { buildAllowedLimitations } = require('../src/agents/groundedLimitations');
 
 const context = { evidence: [1, 2, 3].map(index => ({ ref: `E${index}`, facts: { productName: `Producto ${['A', 'B', 'C'][index - 1]}` } })),
   constraints: HALLUCINATION_CONTRACT };
@@ -19,7 +20,10 @@ const responseSizes = [1, 2, 3].map(count => {
   return { observations: count, chars: text.length, bytes: Buffer.byteLength(text, 'utf8'),
     estimatedTokens: Math.ceil(Buffer.byteLength(text, 'utf8') / 3) };
 });
-const withLimitation = response(3, [HALLUCINATION_CONTRACT[1]]);
+const partialContext = { ...context, evidence: [...context.evidence,
+  { ref: 'E4', skillId: 'get_product_forecast', status: 'NO_DATA', facts: null }] };
+partialContext.allowedLimitations = buildAllowedLimitations(partialContext.evidence);
+const withLimitation = response(3, ['FORECAST_UNAVAILABLE']);
 const sizeWithLimitation = { observations: 3, limitations: 1, chars: withLimitation.length,
   bytes: Buffer.byteLength(withLimitation, 'utf8'), estimatedTokens: Math.ceil(Buffer.byteLength(withLimitation, 'utf8') / 3) };
 const makeEnvelope = (text, finishReason = 'stop', outputTokens = 120) => ({ model: 'deepseek-flash',
@@ -49,7 +53,7 @@ test('J2L three compact observations and one material limitation fit with at lea
     onFetch: value => { body = value; } }).generate(request);
   assert.equal(body.max_tokens, 500);
   assert.ok(sizeWithLimitation.estimatedTokens <= 400, JSON.stringify(sizeWithLimitation));
-  assert.equal(validateGroundedOutput(result.text, context).limitations[0], HALLUCINATION_CONTRACT[1]);
+  assert.equal(validateGroundedOutput(result.text, partialContext).limitations[0], 'FORECAST_UNAVAILABLE');
 });
 
 test('J2L fixture measurements include JSON overhead and label the three-byte estimate', () => {

@@ -27,6 +27,17 @@ const response: AgentResponse = {
 beforeEach(() => { send.mockReset(); localStorage.clear(); vi.mocked(apiClient.listAgentConversations).mockResolvedValue({ success: true,
   data: { items: [], pagination: { page: 1, limit: 10, total: 0, totalPages: 1 } } }); });
 function submit(text = 'stock bajo') { fireEvent.change(screen.getByLabelText('Tu consulta'), { target: { value: text } }); fireEvent.click(screen.getByRole('button', { name: 'Enviar' })); }
+it('J2M displays safe limitation diagnostics without generated prose', () => {
+  render(<AgentActivity response={{ ...response, grounded: { route: 'GROUNDED_LLM', responseDiagnostic: {
+    validationResult: 'REJECTED', validationReason: 'LIMITATION_NOT_ALLOWED', validationField: 'limitations[0]',
+    limitationReason: 'NO_ALLOWED_LIMITATION_CONTEXT', limitationCode: 'FORECAST_UNAVAILABLE',
+    finishReason: 'stop', contentPresent: true } } }} />);
+  fireEvent.click(screen.getByText('Diagnóstico de síntesis'));
+  expect(screen.getByText('NO_ALLOWED_LIMITATION_CONTEXT')).toBeTruthy();
+  expect(screen.getByText('FORECAST_UNAVAILABLE')).toBeTruthy();
+  expect(screen.getByText('limitations[0]')).toBeTruthy();
+  expect(screen.getByText('Diagnóstico de síntesis').closest('details')?.textContent).not.toMatch(/prompt|raw response|reasoning/);
+});
 it('J2I J2K displays rejected numeric values and safe categories in the expandable diagnostic', () => {
   render(<AgentActivity response={{ ...response, grounded: { route: 'GROUNDED_LLM', responseDiagnostic: {
     validationResult: 'REJECTED', validationReason: 'UNSUPPORTED_NUMBER', validationField: 'observations[0].interpretation',

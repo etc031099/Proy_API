@@ -1,6 +1,7 @@
 'use strict';
 const { SCHEMA_REASONS } = require('./groundedOutputSchema');
 const { NUMBER_PATTERNS } = require('./groundedNumbers');
+const { LIMITATION_REASONS, isLimitationCode } = require('./groundedLimitations');
 const safeSchemaField = value => typeof value === 'string'
   && /^(?:\$|observations(?:\[[0-2]\](?:\.(?:evidenceRefs(?:\[[0-3]\])?|interpretation|advisoryRecommendation))?)?|limitations(?:\[[01]\])?)$/.test(value);
 const REASONS = new Set(['NONE', 'CONTENT_JSON_INVALID', 'OUTPUT_SCHEMA_INVALID', 'EVIDENCE_REFERENCE_INVALID',
@@ -23,6 +24,10 @@ const safeGroundedDiagnostic = (source = {}) => ({
   ...(['SCHEMA', 'GROUNDING'].includes(source.validationLayer) ? { validationLayer: source.validationLayer } : {}),
   ...(SCHEMA_REASONS.includes(source.schemaReason) ? { schemaReason: source.schemaReason } : {}),
   ...(safeSchemaField(source.schemaField) ? { schemaField: source.schemaField } : {}),
+  ...(source.validationReason === 'LIMITATION_NOT_ALLOWED' && LIMITATION_REASONS.includes(source.limitationReason)
+    ? { limitationReason: source.limitationReason } : {}),
+  ...(source.validationReason === 'LIMITATION_NOT_ALLOWED' && isLimitationCode(source.limitationCode)
+    ? { limitationCode: source.limitationCode } : {}),
   ...(source.validationReason === 'UNSUPPORTED_NUMBER' && Array.isArray(source.unsupportedNumbers)
     ? { unsupportedNumbers: source.unsupportedNumbers.slice(0, 3).filter(value => typeof value === 'number'
       && Number.isFinite(value) && Math.abs(value) <= 1e9) } : {}),

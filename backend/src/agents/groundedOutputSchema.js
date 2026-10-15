@@ -10,7 +10,8 @@ const GROUNDED_OUTPUT_SCHEMA = deepFreeze({ type: 'object', additionalProperties
         evidenceRefs: { type: 'array', minItems: 1, maxItems: 4, items: text(16) },
         interpretation: text(900), advisoryRecommendation: text(900)
       } } },
-    limitations: { type: 'array', maxItems: 2, items: text(240) }
+    limitations: { type: 'array', maxItems: 2, items: { ...text(240),
+      description: 'Only codes explicitly listed in context.allowedLimitations; otherwise return [].' } }
   } });
 const MAX_OUTPUT_TEXT = 2160;
 const SCHEMA_REASONS = Object.freeze(['JSON_PARSE_FAILED', 'REQUIRED_FIELD_MISSING', 'WRONG_TYPE',

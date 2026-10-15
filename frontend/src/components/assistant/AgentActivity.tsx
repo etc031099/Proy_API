@@ -64,6 +64,8 @@ export function AgentActivity({ response }: { response?: AgentResponse }) {
           <div><dt>Motivo técnico</dt><dd>{response.grounded.responseDiagnostic.validationReason}</dd></div>
           {response.grounded.responseDiagnostic.schemaReason && <div><dt>Validación de estructura</dt><dd>{response.grounded.responseDiagnostic.schemaReason}</dd></div>}
           {response.grounded.responseDiagnostic.schemaField && <div><dt>Campo de estructura</dt><dd>{response.grounded.responseDiagnostic.schemaField}</dd></div>}
+          {response.grounded.responseDiagnostic.limitationReason && <div><dt>Validación de limitación</dt><dd>{response.grounded.responseDiagnostic.limitationReason}</dd></div>}
+          {response.grounded.responseDiagnostic.limitationCode && <div><dt>Código de limitación</dt><dd>{response.grounded.responseDiagnostic.limitationCode}</dd></div>}
           {response.grounded.responseDiagnostic.validationField && <div><dt>Campo</dt><dd>{response.grounded.responseDiagnostic.validationField}</dd></div>}
           {!!response.grounded.responseDiagnostic.unsupportedNumbers?.length && <div><dt>Valores rechazados</dt><dd>{response.grounded.responseDiagnostic.unsupportedNumbers.join(', ')}</dd></div>}
           {!!response.grounded.responseDiagnostic.unsupportedNumberDetails?.length && <div><dt>Contexto numérico</dt><dd>{response.grounded.responseDiagnostic.unsupportedNumberDetails.map(detail => `${detail.value}: ${detail.pattern}`).join(', ')}</dd></div>}

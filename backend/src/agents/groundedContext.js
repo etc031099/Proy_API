@@ -3,6 +3,7 @@ const { deepFreeze, isPlainObject } = require('./contracts');
 const { V3_IDS } = require('./v3Skills');
 const { parseGroundedSchema } = require('./groundedOutputSchema');
 const { numericEvidence, unsupportedNumberDetails } = require('./groundedNumbers');
+const { buildAllowedLimitations, validateLimitations } = require('./groundedLimitations');
 const MAX_CONTEXT_BYTES = 6400;
 const HALLUCINATION_CONTRACT = Object.freeze([
   'Usa exclusivamente los hechos y referencias entregados; no inventes cifras ni entidades.',
@@ -16,7 +17,7 @@ const HALLUCINATION_CONTRACT = Object.freeze([
 const cleanText = (value, max = 120) => String(value).replace(/@[a-z\d.-]+\.[a-z]{2,}|\b[a-f\d]{24,}\b|\bBearer\s+\S+|AIza[\w-]{20,}|\b\d{9,15}\b|(?:mongodb(?:\+srv)?|https?):\/\/\S+/gi, '[omitido]')
   .replace(/[\r\n\t\x00-\x1f]/g, ' ').slice(0, max);
 // Known structured fields only. Raw documents, free-form metadata and PII never pass.
-const COMMON = 'items total summary available status reasonCodes availability limitations currency name displayName sku productName customerCode customerName supplierCode supplierName categoryCode categoryName metric metricName count value amount';
+const COMMON = 'items total summary available status availabilityStatus reasonCodes availability limitations currency name displayName sku productName customerCode customerName supplierCode supplierName categoryCode categoryName metric metricName count value amount';
 const FIELDS = {
   get_business_analytics: 'kpis revenueCents units tickets averageTicketCents cogsCents grossMarginCents grossMarginPct trends percentChange revenue unitsSold grossMargin totalRevenue totalUnits totalTickets marginIntelligence highMarginProducts highRevenueLowMargin lowRevenueHighMargin',
   get_inventory_intelligence: 'stock onHand incoming incomingUnits inventoryPosition minStock minStockLevel daysCover coverage coverageDays safetyStock reorderPoint rop recommendation recommendedQty shouldReorder risk riskLevel riskCounts critical high medium low abc xyz classification supplier preferredSupplierCode singleSource dependency pendingPurchases forecast stockoutRisk',
@@ -44,13 +45,13 @@ const projectFacts = (value, skillId, depth = 0) => {
 const replenishmentFacts = (skillId, data, skus) => {
   const pick = (value, keys) => isPlainObject(value)
     ? Object.fromEntries(keys.filter(key => value[key] !== undefined).map(key => [key, value[key]])) : {};
-  if (skillId === 'get_inventory_intelligence') return { items: (data?.items || []).slice(0, 3).map(row => ({
+  if (skillId === 'get_inventory_intelligence') return { ...pick(data, ['availabilityStatus']), items: (data?.items || []).slice(0, 3).map(row => ({
     ...pick(row, ['sku', 'productName', 'name']), stock: pick(row.stock, ['onHand', 'incoming']),
     coverage: pick(row.coverage, ['daysCover']), risk: pick(row.risk, ['level', 'reasonCodes']),
     inventoryPolicy: pick(row.inventoryPolicy, ['configuredMinimumStock', 'reorderPoint']),
     recommendation: pick(row.recommendation, ['recommendedQty', 'shouldReorder', 'status']),
     ...pick(row, ['reorderPoint', 'rop']) })) };
-  if (skillId === 'get_product_forecast') return { ...pick(data, ['method', 'forecastSource', 'horizonDays']),
+  if (skillId === 'get_product_forecast') return { ...pick(data, ['method', 'forecastSource', 'horizonDays', 'availabilityStatus']),
     items: (data?.items || []).filter(row => skus.has(row.sku)).slice(0, 3)
       .map(row => pick(row, ['sku', 'productName', 'status', 'expectedUnitsNext7d'])) };
   if (skillId === 'get_supplier_intelligence') {
@@ -63,7 +64,7 @@ const replenishmentFacts = (skillId, data, skus) => {
         productsSupplied: [...products.map(product => pick(product, ['sku', 'name', 'productName'])),
           ...observed.filter(sku => !products.some(product => product.sku === sku)).map(sku => ({ sku }))] }];
     }).slice(0, 3);
-    return items.length ? { items } : null;
+    return items.length ? { ...pick(data, ['availabilityStatus']), items } : null;
   }
   return data;
 };
@@ -89,11 +90,11 @@ const buildGroundedContext = ({ question, plan, results, binding }) => {
         ? { limited: true, ...(data === null ? { omission: 'NO_CANDIDATE_SUPPLIER_EVIDENCE' } : {}) } : {}),
       facts: ['READY', 'NO_DATA', 'PARTIAL'].includes(result.status) ? projectFacts(data, skillId) : null };
   });
-  const context = { contractVersion: 'grounded-v3-context-v1', question: cleanText(question, 600),
+  const context = { contractVersion: 'grounded-v3-context-v2', question: cleanText(question, 600),
     responseIntent: plan.responseIntent, scenarioId: binding.scenarioId, datasetVersion: binding.datasetVersion,
     asOfDate: binding.operationalDate, historicalCutoff: binding.historicalCutoff,
     noHistoricalSkuData: plan.noHistoricalSkuData === true,
-    constraints: HALLUCINATION_CONTRACT, evidence };
+    constraints: HALLUCINATION_CONTRACT, evidence, allowedLimitations: buildAllowedLimitations(evidence) };
   const bytes = () => Buffer.byteLength(JSON.stringify(context), 'utf8');
   // Trim whole structured facts rather than slicing serialized JSON. Each omission
   // stays explicit and its source/cutoff remains attached.
@@ -103,6 +104,7 @@ const buildGroundedContext = ({ question, plan, results, binding }) => {
     if (Array.isArray(largest.facts?.items) && largest.facts.items.length > 1) largest.facts.items.pop();
     else { largest.facts = null; largest.omission = 'CONTEXT_BUDGET'; }
     largest.limited = true;
+    context.allowedLimitations = buildAllowedLimitations(evidence);
   }
   return deepFreeze(context);
 };
@@ -137,10 +139,7 @@ const validateGroundedOutput = (text, context) => {
         unsupportedNumberDetails: rejected.map(value => details.find(detail => detail.value === value)) });
     }
   }
-  for (const [index, value] of output.limitations.entries()) {
-    if (typeof value !== 'string' || value.length > 240 || !HALLUCINATION_CONTRACT.includes(value))
-      fail('LIMITATION_NOT_ALLOWED', `limitations[${index}]`);
-  }
+  validateLimitations(output.limitations, context);
   return deepFreeze(output);
 };
 module.exports = { buildGroundedContext, projectFacts, contextMetrics, validateGroundedOutput, HALLUCINATION_CONTRACT, MAX_CONTEXT_BYTES };
