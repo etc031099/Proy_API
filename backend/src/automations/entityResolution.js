@@ -3,7 +3,8 @@ const { fail } = require('./contracts');
 const { normalizeSku } = require('../utils/sku');
 const { normalizeProductMatchText, numbersCompatible, exactProductComponents } = require('../utils/entityIdentity');
 const normalize = value => String(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-  .toLowerCase().replace(/litro y medio/g, '1.5 l').replace(/\blitros?\b/g, 'l')
+  .toLowerCase().replace(/\bfrnaces\b/g, 'frances').replace(/\blehes\b/g, 'leches')
+  .replace(/litro y medio/g, '1.5 l').replace(/\blitros?\b/g, 'l')
   .replace(/([a-z])(\d)/g, '$1 $2')
   .replace(/(\d)\s*(ml|kg|l)\b/g, '$1 $2').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
 const compact = value => normalize(value).replace(/\s/g, '');

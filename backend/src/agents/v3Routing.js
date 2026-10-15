@@ -9,7 +9,9 @@ const { addCalendarDays } = require('../utils/operationalClock');
 const { contextBinding, TTL_MS } = require('./memory');
 const clean = text => normalize(text).replace(/\bq\b/g, 'que').replace(/\bd\b/g, 'de')
   .replace(/\bprodcutos\b/g, 'productos').replace(/\bstan\b/g, 'estan').replace(/\breposision\b/g, 'reposicion')
-  .replace(/\bclietnes\b/g, 'clientes').replace(/\boy\b/g, 'hoy');
+  .replace(/\bclietnes\b/g, 'clientes').replace(/\boy\b/g, 'hoy').replace(/\bstok\b/g, 'stock')
+  .replace(/\bcuato\b/g, 'cuanto').replace(/\bqeda\b/g, 'queda').replace(/\bay\b/g, 'hay')
+  .replace(/\bfrnaces\b/g, 'frances').replace(/\blehes\b/g, 'leches');
 const trimRef = text => {
   const ref = String(text || '').replace(/[¿?¡!]/g, '').trim()
     .replace(/\s+(?:para\s+(?:los\s+)?pr[oó]ximos?\s+\d+\s+d[ií]as?|hoy|ayer|anteayer|esta semana|este mes|el mes pasado|los proximos|los próximos|los ultimos|los últimos|en los|durante|para mañana|manana|mañana|por favor|el \d+ de).*$/i, '').trim();
@@ -18,6 +20,38 @@ const trimRef = text => {
 const productRef = message => message.match(/\b(?:[A-Z]{2,}(?:-[A-Z0-9]+){1,5}|M5-[A-Z]+_\d+_\d+)\b/)?.[0]
   || trimRef(message.match(/(?:\bde(?:l)?\b|junto con|junto a|\bcon\b)\s+(.+?)(?:\s+y\s+|$)/i)?.[1]);
 const task = (skillId, args = {}, extra = {}) => ({ skillId, agent: V3_SKILLS[skillId].agents[0], args: { limit: 5, ...args }, ...extra });
+const naturalStockReference = message => {
+  const normalized = clean(message).replace(/[¿?¡!.]/g, '').trim().replace(/\s+disponibles?$/, '');
+  const patterns = [
+    /^(?:cuanto stock (?:queda|hay|tiene) (?:de )?)(.+)$/,
+    /^cuanto stock de (.+?)(?: hay)?$/,
+    /^cuant[oa]s? (.+?) quedan$/,
+    /^me queda[n]? (.+)$/,
+    /^dame (?:el )?stock (?:de )?(.+)$/,
+    /^stock (?:de )?(.+)$/,
+    /^tengo stock (?:de )?(.+)$/,
+    /^tengo (.+)$/
+  ];
+  const matched = patterns.map(pattern => normalized.match(pattern)).find(Boolean);
+  if (!matched) return null;
+  let reference = matched[1].trim().replace(/^(?:el|la|los|las|del|de)\s+/, '')
+    .replace(/\s+(?:disponible|en stock|por favor)$/, '').trim();
+  if (!reference || /^(?:stock|inventario|productos?|unidades?)$/.test(reference)) return null;
+  const pluralAliases = { panes: 'pan', gaseosas: 'gaseosa', galletas: 'galleta', leches: 'leche' };
+  return pluralAliases[reference] || reference;
+};
+const naturalProductListReference = message => {
+  const normalized = clean(message).replace(/[¿?¡!.]/g, '').trim();
+  const match = normalized.match(/^(?:que|cuales) (?:productos? )?(?:de )?(.+?) (?:tengo|vendo|quedan|hay|me quedan)$/)
+    || normalized.match(/^(?:muestrame|muestra|lista|dame) (?:los |las |el |la )?(.+?)(?: tengo| que tengo)?$/);
+  if (!match) return null;
+  const reference = match[1].trim().replace(/^(?:productos? (?:de )?|de )/, '');
+  if (!reference || /^(?:productos?|inventario|stock)$/.test(reference)) return null;
+  const aliases = { gaseosa: 'BEB-GAS', gaseosas: 'BEB-GAS', galleta: 'GAL', galletas: 'GAL',
+    leche: 'DES-LEC', leches: 'DES-LEC', pan: 'PAN', pane: 'PAN', panes: 'PAN', 'coca cola': 'coca cola', 'coca colas': 'coca cola' };
+  const singular = reference.replace(/s$/, '');
+  return aliases[singular] || reference;
+};
 const operationalDateOf = binding => binding.operationalDate || binding.asOfDate;
 const queryPeriod = (message, binding, memory, followup = false) => {
   const operationalDate = operationalDateOf(binding);
@@ -134,6 +168,7 @@ const machineLearningPlan = (text, message, binding, memory) => {
 
 const routeV3 = (message, state, binding) => {
   const text = clean(message), memory = state || {};
+  if (/^(?:quien gano el partido de ayer|cual es la capital de japon|escribeme una historia)$/.test(text.replace(/[¿?¡!.]/g, '').trim())) return null;
   if (/^(?:vende|vender|compra|comprar|prepara(?:r)? (?:una )?compra|crea|crear|avisa|avisame|actualiza|ajusta|confirma|confirmar|confirmo|hazlo|correcto|cancela|cancelar|si hazlo|procede|adelante|no lo hagas|no hagas nada|mejor no)\b/.test(text)
     || /^(?:ese|el segundo)$/.test(text)) return null;
   const coverageQuestion = /\b(?:cobertura|coverage)\b/.test(text)
@@ -142,12 +177,16 @@ const routeV3 = (message, state, binding) => {
     const rawRef = productRef(message);
     const ref = message.match(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b|\bM5-[A-Z]+_\d+_\d+\b/)?.[0]
       || (rawRef && !/inventario|stock|cobertura|coverage|producto|los dias|dias/i.test(normalize(rawRef)) ? rawRef : null)
-      || (memory.selectedProduct?.key && /\b(?:ese|este|su)\b/.test(text) || memory.selectedProduct?.key && memory.lastFamily === 'get_product_forecast' && /^(?:y )?cuantos? dias de cobertura/.test(text) ? memory.selectedProduct.key : null);
+      || (memory.selectedProduct?.key && /\b(?:ese|este|su)\b/.test(text) || memory.selectedProduct?.key && /^(?:y )?cuantos? dias de cobertura/.test(text) ? memory.selectedProduct.key : null);
     return ref ? { tasks: [task('get_inventory_intelligence', { mode: 'detail', productRef: ref })] }
       : { clarificationQuestion: '¿De qué producto deseas consultar los días de cobertura?' };
   }
   const machineLearning = machineLearningPlan(text, message, binding, memory);
   if (machineLearning) return machineLearning;
+  const stockReference = naturalStockReference(message);
+  if (stockReference) return { lookup: stockReference, responseMode: 'minimal' };
+  const productListReference = naturalProductListReference(message);
+  if (productListReference) return { lookup: productListReference, responseMode: 'list' };
   if (/producto.{0,25}mas importante/.test(text) && !/ventas|vendido|revenue|abc|riesgo|critic/.test(text))
     return { clarificationQuestion: '¿A qué te refieres con “más importante”: más vendido, mayor ingreso, clase ABC o mayor riesgo de inventario?' };
   const horizonFollowup = /^[¿¡ ]*(?:y )?(?:para )?(?:los )?(?:proximos? )?\d+ dias?[?!. ]*$/.test(text);
@@ -285,7 +324,7 @@ const routeV3 = (message, state, binding) => {
     return { tasks: [task('get_product_forecast', args)] };
   }
   if (!/margen bruto|margen/.test(text) && /stock|inventario|disponible/.test(text)
-    && /cuant|cual|queda|qued|tiene|hay|disponible|inventario de|stock de|stock del/.test(text)) {
+    && /cuant|cual|queda|qued|tiene|hay|disponible|inventario de|stock de|stock del|\bsu\b|minimo/.test(text)) {
     const canReuseProduct = !memory.lastFamily || ['get_inventory_intelligence', 'get_product_forecast', 'get_business_analytics'].includes(memory.lastFamily);
     const explicitProductFollowup = /ese (?:producto|item|articulo)/.test(text);
     const ref = productRef(message) || ((canReuseProduct || explicitProductFollowup) && memory.selectedProduct?.key && /^(?:[¿¡ ]*y |[¿¡ ]*cuanto|[¿¡ ]*que|[¿¡ ]*cual|[¿¡ ]*esta|[¿¡ ]*hay|[¿¡ ]*queda)/.test(text)
@@ -587,9 +626,12 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
   return { kind, title, ...(subtitle ? { subtitle } : {}), metrics: metrics.slice(0, 8), items: items.slice(0, skillId === 'get_business_health' ? 5 : 5),
     ...(note ? { note } : {}) };
 };
-const renderV3 = (skillId, result, args) => {
+const renderV3 = (skillId, result, args, responseMode = null) => {
   const d = result.data, date = result.metadata.asOf;
   const items = d.items || [];
+  if (responseMode === 'minimal' && skillId === 'get_inventory_intelligence' && items.length === 1) {
+    return `${label(items[0])}: ${units(items[0].stock?.onHand)} disponibles.`;
+  }
   const period = result.metadata.period;
   const heading = skillId === 'get_cross_sell_recommendations'
     ? `Escenario V3 · asociaciones históricas al ${result.metadata.frozenCutoff || date}${period ? ` · ${period.startDate} → ${period.endDate}` : ''}.`
@@ -679,12 +721,19 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
   }
   if (memory.pending && /^(?:si(?: ese)?|ok|vale|dale|correcto)$/.test(clean(message))) return { answer: 'Elige una entidad por nombre, código o número. Esta selección no confirma una operación.', clarification: true, intent: 'v3_selection', agent: 'coordinator' };
   let plan = routeV3(message, memory, binding);
+  let responseMode = plan?.responseMode || null;
   const ordinal = ordinalSelection(message), numeric = /^(?:opcion\s+)?([1-5])$/.exec(clean(message));
   const choiceLike = ordinal.matched || Boolean(numeric);
   const candidates = memory.ranking?.items || [];
   const match = candidates.find(row => normalize(row.key) === normalize(message) || normalize(row.label) === normalize(message));
   const index = numeric ? Number(numeric[1]) - 1 : ordinal.index === -1 ? candidates.length - 1 : ordinal.index;
+  const chooseOther = /^(?:esa no,? la otra|no,? esa,? la otra|no es esa,? la otra)$/.test(clean(message).replace(/[?.!]/g, '').trim());
   let selected = match || (choiceLike && index !== null ? candidates[index] : null);
+  if (!selected && chooseOther && memory.ranking?.type === 'product' && memory.selectedProduct) {
+    const selectedIndex = candidates.findIndex(row => row.id === memory.selectedProduct.id);
+    const alternatives = selectedIndex >= 0 ? candidates.filter((_, candidateIndex) => candidateIndex !== selectedIndex) : [];
+    if (alternatives.length === 1) selected = alternatives[0];
+  }
   if (!selected && memory.pending && plan?.lookup) {
     const ranked = require('../automations/entityResolution').rankEntities(candidates.map(row => ({ _id: row.id, name: row.label, sku: row.type === 'product' ? row.key : undefined })), message);
     const value = ranked.value || (ranked.confidence === 'HIGH_CONFIDENCE' && ranked.candidates.length === 1 ? ranked.candidates[0] : null);
@@ -702,7 +751,7 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
     resolution.selectionIndex = memory.pending.selectionIndex;
     return candidateView(resolution, memory.pending.tasks, memory.pending.field);
   }
-  if (selected && (!plan || plan.lookup || choiceLike)) {
+  if (selected && (!plan || plan.lookup || choiceLike || chooseOther)) {
     scope[`selected${selected.type[0].toUpperCase()}${selected.type.slice(1)}`] = selected;
     if (memory.pending) plan = { tasks: memory.pending.tasks.map((item, i) => {
       if (i !== 0) return item;
@@ -746,7 +795,7 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
         result = { ...result, data: { ...result.data, items, total: items.length } };
       }
       const displayArgs = current.pendingOnly ? { ...current.args, pendingOnly: true } : current.args;
-      previous = result; answers.push(renderV3(current.skillId, result, displayArgs));
+      previous = result; answers.push(renderV3(current.skillId, result, displayArgs, responseMode));
       let rankedEntities = [];
       scope.lastFamily = current.skillId;
       if (current.skillId === 'get_supplier_intelligence' && !current.args.productRef && current.args.mode !== 'alternatives') {
@@ -774,7 +823,13 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
         }
         if (entities.length) { scope.ranking = { type, items: entities }; rankedEntities = entities; rankedForResponse = entities; }
       }
-      v3Views.push(await createV3View(current.skillId, result, displayArgs, service, context, rankedEntities));
+      const view = await createV3View(current.skillId, result, displayArgs, service, context, rankedEntities);
+      if (responseMode === 'minimal' && current.skillId === 'get_inventory_intelligence' && view.items?.length === 1) {
+        view.metrics = view.items[0].metrics.filter(metric => metric.label === 'Stock');
+        view.items[0].metrics = view.items[0].metrics.filter(metric => metric.label === 'Stock');
+        view.note = undefined;
+      }
+      v3Views.push(view);
       scope.pending = null; save();
     } catch (error) {
       const functional = error.functionalCode;
