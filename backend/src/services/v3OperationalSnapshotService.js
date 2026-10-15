@@ -397,10 +397,15 @@ function buildSnapshotSections(changes, asOfDate, closedThrough, visibleProducts
           productKey: line.productKey, sku: line.sku ?? null, orderedQty: line.orderedQty,
           purchaseUnitCostCents: line.purchaseUnitCostCents ?? null, costBasis: line.costBasis || 'UNAVAILABLE',
           currency: line.currency ?? null }))
-        : (projection.affectedStableLineKeys || []).map(lineKey => ({ lineKey, receivedQty: null }));
+        // Match the strict Python wire schema before hashing. Its parser includes
+        // nullable fields in model_dump(), so omitted defaults would change the hash.
+        : (projection.affectedStableLineKeys || []).map(lineKey => ({ lineKey, receivedQty: null,
+          productKey: null, sku: null, orderedQty: null, purchaseUnitCostCents: null,
+          costBasis: null, currency: null }));
       transactionChanges.push({ ...common, entityKey: transactionKey, transactionKey,
         transactionOrigin: projection.transactionOrigin || 'LIVE', kind,
-        ...(kind === 'RECEIVE' ? { receiptKey: projection.receiptKey, supplierKey: projection.supplierKey } : {}),
+        receiptKey: kind === 'RECEIVE' ? projection.receiptKey : null,
+        supplierKey: kind === 'RECEIVE' ? projection.supplierKey : null,
         lineChanges });
       if (kind === 'CANCEL') canceled.add(transactionKey);
     }
@@ -536,8 +541,6 @@ async function buildV3OperationalSnapshot({ businessId, asOfDate, now = new Date
           dataVersion: version, completeness: 'COMPLETE',
           counts: { catalogChanges: sections.catalogChanges.length, sales: sections.sales.length, purchases: sections.purchases.length,
             transactionChanges: sections.transactionChanges.length, stockStates: data.stockStates.length, closedSalesDays: sections.closedSalesDays.length },
-          ...(contractV2 ? { receiptEvents: sections.transactionChanges.filter(change => change.kind === 'RECEIVE').length,
-            cancellationEvents: sections.transactionChanges.filter(change => change.kind === 'CANCEL').length } : {}),
           costCoverage: { knownSaleLines: sections.sales.flatMap(sale => sale.lines).filter(line => line.costKnown).length,
             unknownSaleLines: sections.sales.flatMap(sale => sale.lines).filter(line => !line.costKnown).length },
           availabilityCoverage: 'UNKNOWN'

@@ -172,7 +172,9 @@ test('F.4B RECEIVE and frozen cancellation persist transactionally on a disposab
       const snapshotA = await buildV3OperationalSnapshot({ businessId, asOfDate, now: fixedNow, minimumDataVersion: '2' });
       const snapshotB = await buildV3OperationalSnapshot({ businessId, asOfDate, now: fixedNow, minimumDataVersion: '2' });
       assert.equal(snapshotA.snapshot.metadata.contractVersion, '2');
-      assert.equal(snapshotA.snapshot.metadata.receiptEvents, 1);
+      assert.equal(snapshotA.snapshot.transactionChanges.filter(row => row.kind === 'RECEIVE').length, 1);
+      assert.equal(Object.hasOwn(snapshotA.snapshot.metadata, 'receiptEvents'), false);
+      assert.equal(Object.hasOwn(snapshotA.snapshot.metadata, 'cancellationEvents'), false);
       const cancelChange = snapshotA.snapshot.transactionChanges.find(row => row.kind === 'CANCEL');
       const receiveChange = snapshotA.snapshot.transactionChanges.find(row => row.kind === 'RECEIVE');
       assert.equal(cancelChange.transactionKey, saleCode);
