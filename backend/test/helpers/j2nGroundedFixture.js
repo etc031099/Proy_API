@@ -15,7 +15,8 @@ const products = [
 ].map(([sku, productName, stock, incoming, coverage, level, qty, forecast]) => ({ sku, productName,
   stock: { onHand: stock, incoming }, coverage: { daysCover: coverage }, risk: { level },
   inventoryPolicy: { configuredMinimumStock: 5 }, recommendation: { shouldReorder: true, recommendedQty: qty }, forecast }));
-const kpis = { revenueCents: 500000, unitsSold: 100, ticketCount: 20, averageTicketCents: 25000, grossMarginPct: null };
+const kpis = { revenueCents: 500000, unitsSold: 100, ticketCount: 20, averageTicket: 250,
+  averageTicketCents: 25000, grossMarginPct: null };
 const dataFor = (skill, args) => {
   const requested = (args.productRefs || args.productRef || '').split('|').filter(Boolean);
   const selected = requested.length ? products.filter(row => requested.includes(row.sku)) : products.slice(0, 3);
@@ -32,7 +33,13 @@ const dataFor = (skill, args) => {
     rfm90d: { raw: { recencyDays: 35, frequency90d: 4, monetary90dCents: 12345 } } }], total: 1 };
   if (skill === B) return args.mode === 'rank' ? { items: args.entityType === 'category'
     ? [{ categoryCode: 'ABARROTES', categoryName: 'Abarrotes', metric: 100 }]
-    : selected.map(row => ({ sku: row.sku, productName: row.productName, metric: 100 })), total: 1 } : { kpis };
+    : selected.map(row => ({ sku: row.sku, productName: row.productName, metric: 100 })), total: 1 }
+    : args.mode === 'compare' ? { kpis: structuredClone(kpis), availabilityStatus: 'AVAILABLE', comparisonMode: 'EQUIVALENT_PREVIOUS',
+      period: { startDate: args.startDate, endDate: args.endDate },
+      previousPeriod: { startDate: '2026-08-17', endDate: '2026-09-15', equalDuration: true },
+      trends: Object.fromEntries([['revenue', 500000], ['unitsSold', 100], ['ticketCount', 20], ['averageTicket', 25000]]
+        .map(([key, value]) => [key, { value, previousValue: value * 0.8, absoluteChange: value * 0.2,
+          percentChange: 25, comparisonAvailable: true, comparableDurations: true }])) } : { kpis: structuredClone(kpis) };
   if (skill === H) return { businessHealth: { sales: { kpis }, inventory: { critical: 5, high: 4 },
     customers: { atRiskCount: 3 }, suppliers: { summary: { suppliers: 10 } }, marketBasket: { stableCrossSellRuleCount: 33,
       freshness: { mode: 'HISTORICAL', analysisCutoff: V3.historicalCutoff } } }, alerts: [] };
@@ -51,7 +58,8 @@ const synthesisFor = context => {
       make([I, F], 'Arroz tiene 57 unidades pendientes frente a demanda prevista de 34,75.', 'Considera esas entradas antes de preparar otra compra.')
     ], limitations: [] };
   let observation;
-  if (context.responseIntent === 'ml_interpretation') observation = make([F], 'MA28 es estadístico y HGB conserva su evaluación.', 'Usa el método operativo aprobado para planificar.');
+  if (context.responseIntent === 'sales_evolution') observation = make([B], 'Las ventas fueron mayores que en el período comparable anterior.', 'Vigila ventas, unidades, tickets y ticket promedio en próximos cortes comparables.');
+  else if (context.responseIntent === 'ml_interpretation') observation = make([F], 'MA28 es estadístico y HGB conserva su evaluación.', 'Usa el método operativo aprobado para planificar.');
   else if (refs([C]).length) observation = make([C], 'Cliente Ana tiene 35 días de recencia observada.', 'Revisa su historial antes de planificar el contacto.');
   else if (context.responseIntent === 'supplier_advice') observation = make([S], 'Proveedor Andino registra puntualidad de 80 %.', 'Compara sus condiciones con el inventario antes de decidir.');
   else if (refs([H]).length) observation = make([H], 'El inventario muestra 5 productos críticos.', 'Revisa las prioridades de inventario antes de decidir.');

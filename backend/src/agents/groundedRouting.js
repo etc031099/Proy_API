@@ -26,6 +26,11 @@ const classifyGrounded = message => {
     return result('inventory_demand_priorities', [I, F]);
   if (/proveedor/.test(text) && /recom|elegir|conviene|prioriz/.test(text) && !/ventas|forecast|stock/.test(text))
     return result('supplier_advice', [S, I]);
+  const salesQuestion = /\b(?:ventas?|vendid[oa]s?|ingresos?|tickets?)\b/.test(text);
+  const asksSalesEvolution = /\b(?:evolucion|evolucionad[oa]s?|tendencia|tendencias|subiendo|bajando|subieron|bajaron|aumentaron|disminuyeron|creciendo|cayendo|como vienen|como van|variacion|variaciones)\b/.test(text);
+  const asksSalesMonitoring = /\b(?:vigilar|vigile|vigiles|revisar|revise|revises|observar|observarse|atencion)\b/.test(text);
+  if (salesQuestion && (asksSalesEvolution || asksSalesMonitoring) || /\bque tendencias observas?\b/.test(text))
+    return result('sales_evolution', [B], { asksSalesEvolution, asksSalesMonitoring });
   if (/ventas/.test(text) && /stock/.test(text) && /forecast|pronostico/.test(text) && /compr|recom|prioriz|analiz/.test(text))
     return result('purchase_advice', /proveedor/.test(text) ? [B, I, F, S] : [B, I, F]);
   if (/ventas/.test(text) && /inventario/.test(text) && /forecast|pronostico/.test(text) && /analiz|prioriz/.test(text))
@@ -56,7 +61,7 @@ const buildGroundedPlan = (message, binding) => {
     return { ...classification, tasks: [], clarificationQuestion: 'El pronóstico operativo admite únicamente horizontes de 1, 7 o 14 días. ¿Cuál deseas consultar?' };
   const tasks = classification.skills.map(skillId => {
     let args = { limit: 3 };
-    if (skillId === B) args = { ...args, mode: 'summary', ...parsed.period,
+    if (skillId === B) args = { ...args, mode: classification.responseIntent === 'sales_evolution' ? 'compare' : 'summary', ...parsed.period,
       ...(['stockout_opportunity', 'sales_stock_opportunity'].includes(classification.responseIntent) ? { mode: 'rank', entityType: 'product', metric: 'units' } : {}),
       ...(classification.noHistoricalSkuData ? { mode: 'rank', entityType: 'category', metric: 'units' } : {}),
       ...(sku ? { productRef: sku } : {}) };

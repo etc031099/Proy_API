@@ -16,6 +16,49 @@ const replenishmentFallback = results => {
     return `${row.productName || row.name || row.sku}: stock ${known(row.stock?.onHand)}, entradas ${known(row.stock?.incoming)}, riesgo ${risk}, cantidad sugerida ${known(row.recommendation?.recommendedQty)}.`;
   }).join('\n');
 };
+const salesComparisonAvailable = result => {
+  const data = result?.data || {};
+  const period = data.previousPeriod;
+  const current = data.period;
+  const dayCount = range => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(range?.startDate || '') || !/^\d{4}-\d{2}-\d{2}$/.test(range?.endDate || '')) return null;
+    const start = Date.parse(`${range.startDate}T00:00:00Z`), end = Date.parse(`${range.endDate}T00:00:00Z`);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start
+      || new Date(start).toISOString().slice(0, 10) !== range.startDate
+      || new Date(end).toISOString().slice(0, 10) !== range.endDate) return null;
+    return (end - start) / 86400000 + 1;
+  };
+  const currentDays = dayCount(current), previousDays = dayCount(period);
+  if (data.comparisonMode !== 'EQUIVALENT_PREVIOUS' || period?.equalDuration !== true
+    || currentDays === null || previousDays === null || currentDays !== previousDays) return false;
+  return ['revenue', 'unitsSold', 'ticketCount', 'averageTicket'].every(key => {
+    const trend = data.trends?.[key];
+    return trend?.comparisonAvailable === true && trend.comparableDurations === true
+      && Number.isFinite(trend.value) && Number.isFinite(trend.previousValue);
+  });
+};
+const costCoveragePartial = coverage => coverage?.unknownSaleLines > 0 && coverage.unsupportedCurrency === false;
+const usablePartialSalesComparison = result => result?.status === 'PARTIAL'
+  && result.data?.availabilityStatus === 'PARTIAL'
+  && (costCoveragePartial(result.data?.costCoverage) || costCoveragePartial(result.data?.comparisonCostCoverage))
+  && [result.data?.costCoverage, result.data?.comparisonCostCoverage].filter(Boolean)
+    .every(coverage => coverage.unsupportedCurrency === false) && salesComparisonAvailable(result);
+const salesEvolutionLimitation = (result, plan) => {
+  const data = result?.data || {}, kpis = data.kpis || {};
+  const period = data.period || result?.metadata?.period;
+  const range = period?.startDate && period?.endDate ? `${period.startDate} – ${period.endDate}` : 'el período consultado';
+  const observed = [];
+  if (Number.isFinite(kpis.revenueCents)) observed.push(`ventas por S/ ${(kpis.revenueCents / 100).toFixed(2)}`);
+  if (Number.isFinite(kpis.unitsSold)) observed.push(`${kpis.unitsSold} unidades`);
+  if (Number.isFinite(kpis.ticketCount)) observed.push(`${kpis.ticketCount} tickets`);
+  if (Number.isFinite(kpis.averageTicket)) observed.push(`ticket promedio de S/ ${kpis.averageTicket.toFixed(2)}`);
+  const facts = observed.length ? `En ${range} se registraron ${observed.join(', ')}.` : `No hay indicadores completos disponibles para ${range}.`;
+  const limitation = 'La evidencia no contiene una comparación válida con un período equivalente, así que no permite afirmar si las ventas subieron o bajaron.';
+  const monitoring = plan.asksSalesMonitoring
+    ? ` Para vigilar, puedes seguir ventas, unidades, tickets y ticket promedio en cortes comparables${!Number.isFinite(kpis.grossMarginPct) ? '; el margen bruto no está disponible en este resultado' : ''}.`
+    : '';
+  return `${facts} ${limitation}${monitoring}`;
+};
 const safeFailure = error => {
   const allowed = ['ARTIFACT_UNAVAILABLE', 'SCENARIO_NOT_SUPPORTED', 'TENANT_MISMATCH', 'INVALID_PERIOD',
     'SNAPSHOT_BOOTSTRAP_REQUIRED', 'SNAPSHOT_CONSISTENCY_UNAVAILABLE', 'SNAPSHOT_TOO_LARGE', 'LIVE_SNAPSHOT_UNAVAILABLE',
@@ -57,6 +100,8 @@ const handleGrounded = async ({ message, context, service, run, execution }) => 
         incomplete = true; failures.push({ skillId: task.skillId, kind: 'UNAVAILABLE', code: 'SKILL_NOT_READY' }); continue;
       }
       facts.push(renderV3(task.skillId, result, args));
+      if (result.status === 'PARTIAL' && plan.responseIntent === 'sales_evolution'
+        && usablePartialSalesComparison(result)) continue;
       if (['PARTIAL', 'NO_DATA'].includes(result.status)) {
         incomplete = true; failures.push({ skillId: task.skillId, kind: result.status, code: result.status });
       }
@@ -76,6 +121,13 @@ const handleGrounded = async ({ message, context, service, run, execution }) => 
   }
   const grounded = { route: plan.route, responseIntent: plan.responseIntent, domains: plan.domains,
     skills: plan.skills, failures, contextMetrics: contextMetrics(compact), noHistoricalSkuData: compact.noHistoricalSkuData };
+  const businessResult = results.find(row => row.skillId === 'get_business_analytics')?.result;
+  if (plan.responseIntent === 'sales_evolution' && !salesComparisonAvailable(businessResult)) {
+    grounded.interpretationMode = 'DETERMINISTIC_LIMITATION';
+    const answer = salesEvolutionLimitation(businessResult, plan);
+    return { intent: plan.responseIntent, agent: 'analyst', grounded,
+      answer: [answer, ...renderLimitations(compact.allowedLimitations.map(row => row.code))].join('\n\n') };
+  }
   // Keep fallback readable; full structured evidence remains in activity.
   let answer = facts.filter(Boolean).map(fact => String(fact).split('\n').slice(0, 4).join('\n')).join('\n\n');
   const notes = [];
@@ -87,7 +139,10 @@ const handleGrounded = async ({ message, context, service, run, execution }) => 
   if (plan.noHistoricalSkuData) notes.push('No hay historial directo de SKU nuevos: cualquier propuesta sería exploratoria, no un pronóstico validado.');
   if (incomplete) notes.push('No hay datos suficientes para una interpretación completa; se conservan los hechos obtenidos.');
   else if (!execution.hasGroundedProvider()) notes.push('La interpretación adicional aún no está habilitada; estos son los datos verificados.');
-  else if (!compact.evidence.some(row => row.facts && row.status === 'READY')) notes.push('No hay datos suficientes para generar una interpretación.');
+  else if (!compact.evidence.some(row => row.facts && (row.status === 'READY'
+    || plan.responseIntent === 'sales_evolution' && row.skillId === 'get_business_analytics'
+      && row.status === 'PARTIAL' && usablePartialSalesComparison(businessResult))))
+    notes.push('No hay datos suficientes para generar una interpretación.');
   else {
     try {
       const generated = await execution.generateGrounded({ maxTokens: 600, temperature: 0,

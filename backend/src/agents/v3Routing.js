@@ -247,6 +247,10 @@ const routeV3 = (message, state, binding) => {
   }
   const machineLearning = machineLearningPlan(text, message, binding, memory);
   if (machineLearning) return machineLearning;
+  if (/\bresumen\b/.test(text) && /\bventas?\b/.test(text)) {
+    const period = queryPeriod(message, binding, memory);
+    return period.clarificationQuestion ? period : { tasks: [task('get_business_analytics', { mode: 'summary', metric: 'revenue', ...period })] };
+  }
   // Small bounded cross-domain combinations used during the business presentation.
   if (/\b(?:mejores? clientes?|clientes? de alto valor|clientes? con mayor gasto)\b/.test(text)
     && /\b(?:ventas?|vendi|vendimos)\b/.test(text)) {
@@ -463,7 +467,9 @@ const routeV3 = (message, state, binding) => {
     if (ref) args.productRef = ref;
     return { tasks: [task('get_business_analytics', args)] };
   }
-  if (/^busca (?:a )?/.test(text) || /^[\p{L}\d .-]{3,100}$/u.test(message.trim()) && !/^(?:y|si|ok|vale|dale|correcto|de acuerdo|no|precio|stock|minimo|que|cuanto|esta|el|la)\b/.test(text)) {
+  if (/^busca (?:a )?/.test(text) || /^[\p{L}\d .-]{3,100}$/u.test(message.trim())
+    && !/^(?:y|si|ok|vale|dale|correcto|de acuerdo|no|precio|stock|minimo|que|cuanto|esta|el|la)\b/.test(text)
+    && !/\b(?:ventas?|vendid[oa]s?|tickets?|ingresos?|resumen)\b/.test(text)) {
     const sku = message.match(/\b(?:[A-Z]{2,}(?:-[A-Z0-9]+){1,5}|M5-[A-Z]+_\d+_\d+)\b/)?.[0];
     return { lookup: sku || trimRef(message.replace(/^busca(?: a)?\s+/i, '')) };
   }
@@ -798,8 +804,11 @@ const renderV3 = (skillId, result, args, responseMode = null) => {
     return `${i + 1}. ${label(r)} · ${args.metric === 'units' ? units(r.metric ?? r.units ?? r.unitsSold) : args.metric === 'tickets' ? `${num(r.metric ?? r.ticketCount)} tickets` : money(r.metric ?? r[args.metric === 'gross_margin' ? 'grossMarginCents' : 'revenueCents'])}.`;
   });
   if (skillId === 'get_business_analytics' && d.kpis) {
-    const k = d.kpis; lines.push(`Ventas ${money(k.revenueCents)} · ${units(k.unitsSold)} · ${num(k.ticketCount)} tickets · ticket promedio ${money(k.averageTicket * 100)} · margen bruto ${num(k.grossMarginPct)}%.`);
-    if (args.mode === 'compare') lines.push(`Variación de ventas: ${num(d.trends?.revenue?.percentChange)}% frente al periodo comparable anterior; no demuestra causalidad.`);
+    const k = d.kpis, margin = Number.isFinite(k.grossMarginPct) ? `${num(k.grossMarginPct)}%` : 'no disponible';
+    lines.push(`Ventas ${money(k.revenueCents)} · ${units(k.unitsSold)} · ${num(k.ticketCount)} tickets · ticket promedio ${money(k.averageTicket * 100)} · margen bruto ${margin}.`);
+    if (args.mode === 'compare') lines.push(Number.isFinite(d.trends?.revenue?.percentChange)
+      ? `Variación de ventas: ${num(d.trends.revenue.percentChange)}% frente al periodo comparable anterior; no demuestra causalidad.`
+      : 'La variación frente al periodo comparable no está disponible.');
   }
   if (skillId === 'get_inventory_intelligence' && d.summary) lines.push(`${num(d.summary.products)} productos · ${num(d.summary.critical)} críticos · ${num(d.summary.lowStock)} con stock bajo · ${num(d.summary.shouldReorder)} requieren reposición. ABC: ${Object.entries(d.abcCounts || {}).map(([key, count]) => `${key}: ${count}`).join(', ')}. XYZ: ${Object.entries(d.xyzCounts || {}).map(([key, count]) => `${key}: ${count}`).join(', ')}.`);
   if (skillId === 'get_product_forecast' && d.method) lines.push('Se usa MOVING_AVERAGE_28: media móvil de 28 días, seleccionada por su generalización en los horizontes operativos de 1, 7 y 14 días del benchmark V3. No expone confianza ni intervalo de predicción.');
