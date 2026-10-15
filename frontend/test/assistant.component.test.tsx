@@ -4,6 +4,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import AssistantPage from '@/app/assistant/page';
 import { apiClient, AgentApiError } from '@/lib/api';
 import type { AgentResponse } from '@/types/agent';
+import { AgentActivity } from '@/components/assistant/AgentActivity';
 vi.mock('@/components/ProtectedRoute', () => ({ ProtectedRoute: ({ children }: { children: ReactNode }) => <>{children}</> }));
 vi.mock('@/components/Layout', () => ({ Layout: ({ children }: { children: ReactNode }) => <main>{children}</main> }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'user-a', businessId: 'business-a' } }) }));
@@ -347,4 +348,21 @@ it('shows a human V3 service-unavailable message without technical details', asy
   send.mockRejectedValue(new AgentApiError(503)); render(<AssistantPage />); submit();
   expect(await screen.findByRole('alert')).toBeTruthy();
   expect(screen.getByText('El módulo analítico no está disponible en este momento.')).toBeTruthy();
+});
+
+it('shows provider-neutral DeepSeek activity, real usage and a cost range without false precision', () => {
+  render(<AgentActivity response={{ ...response, usage: { ...response.usage, provider: 'deepseek', model: 'deepseek-flash',
+    totalLlmCalls: 1, totalInputTokens: 1000, totalOutputTokens: 100, totalTokens: 1100, totalProviderLatencyMs: 250,
+    estimatedCostUsd: null, estimatedCostRangeUsd: { min: 0.0001512, max: 0.0003024 } } }} />);
+  expect(screen.getByText('Respuesta asistida por IA')).toBeTruthy();
+  expect(screen.getByText('Proveedor: DeepSeek')).toBeTruthy(); expect(screen.getByText('Modelo: deepseek-flash')).toBeTruthy();
+  expect(screen.getByText(/\$0.00015120–\$0.00030240 USD/)).toBeTruthy();
+  expect(screen.getByText('Latencia proveedor: 0.25 s')).toBeTruthy();
+  expect(screen.queryByText(/0 tokens IA/)).toBeNull();
+});
+
+it('shows unavailable provider cost when official usage is missing', () => {
+  render(<AgentActivity response={{ ...response, usage: { ...response.usage, provider: 'deepseek', model: 'deepseek-flash',
+    totalLlmCalls: 1, totalInputTokens: null, totalOutputTokens: null, totalTokens: null, estimatedCostUsd: null } }} />);
+  expect(screen.getByText('Costo estimado: No disponible')).toBeTruthy();
 });
