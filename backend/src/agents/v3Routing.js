@@ -13,10 +13,10 @@ const clean = text => normalize(text).replace(/\bq\b/g, 'que').replace(/\bd\b/g,
 const trimRef = text => {
   const ref = String(text || '').replace(/[¿?¡!]/g, '').trim()
     .replace(/\s+(?:para\s+(?:los\s+)?pr[oó]ximos?\s+\d+\s+d[ií]as?|hoy|ayer|anteayer|esta semana|este mes|el mes pasado|los proximos|los próximos|los ultimos|los últimos|en los|durante|para mañana|manana|mañana|por favor|el \d+ de).*$/i, '').trim();
-  return /^(?:el|ella|ellos|eso|ayer|hoy|anteayer|manana)$/.test(normalize(ref)) ? null : ref;
+  return /^(?:el|ella|ellos|eso|ayer|hoy|anteayer|manana|\d+ dias?|los? ultimos? \d+ dias?)$/.test(normalize(ref)) ? null : ref;
 };
 const productRef = message => message.match(/\b(?:[A-Z]{2,}(?:-[A-Z0-9]+){1,5}|M5-[A-Z]+_\d+_\d+)\b/)?.[0]
-  || trimRef(message.match(/(?:\bde(?:l)?|junto con|junto a|con)\s+(.+?)(?:\s+y\s+|$)/i)?.[1]);
+  || trimRef(message.match(/(?:\bde(?:l)?\b|junto con|junto a|\bcon\b)\s+(.+?)(?:\s+y\s+|$)/i)?.[1]);
 const task = (skillId, args = {}, extra = {}) => ({ skillId, agent: V3_SKILLS[skillId].agents[0], args: { limit: 5, ...args }, ...extra });
 const operationalDateOf = binding => binding.operationalDate || binding.asOfDate;
 const queryPeriod = (message, binding, memory, followup = false) => {
@@ -37,11 +37,12 @@ const machineLearningPlan = (text, message, binding, memory) => {
     || /lead time|puntualidad|dependencia/.test(text) && /que es|que significa/.test(text);
   const health = /salud|diagnostico/.test(text) && /negocio|sistema|general/.test(text);
   const supervisedIntent = /supervisad/.test(text) && !/no supervisad/.test(text);
-  const forecastIntent = !(/fp.?growth/.test(text) && /modelo predictivo/.test(text)) && (/histgradient|\bhgb\b|wape|baseline|media movil|\bma28\b|modelo.{0,24}(?:predic|demanda)|algoritmo.{0,24}(?:predic|demanda)|tecnica.{0,24}(?:predic|demanda)|caracteristicas.{0,20}modelo/.test(text)
+  const forecastIntent = !(/fp.?growth/.test(text) && /modelo predictivo/.test(text)) && (/histgradient|\bhgb\b|wape|baseline|media movil|\bma28\b|modelo.{0,24}(?:predic|demanda)|(?:modelo|algoritmo).{0,80}evalu[oa].{0,40}(?:predic|demanda)|algoritmo.{0,24}(?:predic|demanda)|tecnica.{0,24}(?:predic|demanda)|caracteristicas.{0,20}modelo/.test(text)
     || /features?|variables?.{0,20}modelo/.test(text) && /hgb|histgradient|pronostic|predic|demanda|forecast/.test(text) || supervisedIntent);
   const boundedForecastIntent = forecastIntent;
   const unsupervisedIntent = /no supervisad/.test(text) && /modelo|algoritmo|tecnica|machine learning|\bml\b|aprendizaje/.test(text);
-  const customerIntent = /k.?means|cluster|clustering|agrupamiento|silhouette|\bari\b|\brfm\b|algoritmo.{0,25}(?:cliente|segment)|como estan segmentados.{0,25}clientes|segmentacion.{0,25}clientes|clientes?.{0,20}grupo mas alto/.test(text) || unsupervisedIntent;
+  const customerIntent = /k.?means|cluster|clustering|agrupamiento|silhouette|\bari\b|\brfm\b|algoritmo.{0,25}(?:cliente|segment)|como estan segmentados.{0,25}clientes|segmentacion.{0,25}clientes|clientes?.{0,20}grupo mas alto/.test(text)
+    || memory.lastFamily === 'get_customer_intelligence' && /(?:como|de que manera).{0,20}(?:los |a los )?segmentaste/.test(text) || unsupervisedIntent;
   const anomalyIntent = /isolation forest|anomali|anomaly|atipic|fuera del patron|fraude|contamination|contaminacion|jaccard|detector|score.{0,20}(?:anomali|anomaly|atipic|negativo)|(?:anomali|anomaly|atipic).{0,20}score|confirma incidentes/.test(text) || unsupervisedIntent;
   const basketIntent = /fp.?growth|support|confidence|\blift\b|asociacion|reglas?.{0,20}(?:productos|ticket|support|confidence)|(?:ticket|evidencia).{0,20}regla|patrones frecuentes|productos.{0,25}relacionados|con que productos se compra|productos.{0,25}compran juntos|productos.{0,25}suelen comprar|compra.{0,20}juntos|causalidad/.test(text);
   const frozenIntent = /congelad|frozen|cutoff|corte historico/.test(text)
@@ -133,7 +134,7 @@ const machineLearningPlan = (text, message, binding, memory) => {
 
 const routeV3 = (message, state, binding) => {
   const text = clean(message), memory = state || {};
-  if (/^(?:vende|vender|compra|comprar|crea|crear|avisa|avisame|actualiza|ajusta|confirma|confirmar|confirmo|hazlo|correcto|cancela|cancelar|si hazlo|procede|adelante|no lo hagas|no hagas nada|mejor no)\b/.test(text)
+  if (/^(?:vende|vender|compra|comprar|prepara(?:r)? (?:una )?compra|crea|crear|avisa|avisame|actualiza|ajusta|confirma|confirmar|confirmo|hazlo|correcto|cancela|cancelar|si hazlo|procede|adelante|no lo hagas|no hagas nada|mejor no)\b/.test(text)
     || /^(?:ese|el segundo)$/.test(text)) return null;
   const coverageQuestion = /\b(?:cobertura|coverage)\b/.test(text)
     && !/que es|que significa|interpreta|como se calcula|modelo|hgb|ma28|machine learning|\bml\b/.test(text);
@@ -141,7 +142,7 @@ const routeV3 = (message, state, binding) => {
     const rawRef = productRef(message);
     const ref = message.match(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b|\bM5-[A-Z]+_\d+_\d+\b/)?.[0]
       || (rawRef && !/inventario|stock|cobertura|coverage|producto|los dias|dias/i.test(normalize(rawRef)) ? rawRef : null)
-      || (memory.selectedProduct?.key && /\b(?:ese|este|su)\b/.test(text) ? memory.selectedProduct.key : null);
+      || (memory.selectedProduct?.key && /\b(?:ese|este|su)\b/.test(text) || memory.selectedProduct?.key && memory.lastFamily === 'get_product_forecast' && /^(?:y )?cuantos? dias de cobertura/.test(text) ? memory.selectedProduct.key : null);
     return ref ? { tasks: [task('get_inventory_intelligence', { mode: 'detail', productRef: ref })] }
       : { clarificationQuestion: '¿De qué producto deseas consultar los días de cobertura?' };
   }
@@ -158,6 +159,8 @@ const routeV3 = (message, state, binding) => {
     const period = queryPeriod(message, binding, memory, true);
     return period.clarificationQuestion ? period : { tasks: [task('get_business_analytics', { mode: 'summary', metric: 'revenue', ...period })] };
   }
+  if (memory.lastFamily === 'get_supplier_intelligence' && /^(?:y )?(?:cual|quien).{0,35}(?:mayor|mas|menor).{0,25}(?:tiempo de entrega|lead time|plazo de entrega)/.test(text))
+    return { tasks: [task('get_supplier_intelligence', { mode: 'rank', metric: 'lead_time', sortDirection: /menor/.test(text) ? 'asc' : 'desc', limit: 5 })] };
   if (/(?:proveedor.*(?:vende|provee)|quien.*(?:provee|abastece))/.test(text)) {
     const ref = productRef(message) || (/\blo\b/.test(text) ? memory.selectedProduct?.key : null);
     if (ref) return { tasks: [task('get_supplier_intelligence', { mode: 'rank', productRef: ref })] };
@@ -170,7 +173,7 @@ const routeV3 = (message, state, binding) => {
       : { clarificationQuestion: '¿De qué producto deseas conocer los proveedores alternativos?' };
   }
   if (/cuesta|costo|presupuesto/.test(text) && /reponer|reposicion/.test(text)) return { clarificationQuestion: 'Puedo mostrar la recomendación de reposición al corte V3. El cálculo comercial de costo/presupuesto V3 aún no está habilitado; consulta las ofertas configuradas del producto.' };
-  if (/^(?:vende|vender|compra|comprar|crea|crear|avisa|avisame|actualiza|ajusta|confirma|confirmar|cancela|cancelar|si hazlo|procede|adelante|no lo hagas|mejor no)\b/.test(text)) return null;
+  if (/^(?:vende|vender|compra|comprar|prepara(?:r)? (?:una )?compra|crea|crear|avisa|avisame|actualiza|ajusta|confirma|confirmar|cancela|cancelar|si hazlo|procede|adelante|no lo hagas|mejor no)\b/.test(text)) return null;
   if (/^(?:haz|hacer|realiza) (?:el pedido|la compra)$/.test(text)) return { clarificationQuestion: 'Indica la cantidad y el proveedor del pedido. Prepararé el preview para que lo revises y confirmes; la recomendación no ejecuta una compra.' };
   if (/^por que (?:ocurre|pasa) (?:esto|eso)$/.test(text) && memory.lastFamily) return { clarificationQuestion: 'Estos datos muestran hechos y asociaciones observadas; no permiten demostrar su causa. Puedo comparar periodos o ampliar un dominio.' };
   // Only the three approved compound forms; no unbounded general planner.
@@ -242,7 +245,8 @@ const routeV3 = (message, state, binding) => {
       ...(ref || memory.selectedSupplier ? { supplierRef: ref || memory.selectedSupplier.key } : {}) })] };
     const general = /que proveedor|proveedores|quien.*abastece|de que proveedor/.test(text);
     const selected = ref || (!general && /\bsu\b|ese proveedor|el anterior|me vende|productos|lead time|puntual|llego tarde|se atraso/.test(text) ? memory.selectedSupplier?.key : null);
-    const args = { mode: selected ? 'detail' : 'rank', metric: /tarda|demora|retras|llego tarde|se atraso/.test(text) ? 'delays' : /lead time/.test(text) ? 'lead_time' : /puntual/.test(text) ? 'punctuality' : /depend/.test(text) ? 'dependency' : /orden|pedido/.test(text) ? 'orders' : 'spend', ...(selected ? { supplierRef: selected } : {}) };
+    const pendingOnly = /(?:pedido|orden|compra).{0,20}pendient|pendient.{0,20}(?:pedido|orden|compra)/.test(text) && !selected;
+    const args = { mode: selected ? 'detail' : 'rank', metric: /tarda|demora|retras|llego tarde|se atraso/.test(text) ? 'delays' : /lead time|tiempo de entrega|plazo de entrega/.test(text) ? 'lead_time' : /puntual/.test(text) ? 'punctuality' : /depend/.test(text) ? 'dependency' : /orden|pedido/.test(text) ? 'orders' : 'spend', ...(selected ? { supplierRef: selected } : {}), ...(pendingOnly ? { limit: 20 } : {}) };
     if (/tarda/.test(text)) args.metric = 'lead_time';
     if (/tarda mas|demora mas|mas retras/.test(text)) args.sortDirection = 'desc';
     if (/menor|menos|rapido/.test(text)) args.sortDirection = 'asc';
@@ -250,7 +254,7 @@ const routeV3 = (message, state, binding) => {
     const parsed = resolveOperationalPeriod(message, operationalDateOf(binding));
     if (parsed.clarificationQuestion) return parsed;
     if (parsed.explicit) Object.assign(args, parsed.period);
-    return { tasks: [task('get_supplier_intelligence', args)] };
+    return { tasks: [task('get_supplier_intelligence', args, pendingOnly ? { pendingOnly: true } : {})] };
   }
   if (/junt[oa]s|junto con|junto a|cross sell|canasta|acompan|asociacion/.test(text)) {
     const ref = productRef(message) || (/\bel\b|\beso\b|\bsu\b/.test(text) ? memory.selectedProduct?.key : null);
@@ -271,7 +275,7 @@ const routeV3 = (message, state, binding) => {
     return { tasks: [task('get_product_forecast', args)] };
   }
   if (!/margen bruto|margen/.test(text) && /stock|inventario|disponible/.test(text)
-    && /cuant|queda|qued|tiene|hay|disponible|inventario de|stock de|stock del/.test(text)) {
+    && /cuant|cual|queda|qued|tiene|hay|disponible|inventario de|stock de|stock del/.test(text)) {
     const canReuseProduct = !memory.lastFamily || ['get_inventory_intelligence', 'get_product_forecast', 'get_business_analytics'].includes(memory.lastFamily);
     const explicitProductFollowup = /ese (?:producto|item|articulo)/.test(text);
     const ref = productRef(message) || ((canReuseProduct || explicitProductFollowup) && memory.selectedProduct?.key && /^(?:[¿¡ ]*y |[¿¡ ]*cuanto|[¿¡ ]*que|[¿¡ ]*cual|[¿¡ ]*esta|[¿¡ ]*hay|[¿¡ ]*queda)/.test(text)
@@ -312,7 +316,8 @@ const routeV3 = (message, state, binding) => {
     return { tasks: [task('get_business_analytics', args)] };
   }
   if (/^busca (?:a )?/.test(text) || /^[\p{L}\d .-]{3,100}$/u.test(message.trim()) && !/^(?:y|si|ok|vale|dale|correcto|de acuerdo|no|precio|stock|minimo|que|cuanto|esta|el|la)\b/.test(text)) {
-    return { lookup: trimRef(message.replace(/^busca(?: a)?\s+/i, '')) };
+    const sku = message.match(/\b(?:[A-Z]{2,}(?:-[A-Z0-9]+){1,5}|M5-[A-Z]+_\d+_\d+)\b/)?.[0];
+    return { lookup: sku || trimRef(message.replace(/^busca(?: a)?\s+/i, '')) };
   }
   return null;
 };
@@ -350,6 +355,16 @@ const units = value => Number.isFinite(value) ? require('../utils/assistantForma
 const label = row => row.productName || row.displayName || row.name || row.sku || row.customerCode || row.supplierCode || row.categoryName || row.categoryCode;
 const segmentLabel = code => ({ AT_RISK: 'en riesgo según actividad observada', INACTIVE: 'sin compras completadas en los últimos 90 días', NEW: 'nuevo', LOYAL: 'frecuente', TOP_HIGH_VALUE: 'alto valor observado', POTENTIAL: 'potencial' })[code] || 'no disponible';
 const reasonLabel = code => ({ LOW_DEMAND: 'ventas observadas bajas', PERISHABLE_CAP: 'cantidad limitada por vida útil', BELOW_REORDER_POINT: 'posición por debajo del punto de reposición', NO_INBOUND: 'sin entradas pendientes', INBOUND_INSUFFICIENT: 'entradas pendientes insuficientes', COVER_BELOW_LEAD_TIME: 'cobertura inferior al plazo observado', LEAD_TIME_EXCEEDS_FORECAST_HORIZON: 'plazo superior al horizonte aprobado', INSUFFICIENT_DEMAND_VARIABILITY_HISTORY: 'historia insuficiente de variabilidad', LOW_STOCK: 'stock bajo', SINGLE_SOURCE: 'un solo proveedor', SLOW_MOVING: 'rotación lenta', DEAD_STOCK: 'sin movimiento observado', OVERSTOCK: 'exceso de stock', STOCKOUT_RISK: 'riesgo de agotamiento' })[code] || 'indicador observado al corte';
+const healthInsightLabel = insight => ({
+  SALES_DOWN_VS_PREVIOUS_PERIOD: 'Las ventas observadas disminuyeron frente al periodo comparable.',
+  MARGIN_DOWN: 'El margen bruto observado disminuyó frente al periodo comparable; no es utilidad neta.',
+  CUSTOMER_AT_RISK_COUNT: 'Hay clientes registrados en riesgo según las reglas documentadas; no implica probabilidad de abandono.',
+  CRITICAL_STOCK_COUNT: 'El inventario presenta productos con riesgo crítico.',
+  OVERSTOCK_VALUE: 'Hay valor estimado en exceso de stock según las reglas de inventario; no es un deterioro contable.',
+  HIGH_SUPPLIER_DEPENDENCY: 'Una parte concentrada del gasto de compras recibido corresponde a un proveedor.',
+  SINGLE_SOURCE_INVENTORY_EXPOSURE: 'Hay productos de riesgo alto o crítico con una sola oferta de proveedor configurada.',
+  CROSS_SELL_OPPORTUNITIES: 'Hay asociaciones estables de productos en el histórico; no implican causalidad.'
+})[insight?.code] || 'Hay un indicador que requiere revisión en el panel de salud.';
 const displayMoney = cents => Number.isFinite(cents) ? `S/ ${(cents / 100).toFixed(2)}` : 'no disponible';
 const displayNumber = value => Number.isFinite(value) ? Number(value.toFixed(2)) : 'no disponible';
 const percent = value => Number.isFinite(value) ? `${displayNumber(value * 100)}%` : 'no disponible';
@@ -530,10 +545,13 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
     }
     if (d.periodMetrics) metrics.push({ label: 'Gasto del periodo solicitado', value: Object.values(d.periodMetrics).map(row => displayMoney(row.revenueCents)).join(' · ') });
   } else if (skillId === 'get_supplier_intelligence') {
-    kind = 'supplier'; title = selected?.label ? `Proveedor · ${selected.label}` : 'Inteligencia de proveedores';
+    kind = 'supplier'; title = args.pendingOnly ? 'Proveedores con pedidos pendientes'
+      : selected?.label ? `Proveedor · ${selected.label}` : 'Inteligencia de proveedores';
+    if (args.pendingOnly) metrics.push({ label: 'Proveedores con pedidos pendientes', value: d.total ?? rows.length });
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i], item = itemFor(row, i, [
         { label: 'Compras', value: row.purchaseOrderCount ?? 'no disponible' }, { label: 'Gasto recibido', value: displayMoney(row.receivedSpendCents) },
+        { label: 'Pedidos pendientes', value: row.pendingOrderCount ?? 'no disponible' },
         { label: 'Lead time observado', value: Number.isFinite(row.leadTime?.averageDays) ? `${displayNumber(row.leadTime.averageDays)} días` : 'no disponible' },
         { label: 'Puntualidad', value: Number.isFinite(row.punctuality?.onTimeRatePct) ? `${displayNumber(row.punctuality.onTimeRatePct)}%` : 'no disponible' },
         { label: 'Productos', value: (row.productsSupplied || []).slice(0, 3).map(p => p.name || p.productName || p.sku).join(', ') || `${row.exclusiveOfferedSkuCount ?? 0} exclusivos` }
@@ -550,8 +568,8 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
       { label: 'Inventario crítico', value: h.inventory?.critical ?? 'no disponible' },
       { label: 'Proveedores', value: h.suppliers?.summary?.suppliers ?? 'no disponible' },
       { label: 'Asociaciones estables', value: h.marketBasket?.stableCrossSellRuleCount ?? 'no disponible' });
-    for (const insight of (d.alerts || []).slice(0, 1)) items.push({ type: 'category', key: String(insight.code || insight.summary || items.length),
-      label: insight.summary || insight.code || 'Hallazgo', metrics: [], secondaryLabel: undefined });
+    for (const insight of (d.alerts || []).slice(0, 1)) items.push({ type: 'category', key: String(insight.code || items.length),
+      label: healthInsightLabel(insight), metrics: [], secondaryLabel: undefined });
     note = `Indicadores descriptivos del corte V3; el resumen no asigna un puntaje global. Market Basket permanece histórico al ${h.marketBasket?.freshness?.analysisCutoff || '2026-10-12'}.`;
   }
   if (args.concept && mlExplanation(args.concept)) note = [note, mlExplanation(args.concept)].filter(Boolean).join(' ');
@@ -605,7 +623,7 @@ const renderV3 = (skillId, result, args) => {
     if (skillId === 'get_product_forecast') return `${i + 1}. ${result.metadata.selected?.product?.label || label(r)} (${r.sku}) · estimación de ventas: ${units(r[`expectedUnitsNext${args.horizonDays || 7}d`])} en ${args.horizonDays || 7} ${args.horizonDays === 1 ? 'día' : 'días'} · media móvil de 28 días.`;
     if (skillId === 'get_customer_intelligence') return `${i + 1}. ${label(r)} · ${segmentLabel(r.segment)} · última compra ${r.lastPurchaseDate || 'sin compras'} · ${num(r.ticketCount)} tickets históricos · gasto histórico ${money(r.totalSpentCents)} · ticket promedio ${money(r.averageTicketCents)}${args.mode === 'preferences' ? ` · categoría preferida: ${r.preferences?.favoriteCategoryName || 'no disponible'} · productos habituales: ${(r.preferences?.topProducts || []).slice(0, 5).map(p => p.name || p.sku).join(', ') || 'sin datos'}` : ''}.`;
     if (skillId === 'get_supplier_intelligence' && args.mode === 'alternatives') return `${i + 1}. ${r.sku} · ${(r.alternatives || []).slice(0, 5).map(offer => `${offer.supplierName || offer.supplierCode}: ${money(offer.unitCostCents)}`).join('; ') || 'sin alternativas configuradas'}.`;
-    if (skillId === 'get_supplier_intelligence') return `${i + 1}. ${label(r)} (${r.supplierCode}) · ${num(r.purchaseOrderCount)} compras históricas · gasto histórico recibido ${money(r.receivedSpendCents)} · lead time observado ${num(r.leadTime?.averageDays)} días con ${num(r.leadTime?.sampleSize)} observaciones · puntualidad ${num(r.punctuality?.onTimeRatePct)}% · catálogo exclusivo: ${num(r.exclusiveOfferedSkuCount)} productos · ${(r.productsSupplied || []).slice(0, 5).map(p => p.name || p.productName || p.sku).join(', ')}.`;
+    if (skillId === 'get_supplier_intelligence') return `${i + 1}. ${label(r)} (${r.supplierCode}) · ${num(r.purchaseOrderCount)} compras históricas · ${num(r.pendingOrderCount)} pedidos pendientes · gasto histórico recibido ${money(r.receivedSpendCents)} · lead time observado ${num(r.leadTime?.averageDays)} días con ${num(r.leadTime?.sampleSize)} observaciones · puntualidad ${num(r.punctuality?.onTimeRatePct)}% · catálogo exclusivo: ${num(r.exclusiveOfferedSkuCount)} productos · ${(r.productsSupplied || []).slice(0, 5).map(p => p.name || p.productName || p.sku).join(', ')}.`;
     if (skillId === 'get_cross_sell_recommendations') return `${i + 1}. ${(r.consequentProducts || [r.recommendedProduct]).filter(Boolean).join(', ')} (${(r.consequentSkus || [r.recommendedSku || r.sku]).filter(Boolean).join(', ')}) · ${num(r.ticketCount)} tickets · support ${percent(r.support)} · confidence ${percent(r.confidence)} · lift ${num(r.lift)} · estabilidad ${r.stability?.status || r.stability || 'según artefacto'}.`;
     return `${i + 1}. ${label(r)} · ${args.metric === 'units' ? units(r.metric ?? r.units ?? r.unitsSold) : args.metric === 'tickets' ? `${num(r.metric ?? r.ticketCount)} tickets` : money(r.metric ?? r[args.metric === 'gross_margin' ? 'grossMarginCents' : 'revenueCents'])}.`;
   });
@@ -618,6 +636,7 @@ const renderV3 = (skillId, result, args) => {
   if (skillId === 'get_product_forecast' && d.totalExpectedUnits !== undefined) lines.push(`Estimación agregada: ${units(d.totalExpectedUnits)} en ${d.horizonDays} ${d.horizonDays === 1 ? 'día' : 'días'} desde el corte del escenario.`);
   if (skillId === 'get_customer_intelligence' && d.periodMetrics) lines.push(`Gasto del periodo solicitado: ${Object.entries(d.periodMetrics).map(([code, row]) => `${code}: ${money(row.revenueCents)}`).join('; ')}. El segmento RFM corresponde a su ventana de 90 días.`);
   if (skillId === 'get_supplier_intelligence' && d.singleSourceCriticalOrHigh) lines.push(`Dependencia: ${num(d.singleSourceCriticalOrHigh.singleSourceCriticalOrHighSkuCount)} productos críticos o de alto riesgo con un solo proveedor observado/configurado; no es un score de calidad.`);
+  if (skillId === 'get_supplier_intelligence' && args.pendingOnly) lines.unshift(`${d.total ?? items.length} proveedores con pedidos pendientes; se muestran hasta 5. La cifra procede de órdenes pendientes registradas.`);
   if (skillId === 'get_cross_sell_recommendations') lines.push(d.available === false ? 'No hay asociaciones validadas disponibles para ese corte.' : 'Son compras conjuntas observadas; no demuestran causalidad ni garantizan ventas futuras.');
   if (args.concept && mlExplanation(args.concept)) lines.push(mlExplanation(args.concept));
   if (skillId === 'get_business_health') {
@@ -626,7 +645,7 @@ const renderV3 = (skillId, result, args) => {
       `Clientes en riesgo observado: ${num(h.customers?.atRiskCount)}.`, `Inventario: ${num(h.inventory?.critical)} críticos.`,
       `Proveedores: ${num(h.suppliers?.summary?.suppliers)}.`, `Cross-sell: ${num(h.marketBasket?.stableCrossSellRuleCount)} reglas estables.`);
     if (h.marketBasket?.freshness?.analysisCutoff) lines.push(`Market Basket permanece histórico al ${h.marketBasket.freshness.analysisCutoff}.`);
-    for (const insight of (d.alerts || []).slice(0, Math.max(0, 7 - lines.length))) lines.push(insight.summary || insight.code);
+    for (const insight of (d.alerts || []).slice(0, Math.max(0, 7 - lines.length))) lines.push(healthInsightLabel(insight));
   }
   if (!lines.length) lines.push('No hay registros que cumplan los filtros solicitados.');
   const horizon = args.horizonDays || 7;
@@ -705,14 +724,24 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
       current.args = { ...current.args, [`${current.fromPrevious}Ref`]: key };
     }
     try {
-      const result = await run(current.agent, current.skillId, current.args);
+      let result = await run(current.agent, current.skillId, current.args);
       if (result.metadata.resolution) {
         const resolution = result.metadata.resolution;
         return candidateView(resolution, plan.tasks.slice(i), resolution.referenceField || `${resolution.type}Ref`);
       }
-      previous = result; answers.push(renderV3(current.skillId, result, current.args));
+      if (current.pendingOnly) {
+        const items = (result.data.items || []).filter(row => Number(row.pendingOrderCount) > 0);
+        result = { ...result, data: { ...result.data, items, total: items.length } };
+      }
+      const displayArgs = current.pendingOnly ? { ...current.args, pendingOnly: true } : current.args;
+      previous = result; answers.push(renderV3(current.skillId, result, displayArgs));
       let rankedEntities = [];
       scope.lastFamily = current.skillId;
+      if (current.skillId === 'get_supplier_intelligence' && !current.args.productRef && current.args.mode !== 'alternatives') {
+        // An explicit supplier comparison supersedes a product from an older domain.
+        scope.selectedProduct = null;
+        scope.readRecommendation = null;
+      }
       for (const [type, entity] of Object.entries(result.metadata.selected || {})) scope[`selected${type[0].toUpperCase()}${type.slice(1)}`] = entity;
       if (scope.readRecommendation && scope.readRecommendation.sku !== scope.selectedProduct?.key) scope.readRecommendation = null;
       if (current.skillId === 'get_inventory_intelligence' && result.metadata.selected?.product && result.data.items?.length === 1) {
@@ -733,7 +762,7 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
         }
         if (entities.length) { scope.ranking = { type, items: entities }; rankedEntities = entities; rankedForResponse = entities; }
       }
-      v3Views.push(await createV3View(current.skillId, result, current.args, service, context, rankedEntities));
+      v3Views.push(await createV3View(current.skillId, result, displayArgs, service, context, rankedEntities));
       scope.pending = null; save();
     } catch (error) {
       const functional = error.functionalCode;

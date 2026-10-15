@@ -6,13 +6,13 @@ const CONFIRM = new Set(['confirmar', 'confirma', 'confirmalo', 'confirmo', 'con
   'ok confirma', 'correcto confirma', 'confirm', 'ok confirm', 'yes confirm']);
 const SHORT = new Set(['si', 'ok', 'vale', 'correcto', 'dale']);
 const CANCEL = new Set(['cancelar', 'cancela', 'cancelalo', 'cancelo', 'cansela', 'no lo hagas', 'mejor no',
-  'dejalo', 'olvidalo', 'descarta', 'descartalo', 'anula', 'no quiero hacerlo', 'mejor cancela eso', 'cancel', 'no cancel']);
+  'dejalo', 'olvidalo', 'descarta', 'descartalo', 'anula', 'no quiero hacerlo', 'mejor cancela eso', 'mejor no cancela', 'cancel', 'no cancel']);
 const HOLD = new Set(['no', 'no todavia', 'no confirmes', 'no espera', 'todavia no', 'no quiero', 'no procede']);
 function actionDecision(message) {
   const text = normalizeDecision(message);
   if (/[¿?]/.test(message)) {
     const question = text.replace(/[¿?]/g, '').trim();
-    return /\b(?:si|confirm\w*|hazlo|cancel\w*)\b/.test(question)
+    return /\b(?:confirm\w*|hazlo|cancel\w*)\b/.test(question)
       || /^(?:esta bien el precio|puedo cambiar el cliente)$/.test(question) ? 'hold' : null;
   }
   if (CANCEL.has(text)) return 'cancel';

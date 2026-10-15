@@ -36,10 +36,10 @@ const actionIntent = message => {
   if (/^(?:(?:crea(?:r)?|configura|registra|quiero)(?: una)? alerta\b|avisame\b)/.test(value)) return 'create_stock_alert_rule';
   if (/^(?:crea(?:r)?|agrega|anade|registra)(?: un)? producto\b/.test(value) || /^(?:agrega|anade)\s+/.test(value)) return 'create_product';
   if (/^(?:vende|vender|registra(?:r)?(?: una)? venta)\b/.test(value)) return 'create_sale';
-  if (/^(?:compre|comprar|compra|registra(?:r)?(?: una)? compra)\b/.test(value)) return 'create_purchase';
+  if (/^(?:compre|comprar|compra|prepara(?:r)?(?: una)? compra|registra(?:r)?(?: una)? compra)\b/.test(value)) return 'create_purchase';
   return null;
 };
-const commandLength = message => (/^(?:crea(?:r)?|agrega|añade|registra)(?: un)? producto\b|^registra(?:r)?(?: una)? (?:venta|compra)\b/iu.exec(message.trim()) || [''])[0].length;
+const commandLength = message => (/^(?:crea(?:r)?|agrega|añade|registra)(?: un)? producto\b|^(?:registra(?:r)?(?: una)? (?:venta|compra)|prepara(?:r)?(?: una)? compra)\b/iu.exec(message.trim()) || [''])[0].length;
 const money = text => /(?:USD|d[oó]lares|\$)/i.test(text) ? 'USD' : /(?:EUR|euros|€)/i.test(text) ? 'EUR' : /(?:PEN|S\/|soles)/i.test(text) ? 'PEN' : undefined;
 function parseAction(message, action) {
   message = require('../agents/supplierReference').supplierLanguage(message);
@@ -73,7 +73,7 @@ function parseAction(message, action) {
   const customer = /\b(?:al|para el|para|cliente|a)\s+(?:cliente\s+)?([a-záéíóúñ].+?)(?=,|\s+(?:en|a)\s+(?:cr[eé]dito|contado)|$)/i.exec(message.replace(/(?:al|de)\s+prove(?:edor|edro).*/i, '').replace(/a\s+cr[eé]dito.*/i, ''));
   const itemText = (contextualVendor ? message.slice(0, contextualVendor.index).trim() : message).replace(/\s+(?:(?:al|del|de|con(?: el)?)\s+)?prove(?:edor|edro)\s+.*/i, '').replace(/\s+(?:al|para el|para|a)\s+(?:cliente\s+)?[A-Za-z].*/i, '')
     .replace(/\s+(?:fiado|(?:en|a|al)\s+(?:cr[eé]dito|contado)).*/i, '').replace(/\s+(?:moneda|en)\s+(?:PEN|USD|EUR|soles|d[oó]lares|euros).*/i, '');
-  const content = itemText.replace(/^(?:vender|vende|compre|compré|comprar|compra|registra(?:r)?(?: una)? (?:venta|compra))(?=\s|$)\s*(?:de\s+)?/i, '');
+  const content = itemText.replace(/^(?:vender|vende|compre|compré|comprar|compra|prepara(?:r)?(?: una)? compra|registra(?:r)?(?: una)? (?:venta|compra))(?=\s|$)\s*(?:de\s+)?/i, '');
   // A comma inside a number stays part of that token. Quantities only occur at
   // the beginning of an item, never inside its name, item number or SKU.
   const segments = content.split(/(?<=\S),\s+|(?<=[^\d\s]),|\s+y\s+(?=[+\-−]?\d|uno\b|una\b|dos\b|tres\b|cuatro\b|cinco\b|seis\b|siete\b|ocho\b|nueve\b|diez\b|once\b|doce\b|veinte\b|treinta\b|cincuenta\b|cien\b)/i);
@@ -91,7 +91,7 @@ function parseAction(message, action) {
     } else if (segments.length > 1) fail('ACTION_VALIDATION_FAILED');
   }
   if (!items.length) {
-    const ref = itemText.replace(/^(?:vender|vende|compre|compré|comprar|compra|registra(?:r)?(?: una)? (?:venta|compra))(?=\s|$)\s*(?:de\s+)?/i, '').trim();
+    const ref = itemText.replace(/^(?:vender|vende|compre|compré|comprar|compra|prepara(?:r)?(?: una)? compra|registra(?:r)?(?: una)? (?:venta|compra))(?=\s|$)\s*(?:de\s+)?/i, '').trim();
     if (ref) items.push({ ref });
   }
   return { action, items, ...(supplier ? { supplierRef: supplier[1].trim().replace(/[.!?]+$/, '') } : {}),

@@ -91,6 +91,26 @@ function fixture({ products = [p1, p2], suppliers = [vendor], configured = [vend
   const send = message => adapter.handle(request(), { message, conversationId });
   return { adapter, runtime, service, options, conversationId, send, prepared, cancelled, confirmed };
 }
+test('H.5 prepare purchase by exact SKU shows preview then natural cancellation executes nothing', async () => {
+  const supplier = { _id: 'dddddddddddddddddddddddd', name: 'Proveedor de pan', isActive: true };
+  const product = { _id: 'bbbbbbbbbbbbbbbbbbbbbbbb', name: 'Pan francés fresco paquete 4 unidades',
+    sku: 'PAN-FRE-001', currency: 'PEN', stock: 21, isActive: true,
+    supplierPrices: [{ supplierId: supplier._id, purchasePrice: 1.5 }] };
+  const f = fixture({ products: [product], suppliers: [supplier], configured: [supplier] });
+  const preview = await f.send('Prepara una compra de 3 unidades de PAN-FRE-001.');
+  assert.ok(preview.pendingAction?.pendingActionId);
+  assert.equal(f.prepared.length, 1);
+  assert.deepEqual(f.prepared[0].products, [{ productId: product._id, quantity: 3 }]);
+  assert.equal(f.prepared[0].vendorId, supplier._id);
+  assert.equal(f.confirmed.length, 0);
+  const cancel = await f.send('Mejor no, cancela.');
+  assert.match(cancel.answer, /cancelad/i);
+  assert.equal(f.cancelled.length, 1);
+  assert.equal(f.confirmed.length, 0);
+  assert.equal(preview.usage.totalLlmCalls, 0);
+  assert.equal(cancel.usage.totalLlmCalls, 0);
+  assert.equal(preview.usage.totalTokens + cancel.usage.totalTokens, 0);
+});
 const pagedProducts = () => Array.from({ length: 28 }, (_, i) => ({ ...p1, _id: (i + 1).toString(16).padStart(24, '0'),
   name: `Food ${i % 4} variant ${i}`, sku: `PAGE-${i}` }));
 const identityProducts = [2, 3].map((group, i) => ({ ...p1, _id: String(i + 2).repeat(24),

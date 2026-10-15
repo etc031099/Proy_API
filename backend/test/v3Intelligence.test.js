@@ -123,6 +123,29 @@ function fixture({ corrupt, failed, record = scenario, clock = () => new Date('2
 const zero = result => { assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
   assert.equal(result.code, null, JSON.stringify({ answer: result.answer, code: result.code, diagnostics: result.diagnostics })); assert.ok(!result.pendingAction); };
 
+test('H.5 cloud regressions preserve deterministic READ context across exact turns', async () => {
+  const f = fixture({ clock: () => new Date('2026-10-14T17:30:00.000Z') });
+  const conversationId = randomUUID();
+  for (const message of ['¿Qué modelo de Machine Learning se evaluó para predecir demanda?', '¿Por qué usan MA28 si evaluaron HGB?']) {
+    const response = await f.run(message, conversationId); zero(response);
+    assert.match(response.answer, /HistGradientBoostingRegressor|HGB/);
+    assert.match(response.answer, /MA28/);
+  }
+  zero(await f.run('¿Cuáles son mis clientes de alto valor?', conversationId));
+  const clustering = await f.run('¿Cómo los segmentaste?', conversationId); zero(clustering);
+  assert.match(clustering.answer, /K-Means/);
+  const multi = await f.run('Dime mis ventas de 7 días y qué productos debería reponer.', conversationId); zero(multi);
+  assert.match(multi.answer, /Ventas/);
+  assert.match(multi.answer, /stock|reposición|productos/i);
+  const lookup = await f.run('Háblame de PAN-FRE-001.', conversationId); zero(lookup);
+  assert.match(lookup.answer, /PAN-FRE-001/);
+  for (const message of ['¿Cuál es su stock?', '¿Y su pronóstico a 14 días?', '¿Cuántos días de cobertura tiene?']) {
+    const response = await f.run(message, conversationId); zero(response);
+    assert.match(response.answer, /PAN-FRE-001/);
+    assert.doesNotMatch(response.answer, /de qué producto|no encontré esa referencia/i);
+  }
+});
+
 const banks = {
   get_business_analytics: ['Cuánto vendí esta semana', 'Cómo van mis ventas', 'Cuántos tickets tengo', 'Qué categoría me deja más margen', 'Cuál fue mi producto más vendido', 'Vendí más que la semana pasada', 'Ventas hoy', 'Ventas ayer', 'Ventas anteayer', 'Ventas últimos 7 días', 'Ventas últimos 30 días', 'Ventas este mes', 'Ventas mes pasado', 'Ingresos este mes', 'Resumen de ventas', 'Margen bruto de ventas', 'Ranking de ventas', 'Top de ventas', 'Ventas por categoría', 'Ventas del 2026-10-01 al 2026-10-12'],
   get_inventory_intelligence: ['Qué se está acabando', 'Qué debería reponer', 'Cuánto debería pedir de pan francés', 'Qué productos son AZ', 'Productos críticos', 'Productos de alto riesgo', 'Inventario con sobrestock', 'Productos lentos', 'Productos sin movimiento', 'ABC de productos', 'XYZ del inventario', 'Qué debo pedir de pan francés', 'Reposición de pan francés', 'Stock bajo', 'Productos bajos de stock', 'Qué está por agotarse', 'Reponer pan francés', 'Cuánto pedir de PAN-FRE-001', 'Productos para reposición', 'Amplía inventario', 'Productos críticos de SUP-05', 'Sobrestock de pan francés', 'Cuánto debería pedir de Inca Kola 500 ml', 'Reposición de BEB-GAS-003', 'Productos AZ de inventario'],
