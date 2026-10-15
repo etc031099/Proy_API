@@ -77,3 +77,34 @@ test('J2I advisory quantities still validated; cardinal words add no numeric per
     error.validationField === 'observations[0].advisoryRecommendation' && error.unsupportedNumbers[0] === 40);
   assert.throws(() => validate('Cocinero requiere 001 unidades.', context, ['E2']), { validationReason: 'UNSUPPORTED_NUMBER' });
 });
+test('J2J numeric markers at line starts do not count as business claims', () => {
+  for (const list of [
+    '1. Priorizar Aceite Cocinero.\n2. Considerar Aceite Primor.',
+    '1) Priorizar Aceite Cocinero.\n2) Considerar Aceite Primor.',
+    '- 1. Priorizar Aceite Cocinero.\n- 2. Considerar Aceite Primor.',
+    '- 1. Priorizar Aceite Cocinero.\n- 2) Considerar Aceite Primor.'
+  ]) assert.ok(validate(list));
+  assert.ok(validate('Primero, priorizar Aceite Cocinero.'));
+  assert.ok(validate('Segundo, considerar Aceite Primor.'));
+});
+test('J2J structural markers never authorize quantities elsewhere in either text field', () => {
+  for (const value of ['1. Priorizar Cocinero; reponer 40 unidades.', '- 2) Considerar Primor; riesgo 80 %.',
+    '1) Priorizar Cocinero; incremento 25 %.', '999. Reponer producto no listado.'])
+    assert.throws(() => validate(value), { validationReason: 'UNSUPPORTED_NUMBER' });
+  for (const value of ['1 unidad', '2 unidades']) assert.throws(() => validate(value), { validationReason: 'UNSUPPORTED_NUMBER' });
+  const out = JSON.parse(output('Priorizar Cocinero.'));
+  out.observations[0].advisoryRecommendation = '2. Considerar Primor.\n3) Revisar el forecast.';
+  assert.doesNotThrow(() => validateGroundedOutput(JSON.stringify(out), context));
+  out.observations[0].advisoryRecommendation = '2. Considerar Primor.\n3) Reponer 40 unidades.';
+  assert.throws(() => validateGroundedOutput(JSON.stringify(out), context), error =>
+    error.validationField === 'observations[0].advisoryRecommendation' && error.unsupportedNumbers[0] === 40);
+});
+test('J2J the cloud fixture passes while 5.03 remains an actual fact claim', () => {
+  const out = JSON.parse(output('1. Priorizar Aceite Cocinero por su riesgo alto y cobertura de 5.03 días.\n'
+    + '2. Considerar Aceite Primor porque no tiene entradas pendientes.'));
+  out.observations[0].evidenceRefs = ['E1'];
+  assert.doesNotThrow(() => validateGroundedOutput(JSON.stringify(out), context));
+  out.observations[0].interpretation = '1. Priorizar Cocinero por cobertura de 99 días.\n2. Considerar Primor.';
+  assert.throws(() => validateGroundedOutput(JSON.stringify(out), context), error =>
+    error.unsupportedNumbers.includes(99));
+});

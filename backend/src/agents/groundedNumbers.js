@@ -4,6 +4,8 @@ const normalize = text => text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCa
 const words = text => normalize(text).match(/\p{L}+/gu) || [];
 const PACK = /(?<![\w.,+\-])(\d+(?:[.,]\d+)?)\s*(ml|kg|mg|g|l)\b/giu;
 const numberValue = value => Number(value.replace(',', '.'));
+const stripStructuralListMarkers = text => text.replace(
+  /(^|\n)([ \t]{0,3}(?:[-*+][ \t]+)?)([1-3])[.)](?=[ \t]+\S)/g, '$1$2');
 const numericEvidence = facts => {
   const numbers = [], presentations = [];
   const collect = value => {
@@ -42,11 +44,11 @@ const withoutPresentationNumbers = (text, presentations) => text.replace(PACK, (
   return supported ? '[presentación]' : match;
 });
 const unsupportedNumbers = (text, evidence) => {
-  const metricText = withoutPresentationNumbers(text, evidence.presentations);
+  const metricText = withoutPresentationNumbers(stripStructuralListMarkers(text), evidence.presentations);
   return [...new Set((metricText.match(/-?\d+(?:[.,]\d+)?/g) || []).filter(number => {
     const normalized = number.replace(',', '.'), claim = Number(normalized), decimals = normalized.split('.')[1]?.length;
     return !evidence.numbers.some(fact => fact === claim
       || decimals >= 1 && decimals <= 2 && Number(fact.toFixed(decimals)) === claim);
   }).map(numberValue))];
 };
-module.exports = { numericEvidence, unsupportedNumbers };
+module.exports = { numericEvidence, stripStructuralListMarkers, unsupportedNumbers };

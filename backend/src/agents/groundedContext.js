@@ -124,7 +124,7 @@ const validateGroundedOutput = (text, context) => {
     for (const field of ['interpretation', 'advisoryRecommendation']) {
       const value = row[field];
       const path = `observations[${index}].${field}`;
-      if (cleanText(value, 900) !== value) fail('UNSAFE_CONTENT', path);
+      if (value.split('\n').some(line => cleanText(line, 900) !== line)) fail('UNSAFE_CONTENT', path);
       const claims = value.replace(/no (?:fue |esta |es )?aprobado|no (?:demuestra|prueba|garantiza|implica)/gi, '[negado]');
       if (/(?:fraude confirmado|probabilidad de abandono|1\s*[-−]\s*WAPE|causa(?:lidad)? (?:demostrada|confirmada)|MA28 es (?:ML|machine learning)|HGB.*28.*aprobado|\b(?:confirmo|ejecut[eé]|registr[eé]) (?:la |una )?(?:venta|compra))/i.test(claims)
         || /(?:FP.?Growth|lift).{0,80}(?:demuestra|prueba|garantiza).{0,30}(?:causa|ventas)/i.test(claims)) fail('UNSUPPORTED_SEMANTIC_CLAIM', path);
