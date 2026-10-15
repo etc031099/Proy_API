@@ -20,7 +20,7 @@ export type ExtendedTab = 'sales' | 'customers' | 'suppliers' | 'related' | 'hea
 type LoadStatus = 'loading' | 'ready' | 'error';
 type AnalyticsData = SalesAnalytics | CustomersAnalytics | SuppliersAnalytics | AssociationsAnalytics | BusinessHealthAnalytics;
 const domainLabels: Record<string, string> = { sales: 'Ventas', margin: 'Margen', customers: 'Clientes', inventory: 'Inventario', suppliers: 'Proveedores', forecast: 'Pronóstico', marketBasket: 'Productos relacionados' };
-const statusLabels: Record<string, string> = { READY: 'Disponible', PARTIAL: 'Parcial', UNAVAILABLE: 'No disponible', COLD_START: 'Sin historial suficiente', INSUFFICIENT_HISTORY: 'Historial insuficiente', NOT_AVAILABLE: 'No disponible', FROZEN: 'Histórico hasta 12 oct. 2026', LIVE: 'Actualizado con datos operativos', AVAILABLE: 'Disponible', NOT_REQUESTED: 'No solicitado' };
+const statusLabels: Record<string, string> = { READY: 'Disponible', PARTIAL: 'Parcial', UNAVAILABLE: 'No disponible', COLD_START: 'Sin historial suficiente', INSUFFICIENT_HISTORY: 'Historial insuficiente', NOT_AVAILABLE: 'No disponible', NOT_EXPOSED_BY_ENGINE: 'No disponible', 'not exposed by engine': 'No disponible', FROZEN: 'Histórico hasta 12 oct. 2026', historical: 'Histórico', LIVE: 'Actualizado con datos operativos', AVAILABLE: 'Disponible', NOT_REQUESTED: 'No solicitado' };
 const healthMetricLabels: Record<string, string> = {
   CUSTOMER_AT_RISK_COUNT: 'Clientes en riesgo', customerAtRiskCount: 'Clientes en riesgo', customersAtRisk: 'Clientes en riesgo',
   grossMarginCents: 'Margen bruto', grossMargin: 'Margen bruto', grossMarginPct: 'Margen bruto (%)',
@@ -70,7 +70,7 @@ const healthMetricLabels: Record<string, string> = {
   comparisonAvailable: 'Comparación disponible', comparableDurations: 'Períodos de duración equivalente', status: 'Estado',
   TOP_HIGH_VALUE: 'Mayor valor', singleSource: 'Productos con proveedor único',
 };
-const segmentLabels: Record<string, string> = { HIGH_VALUE: 'Alto valor', POTENTIAL: 'Potencial', NEW: 'Nuevo', AT_RISK: 'En riesgo', INACTIVE: 'Inactivo', ACTIVE: 'Activo', LOYAL: 'Fiel', CHAMPION: 'Cliente frecuente', PROMISING: 'Prometedor', NEEDS_ATTENTION: 'Requiere atención', HIBERNATING: 'Inactivo reciente' };
+const segmentLabels: Record<string, string> = { HIGH_VALUE: 'Alto valor', TOP_HIGH_VALUE: 'Alto valor', POTENTIAL: 'Potencial', NEW: 'Nuevo', AT_RISK: 'En riesgo', INACTIVE: 'Inactivo', ACTIVE: 'Activo', LOYAL: 'Fiel', CHAMPION: 'Cliente frecuente', PROMISING: 'Prometedor', NEEDS_ATTENTION: 'Requiere atención', HIBERNATING: 'Inactivo reciente' };
 const chartColors = ['#2563eb', '#0f766e', '#7c3aed', '#d97706', '#db2777', '#0891b2', '#65a30d'];
 
 function errorLabel(error: unknown): string {

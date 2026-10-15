@@ -238,16 +238,18 @@ describe('extended business intelligence smoke panels', () => {
   it('loads supplier detail by the selected stable reference and preserves null availability', async () => {
     const row = { supplierId: 'SUP-05', name: 'Proveedor cinco', orders: 3, spend: null, pending: 1, received: 2, leadTime: null, punctuality: null, leadTimeAvailability: 'INSUFFICIENT_HISTORY', dependency: {}, products: [], status: 'PARTIAL' };
     vi.spyOn(apiClient, 'getSuppliersAnalytics').mockResolvedValue(envelope({ ...meta, freshness: { mode: 'LIVE', updatedAt: null, dataThrough: null }, dataVersion: 1, snapshotHash: 'h', source: 'LIVE', engineVersion: 'v3', period: { startDate: '2026-10-14', endDate: '2026-10-14' }, summary: { totalSuppliers: 1, totalSpend: null, pendingOrders: 1, receivedOrders: 2, dependency: null, averageLeadTime: { days: null, sampleSize: null, status: 'NOT_EXPOSED_BY_ENGINE' } }, items: [row], total: 1, limit: 20, offset: 0 } as never));
-    const detail = vi.spyOn(apiClient, 'getSupplierAnalytics').mockResolvedValue(envelope({ ...meta, freshness: { mode: 'LIVE', updatedAt: null, dataThrough: null }, dataVersion: 1, snapshotHash: 'h', source: 'LIVE', engineVersion: 'v3', status: 'PARTIAL', item: { ...row, costTrends: null, historyAvailability: 'INSUFFICIENT_HISTORY' }, historyAvailability: 'INSUFFICIENT_HISTORY' } as never));
+    const detail = vi.spyOn(apiClient, 'getSupplierAnalytics').mockResolvedValue(envelope({ ...meta, freshness: { mode: 'LIVE', updatedAt: null, dataThrough: null }, dataVersion: 1, snapshotHash: 'h', source: 'LIVE', engineVersion: 'v3', status: 'PARTIAL', item: { ...row, costTrends: null, historyAvailability: 'NOT_EXPOSED_BY_ENGINE' }, historyAvailability: 'NOT_EXPOSED_BY_ENGINE' } as never));
     render(<ExtendedAnalyticsPanel tab="suppliers" inventory={inventory} />);
     fireEvent.click(await screen.findByRole('button', { name: /Proveedor cinco/ }));
     expect(await screen.findByText('Productos suministrados')).toBeTruthy();
     expect(screen.getAllByText('No disponible').length).toBeGreaterThan(0);
+    expect(screen.getByText('Historial: No disponible')).toBeTruthy();
+    expect(screen.queryByText(/not exposed by engine/i)).toBeNull();
     expect(detail).toHaveBeenCalledWith('SUP-05');
   });
 
   it('renders health freshness by domain without creating a composite score', async () => {
-    const domains = Object.fromEntries(['sales', 'margin', 'customers', 'inventory', 'suppliers', 'forecast', 'marketBasket'].map(name => [name, { status: name === 'marketBasket' ? 'FROZEN' : 'READY', freshness: { mode: name === 'marketBasket' ? 'FROZEN' : 'LIVE', cutoff: name === 'marketBasket' ? '2026-10-12' : undefined }, metrics: name === 'sales' ? { grossMarginCents: 12345, CUSTOMER_AT_RISK_COUNT: 3, forecastSource: 'MOVING_AVERAGE_28' } : {}, insights: [] }]));
+    const domains = Object.fromEntries(['sales', 'margin', 'customers', 'inventory', 'suppliers', 'forecast', 'marketBasket'].map(name => [name, { status: name === 'marketBasket' ? 'historical' : 'READY', freshness: { mode: name === 'marketBasket' ? 'FROZEN' : 'LIVE', cutoff: name === 'marketBasket' ? '2026-10-12' : undefined }, metrics: name === 'sales' ? { grossMarginCents: 12345, CUSTOMER_AT_RISK_COUNT: 3, forecastSource: 'MOVING_AVERAGE_28' } : {}, insights: [] }]));
     vi.spyOn(apiClient, 'getBusinessHealth').mockResolvedValue(envelope({ ...meta, freshness: { mode: 'LIVE', updatedAt: null, dataThrough: null }, dataVersion: 0, snapshotHash: 'h', source: 'LIVE', engineVersion: 'v3', status: 'PARTIAL', period: { startDate: '2026-10-14', endDate: '2026-10-14' }, domains, insights: [] } as never));
     render(<ExtendedAnalyticsPanel tab="health" inventory={inventory} />);
     expect(await screen.findByText(/No se calcula una puntuación global/)).toBeTruthy();
@@ -256,6 +258,8 @@ describe('extended business intelligence smoke panels', () => {
     expect(screen.getByText('Margen bruto')).toBeTruthy();
     expect(screen.getByText('Clientes en riesgo')).toBeTruthy();
     expect(screen.getByText('Media móvil de 28 días')).toBeTruthy();
+    expect(screen.getByText('Histórico')).toBeTruthy();
+    expect(screen.queryByText('historical')).toBeNull();
     expect(screen.queryByText('grossMarginCents')).toBeNull();
     expect(screen.queryByText('CUSTOMER_AT_RISK_COUNT')).toBeNull();
     expect(screen.queryByText(/score: \d/i)).toBeNull();
@@ -283,12 +287,13 @@ describe('extended business intelligence smoke panels', () => {
   });
 
   it('renders RFM columns and uses human names with secondary SKU for frozen basket rules', async () => {
-    const customer = { customerId: 'CUS-1', displayName: 'María Pérez', segment: 'HIGH_VALUE', recency: 2, frequency: 5, monetary: { value: 120, currency: 'PEN' }, spend: { value: 150, currency: 'PEN' }, lifetimeTicketCount: 8, rfm90d: {}, averageTicket: { value: 24, currency: 'PEN' }, lastPurchaseDate: '2026-10-13', firstPurchaseDate: null, reasonCodes: [], preferences: null, trends: null, windows: null, freshness: null };
-    vi.spyOn(apiClient, 'getCustomersAnalytics').mockResolvedValue(envelope({ ...meta, freshness: { mode: 'LIVE', updatedAt: null, dataThrough: null }, dataVersion: 0, snapshotHash: 'h', source: 'LIVE', engineVersion: 'v3', summary: { totalRegistered: 1, active: 1, new: 0, inactive: 0, atRisk: 0, highValue: 1, potential: 0, segments: { HIGH_VALUE: 1 }, consumerFinalIncludedInIndividualRfm: false }, items: [customer], total: 1, limit: 20, offset: 0 } as never));
+    const customer = { customerId: 'CUS-1', displayName: 'María Pérez', segment: 'TOP_HIGH_VALUE', recency: 2, frequency: 5, monetary: { value: 120, currency: 'PEN' }, spend: { value: 150, currency: 'PEN' }, lifetimeTicketCount: 8, rfm90d: {}, averageTicket: { value: 24, currency: 'PEN' }, lastPurchaseDate: '2026-10-13', firstPurchaseDate: null, reasonCodes: [], preferences: null, trends: null, windows: null, freshness: null };
+    vi.spyOn(apiClient, 'getCustomersAnalytics').mockResolvedValue(envelope({ ...meta, freshness: { mode: 'LIVE', updatedAt: null, dataThrough: null }, dataVersion: 0, snapshotHash: 'h', source: 'LIVE', engineVersion: 'v3', summary: { totalRegistered: 1, active: 1, new: 0, inactive: 0, atRisk: 0, highValue: 1, potential: 0, segments: { TOP_HIGH_VALUE: 1 }, consumerFinalIncludedInIndividualRfm: false }, items: [customer], total: 1, limit: 20, offset: 0 } as never));
     vi.spyOn(apiClient, 'getAssociations').mockResolvedValue(envelope({ ...meta, mode: 'FROZEN', freshness: { mode: 'FROZEN', cutoff: '2026-10-12' }, dataVersion: null, snapshotHash: null, source: 'M6.7', engineVersion: null, cutoff: '2026-10-12', summary: {}, available: true, items: [{ antecedent: ['A'], antecedentProducts: [{ name: 'Pan Francés', sku: 'PAN-FRE-001' }], consequent: ['B'], consequentProducts: [{ name: 'Leche Gloria', sku: 'LEC-GLO-001' }], support: 0.02, confidence: 0.2, lift: 1.59, ticketCount: 207, stability: 'STABLE', status: 'READY' }], total: 1, limit: 10, offset: 0 } as never));
     vi.spyOn(apiClient, 'getRelatedProducts').mockResolvedValue(envelope({ ...meta, mode: 'FROZEN', freshness: { mode: 'FROZEN', cutoff: '2026-10-12' }, dataVersion: null, snapshotHash: null, source: 'M6.7', engineVersion: null, cutoff: '2026-10-12', sourceProduct: { sku: 'PAN-FRE-001', name: 'Pan Francés', presentation: null }, available: true, items: [{ relatedProduct: { sku: 'LEC-GLO-001', name: 'Leche Gloria' }, support: 0.02, confidence: 0.2, lift: 1.59, ticketCount: 207, stability: 'STABLE', classification: 'CROSS_SELL' }], total: 1 } as never));
     const { rerender } = render(<ExtendedAnalyticsPanel tab="customers" inventory={inventory} />);
     expect((await screen.findAllByText('Alto valor')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('TOP_HIGH_VALUE')).toBeNull();
     expect(screen.getAllByText('Valor monetario').length).toBeGreaterThan(0);
     rerender(<ExtendedAnalyticsPanel tab="related" inventory={inventory} />);
     fireEvent.change(screen.getByRole('combobox', { name: 'Producto relacionado' }), { target: { value: 'PAN-FRE-001' } });
