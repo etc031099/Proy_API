@@ -7,6 +7,7 @@ const normalizeConversationalInput = message => message
   .replace(/\bse ta\b/gi, 'se esta')
   .replace(/\bproveedor ta\b/gi, 'proveedor esta')
   .replace(/\bcomo tan\b/gi, 'como estan')
+  .replace(/\bcuanto ha gastado\b/gi, 'cuanto gasto')
   .replace(/\bproductos? repongo\b/gi, 'productos deberia reponer')
   .replace(/^que compro esta semana[?!.]*$/i, 'que productos deberia reponer esta semana')
   .replace(/\s+(?:ps|pls|porfa)[?!.]*$/i, '');

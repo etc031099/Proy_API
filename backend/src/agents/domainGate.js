@@ -9,6 +9,7 @@ const isUnsafeControlRequest = message => /(?:ignora|olvida|omite).{0,45}(?:inst
 const isOutOfDomain = message => {
   const text = normalize(message);
   if (isUnsafeControlRequest(message)) return true;
+  if (/^(?:clima|bitcoin|peliculas|musica|cuentame algo)$/.test(text)) return true;
   if (/^(?:hola[ ,]*)?(?:como estas|que tal|buenos dias|buenas tardes|buenas noches|hola)$/.test(text)) return true;
   if (/\b(?:ventas?|inventario|stock|clientes?|proveedores?|catalogo|productos?|negocio|empresa)\b/.test(text)) return false;
   if (/^(?:de (?:q|que) equipo eres hincha|(?:cual es )?tu equipo favorito|cual es tu equipo favorito|cual es tu comida favorita|cuentame un (?:chiste|cuento)|resultado del partido|clima de hoy|quien es el presidente|receta de pollo|dame una pelicula|que musica escuchas)$/.test(text)

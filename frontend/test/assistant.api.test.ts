@@ -14,6 +14,17 @@ const instance = (apiClient as unknown as { instance: {
   get: (url: string, config?: unknown) => Promise<unknown>;
   delete: (url: string) => Promise<unknown>;
 } }).instance;
+it('J4 preserves separate semantic and grounded telemetry without changing authenticated transport', async () => {
+  const stage = { provider: 'deepseek', model: 'deepseek-flash', calls: 1, inputTokens: 300, outputTokens: 50,
+    totalTokens: 350, latencyMs: 10, finishReason: 'stop', accepted: true, fallbackReason: null, estimatedCostUsd: null };
+  const data = { answer: 'Ranking verificado', routingMode: 'semantic_fallback', semanticClassification: stage, groundedAnswer: stage };
+  const post = vi.spyOn(instance, 'post').mockResolvedValue({ data: { success: true, data } });
+  const get = vi.spyOn(instance, 'get').mockResolvedValue({ data: { success: true, data: { messages: [{ response: data }] } } });
+  try {
+    expect((await apiClient.sendAgentMessage({ message: 'qué se mueve más' })).data).toEqual(data);
+    expect((await apiClient.getAgentConversation('conversation')).data?.messages[0].response).toEqual(data);
+  } finally { post.mockRestore(); get.mockRestore(); }
+});
 it.each(['AGENT_PROVIDER_FAILED', 'AGENT_SKILL_FAILED', 'AGENT_INVALID_REQUEST', 'AGENT_INTERNAL_ERROR'])('J3 preserves only a safe error code: %s', async code => {
   vi.spyOn(instance, 'post').mockRejectedValue({ isAxiosError: true, response: { status: 503, data: { code, message: 'PRIVATE_PROVIDER' } } });
   await expect(apiClient.sendAgentMessage({ message: 'consulta' })).rejects.toMatchObject({ code });

@@ -222,6 +222,7 @@ const machineLearningPlan = (text, message, binding, memory) => {
 };
 
 const routeV3 = (message, state, binding) => {
+  message = require('./languageNlu').highPrecisionMessage(message);
   const { isOutOfDomain, OUT_OF_DOMAIN_ANSWER } = require('./domainGate');
   if (isOutOfDomain(message)) return { clarificationQuestion: OUT_OF_DOMAIN_ANSWER };
   const text = clean(message), memory = state || {};
@@ -907,7 +908,7 @@ const renderV3 = (skillId, result, args, responseMode = null) => {
   return `${heading}${forecastDates}\n${lines.join('\n')}`;
 };
 
-const handleV3 = async ({ message, state, context, service, run, commit }) => {
+const handleV3 = async ({ message, state, context, service, run, commit, execution, deterministicProbe }) => {
   let binding;
   try { binding = await service.resolveContext(context); } catch { return { answer: 'El módulo analítico no está disponible en este momento.', intent: 'v3_unavailable', agent: 'coordinator' }; }
   if (!binding) return null;
@@ -922,6 +923,20 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
   }
   if (memory.pending && /^(?:si(?: ese)?|ok|vale|dale|correcto)$/.test(clean(message))) return { answer: 'Elige una entidad por nombre, código o número. Esta selección no confirma una operación.', clarification: true, intent: 'v3_selection', agent: 'coordinator' };
   let plan = routeV3(message, memory, binding);
+  const language = require('./languageNlu');
+  if (/^pan[?!.]*$/i.test(message.trim()) && !memory.pending && !memory.selectedProduct)
+    plan = { clarificationQuestion: '¿Quieres consultar stock, pronóstico, productos relacionados o preparar una venta de pan?' };
+  if (execution?.hasSemanticProvider() && language.fallbackDecision(message, plan, memory)) {
+    const legacy = deterministicProbe?.();
+    if (legacy && !['search_product', 'ambiguous_query', 'unsupported'].includes(legacy.intent)) return null;
+    plan = await language.semanticPlan({ message, memory, binding, execution });
+    memory.pending = null; memory.ranking = null;
+    if (saved) commit({ v3Context: { ...memory } });
+    if (plan.semanticAction) return { answer: 'La venta necesita selección y preview antes de confirmar.',
+      intent: 'semantic_sale_proposal', agent: 'coordinator', clarification: true, semanticAction: plan.semanticAction };
+    if (plan.outOfDomain) return { answer: require('./domainGate').OUT_OF_DOMAIN_ANSWER, intent: 'out_of_domain', agent: 'coordinator' };
+    if (plan.groundedQuestion) return require('./grounded').handleGrounded({ message: plan.groundedQuestion, context, service, run, execution });
+  }
   let responseMode = plan?.responseMode || null;
   let productResolution;
   const rawChoice = message.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();

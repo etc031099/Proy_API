@@ -61,6 +61,9 @@ export interface AgentEvidence {
   recordCount?: number;
 }
 export interface AgentResponse {
+  routingMode?: 'deterministic' | 'semantic_fallback';
+  semanticClassification?: ProviderStageUsage;
+  groundedAnswer?: ProviderStageUsage;
   grounded?: { route: string; responseDiagnostic?: {
     validationResult: 'ACCEPTED' | 'REJECTED'; validationReason: string; validationField?: string;
     validationLayer?: 'SCHEMA' | 'GROUNDING'; schemaReason?: string; schemaField?: string;
@@ -90,6 +93,12 @@ export interface AgentResponse {
   requiresClarification: boolean;
   clarificationQuestion: string | null;
   latencyMs: number;
+}
+export interface ProviderStageUsage {
+  provider: string; model: string; calls: number;
+  inputTokens: number | null; outputTokens: number | null; totalTokens: number | null;
+  latencyMs: number; finishReason: string | null; accepted: boolean; fallbackReason: string | null;
+  estimatedCostUsd: number | null; estimatedCostRangeUsd?: { min: number; max: number };
 }
 export type V3DisplayKind = 'business' | 'inventory' | 'forecast' | 'cross_sell' | 'customer' | 'supplier' | 'health';
 export type V3EntityKind = 'product' | 'customer' | 'supplier' | 'category';

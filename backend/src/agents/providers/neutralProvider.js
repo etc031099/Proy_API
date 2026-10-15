@@ -36,15 +36,16 @@ const estimateCostUsd = ({ provider, model, usage, prices = [], at = new Date().
 };
 
 // Closed provider-neutral boundary: no tools or caller-supplied credentials.
-const createNeutralProvider = ({ provider, model, generate, prices = [], timeoutMs = 15000, clock = () => new Date() }) => {
+const createNeutralProvider = ({ provider, model, generate, prices = [], timeoutMs = 15000, semanticTimeoutMs = timeoutMs, clock = () => new Date() }) => {
   if (!validId(provider) || provider === 'none' || !validId(model) || typeof generate !== 'function'
-    || !Array.isArray(prices) || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 20000) throw unavailable();
+    || !Array.isArray(prices) || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 20000
+    || !Number.isSafeInteger(semanticTimeoutMs) || semanticTimeoutMs < 1 || semanticTimeoutMs > 20000) throw unavailable();
   const priceConfig = structuredClone(prices);
   return Object.freeze({ provider, model, async generate(request) {
     if (!isPlainObject(request) || Object.keys(request).some(key => !['route', 'messages', 'maxTokens', 'temperature'].includes(key))
-      || request.route !== undefined && request.route !== 'GROUNDED_LLM'
+      || request.route !== undefined && !['GROUNDED_LLM', 'SEMANTIC_NLU'].includes(request.route)
       || !Array.isArray(request.messages) || request.messages.length < 1 || request.messages.length > 8
-      || ![300, 600].includes(request.maxTokens) || !Number.isFinite(request.temperature) || request.temperature < 0 || request.temperature > 1
+      || !(request.route === 'SEMANTIC_NLU' ? request.maxTokens === 300 : [300, 600].includes(request.maxTokens)) || !Number.isFinite(request.temperature) || request.temperature < 0 || request.temperature > 1
       || request.messages.some(message => !isPlainObject(message) || Object.keys(message).some(key => !['role', 'content'].includes(key))
         || !['system', 'user'].includes(message.role) || typeof message.content !== 'string')
       || Buffer.byteLength(JSON.stringify(request.messages), 'utf8') > MAX_PROVIDER_MESSAGE_BYTES) throw unavailable();
@@ -52,7 +53,8 @@ const createNeutralProvider = ({ provider, model, generate, prices = [], timeout
     let timer;
     try {
       const result = await Promise.race([Promise.resolve().then(() => generate({ ...request, signal: controller.signal })),
-        new Promise((resolve, reject) => { timer = setTimeout(() => { controller.abort(); reject(unavailable()); }, timeoutMs); })]);
+        new Promise((resolve, reject) => { timer = setTimeout(() => { controller.abort(); reject(unavailable()); },
+          request.route === 'SEMANTIC_NLU' ? semanticTimeoutMs : timeoutMs); })]);
       if (!isPlainObject(result) || typeof result.text !== 'string' || !result.text.trim() || result.text.length > 6000
         || result.provider !== undefined && result.provider !== provider || result.model !== undefined && result.model !== model) throw unavailable();
       const source = result.usage || {}, usage = Object.fromEntries(['inputTokens', 'outputTokens', 'totalTokens', 'cachedInputTokens', 'cacheMissInputTokens', 'reasoningTokens']

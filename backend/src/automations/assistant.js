@@ -42,7 +42,7 @@ const pendingQuestionAnswer = (pending, type) => {
 const withActionAssistant = (runtime, service, options = {}) => {
   const drafts = new Map(), locks = new Map(), now = options.clock || Date.now;
   const keyFor = (req, id) => JSON.stringify([String(req.user?._id), req.businessId, id]);
-  async function handle(req, input) {
+  async function handle(req, input, allowProviderExtraction = true) {
     let v3State;
     if (req.businessId === require('../services/v3IntelligenceService').V3.businessId && input.conversationId) {
       const snapshot = await runtime.getContextSnapshot?.(req, input.conversationId);
@@ -231,7 +231,7 @@ const withActionAssistant = (runtime, service, options = {}) => {
       const unclear = skillId !== 'create_stock_alert_rule' && !previous && !extracted.direct && (skillId === 'create_product' ? !Object.keys(extracted.product || {}).length
         : !extracted.items?.length || /\b(?:tres|dos|cinco)\s+botellas/.test(normalized));
       if (unclear) {
-        if (require('../agents/providers/selection').selectedProvider() !== 'gemini')
+        if (!allowProviderExtraction || require('../agents/providers/selection').selectedProvider() !== 'gemini')
           return response('Indica el producto y la cantidad para preparar un preview; no se ejecutó ninguna operación.', undefined, true);
         execution = createAgentExecution({ context: context.agentContext, ...(options.onEvent ? { onEvent: options.onEvent } : {}), ...(options.provider ? { provider: options.provider } : {}) });
         try {
@@ -295,6 +295,7 @@ const withActionAssistant = (runtime, service, options = {}) => {
       const participant = { agentId: 'operations', model: null, llmCalls: 0, skillCalls: 0, ...zeroUsage(), usageAvailable: true, latencyMs, providerLatencyMs: 0 };
       if (realUsage) Object.assign(participant, realUsage.agents.find(agent => agent.agentId === 'operations'));
       return { requestId: context.requestId, conversationId, answer: text, intent: 'action', agent: 'operations', participants: [participant], actions: [], evidence: [],
+        ...(!realUsage ? { routingMode: 'deterministic' } : {}),
         usage: { provider: 'none', model: null, llmCalls: 0, inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0, providerLatencyMs: 0,
           totalLlmCalls: 0, totalSkillCalls: 0, totalInputTokens: 0, totalOutputTokens: 0, totalThoughtTokens: 0,
           totalCachedInputTokens: 0, totalToolUseTokens: 0, totalTokens: 0, metricsComplete: true, totalProviderLatencyMs: 0,
@@ -321,7 +322,25 @@ const withActionAssistant = (runtime, service, options = {}) => {
         if (require('../agents/domainGate').isUnsafeControlRequest(input.message)) return runtime.handle(req, input);
       }
       const key = keyFor(req, input.conversationId), preceding = locks.get(key) || Promise.resolve();
-      const work = preceding.catch(() => {}).then(() => handle(req, input)); locks.set(key, work);
+      const work = preceding.catch(() => {}).then(async () => {
+        const first = await handle(req, input), proposal = first.semanticAction;
+        if (!proposal) return first;
+        // Internal validated extraction only. Never translate model confirmation
+        // into actionDecision; the normal backend draft/resolver owns the preview.
+        const { validateNlu, nluPlan } = require('../agents/languageNlu');
+        const checked = validateNlu(JSON.stringify({ intent: 'CREATE_SALE', productQuery: proposal.productQuery,
+          quantity: proposal.quantity, metric: null, period: null, horizonDays: null,
+          needsClarification: false, clarificationReason: null }), input.message);
+        const authorizedProposal = nluPlan(checked, input.message, {}, {}).semanticAction;
+        if (!authorizedProposal) return first;
+        const next = await handle(req, { ...input, conversationId: first.conversationId,
+          message: `vende ${authorizedProposal.quantity} de ${authorizedProposal.productQuery}` }, false);
+        return { ...next, requestId: first.requestId, routingMode: first.routingMode,
+          semanticClassification: first.semanticClassification,
+          participants: [...first.participants, ...next.participants.filter(row => !first.participants.some(p => p.agentId === row.agentId))],
+          actions: [...first.actions, ...next.actions], evidence: [...first.evidence, ...next.evidence],
+          usage: { ...first.usage, totalLatencyMs: first.latencyMs + next.latencyMs }, latencyMs: first.latencyMs + next.latencyMs };
+      }); locks.set(key, work);
       try { return await work; } finally { if (locks.get(key) === work) locks.delete(key); }
     }
   };

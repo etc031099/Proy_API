@@ -12,6 +12,7 @@ const C = 'get_customer_intelligence', S = 'get_supplier_intelligence', M = 'get
 const classifyGrounded = message => {
   const text = normalize(message);
   if (isOutOfDomain(message)) return { route: 'OUT_OF_DOMAIN' };
+  if (/^como van mis ventas$/.test(text)) return { route: 'DETERMINISTIC' };
   if (/^(?:saca|retira|mete|mueve|baja)\b/.test(text)) return { route: 'AMBIGUOUS_WRITE' };
   if (/^(?:vende|vender|compra|comprar|prepara|crea|crear|ajusta|confirma|confirmo|confirmar|cancela|cancelar|hazlo|procede)\b/.test(text)) return { route: 'DETERMINISTIC' };
   const result = (responseIntent, skills, extra = {}) => ({ route: 'GROUNDED_LLM', responseIntent,

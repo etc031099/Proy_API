@@ -67,6 +67,9 @@ const createAgentExecution = options => {
   if (neutralProvider && (typeof neutralProvider.generate !== 'function' || !/^[\w.-]{1,100}$/.test(neutralProvider.provider || '')
     || !/^[\w.-]{1,100}$/.test(neutralProvider.model || ''))) throw new AgentError('AGENT_INVALID_REQUEST');
   let groundedCalled = false;
+  let semanticCalled = false;
+  let semanticDiagnostic = null;
+  let groundedDiagnostic = null;
   const executors = createSkillExecutors(options.dependencies);
   const budget = createExecutionBudget();
   const participants = new Set();
@@ -134,16 +137,34 @@ const createAgentExecution = options => {
     async generateStructured(input) { return runLlmCall('generateStructured', input); },
     async generateWithTools(input) { return runLlmCall('generateWithTools', input); },
     hasGroundedProvider: () => Boolean(neutralProvider),
-    async generateGrounded(input) {
-      if (closed || !neutralProvider || groundedCalled) throw new AgentError('AGENT_INVALID_REQUEST');
-      budget.consume('llmCalls'); groundedCalled = true;
+    hasSemanticProvider: () => neutralProvider?.provider === 'deepseek',
+    languageRouting: () => ({ routingMode: semanticCalled ? 'semantic_fallback' : 'deterministic',
+      ...(semanticDiagnostic ? { semanticClassification: semanticDiagnostic } : {}),
+      ...(groundedDiagnostic ? { groundedAnswer: groundedDiagnostic } : {}) }),
+    recordSemanticOutcome(accepted, reason) {
+      if (semanticDiagnostic) semanticDiagnostic = { ...semanticDiagnostic, accepted, fallbackReason: reason };
+    },
+    async generateSemantic(input) { return this.generateGrounded(input, 'SEMANTIC_NLU'); },
+    async generateGrounded(input, route = 'GROUNDED_LLM') {
+      const semantic = route === 'SEMANTIC_NLU';
+      if (!['GROUNDED_LLM', 'SEMANTIC_NLU'].includes(route) || closed || !neutralProvider || (semantic ? semanticCalled : groundedCalled)) throw new AgentError('AGENT_INVALID_REQUEST');
+      budget.consume('llmCalls');
+      if (semantic) semanticCalled = true; else groundedCalled = true;
       participants.add('analyst');
       const agentRunId = randomUUID(), start = performance.now();
       emit('agent_started', { agentId: 'analyst', agentRunId, status: 'STARTED' });
       emit('llm_started', { agentId: 'analyst', agentRunId, status: 'STARTED' });
       active++;
       try {
-        const result = await neutralProvider.generate({ ...input, route: 'GROUNDED_LLM' });
+        const result = await neutralProvider.generate({ ...input, route });
+        if (semantic) semanticDiagnostic = { provider: neutralProvider.provider, model: neutralProvider.model,
+          calls: 1, ...result.usage, latencyMs: result.latencyMs,
+          finishReason: result.responseDiagnostic?.finishReason || null, estimatedCostUsd: result.estimatedCostUsd ?? null,
+          ...(result.estimatedCostRangeUsd ? { estimatedCostRangeUsd: result.estimatedCostRangeUsd } : {}), accepted: false, fallbackReason: null };
+        else groundedDiagnostic = { provider: neutralProvider.provider, model: neutralProvider.model, calls: 1,
+          ...result.usage, latencyMs: result.latencyMs, finishReason: result.responseDiagnostic?.finishReason || null,
+          estimatedCostUsd: result.estimatedCostUsd ?? null,
+          ...(result.estimatedCostRangeUsd ? { estimatedCostRangeUsd: result.estimatedCostRangeUsd } : {}), accepted: false, fallbackReason: null };
         llmRecords.push({ agentId: 'analyst', provider: result.provider, model: result.model, latencyMs: result.latencyMs,
           estimatedCostUsd: result.estimatedCostUsd, pricingVersion: result.pricingVersion,
           estimatedCostRangeUsd: result.estimatedCostRangeUsd,
@@ -154,6 +175,16 @@ const createAgentExecution = options => {
         return { ...result, responseDiagnostic: { ...result.responseDiagnostic, provider: neutralProvider.provider, model: neutralProvider.model } };
       } catch (error) {
         failed = true;
+        if (semantic) semanticDiagnostic = { provider: neutralProvider.provider, model: neutralProvider.model,
+          calls: 1, inputTokens: error?.usage?.inputTokens ?? null, outputTokens: error?.usage?.outputTokens ?? null,
+          totalTokens: error?.usage?.totalTokens ?? null, latencyMs: performance.now() - start,
+          finishReason: error?.responseDiagnostic?.finishReason || null, estimatedCostUsd: error?.estimatedCostUsd ?? null,
+          accepted: false, fallbackReason: error?.failureKind || 'INVALID_RESPONSE' };
+        else groundedDiagnostic = { provider: neutralProvider.provider, model: neutralProvider.model, calls: 1,
+          inputTokens: error?.usage?.inputTokens ?? null, outputTokens: error?.usage?.outputTokens ?? null,
+          totalTokens: error?.usage?.totalTokens ?? null, latencyMs: performance.now() - start,
+          finishReason: error?.responseDiagnostic?.finishReason || null, estimatedCostUsd: error?.estimatedCostUsd ?? null,
+          accepted: false, fallbackReason: error?.failureKind || 'INVALID_RESPONSE' };
         llmRecords.push({ agentId: 'analyst', provider: neutralProvider.provider, model: neutralProvider.model,
           latencyMs: performance.now() - start,
           usageAvailable: ['inputTokens', 'outputTokens', 'totalTokens', 'cachedInputTokens', 'cacheMissInputTokens', 'reasoningTokens'].some(key => Number.isSafeInteger(error?.usage?.[key])),
@@ -167,6 +198,7 @@ const createAgentExecution = options => {
       } finally { active--; }
     },
     recordGroundedSynthesis(accepted) {
+      if (groundedDiagnostic) groundedDiagnostic = { ...groundedDiagnostic, accepted, fallbackReason: accepted ? null : 'GROUNDING_REJECTED' };
       if (!accepted) failed = true;
       emit('synthesis_finished', { agentId: 'analyst', agentRunId: randomUUID(), status: accepted ? 'ACCEPTED' : 'REJECTED',
         synthesisDiagnostic: accepted ? 'NONE' : 'INVALID_OUTPUT' });

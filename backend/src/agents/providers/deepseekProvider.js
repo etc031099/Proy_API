@@ -21,7 +21,9 @@ const readDeepSeekConfig = (env = process.env) => {
     || !Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 1 || maxOutputTokens > MAX_OUTPUT_TOKENS
     || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 20000)
     throw failure('DEEPSEEK_CONFIGURATION_INVALID');
-  return Object.freeze({ model, endpoint: `${base.href.replace(/\/$/, '')}/chat/completions`, maxOutputTokens, timeoutMs });
+  const nluTimeoutMs = Number(env.DEEPSEEK_NLU_TIMEOUT_MS || 8000);
+  if (!Number.isSafeInteger(nluTimeoutMs) || nluTimeoutMs < 1 || nluTimeoutMs > 20000) throw failure('DEEPSEEK_CONFIGURATION_INVALID');
+  return Object.freeze({ model, endpoint: `${base.href.replace(/\/$/, '')}/chat/completions`, maxOutputTokens, timeoutMs, nluTimeoutMs });
 };
 
 const normalizeDeepSeekUsage = source => {
@@ -55,8 +57,8 @@ const createDeepSeekProvider = ({ env = process.env, fetchImpl = globalThis.fetc
   const config = readDeepSeekConfig(env), apiKey = env.DEEPSEEK_API_KEY;
   // Key is held only by this closure; it is never part of config, errors or telemetry.
   return createNeutralProvider({ provider: 'deepseek', model: config.model, prices: DEEPSEEK_PRICES,
-    timeoutMs: config.timeoutMs, ...(clock ? { clock } : {}), generate: async request => {
-      if (request.route !== 'GROUNDED_LLM' || typeof apiKey !== 'string' || !apiKey.trim()
+    timeoutMs: config.timeoutMs, semanticTimeoutMs: config.nluTimeoutMs, ...(clock ? { clock } : {}), generate: async request => {
+      if (!['GROUNDED_LLM', 'SEMANTIC_NLU'].includes(request.route) || typeof apiKey !== 'string' || !apiKey.trim()
         || /[\r\n]/.test(apiKey) || typeof fetchImpl !== 'function') throw failure('DEEPSEEK_CONFIGURATION_INVALID');
       const body = { model: config.model, messages: request.messages, stream: false,
         max_tokens: Math.min(request.maxTokens, config.maxOutputTokens), reasoning_effort: 'none',

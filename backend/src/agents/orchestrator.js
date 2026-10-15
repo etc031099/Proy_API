@@ -206,7 +206,8 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, neutralProv
           ? { intent: 'out_of_domain', agent: 'coordinator', answer: OUT_OF_DOMAIN_ANSWER }
           : !securityPlan && v3Service ? await execution.runAgent('coordinator', async () =>
             await require('./grounded').handleGrounded({ message, context, service: v3Service, run, execution })
-            || require('./v3Routing').handleV3({ message, state, context, service: v3Service, run, commit })) : null;
+            || require('./v3Routing').handleV3({ message, state, context, service: v3Service, run, commit, execution,
+              deterministicProbe: () => routeDeterministically(message, state, clock(), conversationId, contextBinding(context), context.businessId) })) : null;
         if (v3Response) {
           if ((v3Response.grounded || v3Response.intent === 'out_of_domain') && state.v3Context) {
             commit({ v3Context: { ...state.v3Context, pending: null, ranking: null } });
@@ -822,6 +823,8 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, neutralProv
         pageSize: 5, totalMatches: candidateSnapshot.totalMatches ?? candidateSnapshot.candidates.length }
         : plan.contextProvenance;
       return deepFreeze({ requestId: context.requestId, conversationId, answer, intent: plan.intent, agent: plan.agent,
+        ...execution.languageRouting(),
+        ...(v3Response?.semanticAction ? { semanticAction: v3Response.semanticAction } : {}),
         ...(synthesisStatus ? { synthesisStatus } : {}),
         ...(synthesisDiagnostic ? { synthesisDiagnostic } : {}),
         ...(suggested ? { suggestions: suggested.result.metadata.suggestions,
