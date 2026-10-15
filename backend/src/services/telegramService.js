@@ -95,21 +95,16 @@ const notifyLowStock = async (businessId, product, previousStock) => {
   });
   if (!connection) return;
 
-  await sendMessage(connection.chatId, [
-    '⚠️ LOW STOCK ALERT / ALERTA DE STOCK BAJO',
-    '',
-    '🇬🇧 English',
-    `Product: ${product.name}`,
-    `Current stock: ${product.stock}`,
-    `Minimum stock: ${product.minStockLevel}`,
-    'Action: Please restock this product.',
-    '',
-    '🇪🇸 Español',
-    `Producto: ${product.name}`,
-    `Stock actual: ${product.stock}`,
-    `Stock mínimo: ${product.minStockLevel}`,
-    'Acción: Reponer este producto.',
-  ].join('\n'));
+  const unit = (quantity) => quantity === 1 ? 'unidad' : 'unidades';
+  const title = product.stock === 0 ? '🚨 Producto agotado' : '⚠️ Stock bajo';
+  const details = [
+    title,
+    product.name,
+    product.sku ? `SKU: ${product.sku}` : null,
+    `Stock actual: ${product.stock} ${unit(product.stock)}`,
+    `Mínimo configurado: ${product.minStockLevel} ${unit(product.minStockLevel)}`
+  ].filter(Boolean);
+  await sendMessage(connection.chatId, details.join('\n'));
   connection.lastAlertAt = new Date();
   await connection.save();
 };
