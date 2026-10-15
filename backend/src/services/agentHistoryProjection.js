@@ -11,7 +11,8 @@ const shape = {
   grounded: { route: true, responseIntent: true, domains: [true], skills: [true], noHistoricalSkuData: true,
     failures: [{ skillId: true, kind: true, code: true, httpStatus: true }],
     responseDiagnostic: { providerResponseReceived: true, httpStatus: true, contentPresent: true, contentLength: true,
-      finishReason: true, usagePresent: true, usageParseResult: true, validationResult: true, validationReason: true },
+      provider: true, model: true, finishReason: true, usagePresent: true, usageParseResult: true,
+      validationResult: true, validationPassed: true, validationReason: true, validationField: true },
     contextMetrics: { bytes: true, chars: true, estimatedTokens: true, tokenCountIsEstimate: true } },
   v3Views: [{ kind: true, title: true, subtitle: true, metrics: [{ label: true, value: true }],
     items: [{ type: true, key: true, label: true, secondaryLabel: true, selectMessage: true, metrics: [{ label: true, value: true }] }], note: true }],
@@ -48,7 +49,12 @@ const project = (value, schema) => {
   if (Array.isArray(schema)) return Array.isArray(value) ? value.slice(0, 20).map(item => project(item, schema[0])) : [];
   return Object.fromEntries(Object.entries(schema).filter(([key]) => Object.hasOwn(value, key)).map(([key, rule]) => [key, project(value[key], rule)]));
 };
-const publicResponse = result => project(result, shape);
+const publicResponse = result => {
+  const projected = project(result, shape);
+  if (projected.grounded?.responseDiagnostic) projected.grounded.responseDiagnostic =
+    require('../agents/groundedDiagnostic').safeGroundedDiagnostic(projected.grounded.responseDiagnostic);
+  return projected;
+};
 const snapshot = state => ({
   v3Context: require('../agents/v3Routing').compactV3State(state.v3Context, Date.now()),
   lastReplenishmentPlan: compactBudgetPlan(state.lastReplenishmentPlan, Date.now()),

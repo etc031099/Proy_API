@@ -151,7 +151,7 @@ const createAgentExecution = options => {
           ...result.usage, thoughtTokens: null, toolUseTokens: null });
         emit('llm_finished', { agentId: 'analyst', agentRunId, model: result.model, durationMs: result.latencyMs, status: 'SUCCEEDED', ...result.usage });
         emit('agent_finished', { agentId: 'analyst', agentRunId, durationMs: performance.now() - start, status: 'SUCCEEDED' });
-        return result;
+        return { ...result, responseDiagnostic: { ...result.responseDiagnostic, provider: neutralProvider.provider, model: neutralProvider.model } };
       } catch (error) {
         failed = true;
         llmRecords.push({ agentId: 'analyst', provider: neutralProvider.provider, model: neutralProvider.model,
@@ -162,7 +162,8 @@ const createAgentExecution = options => {
           pricingVersion: error.pricingVersion, providerFailure: error?.failureKind || 'INVALID_RESPONSE' });
         emit('llm_finished', { agentId: 'analyst', agentRunId, model: neutralProvider.model, durationMs: performance.now() - start, status: 'FAILED' });
         emit('agent_finished', { agentId: 'analyst', agentRunId, durationMs: performance.now() - start, status: 'FAILED' });
-        throw Object.assign(new AgentError('AGENT_PROVIDER_FAILED'), { responseDiagnostic: error.responseDiagnostic });
+        throw Object.assign(new AgentError('AGENT_PROVIDER_FAILED'), { responseDiagnostic: {
+          ...error.responseDiagnostic, provider: neutralProvider.provider, model: neutralProvider.model } });
       } finally { active--; }
     },
     recordGroundedSynthesis(accepted) {

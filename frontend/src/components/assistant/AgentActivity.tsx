@@ -57,6 +57,16 @@ export function AgentActivity({ response }: { response?: AgentResponse }) {
       inputTokens: u.totalInputTokens, outputTokens: u.totalOutputTokens, thoughtTokens: u.totalThoughtTokens,
       cachedInputTokens: u.totalCachedInputTokens, toolUseTokens: u.totalToolUseTokens, totalTokens: u.totalTokens
     }} /></div><p className="mt-2 text-xs text-muted-foreground">{u.metricsComplete ? 'Métricas completas' : '— = no reportado por el proveedor'}</p></details>
+    {response.grounded?.route === 'GROUNDED_LLM' && response.grounded.responseDiagnostic?.validationResult === 'REJECTED' &&
+      <details><summary className="cursor-pointer text-sm">Diagnóstico de síntesis</summary>
+        <dl className="mt-3 space-y-1 text-sm">
+          <div><dt>Estado de síntesis</dt><dd>Rechazada</dd></div>
+          <div><dt>Motivo técnico</dt><dd>{response.grounded.responseDiagnostic.validationReason}</dd></div>
+          {response.grounded.responseDiagnostic.validationField && <div><dt>Campo</dt><dd>{response.grounded.responseDiagnostic.validationField}</dd></div>}
+          <div><dt>Finalización</dt><dd>{response.grounded.responseDiagnostic.finishReason || 'No reportada'}</dd></div>
+          <div><dt>Contenido recibido</dt><dd>{response.grounded.responseDiagnostic.contentPresent === null ? 'No reportado' : response.grounded.responseDiagnostic.contentPresent ? 'Sí' : 'No'}</dd></div>
+        </dl>
+      </details>}
     <section aria-label="Agentes participantes" className="space-y-3">
       {response.participants.map(p => <div key={p.agentId} className="rounded-lg border p-3">
         <h3 className="font-medium">{names[p.agentId]} <span className="text-xs text-muted-foreground">{p.agentId}</span></h3>

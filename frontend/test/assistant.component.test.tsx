@@ -27,6 +27,23 @@ const response: AgentResponse = {
 beforeEach(() => { send.mockReset(); localStorage.clear(); vi.mocked(apiClient.listAgentConversations).mockResolvedValue({ success: true,
   data: { items: [], pagination: { page: 1, limit: 10, total: 0, totalPages: 1 } } }); });
 function submit(text = 'stock bajo') { fireEvent.change(screen.getByLabelText('Tu consulta'), { target: { value: text } }); fireEvent.click(screen.getByRole('button', { name: 'Enviar' })); }
+it('J2G shows only safe failure diagnostics in an expandable synthesis detail', () => {
+  const { rerender } = render(<AgentActivity response={{ ...response, grounded: { route: 'GROUNDED_LLM', responseDiagnostic: {
+    validationResult: 'REJECTED', validationReason: 'UNSUPPORTED_NUMBER', validationField: 'observations[0].interpretation',
+    finishReason: 'stop', contentPresent: true } } }} />);
+  const summary = screen.getByText('Diagnóstico de síntesis');
+  fireEvent.click(summary);
+  expect(screen.getByText('Rechazada')).toBeTruthy();
+  expect(screen.getByText('UNSUPPORTED_NUMBER')).toBeTruthy();
+  expect(screen.getByText('observations[0].interpretation')).toBeTruthy();
+  expect(screen.getByText('stop')).toBeTruthy(); expect(screen.getByText('Sí')).toBeTruthy();
+  expect(summary.closest('details')?.textContent).not.toMatch(/prompt|reasoning_content|raw response/);
+  rerender(<AgentActivity response={response} />);
+  expect(screen.queryByText('Diagnóstico de síntesis')).toBeNull();
+  rerender(<AgentActivity response={{ ...response, grounded: { route: 'GROUNDED_LLM', responseDiagnostic: {
+    validationResult: 'ACCEPTED', validationReason: 'NONE', finishReason: 'stop', contentPresent: true } } }} />);
+  expect(screen.queryByText('Diagnóstico de síntesis')).toBeNull();
+});
 it('labels configured stock rules as a read-only consultation with real zero-token activity', async () => {
   send.mockResolvedValue({ success: true, data: { ...response, answer: 'Tienes 1 regla de alerta de stock configurada.',
     intent: 'stock_alert_rules', actions: [{ skillId: 'list_stock_alert_rules', agentId: 'operations', status: 'SUCCEEDED', durationMs: 20 }],

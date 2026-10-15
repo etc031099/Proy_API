@@ -61,6 +61,10 @@ export interface AgentEvidence {
   recordCount?: number;
 }
 export interface AgentResponse {
+  grounded?: { route: string; responseDiagnostic?: {
+    validationResult: 'ACCEPTED' | 'REJECTED'; validationReason: string; validationField?: string;
+    finishReason: string | null; contentPresent: boolean | null;
+  } };
   suggestions?: { label: string; message: string; detail?: string }[];
   suggestionsEntityType?: 'product' | 'supplier' | 'customer' | 'category';
   contextProvenance?:

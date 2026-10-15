@@ -90,7 +90,9 @@ const createAgentMessagesHandler = ({ enabled, orchestrator, history } = {}) => 
     const fields = ['requestId', 'conversationId', 'answer', 'intent', 'agent', 'synthesisStatus', 'synthesisDiagnostic', 'participants', 'actions', 'evidence',
       'usage', 'requiresClarification', 'clarificationQuestion', 'latencyMs', 'pendingAction', 'suggestions', 'suggestionsEntityType', 'suggestionsExpiresAt',
       'suggestionsPagination', 'contextProvenance', 'v3Views'];
-    return res.json({ success: true, data: Object.fromEntries(fields.filter(key => result[key] !== undefined).map(key => [key, result[key]])) });
+    const data = Object.fromEntries(fields.filter(key => result[key] !== undefined).map(key => [key, result[key]]));
+    if (result.grounded) data.grounded = require('../services/agentHistoryProjection').publicResponse(result).grounded;
+    return res.json({ success: true, data });
   } catch (error) {
     return fail(error.code);
   }
