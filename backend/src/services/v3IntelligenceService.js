@@ -84,9 +84,11 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
     const code = rows.find(row => normalize(row.sku || row.stableCode || '') === normalize(reference));
     const match = code ? { value: code, confidence: 'EXACT' } : rankEntities(rows, reference, offset, type === 'supplier');
     const compact = row => ({ id: String(row._id), key: row.sku || row.stableCode, label: row.name, type });
-    if (match.value) return { entity: compact(match.value) };
-    if (match.confidence === 'HIGH_CONFIDENCE' && match.candidates.length === 1) return { entity: compact(match.candidates[0]) };
-    return { candidates: (match.candidates || []).map(compact), pagination: match.pagination, query: reference, type };
+    if (match.value) return { entity: compact(match.value), ...(type === 'product' ? { resolutionStatus: 'EXACT' } : {}) };
+    if (match.confidence === 'HIGH_CONFIDENCE' && match.candidates.length === 1)
+      return { entity: compact(match.candidates[0]), ...(type === 'product' ? { resolutionStatus: 'SINGLE_MATCH' } : {}) };
+    return { candidates: (match.candidates || []).map(compact), pagination: match.pagination, query: reference, type,
+      ...(type === 'product' ? { resolutionStatus: match.resolutionStatus || (match.candidates?.length ? 'MULTIPLE_MATCHES' : 'NO_MATCH') } : {}) };
   };
   const execute = async invocation => {
     const binding = await resolveContext(invocation.context);

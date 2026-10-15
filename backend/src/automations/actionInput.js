@@ -137,7 +137,7 @@ async function resolveAction(extracted, context, resolver = resolveReference, su
     args.products.push({ productId: String(result.value._id), quantity: item.quantity }); currencies.add(result.value.currency);
   }
   args.currency = extracted.currency || (currencies.size === 1 ? [...currencies][0] : undefined);
-  if (extracted.action === 'create_purchase' && products.length === 1) extracted.selectedProductReference = {
+  if (products.length === 1 && typeof products[0].name === 'string' && typeof products[0].sku === 'string') extracted.selectedProductReference = {
     id: String(products[0]._id), sku: products[0].sku, name: products[0].name };
   if (!args.currency) return { clarification: 'Los productos tienen distintas monedas. Indica PEN, USD o EUR para la operación.' };
   let contactRef = extracted.action === 'create_purchase' ? extracted.supplierRef : extracted.customerRef;

@@ -145,6 +145,20 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, neutralProv
       lastSupplier: safe, lastEntity: entity || state.lastEntity,
       ...(entity ? { selectedProductReference: entity } : {}) }));
   },
+  async rememberProduct(req, conversationId, product) {
+    const entity = require('./memory').compactEntity(product);
+    if (!entity?.sku) return;
+    const requestContext = createAgentRequestContext(req, { conversationId });
+    return memory.withConversation(requestContext, (state, commit) => {
+      const saved = require('./v3Routing').compactV3State(state.v3Context);
+      const binding = contextBinding(requestContext);
+      commit({ selectedProductReference: entity, lastEntity: entity,
+        ...(req.businessId === require('../services/v3IntelligenceService').V3.businessId ? {
+          v3Context: { ...(saved?.binding === binding ? saved : {}), binding, expiresAt: Date.now() + require('./memory').TTL_MS,
+            selectedProduct: { type: 'product', id: entity.id, key: entity.sku, label: entity.label } }
+        } : {}) });
+    });
+  },
   async restoreContext(req, conversationId, snapshot) {
     const context = createAgentRequestContext(req, { conversationId });
     return memory.withConversation(context, (state, commit) => {
@@ -821,6 +835,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, neutralProv
           suggestionsExpiresAt: v3Response.suggestionsExpiresAt, ...(v3Response.suggestionsPagination ? { suggestionsPagination: v3Response.suggestionsPagination } : {}) } : {}),
         ...(v3Response?.v3Views ? { v3Views: v3Response.v3Views } : {}),
         ...(v3Response?.grounded ? { grounded: v3Response.grounded } : {}),
+        ...(v3Response?.productResolution ? { productResolution: v3Response.productResolution } : {}),
         participants, actions, evidence: results.map(({ result }) => ({ ...result.evidence, recordCount: result.metadata.returnedCount })),
         usage: { ...usage, toolSelectionCycles: execution.getBudget().toolSelectionCycles, totalLatencyMs: latencyMs }, requiresClarification: Boolean(question), clarificationQuestion: question,
         code, latencyMs });

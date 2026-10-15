@@ -2,6 +2,7 @@ const { Product, Contact } = require('../models');
 const { fail } = require('./contracts');
 const { normalizeSku } = require('../utils/sku');
 const { normalizeProductMatchText, numbersCompatible, exactProductComponents } = require('../utils/entityIdentity');
+const { normalizeProductReference } = require('../utils/productReference');
 const normalize = value => String(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
   .toLowerCase().replace(/\bfrnaces\b/g, 'frances').replace(/\blehes\b/g, 'leches')
   .replace(/litro y medio/g, '1.5 l').replace(/\blitros?\b/g, 'l')
@@ -20,12 +21,13 @@ const distance = (a, b) => {
 };
 // Conservative suffix handling is matching-only, never a persistent alias.
 const stem = token => token.length > 4 && token.endsWith('s') ? token.slice(0, -1) : token;
-function createRanking(ref, offset = 0, supplier = false) {
+function createRanking(ref, offset = 0, supplier = false, product = false) {
   if (!Number.isSafeInteger(offset) || offset < 0 || offset % 5 !== 0) fail('ACTION_VALIDATION_FAILED');
+  if (product) ref = normalizeProductReference(ref);
   const matchText = supplier ? require('../agents/replenishmentPlanning').normalizeSupplier : value => normalizeProductMatchText(normalize(value));
   const query = supplier ? matchText(ref).replace(/\s/g, '') : compact(ref), words = matchText(ref).split(' ').map(stem);
-  let total = 0, exactCount = 0;
-  const ranked = [], exactRows = [];
+  let total = 0, exactCount = 0, skuExactCount = 0;
+  const ranked = [], exactRows = [], skuExactRows = [];
   const compare = (a, b) => b.score - a.score || String(a.value._id).localeCompare(String(b.value._id));
   const retain = (list, item) => {
     list.push(item); list.sort(compare);
@@ -37,31 +39,40 @@ function createRanking(ref, offset = 0, supplier = false) {
       if (!numbersCompatible(normalize(ref), { ...value, name: normalize(value.name), sku: normalize(value.sku || '') }, { product: Boolean(value.sku) })) return;
       const name = supplier ? matchText(value.name).replace(/\s/g, '') : compact(value.name), sku = compact(value.sku || '');
       const literalExact = query === name || query === sku;
+      if (product && query.length < 3 && !literalExact) return;
       const exact = literalExact || !supplier && exactProductComponents(ref, value);
       const tokens = `${matchText(value.name)} ${matchText(value.sku || '')}`.split(' ').map(stem);
-      const coverage = words.filter(word => tokens.some(token => token === word || (word.length >= 4 && distance(word, token) <= 1))).length / words.length;
+      const transposed = (word, token) => word.length >= 5 && word.length === token.length
+        && [...word].some((_, index) => index + 1 < word.length
+          && word.slice(0, index) + word[index + 1] + word[index] + word.slice(index + 2) === token);
+      const coverage = words.filter(word => tokens.some(token => token === word || (word.length >= 4 && distance(word, token) <= 1)
+        || product && transposed(word, token))).length / words.length;
       const similarity = 1 - distance(query, name) / Math.max(query.length, name.length, 1);
       const score = exact ? 1 : name.includes(query) || sku.includes(query) ? 0.9 : Math.max(coverage * 0.85, similarity);
       if (score < 0.72) return;
       const item = { value, exact, literalExact, score };
       total++; retain(ranked, item);
       if (exact) { exactCount++; retain(exactRows, item); }
+      if (product && query === sku) { skuExactCount++; retain(skuExactRows, item); }
     },
     result() {
-      if (exactCount === 1) return { confidence: exactRows[0].literalExact ? 'EXACT' : 'NORMALIZED', value: exactRows[0].value };
+      if (skuExactCount === 1) return { confidence: 'EXACT', resolutionStatus: 'EXACT', value: skuExactRows[0].value };
+      if (exactCount === 1) return { confidence: exactRows[0].literalExact ? 'EXACT' : 'NORMALIZED',
+        ...(product ? { resolutionStatus: 'EXACT' } : {}), value: exactRows[0].value };
       const totalMatches = exactCount || total;
       // Clamp a page when products changed since the preceding turn.
       const currentOffset = Math.min(offset, Math.max(0, Math.ceil(totalMatches / 5) - 1) * 5);
       const candidates = (exactCount ? exactRows : ranked).slice(currentOffset, currentOffset + 5).map(item => item.value);
       // >= .72 is only a candidate; >= .85 with exactly one match is high confidence.
-      // Both fuzzy levels still require a human selection, never write authority.
-      return { confidence: totalMatches === 0 ? 'NOT_FOUND' : totalMatches === 1 && ranked[0].score >= 0.85 ? 'HIGH_CONFIDENCE' : 'AMBIGUOUS', candidates,
+      // A unique high-confidence match resolves identity only, never write authority.
+      return { ...(product ? { resolutionStatus: totalMatches === 0 ? 'NO_MATCH' : totalMatches === 1 ? 'SINGLE_MATCH' : 'MULTIPLE_MATCHES' } : {}),
+        confidence: totalMatches === 0 ? 'NOT_FOUND' : totalMatches === 1 && ranked[0].score >= 0.85 ? 'HIGH_CONFIDENCE' : 'AMBIGUOUS', candidates,
         pagination: { query: ref, offset: currentOffset, limit: 5, totalMatches, hasMore: currentOffset + 5 < totalMatches, hasPrevious: currentOffset > 0 } };
     }
   };
 }
 function rankEntities(rows, ref, offset = 0, supplier = false) {
-  const ranking = createRanking(ref, offset, supplier);
+  const ranking = createRanking(ref, offset, supplier, !supplier && rows.some(row => row.sku));
   rows.forEach(value => ranking.add(value));
   return ranking.result();
 }
@@ -83,12 +94,14 @@ async function resolveReference(model, context, ref, type, offset = 0) {
   if (/^[a-f\d]{24}$/i.test(ref)) return { confidence: 'NOT_FOUND', candidates: [], clarification: 'No encontré ese identificador en este negocio.' };
   // Fuzzy normalization requires a tenant-scoped cursor. Count matches in one
   // pass and retain only the ranked prefix needed for this page, never all docs.
-  const ranking = createRanking(ref, offset, model === Contact && type === 'vendor');
+  const ranking = createRanking(ref, offset, model === Contact && type === 'vendor', model === Product);
   const candidateFields = model === Product ? '_id sku name currency stock isActive' : fields;
   for await (const value of model.find(scope).select(candidateFields).sort({ _id: 1 }).maxTimeMS(5000).cursor()) {
     ranking.add(value.toObject ? value.toObject() : value);
   }
   const result = ranking.result();
+  if (model === Product && result.confidence === 'HIGH_CONFIDENCE' && result.pagination?.totalMatches === 1
+    && result.candidates?.length === 1) result.value = result.candidates[0];
   if (result.value && model === Product) {
     // Load supplier costs only for the single resolved product, not every match.
     const selected = await model.find({ ...scope, _id: result.value._id }).select(fields).limit(1).lean().maxTimeMS(5000);

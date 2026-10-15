@@ -247,6 +247,12 @@ const withActionAssistant = (runtime, service, options = {}) => {
           if (extracted.action !== skillId) require('./contracts').fail('ACTION_VALIDATION_FAILED');
         } finally { execution.finish(); }
       }
+      for (const item of extracted.items || []) {
+        if (!require('../utils/productReference').isContextualProductReference(item.ref)) continue;
+        if (!v3State?.selectedProduct?.key)
+          return response('¿A qué producto te refieres? Indica su nombre o código para preparar el preview.', undefined, true);
+        item.ref = v3State.selectedProduct.key;
+      }
       let draft;
       if (extracted.supplierRef && require('../agents/supplierReference').contextualSupplier(extracted.supplierRef)) {
         const state = input.conversationId ? await runtime.getContextSnapshot?.(req, input.conversationId) : null;
@@ -261,6 +267,7 @@ const withActionAssistant = (runtime, service, options = {}) => {
       }
       if (extracted.direct && (explicit || !previous)) draft.direct = extracted.direct;
       const resolved = applyResolution(draft, await resolveDraft(draft, context, options), now());
+      if (draft.selectedProductReference) await runtime.rememberProduct?.(req, conversationId, draft.selectedProductReference);
       if (draft.selectedSupplier) await runtime.rememberSupplier?.(req, conversationId, draft.selectedSupplier, draft.selectedProductReference);
       suggestions = resolved.suggestions || [];
       suggestionsPagination = resolved.suggestionsPagination;
@@ -294,6 +301,8 @@ const withActionAssistant = (runtime, service, options = {}) => {
           totalLatencyMs: latencyMs, toolSelectionCycles: 0, agents: [participant], ...(realUsage || {}) },
         requiresClarification: needsClarification, clarificationQuestion: needsClarification ? text : null, latencyMs,
         ...(pending ? { pendingAction: pending } : {}), ...(suggestions.length ? { suggestions, suggestionsExpiresAt } : {}),
+        ...(activeDraft?.selectedProductReference ? { productResolution: { status: 'SINGLE_MATCH', sku: activeDraft.selectedProductReference.sku, resumedSkillId: activeDraft.action } }
+          : activeDraft?.selection?.slot === 'product' ? { productResolution: { status: 'MULTIPLE_MATCHES', candidateCount: activeDraft.selection.totalMatches || activeDraft.selection.candidates.length } } : {}),
         ...(suggestions.length ? { suggestionsEntityType } : {}),
         ...(suggestionsPagination ? { suggestionsPagination } : {}) };
     }

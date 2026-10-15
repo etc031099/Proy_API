@@ -7,6 +7,7 @@ const { normalize } = require('../automations/entityResolution');
 const { resolveOperationalPeriod } = require('./intentRouting');
 const { addCalendarDays } = require('../utils/operationalClock');
 const { contextBinding, TTL_MS } = require('./memory');
+const { extractProductReference, isContextualProductReference } = require('../utils/productReference');
 const clean = text => normalize(text).replace(/\bq\b/g, 'que').replace(/\bd\b/g, 'de')
   .replace(/\bprodcutos\b/g, 'productos').replace(/\bstan\b/g, 'estan').replace(/\breposision\b/g, 'reposicion')
   .replace(/\bclietnes\b/g, 'clientes').replace(/\boy\b/g, 'hoy').replace(/\bstok\b/g, 'stock')
@@ -17,8 +18,10 @@ const trimRef = text => {
     .replace(/\s+(?:para\s+(?:los\s+)?pr[oó]ximos?\s+\d+\s+d[ií]as?|(?:a|en)\s+\d+\s+d[ií]as?|hoy|ayer|anteayer|esta semana|este mes|el mes pasado|los proximos|los próximos|los ultimos|los últimos|en los|durante|para mañana|manana|mañana|por favor|el \d+ de).*$/i, '').trim();
   return /^(?:el|ella|ellos|eso|ayer|hoy|anteayer|manana|\d+ dias?|los? ultimos? \d+ dias?)$/.test(normalize(ref)) ? null : ref;
 };
-const productRef = message => message.match(/\b(?:[A-Z]{2,}(?:-[A-Z0-9]+){1,5}|M5-[A-Z]+_\d+_\d+)\b/)?.[0]
-  || trimRef(message.match(/(?:\bde(?:l)?\b|junto con|junto a|\bcon\b)\s+(.+?)(?:\s+y\s+|$)/i)?.[1]);
+const productRef = (message, memory = {}) => {
+  const reference = extractProductReference(message);
+  return isContextualProductReference(reference) ? memory.selectedProduct?.key || reference : reference;
+};
 const task = (skillId, args = {}, extra = {}) => ({ skillId, agent: V3_SKILLS[skillId].agents[0], args: { limit: 5, ...args }, ...extra });
 const naturalStockReference = message => {
   const normalized = clean(message).replace(/[¿?¡!.]/g, '').trim().replace(/\s+disponibles?$/, '');
@@ -48,7 +51,8 @@ const naturalProductListReference = message => {
     || normalized.match(/^(?:muestrame|muestra|lista|dame) (?:los |las |el |la )?(.+?)(?: tengo| que tengo)?$/);
   if (!match) return null;
   const reference = match[1].trim().replace(/^(?:productos? (?:de )?|de )/, '');
-  if (!reference || /^(?:productos?|inventario|stock)$/.test(reference)) return null;
+  if (!reference || /\b(?:resumen|negocio|ventas|clientes|proveedores)\b/.test(reference)
+    || /^(?:productos?|inventario|stock)$/.test(reference)) return null;
   const aliases = { gaseosa: 'BEB-GAS', gaseosas: 'BEB-GAS', galleta: 'GAL', galletas: 'GAL',
     leche: 'DES-LEC', leches: 'DES-LEC', pan: 'PAN', pane: 'PAN', panes: 'PAN', 'coca cola': 'coca cola', 'coca colas': 'coca cola' };
   const singular = reference.replace(/s$/, '');
@@ -129,7 +133,7 @@ const machineLearningPlan = (text, message, binding, memory) => {
   const customerIntent = /k.?means|cluster|clustering|agrupamiento|silhouette|\bari\b|\brfm\b|algoritmo.{0,25}(?:cliente|segment)|como estan segmentados.{0,25}clientes|segmentacion.{0,25}clientes|clientes?.{0,20}grupo mas alto/.test(text)
     || memory.lastFamily === 'get_customer_intelligence' && /(?:como|de que manera).{0,20}(?:los |a los )?segmentaste/.test(text) || unsupervisedIntent;
   const anomalyIntent = /isolation forest|anomali|anomaly|atipic|fuera del patron|fraude|contamination|contaminacion|jaccard|detector|score.{0,20}(?:anomali|anomaly|atipic|negativo)|(?:anomali|anomaly|atipic).{0,20}score|confirma incidentes/.test(text) || unsupervisedIntent;
-  const basketIntent = /fp.?growth|support|confidence|\blift\b|asociacion|reglas?.{0,20}(?:productos|ticket|support|confidence)|(?:ticket|evidencia).{0,20}regla|patrones frecuentes|productos.{0,25}relacionados|con que productos se compra|productos.{0,25}compran juntos|productos.{0,25}suelen comprar|compra.{0,20}juntos|causalidad/.test(text);
+  const basketIntent = /fp.?growth|support|confidence|\blift\b|asociacion|reglas?.{0,20}(?:productos|ticket|support|confidence)|(?:ticket|evidencia).{0,20}regla|patrones frecuentes|productos.{0,25}relacionados|con que productos se compra|productos.{0,25}compran juntos|productos.{0,25}suelen comprar|compra.{0,20}juntos|(?:se compra|se compran|suelen comprarse).{0,25}(?:con|junto)|causalidad/.test(text);
   const frozenIntent = /congelad|frozen|cutoff|corte historico/.test(text)
     && /modelo|algoritmo|tecnica|artifact|historico/.test(text);
   const tasks = [], add = (id, args = {}) => { if (!tasks.some(row => row.skillId === id && row.args.mode === args.mode)) tasks.push(task(id, args)); };
@@ -209,7 +213,7 @@ const machineLearningPlan = (text, message, binding, memory) => {
   }
   if (basketIntent) {
     const relatedRef = trimRef(message.match(/(?:con que productos se compra|que productos se compran junto con|productos relacionados (?:a|con)|asociaciones para|cross sell de)\s+(.+)$/i)?.[1]);
-    const ref = productRef(message) || relatedRef || (/(?:el|eso|su)/.test(text) ? memory.selectedProduct?.key : null);
+    const ref = productRef(message, memory) || relatedRef || (/(?:el|eso|su)/.test(text) ? memory.selectedProduct?.key : null);
     const concept = /causal/.test(text) ? 'causality' : /support/.test(text) ? 'support'
       : /confidence/.test(text) ? 'confidence' : /lift/.test(text) ? 'lift' : 'fp_growth';
     return { tasks: [task('get_cross_sell_recommendations', { mode: ref ? 'recommend' : 'rules', concept, ...(ref ? { productRef: ref } : {}) })] };
@@ -223,11 +227,22 @@ const routeV3 = (message, state, binding) => {
   const text = clean(message), memory = state || {};
   if (/^saca\s+(?:\d+|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\b/.test(text))
     return { clarificationQuestion: '¿Quieres registrar una venta para descontar esas unidades o solo corregir el stock? «Saca» puede referirse a movimientos distintos; no prepararé una operación hasta que lo aclares.' };
+  if (/^(?:ajusta|ajustar|corrige|corregir)\s+(?:el\s+)?stock\b/.test(text))
+    return { clarificationQuestion: 'No tengo una acción de ajuste de stock habilitada en este asistente. Puedo consultar existencias o preparar una venta/compra; indica qué necesitas.' };
   if (/^(?:quien gano el partido de ayer|cual es la capital de japon|escribeme una historia(?: de .+)?|que laptop me recomiendas)$/.test(text.replace(/[¿?¡!.]/g, '').trim())) return null;
   if (/^(?:vende|vender|compra|comprar|prepara(?:r)? (?:una )?compra|crea|crear|avisa|avisame|actualiza|ajusta|confirma|confirmar|confirmo|hazlo|correcto|cancela|cancelar|si hazlo|procede|adelante|no lo hagas|no hagas nada|mejor no)\b/.test(text)
-    || /^(?:ese|el segundo)$/.test(text)) return null;
+    || /^el segundo$/.test(text)) return null;
   const groundedPlan = require('./groundedRouting').buildGroundedPlan(message, binding);
   if (groundedPlan) return groundedPlan;
+  const referenceOnly = /^(?:y )?(?:del?|de la|de ese|de este)\b/.test(text) || isContextualProductReference(message);
+  if (isContextualProductReference(message) && !memory.selectedProduct)
+    return { clarificationQuestion: '¿A qué producto te refieres? Indica su nombre o código.' };
+  if (referenceOnly && memory.lastProductTask) {
+    const reference = productRef(message, memory) || (isContextualProductReference(message) ? memory.selectedProduct?.key || message : null);
+    if (reference) return { tasks: [task(memory.lastProductTask.skillId, { ...memory.lastProductTask.args, productRef: reference })] };
+  }
+  if (isContextualProductReference(message) && memory.selectedProduct)
+    return { tasks: [task('get_inventory_intelligence', { mode: 'detail', productRef: memory.selectedProduct.key })] };
   if (/^(?:y )?(?:cual|cuales)\b/.test(text) && /\b(?:mas|menos) stock\b/.test(text)
     && memory.ranking?.type === 'product' && memory.ranking.items?.length) {
     const productRefs = memory.ranking.items.map(row => row.key).filter(Boolean).slice(0, 20);
@@ -238,7 +253,7 @@ const routeV3 = (message, state, binding) => {
   const coverageQuestion = /\b(?:cobertura|coverage)\b/.test(text)
     && !/que es|que significa|interpreta|como se calcula|modelo|hgb|ma28|machine learning|\bml\b/.test(text);
   if (coverageQuestion) {
-    const rawRef = productRef(message);
+    const rawRef = productRef(message, memory);
     const ref = message.match(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b|\bM5-[A-Z]+_\d+_\d+\b/)?.[0]
       || (rawRef && !/inventario|stock|cobertura|coverage|producto|los dias|dias/i.test(normalize(rawRef)) ? rawRef : null)
       || (memory.selectedProduct?.key && /\b(?:ese|este|su)\b/.test(text) || memory.selectedProduct?.key && /^(?:y )?cuantos? dias de cobertura/.test(text) ? memory.selectedProduct.key : null);
@@ -260,7 +275,7 @@ const routeV3 = (message, state, binding) => {
       task('get_business_analytics', { mode: 'summary', metric: 'revenue', ...period })] };
   }
   if (/\bventas?\b/.test(text) && /\bmargen\b/.test(text) && /\bstock\b/.test(text)) {
-    const ref = productRef(message) || memory.selectedProduct?.key;
+    const ref = productRef(message, memory) || memory.selectedProduct?.key;
     if (!ref) return { clarificationQuestion: '¿De qué producto deseas consultar ventas, margen y stock?' };
     const period = queryPeriod(message, binding, memory);
     if (period.clarificationQuestion) return period;
@@ -277,7 +292,7 @@ const routeV3 = (message, state, binding) => {
   if (inventoryConditionList) return inventoryConditionList;
   const inventoryFilter = naturalInventoryFilter(message);
   if (inventoryFilter) return inventoryFilter;
-  if (!productRef(message) && /\b(?:stock cero|stock zero|exactamente (?:su )?minimo|igual a (?:su )?minimo|menor stock|menos stock|mayor stock|mas stock)\b/.test(text))
+  if (!productRef(message, memory) && /\b(?:stock cero|stock zero|exactamente (?:su )?minimo|igual a (?:su )?minimo|menor stock|menos stock|mayor stock|mas stock)\b/.test(text))
     return { clarificationQuestion: 'El escenario permite consultar riesgo bajo y reposición, pero no tiene un filtro global aprobado para stock cero, igualdad exacta al mínimo ni extremos de unidades en stock. Indica un producto para consultar su valor.' };
   const stockReference = naturalStockReference(message);
   if (stockReference) return { lookup: stockReference, responseMode: 'minimal' };
@@ -297,13 +312,13 @@ const routeV3 = (message, state, binding) => {
   if (memory.lastFamily === 'get_supplier_intelligence' && /^(?:y )?(?:cual|quien).{0,35}(?:mayor|mas|menor).{0,25}(?:tiempo de entrega|lead time|plazo de entrega)/.test(text))
     return { tasks: [task('get_supplier_intelligence', { mode: 'rank', metric: 'lead_time', sortDirection: /menor/.test(text) ? 'asc' : 'desc', limit: 5 })] };
   if (/(?:proveedor.*(?:vende|provee)|quien.*(?:provee|abastece))/.test(text)) {
-    const ref = productRef(message) || (/\blo\b/.test(text) ? memory.selectedProduct?.key : null);
+    const ref = productRef(message, memory) || (/\blo\b/.test(text) ? memory.selectedProduct?.key : null);
     if (ref) return { tasks: [task('get_supplier_intelligence', { mode: 'rank', productRef: ref })] };
     if (/\blo\b/.test(text)) return { clarificationQuestion: '¿De qué producto deseas consultar los proveedores?' };
   }
   if (/^por que/.test(text) && /proveedor/.test(text)) return null;
   if (/alternativas|alternativo/.test(text) && /proveedor/.test(text)) {
-    const ref = productRef(message) || trimRef(message.match(/para\s+(.+)$/i)?.[1]) || memory.selectedProduct?.key;
+    const ref = productRef(message, memory) || trimRef(message.match(/para\s+(.+)$/i)?.[1]) || memory.selectedProduct?.key;
     return ref ? { tasks: [task('get_supplier_intelligence', { mode: 'alternatives', productRef: ref })] }
       : { clarificationQuestion: '¿De qué producto deseas conocer los proveedores alternativos?' };
   }
@@ -318,7 +333,7 @@ const routeV3 = (message, state, binding) => {
     if (/salud|diagnostico/.test(text) && /negocio|general/.test(text) && /proveedor/.test(text) && /retras|demor|tarda/.test(text))
       return { tasks: [task('get_business_health', {}), task('get_supplier_intelligence', { mode: 'rank', metric: 'delays', sortDirection: 'desc' })] };
     if (/stock/.test(text) && /pronostic|prediccion|forecast|demanda|vendere/.test(text)) {
-      const ref = productRef(message) || memory.selectedProduct?.key;
+      const ref = productRef(message, memory) || memory.selectedProduct?.key;
       if (!ref) return { clarificationQuestion: '¿De qué producto deseas consultar el stock y el pronóstico?' };
       const forecastClause = message.split(/\s+y\s+/i).find(part => {
         const clause = clean(part);
@@ -402,17 +417,17 @@ const routeV3 = (message, state, binding) => {
     return { tasks: [task('get_supplier_intelligence', args, pendingOnly ? { pendingOnly: true } : {})] };
   }
   if (/junt[oa]s|junto con|junto a|cross sell|canasta|acompan|asociacion|combinacion/.test(text)) {
-    const ref = /\bcombinacion\b/.test(text) ? null : productRef(message) || (/\bel\b|\beso\b|\bsu\b/.test(text) ? memory.selectedProduct?.key : null);
+    const ref = /\bcombinacion\b/.test(text) ? null : productRef(message, memory) || (/\bel\b|\beso\b|\bsu\b/.test(text) ? memory.selectedProduct?.key : null);
     return { tasks: [task('get_cross_sell_recommendations', { mode: ref ? 'recommend' : 'rules', ...(ref ? { productRef: ref } : {}) })] };
   }
   if (horizonFollowup || /pronostic|prediccion|forecast|demanda|cuanto vendere|se vendera|manana|proxima semana/.test(text)) {
-    const ref = productRef(message) || (horizonFollowup || /\bsu\b|^y |manana/.test(text)
+    const ref = productRef(message, memory) || (horizonFollowup || /\bsu\b|^y |manana/.test(text)
       || memory.selectedProduct?.key && /^(?:pronostico|prediccion|forecast)(?: a | para )/.test(text) ? memory.selectedProduct?.key : null);
     const horizon = Number(text.match(/\b(\d+) dias?\b/)?.[1] || (/manana/.test(text) ? 1 : /14|dos semanas/.test(text) ? 14 : 7));
     if (/como calcul|metodo|metodologia/.test(text)) return { tasks: [task('get_product_forecast', { mode: 'method' })] };
     if (![1, 7, 14].includes(horizon) || /proximo mes|28 dias/.test(text)) return { clarificationQuestion: 'El horizonte validado para este escenario llega a 14 días.',
       suggestions: [7, 14].map(days => ({ label: `Consultar ${days} días`, message: ref ? `pronóstico de ${ref} próximos ${days} días` : `pronóstico próximos ${days} días` })) };
-    if (/esta semana/.test(text)) return { clarificationQuestion: 'El pronóstico admite horizontes agregados de 1, 7 o 14 días desde el corte del escenario. ¿Cuál deseas?' };
+    if (/esta semana/.test(text) && !ref) return { clarificationQuestion: 'El pronóstico admite horizontes agregados de 1, 7 o 14 días desde el corte del escenario. ¿Cuál deseas?' };
     if (!ref && /ayer/.test(text)) return { clarificationQuestion: '¿De qué producto deseas consultar la predicción de ayer?' };
     const args = { mode: ref ? 'detail' : /mayor|mas|top/.test(text) ? 'rank' : 'summary', horizonDays: horizon, ...(ref ? { productRef: ref } : {}) };
     const compare = /compar/.test(text) && message.match(/(?:demanda|forecast|predicci[oó]n|pron[oó]stico)\s+(?:de\s+)?(.+)\s+y\s+(.+)$/i);
@@ -424,14 +439,14 @@ const routeV3 = (message, state, binding) => {
     && /cuant|cual|queda|qued|tiene|hay|disponible|inventario de|stock de|stock del|\bsu\b|minimo/.test(text)) {
     const canReuseProduct = !memory.lastFamily || ['get_inventory_intelligence', 'get_product_forecast', 'get_business_analytics'].includes(memory.lastFamily);
     const explicitProductFollowup = /ese (?:producto|item|articulo)/.test(text);
-    const ref = productRef(message) || ((canReuseProduct || explicitProductFollowup) && memory.selectedProduct?.key && /^(?:[¿¡ ]*y |[¿¡ ]*cuanto|[¿¡ ]*que|[¿¡ ]*cual|[¿¡ ]*esta|[¿¡ ]*hay|[¿¡ ]*queda)/.test(text)
+    const ref = productRef(message, memory) || ((canReuseProduct || explicitProductFollowup) && memory.selectedProduct?.key && /^(?:[¿¡ ]*y |[¿¡ ]*cuanto|[¿¡ ]*que|[¿¡ ]*cual|[¿¡ ]*esta|[¿¡ ]*hay|[¿¡ ]*queda)/.test(text)
       ? memory.selectedProduct.key : null);
     if (!ref && !/bajo|critico|agot|riesgo|sobre/.test(text)) return { clarificationQuestion: '¿De qué producto deseas consultar el stock disponible?' };
     if (ref) return { tasks: [task('get_inventory_intelligence', { mode: 'detail', productRef: ref })] };
   }
   if (/reponer|reposicion|deberia pedir|debo pedir|cuanto pedir|agot|acabando|critic|alto riesgo|riesgo|sobrestock|sobrad|lento|sin movimiento|\babc\b|\bxyz\b|\baz\b/.test(text)
     || /stock bajo|bajos.*stock/.test(text)) {
-    const ref = productRef(message) || (/cuanto|\bsu\b|\breponerlo\b|\bpedirlo\b/.test(text) ? memory.selectedProduct?.key : null);
+    const ref = productRef(message, memory) || (/cuanto|\bsu\b|\breponerlo\b|\bpedirlo\b/.test(text) ? memory.selectedProduct?.key : null);
     const args = { mode: ref ? 'detail' : 'rank', metric: 'reorder', ...(ref ? { productRef: ref } : {}) };
     if (/critic/.test(text)) args.risk = 'CRITICAL';
     if (/alto riesgo/.test(text)) args.risk = 'HIGH';
@@ -461,7 +476,7 @@ const routeV3 = (message, state, binding) => {
     const category = trimRef(message.match(/\b(?:de|en)\s+(?:la\s+)?categor[ií]a\s+(.+)$/i)?.[1]), subcategory = trimRef(message.match(/\b(?:de|en)\s+(?:la\s+)?subcategor[ií]a\s+(.+)$/i)?.[1]);
     if (category) args.categoryRef = category;
     if (subcategory) args.subcategoryRef = subcategory;
-    let ref = !category && !subcategory && /vendi de|ventas de|ventas tuvo/.test(text) ? productRef(message) : null;
+    let ref = !category && !subcategory && /vendi de|ventas de|ventas tuvo/.test(text) ? productRef(message, memory) : null;
     if (ref && /^(?:los?\s+)?(?:ultimos?\s+\d+\s+dias?|hoy|ayer|anteayer|esta semana|este mes|mes pasado)$/i
       .test(normalize(ref))) ref = null;
     if (ref) args.productRef = ref;
@@ -469,7 +484,7 @@ const routeV3 = (message, state, binding) => {
   }
   if (/^busca (?:a )?/.test(text) || /^[\p{L}\d .-]{3,100}$/u.test(message.trim())
     && !/^(?:y|si|ok|vale|dale|correcto|de acuerdo|no|precio|stock|minimo|que|cuanto|esta|el|la)\b/.test(text)
-    && !/\b(?:ventas?|vendid[oa]s?|tickets?|ingresos?|resumen)\b/.test(text)) {
+    && !/\b(?:ventas?|vendid[oa]s?|tickets?|ingresos?|resumen|negocio|riesgo|clientes?)\b/.test(text)) {
     const sku = message.match(/\b(?:[A-Z]{2,}(?:-[A-Z0-9]+){1,5}|M5-[A-Z]+_\d+_\d+)\b/)?.[0];
     return { lookup: sku || trimRef(message.replace(/^busca(?: a)?\s+/i, '')) };
   }
@@ -487,6 +502,11 @@ const compactV3State = (value, now = Date.now()) => {
     try { return { skillId: item.skillId, agent: V3_SKILLS[item.skillId].agents[0], args: validateSkillArgs(require('./skills').getSkillDefinition(item.skillId).inputSchema, item.args),
       ...(['customer', 'supplier'].includes(item.fromPrevious) ? { fromPrevious: item.fromPrevious } : {}) }; } catch { return null; }
   }).filter(Boolean);
+  let lastProductTask = null;
+  if (V3_SKILLS[value.lastProductTask?.skillId] && value.lastProductTask?.args?.productRef) {
+    try { lastProductTask = { skillId: value.lastProductTask.skillId,
+      args: validateSkillArgs(require('./skills').getSkillDefinition(value.lastProductTask.skillId).inputSchema, value.lastProductTask.args) }; } catch { /* Discard invalid restored references. */ }
+  }
   return { binding: value.binding, expiresAt: value.expiresAt,
     selectedProduct: entity(value.selectedProduct), selectedCustomer: entity(value.selectedCustomer), selectedSupplier: entity(value.selectedSupplier),
     readRecommendation: value.readRecommendation && typeof value.readRecommendation.sku === 'string' && value.readRecommendation.sku.length <= 100
@@ -495,10 +515,13 @@ const compactV3State = (value, now = Date.now()) => {
         supplierCode: /^SUP-\d{2}$/.test(value.readRecommendation.supplierCode || '') ? value.readRecommendation.supplierCode : null } : null,
     selectedPeriod: value.selectedPeriod && isDate(value.selectedPeriod.startDate) && isDate(value.selectedPeriod.endDate) ? { startDate: value.selectedPeriod.startDate, endDate: value.selectedPeriod.endDate } : null,
     lastFamily: Object.keys(V3_SKILLS).includes(value.lastFamily) ? value.lastFamily : null,
+    lastProductTask,
     ranking: value.ranking && ['product', 'customer', 'supplier', 'category', 'subcategory'].includes(value.ranking.type) ? { type: value.ranking.type,
       items: (value.ranking.items || []).slice(0, 5).map(entity).filter(Boolean) } : null,
     pending: tasks.length && ['productRef', 'productRefs', 'customerRef', 'supplierRef', 'categoryRef', 'subcategoryRef'].includes(value.pending?.field) ? {
       tasks, field: value.pending.field, query: String(value.pending.query || '').slice(0, 100), type: value.pending.type,
+      responseMode: value.pending.responseMode === 'minimal' ? 'minimal' : null,
+      taskIndex: Number.isInteger(value.pending.taskIndex) && value.pending.taskIndex >= 0 && value.pending.taskIndex < tasks.length ? value.pending.taskIndex : 0,
       selectionIndex: Number.isSafeInteger(value.pending.selectionIndex) && value.pending.selectionIndex >= 0 && value.pending.selectionIndex < 5 ? value.pending.selectionIndex : 0,
       offset: Number.isSafeInteger(value.pending.offset) ? Math.max(0, value.pending.offset) : 0 } : null };
 };
@@ -841,18 +864,23 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
   const now = Date.now(), saved = compactV3State(state.v3Context, now);
   const memory = saved?.binding === contextBinding(context) ? saved : {};
   const existingProduct = state.selectedProductReference;
-  if ((!state.v3Context || state.v3Context.binding === contextBinding(context)) && existingProduct?.sku && existingProduct.sku !== memory.selectedProduct?.key) {
+  if ((!state.v3Context || state.v3Context.binding === contextBinding(context)) && existingProduct?.sku
+    && Number.isSafeInteger(existingProduct.createdAt) && existingProduct.createdAt > now - TTL_MS
+    && existingProduct.sku !== memory.selectedProduct?.key) {
     const resolution = await service.resolveEntity('product', existingProduct.sku, context);
     if (resolution.entity) memory.selectedProduct = resolution.entity;
   }
   if (memory.pending && /^(?:si(?: ese)?|ok|vale|dale|correcto)$/.test(clean(message))) return { answer: 'Elige una entidad por nombre, código o número. Esta selección no confirma una operación.', clarification: true, intent: 'v3_selection', agent: 'coordinator' };
   let plan = routeV3(message, memory, binding);
   let responseMode = plan?.responseMode || null;
-  const ordinal = ordinalSelection(message), numeric = /^(?:(?:opcion|numero)\s+)?([1-5])$/.exec(clean(message));
+  let productResolution;
+  const rawChoice = message.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+  const ordinal = ordinalSelection(message), numeric = /^(?:(?:opcion|numero)\s+)?([+\-−]?\d+(?:[.,]\d+)?)[.!?]?$/.exec(rawChoice);
   const choiceLike = ordinal.matched || Boolean(numeric);
   const candidates = memory.ranking?.items || [];
   const match = candidates.find(row => normalize(row.key) === normalize(message) || normalize(row.label) === normalize(message));
-  const index = numeric ? Number(numeric[1]) - 1 : ordinal.index === -1 ? candidates.length - 1 : ordinal.index;
+  const index = numeric ? /^\d+$/.test(numeric[1]) && Number.isSafeInteger(Number(numeric[1])) ? Number(numeric[1]) - 1 : null
+    : ordinal.index === -1 ? candidates.length - 1 : ordinal.index;
   if (choiceLike && index !== null && index >= candidates.length && memory.ranking?.type === 'product')
     return { answer:`La lista tiene ${candidates.length} opciones; esa opción no está en la lista vigente.`,
       clarification:true, intent:'v3_selection', agent:'coordinator' };
@@ -869,6 +897,7 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
     if (value) selected = candidates.find(row => row.id === String(value._id) && row.label === value.name);
   }
   const scope = { ...memory, binding: contextBinding(context), expiresAt: now + TTL_MS };
+  const resolvedProductRefs = new Set(memory.ranking?.type === 'product' ? memory.ranking.items.map(row => row.key) : []);
   const save = () => commit({ v3Context: scope,
     ...(scope.selectedSupplier ? { lastSupplier: { id: scope.selectedSupplier.id, name: scope.selectedSupplier.label } } : {}),
     ...(scope.selectedProduct ? { lastEntity: { id: scope.selectedProduct.id, sku: scope.selectedProduct.key, name: scope.selectedProduct.label },
@@ -878,12 +907,14 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
     const offset = Math.max(0, memory.pending.offset + (clean(message) === 'anterior' ? -5 : 5));
     const resolution = await service.resolveEntity(memory.pending.type, memory.pending.query, context, offset);
     resolution.selectionIndex = memory.pending.selectionIndex;
+    resolution.taskIndex = memory.pending.taskIndex;
     return candidateView(resolution, memory.pending.tasks, memory.pending.field);
   }
   if (selected && (!plan || plan.lookup || choiceLike || chooseOther)) {
     scope[`selected${selected.type[0].toUpperCase()}${selected.type.slice(1)}`] = selected;
-    if (memory.pending) plan = { tasks: memory.pending.tasks.map((item, i) => {
-      if (i !== 0) return item;
+    if (memory.pending) plan = { responseMode: memory.pending.responseMode, tasks: memory.pending.tasks.map((item, i) => {
+      const target = memory.pending.taskIndex || 0;
+      if (i !== target && item.args[memory.pending.field] !== memory.pending.tasks[target].args[memory.pending.field]) return item;
       let reference = selected.key;
       if (memory.pending.field === 'productRefs') { const refs = item.args.productRefs.split('|'); refs[memory.pending.selectionIndex] = selected.key; reference = refs.join('|'); }
       return { ...item, args: { ...item.args, [memory.pending.field]: reference } };
@@ -892,6 +923,9 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
       ? { tasks: [task('get_business_analytics', { mode: 'rank', entityType: 'category', categoryRef: selected.key })] }
       : { tasks: [task(selected.type === 'product' ? 'get_inventory_intelligence' : selected.type === 'customer' ? 'get_customer_intelligence' : 'get_supplier_intelligence', { mode: 'detail', [`${selected.type}Ref`]: selected.key })] };
     scope.pending = null; save();
+    responseMode = plan.responseMode || responseMode;
+    if (selected.type === 'product') productResolution = { status: 'CONTEXT_MATCH', sku: selected.key,
+      candidateCount: candidates.length, resumedSkillId: plan.tasks[memory.pending?.taskIndex || 0].skillId };
   } else if (choiceLike && !plan?.clarificationQuestion) return { answer: 'Elige una entidad de la lista vigente o indica su nombre/código.', clarification: true, intent: 'v3_selection', agent: 'coordinator' };
   if (!plan) return null;
   if (plan.responseMode === 'inventory-filter') {
@@ -914,6 +948,7 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
     for (const sku of new Set(matching.map(row => row.key || row.sku).filter(Boolean))) {
       if (skus.length >= maximumCandidates || [...skus, sku].join('|').length > 490) break;
       skus.push(sku);
+      resolvedProductRefs.add(sku);
     }
     if (!skus.length) return { answer: 'No encontré productos que coincidan con esa marca o categoría.', clarification: false, intent: 'v3_inventory_filter', agent: 'coordinator' };
     plan = { responseMode: 'inventory-filter', tasks: [task('get_inventory_intelligence', {
@@ -921,16 +956,53 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
     })] };
   }
   if (plan.lookup) {
-    for (const type of ['product', 'customer', 'supplier']) {
+    if (isContextualProductReference(plan.lookup)) {
+      if (!scope.selectedProduct) return { answer: '¿A qué producto te refieres? Indica su nombre o código.', clarification: true, intent: 'v3_selection', agent: 'coordinator' };
+      plan = { tasks: [task('get_inventory_intelligence', { mode: 'detail', productRef: scope.selectedProduct.key })] };
+      productResolution = { status: 'CONTEXT_MATCH', sku: scope.selectedProduct.key };
+    }
+  }
+  if (plan.lookup) {
+    const types = ['minimal', 'list'].includes(responseMode) ? ['product'] : ['product', 'customer', 'supplier'];
+    for (const type of types) {
       const resolution = await service.resolveEntity(type, plan.lookup, context);
-      if (resolution.entity) { plan = { tasks: [task(type === 'product' ? 'get_inventory_intelligence' : type === 'customer' ? 'get_customer_intelligence' : 'get_supplier_intelligence', { mode: 'detail', [`${type}Ref`]: resolution.entity.key })] }; break; }
+      if (resolution.entity) {
+        if (type === 'product') { scope.selectedProduct = resolution.entity; scope.pending = null;
+          productResolution = { status: resolution.resolutionStatus || 'SINGLE_MATCH', sku: resolution.entity.key }; }
+        plan = { tasks: [task(type === 'product' ? 'get_inventory_intelligence' : type === 'customer' ? 'get_customer_intelligence' : 'get_supplier_intelligence', { mode: 'detail', [`${type}Ref`]: resolution.entity.key })] }; break;
+      }
       if (resolution.candidates?.length) return candidateView(resolution, [task(type === 'product' ? 'get_inventory_intelligence' : type === 'customer' ? 'get_customer_intelligence' : 'get_supplier_intelligence', { mode: 'detail', [`${type}Ref`]: plan.lookup })], `${type}Ref`);
     }
-    if (plan.lookup) return { answer: 'No encontré esa referencia en el escenario de tu negocio.', clarification: true, intent: 'v3_lookup', agent: 'coordinator' };
+    if (plan.lookup) return candidateView({ type: 'product', query: plan.lookup, candidates: [] }, [], 'productRef');
   }
   if (plan.clarificationQuestion) return { answer: plan.clarificationQuestion, clarification: true, intent: 'v3_clarification', agent: 'coordinator',
     ...(plan.suggestions ? { suggestions: plan.suggestions } : {}) };
   if (plan.tasks.length > 4) return { answer: 'Indica qué dominio deseas priorizar.', clarification: true, intent: 'v3_clarification', agent: 'coordinator' };
+  // Resolve every new product reference before dispatch. Already displayed or
+  // resolved identities reuse compact context and are revalidated by the service.
+  plan = { ...plan, tasks: plan.tasks.map(row => ({ ...row, args: { ...row.args } })) };
+  for (let taskIndex = 0; taskIndex < plan.tasks.length; taskIndex++) {
+    const current = plan.tasks[taskIndex], refs = current.args.productRefs?.split('|')
+      || (current.args.productRef ? [current.args.productRef] : []);
+    for (let index = 0; index < refs.length; index++) {
+      const ref = refs[index];
+      if (isContextualProductReference(ref)) {
+        if (!scope.selectedProduct) return { answer: '¿A qué producto te refieres? Indica su nombre o código.', clarification: true, intent: 'v3_selection', agent: 'coordinator' };
+        refs[index] = scope.selectedProduct.key;
+        productResolution = { status: 'CONTEXT_MATCH', sku: refs[index] };
+      } else if (scope.selectedProduct?.key !== ref && !resolvedProductRefs.has(ref)) {
+        const resolution = await service.resolveEntity('product', ref, context);
+        if (!resolution.entity) return candidateView({ ...resolution, type: 'product', query: ref, selectionIndex: index, taskIndex },
+          plan.tasks, current.args.productRefs ? 'productRefs' : 'productRef');
+        refs[index] = resolution.entity.key; scope.selectedProduct = resolution.entity; scope.pending = null;
+        resolvedProductRefs.add(refs[index]);
+        productResolution = { status: resolution.resolutionStatus || 'SINGLE_MATCH', sku: refs[index] };
+      } else if (!productResolution) {
+        productResolution = { status: 'CONTEXT_MATCH', sku: ref };
+      }
+    }
+    if (refs.length) current.args[current.args.productRefs ? 'productRefs' : 'productRef'] = current.args.productRefs ? refs.join('|') : refs[0];
+  }
   const visibleProductList = ['inventory-condition-list', 'inventory-filter'].includes(responseMode);
   if (visibleProductList) { scope.ranking = null; scope.selectedProduct = null; }
   const answers = [], v3Views = [], nearestMinimumRows = []; let previous, rankedForResponse = null;
@@ -958,12 +1030,15 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
       }
       let rankedEntities = [];
       scope.lastFamily = current.skillId;
+      if (current.args.productRef) scope.lastProductTask = { skillId: current.skillId, args: current.args };
       if (current.skillId === 'get_supplier_intelligence' && !current.args.productRef && current.args.mode !== 'alternatives') {
         // An explicit supplier comparison supersedes a product from an older domain.
         scope.selectedProduct = null;
         scope.readRecommendation = null;
       }
       for (const [type, entity] of Object.entries(result.metadata.selected || {})) scope[`selected${type[0].toUpperCase()}${type.slice(1)}`] = entity;
+      if (current.args.productRef && result.metadata.selected?.product && !productResolution)
+        productResolution = { status: 'EXACT', sku: result.metadata.selected.product.key };
       if (scope.readRecommendation && scope.readRecommendation.sku !== scope.selectedProduct?.key) scope.readRecommendation = null;
       if (current.skillId === 'get_inventory_intelligence' && result.metadata.selected?.product && result.data.items?.length === 1) {
         const row = result.data.items[0], quantity = row.recommendation?.recommendedQty;
@@ -1069,16 +1144,27 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
   const suggestions = rankedForResponse?.length ? rankedForResponse.slice(0, 5).map(row => ({ label: row.label, message: row.key,
     ...(row.type === 'product' || row.type === 'customer' || row.type === 'supplier' ? { detail: row.key } : {}) })) : undefined;
   return { answer: answers.join('\n\n'), intent: 'v3_intelligence', agent: plan.tasks.length > 1 ? 'coordinator' : plan.tasks[0].agent,
+    ...(productResolution ? { productResolution } : {}),
     ...(v3Views.length ? { v3Views } : {}), ...(suggestions ? { suggestions, suggestionsEntityType: rankedForResponse[0].type } : {}) };
 
   function candidateView(resolution, tasks, field) {
     const items = resolution.candidates || [], pagination = resolution.pagination;
-    if (!items.length) return { answer: 'No encontré esa referencia en tu negocio. Indica su nombre o código completo.', clarification: true, intent: 'v3_selection', agent: 'coordinator' };
-    scope.pending = { tasks, field, type: resolution.type, query: resolution.query, selectionIndex: resolution.selectionIndex || 0, offset: pagination?.offset || 0 };
+    if (resolution.type === 'product') { scope.selectedProduct = null; scope.readRecommendation = null; }
+    if (!items.length) {
+      scope.pending = null; scope.ranking = null; save();
+      return { answer: resolution.type === 'product'
+        ? `No encontré productos similares a «${String(resolution.query || '').slice(0, 100)}». Prueba con parte del nombre o el código.`
+        : 'No encontré esa referencia en tu negocio. Indica su nombre o código completo.',
+        clarification: true, intent: 'v3_selection', agent: 'coordinator',
+        ...(resolution.type === 'product' ? { productResolution: { status: 'NO_MATCH', candidateCount: 0 } } : {}) };
+    }
+    scope.pending = { tasks, field, type: resolution.type, query: resolution.query, responseMode, taskIndex: resolution.taskIndex || 0,
+      selectionIndex: resolution.selectionIndex || 0, offset: pagination?.offset || 0 };
     if (resolution.type === 'supplier') scope.expiresAt = now + require('./memory').SUPPLIER_SELECTION_TTL_MS;
     scope.ranking = { type: resolution.type, items }; save();
     return { answer: `Encontré ${pagination?.totalMatches || items.length} coincidencias. Elige una opción por número, nombre o código:\n${items.map((row, i) => `${i + 1}. ${row.label} (${row.key})`).join('\n')}`,
       intent: 'v3_selection', agent: 'coordinator', clarification: true,
+      ...(resolution.type === 'product' ? { productResolution: { status: items.length > 1 ? 'MULTIPLE_MATCHES' : 'SINGLE_MATCH', candidateCount: pagination?.totalMatches || items.length } } : {}),
       contextProvenance: { sourceType: 'candidate_snapshot', entityType: resolution.type, query: resolution.query,
         page: Math.floor((pagination?.offset || 0) / 5) + 1, pageSize: 5, totalMatches: pagination?.totalMatches || items.length },
       suggestions: items.map(row => ({ label: row.label, detail: row.key, message: row.key })),

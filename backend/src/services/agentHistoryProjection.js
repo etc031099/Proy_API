@@ -30,6 +30,7 @@ const shape = {
       ruleConfigured: true, operator: true, threshold: true, alreadyExists: true } },
   requestId: true, conversationId: true, answer: true, intent: true, agent: true, synthesisStatus: true, synthesisDiagnostic: true,
   requiresClarification: true, clarificationQuestion: true, latencyMs: true,
+  productResolution: { status: true, sku: true, candidateCount: true, resumedSkillId: true },
   participants: [{ ...agent, skillCalls: true, providerLatencyMs: true }],
   actions: [{ skillId: true, agentId: true, status: true, durationMs: true }],
   evidence: [{ evidenceId: true, sourceType: true, skillId: true, label: true, asOf: true, period, recordCount: true }],
