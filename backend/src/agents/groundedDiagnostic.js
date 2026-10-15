@@ -1,5 +1,6 @@
 'use strict';
 const { SCHEMA_REASONS } = require('./groundedOutputSchema');
+const { NUMBER_PATTERNS } = require('./groundedNumbers');
 const safeSchemaField = value => typeof value === 'string'
   && /^(?:\$|observations(?:\[[0-2]\](?:\.(?:evidenceRefs(?:\[[0-3]\])?|interpretation|advisoryRecommendation))?)?|limitations(?:\[[01]\])?)$/.test(value);
 const REASONS = new Set(['NONE', 'CONTENT_JSON_INVALID', 'OUTPUT_SCHEMA_INVALID', 'EVIDENCE_REFERENCE_INVALID',
@@ -25,6 +26,12 @@ const safeGroundedDiagnostic = (source = {}) => ({
   ...(source.validationReason === 'UNSUPPORTED_NUMBER' && Array.isArray(source.unsupportedNumbers)
     ? { unsupportedNumbers: source.unsupportedNumbers.slice(0, 3).filter(value => typeof value === 'number'
       && Number.isFinite(value) && Math.abs(value) <= 1e9) } : {}),
+  ...(source.validationReason === 'UNSUPPORTED_NUMBER' && Array.isArray(source.unsupportedNumberDetails) && Array.isArray(source.unsupportedNumbers)
+    ? { unsupportedNumberDetails: source.unsupportedNumberDetails.slice(0, 3)
+      .filter(detail => detail && typeof detail.value === 'number' && Number.isFinite(detail.value)
+        && Math.abs(detail.value) <= 1e9 && source.unsupportedNumbers?.includes(detail.value)
+        && NUMBER_PATTERNS.includes(detail.pattern))
+      .map(detail => ({ value: detail.value, pattern: detail.pattern })) } : {}),
   ...(typeof source.validationField === 'string'
     && /^(?:observations\[[0-2]\]\.(?:interpretation|advisoryRecommendation|evidenceRefs)|limitations\[[01]\])$/.test(source.validationField)
     ? { validationField: source.validationField } : {})

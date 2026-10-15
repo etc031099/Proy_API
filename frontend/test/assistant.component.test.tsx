@@ -27,13 +27,15 @@ const response: AgentResponse = {
 beforeEach(() => { send.mockReset(); localStorage.clear(); vi.mocked(apiClient.listAgentConversations).mockResolvedValue({ success: true,
   data: { items: [], pagination: { page: 1, limit: 10, total: 0, totalPages: 1 } } }); });
 function submit(text = 'stock bajo') { fireEvent.change(screen.getByLabelText('Tu consulta'), { target: { value: text } }); fireEvent.click(screen.getByRole('button', { name: 'Enviar' })); }
-it('J2I displays rejected numeric values in the expandable diagnostic', () => {
+it('J2I J2K displays rejected numeric values and safe categories in the expandable diagnostic', () => {
   render(<AgentActivity response={{ ...response, grounded: { route: 'GROUNDED_LLM', responseDiagnostic: {
     validationResult: 'REJECTED', validationReason: 'UNSUPPORTED_NUMBER', validationField: 'observations[0].interpretation',
-    unsupportedNumbers: [40, 25], finishReason: 'stop', contentPresent: true } } }} />);
+    unsupportedNumbers: [40, 25], unsupportedNumberDetails: [{ value: 40, pattern: 'QUANTITY_WITH_UNIT' }],
+    finishReason: 'stop', contentPresent: true } } }} />);
   const summary = screen.getByText('Diagnóstico de síntesis'); fireEvent.click(summary);
   expect(screen.getByText('Valores rechazados')).toBeTruthy();
   expect(screen.getByText('40, 25')).toBeTruthy();
+  expect(screen.getByText('40: QUANTITY_WITH_UNIT')).toBeTruthy();
   expect(summary.closest('details')?.textContent).not.toMatch(/prompt|reasoning_content|raw response/);
 });
 it('J2G shows only safe failure diagnostics in an expandable synthesis detail', () => {

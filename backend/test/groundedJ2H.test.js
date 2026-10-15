@@ -71,6 +71,9 @@ test('J2H prompt and validator share exact schema; compact result renders with s
         return { text: JSON.stringify(out), provider: 'deepseek', model: 'deepseek-flash',
           responseDiagnostic: { finishReason: 'stop', usagePresent: true } }; } } });
   assert.ok(request.messages[0].content.includes(JSON.stringify(GROUNDED_OUTPUT_SCHEMA)));
+  assert.match(request.messages[0].content, /no uses listas numeradas ni índices numéricos/);
+  assert.match(request.messages[0].content, /No conviertas evidenceRefs en referencias de evidencia numeradas visibles/);
+  assert.match(request.messages[0].content, /Identifica productos con nombres o SKU/);
   assert.equal(request.maxTokens, 300); assert.equal(accepted, true);
   assert.equal(response.grounded.responseDiagnostic.finishReason, 'stop');
   assert.equal(response.grounded.responseDiagnostic.usagePresent, true);

@@ -2,7 +2,7 @@
 const { deepFreeze, isPlainObject } = require('./contracts');
 const { V3_IDS } = require('./v3Skills');
 const { parseGroundedSchema } = require('./groundedOutputSchema');
-const { numericEvidence, unsupportedNumbers } = require('./groundedNumbers');
+const { numericEvidence, unsupportedNumberDetails } = require('./groundedNumbers');
 const MAX_CONTEXT_BYTES = 6400;
 const HALLUCINATION_CONTRACT = Object.freeze([
   'Usa exclusivamente los hechos y referencias entregados; no inventes cifras ni entidades.',
@@ -131,8 +131,10 @@ const validateGroundedOutput = (text, context) => {
       if ((value.match(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/g) || []).some(sku => !skus.has(sku))) fail('UNKNOWN_ENTITY', path);
       const remaining = value.replace(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/g, '')
         .replace(/\bMA28\b/g, allowed.includes('MOVING_AVERAGE_28') ? '' : 'MA28');
-      const rejected = unsupportedNumbers(remaining, numericFacts);
-      if (rejected.length) fail('UNSUPPORTED_NUMBER', path, { unsupportedNumbers: rejected.slice(0, 3) });
+      const details = unsupportedNumberDetails(remaining, numericFacts);
+      const rejected = [...new Set(details.map(detail => detail.value))].slice(0, 3);
+      if (rejected.length) fail('UNSUPPORTED_NUMBER', path, { unsupportedNumbers: rejected,
+        unsupportedNumberDetails: rejected.map(value => details.find(detail => detail.value === value)) });
     }
   }
   for (const [index, value] of output.limitations.entries()) {

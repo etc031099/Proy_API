@@ -66,6 +66,7 @@ export function AgentActivity({ response }: { response?: AgentResponse }) {
           {response.grounded.responseDiagnostic.schemaField && <div><dt>Campo de estructura</dt><dd>{response.grounded.responseDiagnostic.schemaField}</dd></div>}
           {response.grounded.responseDiagnostic.validationField && <div><dt>Campo</dt><dd>{response.grounded.responseDiagnostic.validationField}</dd></div>}
           {!!response.grounded.responseDiagnostic.unsupportedNumbers?.length && <div><dt>Valores rechazados</dt><dd>{response.grounded.responseDiagnostic.unsupportedNumbers.join(', ')}</dd></div>}
+          {!!response.grounded.responseDiagnostic.unsupportedNumberDetails?.length && <div><dt>Contexto numérico</dt><dd>{response.grounded.responseDiagnostic.unsupportedNumberDetails.map(detail => `${detail.value}: ${detail.pattern}`).join(', ')}</dd></div>}
           <div><dt>Finalización</dt><dd>{response.grounded.responseDiagnostic.finishReason || 'No reportada'}</dd></div>
           <div><dt>Contenido recibido</dt><dd>{response.grounded.responseDiagnostic.contentPresent === null ? 'No reportado' : response.grounded.responseDiagnostic.contentPresent ? 'Sí' : 'No'}</dd></div>
         </dl>
