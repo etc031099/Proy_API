@@ -6,6 +6,9 @@ const { V3 } = require('../src/services/v3IntelligenceService');
 const { actionIntent, parseAction, resolveAction } = require('../src/automations/actionInput');
 const { routeDeterministically } = require('../src/agents/intentRouting');
 const { ordinalSelection } = require('../src/agents/ordinalSelection');
+const { withActionAssistant } = require('../src/automations/assistant');
+const { Product } = require('../src/models');
+const { randomUUID } = require('node:crypto');
 const { contextBinding, TTL_MS } = require('../src/agents/memory');
 
 const binding = { ...V3, operationalDate: '2026-10-14', asOfDate: V3.referenceDate };
@@ -216,19 +219,55 @@ test('H.7 compares only products from the prior list using current inventory row
   assert.equal(response.v3Views[0].items[0].key, 'BEB-GAS-002');
 });
 
-test('H.7 records the remaining ordinal gap after a low-stock list without adding phrase-level product resolution', async () => {
+test('H.7 low-stock list preserves the visible product identities and ordinal order', async () => {
   const context = { businessId:V3.businessId, userId:'h7-gap', conversationId:'low-stock-ordinal' }, state = {};
-  let entityResolutionCalls = 0;
+  const resolvedSkus = [];
   await handleV3({ message:'Muéstrame productos con stock bajo y su stock mínimo', state, context,
-    service:{ resolveContext:async () => binding, resolveEntity:async () => { entityResolutionCalls++; return {}; } },
+    service:{ resolveContext:async () => binding, resolveEntity:async (type, sku) => {
+      resolvedSkus.push(sku); return { entity:{ id:sku.endsWith('001') ? '111111111111111111111111' : '222222222222222222222222',
+        type, key:sku, label:sku === 'PAN-FRE-001' ? 'Pan francés' : 'Arroz' } };
+    } },
     run:async () => ({ status:'READY', data:{ total:2, items:[
       { sku:'PAN-FRE-001', productName:'Pan francés', stock:{ onHand:2 }, inventoryPolicy:{ configuredMinimumStock:3 }, risk:{ level:'HIGH' } },
       { sku:'ABA-PAS-001', productName:'Arroz', stock:{ onHand:1 }, inventoryPolicy:{ configuredMinimumStock:2 }, risk:{ level:'HIGH' } }
     ] }, metadata:{ asOf:'2026-10-14', dataMode:'LIVE', selected:{} } }), commit:patch => Object.assign(state, patch) });
-  assert.equal(entityResolutionCalls, 0, 'H.6-FIX3 must not resolve the whole low-stock phrase as one product');
-  assert.equal(state.v3Context?.ranking, undefined, 'current low-stock list deliberately does not create an entity ranking');
-  assert.equal(route('El segundo', state.v3Context), null, 'ordinal continuation after this specific list remains a known gap');
-  console.log('H7_KNOWN_GAP low-stock list -> ordinal selection: current result does not persist selectable entity ranking');
+  assert.deepEqual(resolvedSkus, ['PAN-FRE-001', 'ABA-PAS-001'], 'resolve only visible SKUs, never the complete natural-language filter');
+  assert.deepEqual(state.v3Context.ranking.items.map(row => row.key), ['PAN-FRE-001', 'ABA-PAS-001']);
+  assert.equal(route('El segundo', state.v3Context), null, 'selection is handled from compact context, not sent as a generic route');
+  const detailCalls = [];
+  const selected = await handleV3({ message:'El segundo', state, context, service:{ resolveContext:async () => binding,
+    resolveEntity:async () => ({}), }, run:async (_agent, skillId, args) => {
+      detailCalls.push({ skillId, args });
+      return { status:'READY', data:{ items:[{ sku:'ABA-PAS-001', productName:'Arroz', stock:{ onHand:1 },
+        inventoryPolicy:{ configuredMinimumStock:2 } }] }, metadata:{ asOf:'2026-10-14', dataMode:'LIVE',
+        selected:{ product:{ id:'222222222222222222222222', type:'product', key:'ABA-PAS-001', label:'Arroz' } } } };
+    }, commit:patch => Object.assign(state, patch) });
+  assert.equal(detailCalls[0].skillId, 'get_inventory_intelligence');
+  assert.equal(detailCalls[0].args.productRef, 'ABA-PAS-001');
+  assert.equal(state.v3Context.selectedProduct.key, 'ABA-PAS-001');
+  assert.match(selected.answer, /Arroz/);
+});
+
+test('H.7 product list ordinal aliases map to visible positions; absent and out-of-range lists are safe', async () => {
+  for (const [text, index] of [['el primero',0], ['el segundo',1], ['el tercero',2], ['la primera',0], ['la segunda',1],
+    ['la tercera',2], ['opción 1',0], ['opción 2',1], ['opción 3',2], ['número 1',0], ['número 2',1], ['número 3',2]]) {
+    const parsed = ordinalSelection(text);
+    if (parsed.matched) assert.equal(parsed.index, index, text);
+    else assert.match(text, /(?:opci[oó]n|n[uú]mero)/i, text);
+  }
+  const bindingHash = contextBinding({ businessId:V3.businessId, userId:'h7-safe', conversationId:'ordinal-safe' });
+  const state = { v3Context:{ binding:bindingHash, expiresAt:Date.now()+60_000, lastFamily:'get_inventory_intelligence',
+    ranking:{ type:'product', items:[1,2,3].map((n) => ({ type:'product', id:`${n}`.padStart(24,'0'), key:`SKU-${n}`, label:`Producto ${n}` })) } } };
+  const context = { businessId:V3.businessId, userId:'h7-safe', conversationId:'ordinal-safe' };
+  const make = message => handleV3({ message, state, context, service:{ resolveContext:async () => binding, resolveEntity:async () => ({}) },
+    run:async () => assert.fail('out-of-range and absent ordinals must not execute a skill'), commit:patch => Object.assign(state, patch) });
+  const outOfRange = await make('el quinto');
+  assert.match(outOfRange.answer, /3 opciones.*no está en la lista/i);
+  assert.equal((await make('opción 2')).intent, 'v3_selection', 'accented numeric alias can be resolved');
+  state.v3Context.ranking = null;
+  const absent = await make('el segundo');
+  assert.match(absent.answer, /lista vigente/i);
+  assert.equal(outOfRange.usage?.totalTokens || 0, 0);
 });
 
 test('H.7 future-grounded and out-of-domain prompts do not call a provider or business skill', () => {
