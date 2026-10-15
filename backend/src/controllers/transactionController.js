@@ -292,6 +292,7 @@ const updateTransactionStatus = asyncHandler(async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction({ ...(req.businessId === require('../config/v3Operational').businessId && !req.historicalContext ? { writeConcern: { w: 'majority' } } : {}) });
   let transaction;
+  const lowStockNotifications = [];
   try {
     transaction = await Transaction.findOne({
       _id: id,
@@ -399,6 +400,7 @@ const updateTransactionStatus = asyncHandler(async (req, res) => {
           { statusCode: 409 },
         );
       }
+      const previousStock = product.stock;
       await applyStockChange({
         product,
         quantityDelta: reversal,
@@ -412,6 +414,10 @@ const updateTransactionStatus = asyncHandler(async (req, res) => {
           : null,
         session
       });
+      if (!historical && transaction.type === 'purchase'
+        && previousStock > product.minStockLevel && product.stock <= product.minStockLevel) {
+        lowStockNotifications.push({ product, previousStock });
+      }
     }
 
     if (creditCustomer) {
@@ -434,6 +440,11 @@ const updateTransactionStatus = asyncHandler(async (req, res) => {
     throw error;
   } finally {
     await session.endSession();
+  }
+
+  for (const notification of lowStockNotifications) {
+    Promise.resolve().then(() => notifyLowStock(req.businessId, notification.product, notification.previousStock))
+      .catch(error => console.error('[Telegram] low-stock notification failed:', error.message));
   }
 
   res.json({
