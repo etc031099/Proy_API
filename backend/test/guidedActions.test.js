@@ -758,12 +758,32 @@ for (const phrase of ['¿sí se descontarán 3 unidades?', '¿está bien el prec
     const f = fixture(); const preview = await f.send('Vende 3 COC500');
     const result = await f.send(phrase);
     assert.equal(f.confirmed.length, 0); assert.equal(f.cancelled.length, 0); assert.equal(f.prepared.length, 1);
-    assert.equal(result.pendingAction.pendingActionId, preview.pendingAction.pendingActionId);
-    assert.equal(result.requiresClarification, true); assert.equal(result.usage.totalLlmCalls, 0);
-    await f.send('sí'); assert.equal(f.confirmed.length, 0);
-    await f.send('confirmar'); assert.equal(f.confirmed.length, 1);
+    if (phrase === '¿sí se descontarán 3 unidades?') {
+      // READ responses do not repeat the earlier preview payload. The draft and
+      // authoritative pending action remain stored independently of that response.
+      assert.equal(result.pendingAction, undefined);
+      assert.equal((await f.service.get(null, preview.pendingAction.pendingActionId)).status, 'PENDING');
+      assert.equal((await f.adapter.getContextSnapshot(request(), f.conversationId)).operationDraft.readSuspended, true);
+      const review = await f.send('sí');
+      assert.equal(review.pendingAction.pendingActionId, preview.pendingAction.pendingActionId);
+      assert.equal(review.requiresClarification, true); assert.equal(f.confirmed.length, 0);
+      await f.send('confirmar'); assert.equal(f.confirmed.length, 1);
+    } else {
+      assert.equal(result.pendingAction.pendingActionId, preview.pendingAction.pendingActionId);
+      assert.equal(result.requiresClarification, true); assert.equal(result.usage.totalLlmCalls, 0);
+      await f.send('sí'); assert.equal(f.confirmed.length, 0);
+      await f.send('confirmar'); assert.equal(f.confirmed.length, 1);
+    }
   });
 }
+test('P2D related question leaves preview pending and cancellation executes nothing', async () => {
+  const f = fixture(); const preview = await f.send('Vende 2 COC500');
+  await f.send('¿sí se descontarán 3 unidades?');
+  assert.equal((await f.service.get(null, preview.pendingAction.pendingActionId)).status, 'PENDING');
+  const cancelled = await f.send('cancela');
+  assert.equal(cancelled.pendingAction.status, 'CANCELLED');
+  assert.equal(f.confirmed.length, 0); assert.equal(f.prepared.length, 1); assert.equal(f.cancelled.length, 1);
+});
 for (const phrase of ['confirmar', 'sí', 'dale', 'cancelar', 'procede', 'no lo hagas']) {
   test(`P2D ${phrase} without pending is deterministic and preserves read context`, async () => {
     const f = fixture(); f.runtime.handle = async () => { throw new Error('LLM/read routing not allowed'); };
