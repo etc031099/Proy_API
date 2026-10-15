@@ -1,4 +1,7 @@
 'use strict';
+const { SCHEMA_REASONS } = require('./groundedOutputSchema');
+const safeSchemaField = value => typeof value === 'string'
+  && /^(?:\$|observations(?:\[[0-2]\](?:\.(?:evidenceRefs(?:\[[0-3]\])?|interpretation|advisoryRecommendation))?)?|limitations(?:\[[01]\])?)$/.test(value);
 const REASONS = new Set(['NONE', 'CONTENT_JSON_INVALID', 'OUTPUT_SCHEMA_INVALID', 'EVIDENCE_REFERENCE_INVALID',
   'TEXT_FIELD_INVALID', 'OUTPUT_TEXT_TOO_LONG', 'UNSAFE_CONTENT', 'UNSUPPORTED_SEMANTIC_CLAIM', 'UNKNOWN_ENTITY',
   'UNSUPPORTED_NUMBER', 'LIMITATION_NOT_ALLOWED', 'PROVIDER_UNAVAILABLE', 'HTTP_ERROR', 'ENVELOPE_JSON_INVALID', 'USAGE_INVALID',
@@ -16,6 +19,9 @@ const safeGroundedDiagnostic = (source = {}) => ({
   validationResult: source.validationResult === 'ACCEPTED' ? 'ACCEPTED' : 'REJECTED',
   validationPassed: source.validationResult === 'ACCEPTED',
   validationReason: REASONS.has(source.validationReason) ? source.validationReason : 'OTHER',
+  ...(['SCHEMA', 'GROUNDING'].includes(source.validationLayer) ? { validationLayer: source.validationLayer } : {}),
+  ...(SCHEMA_REASONS.includes(source.schemaReason) ? { schemaReason: source.schemaReason } : {}),
+  ...(safeSchemaField(source.schemaField) ? { schemaField: source.schemaField } : {}),
   ...(typeof source.validationField === 'string'
     && /^(?:observations\[[0-2]\]\.(?:interpretation|advisoryRecommendation|evidenceRefs)|limitations\[[01]\])$/.test(source.validationField)
     ? { validationField: source.validationField } : {})

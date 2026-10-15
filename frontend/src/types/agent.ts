@@ -63,6 +63,7 @@ export interface AgentEvidence {
 export interface AgentResponse {
   grounded?: { route: string; responseDiagnostic?: {
     validationResult: 'ACCEPTED' | 'REJECTED'; validationReason: string; validationField?: string;
+    validationLayer?: 'SCHEMA' | 'GROUNDING'; schemaReason?: string; schemaField?: string;
     finishReason: string | null; contentPresent: boolean | null;
   } };
   suggestions?: { label: string; message: string; detail?: string }[];

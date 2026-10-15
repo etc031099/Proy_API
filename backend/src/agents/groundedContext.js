@@ -1,6 +1,7 @@
 'use strict';
 const { deepFreeze, isPlainObject } = require('./contracts');
 const { V3_IDS } = require('./v3Skills');
+const { parseGroundedSchema } = require('./groundedOutputSchema');
 const MAX_CONTEXT_BYTES = 6400;
 const HALLUCINATION_CONTRACT = Object.freeze([
   'Usa exclusivamente los hechos y referencias entregados; no inventes cifras ni entidades.',
@@ -110,18 +111,11 @@ const contextMetrics = context => ({ bytes: Buffer.byteLength(JSON.stringify(con
 
 const validateGroundedOutput = (text, context) => {
   const fail = (reason = 'OUTPUT_SCHEMA_INVALID', validationField) => {
-    throw Object.assign(new Error('GROUNDED_INVALID_RESPONSE'), { validationReason: reason, ...(validationField ? { validationField } : {}) });
+    throw Object.assign(new Error('GROUNDED_INVALID_RESPONSE'), { validationReason: reason, validationLayer: 'GROUNDING', ...(validationField ? { validationField } : {}) });
   };
-  let output;
-  try { output = JSON.parse(text); } catch { fail('CONTENT_JSON_INVALID'); }
-  if (!isPlainObject(output) || Object.keys(output).some(key => !['observations', 'limitations'].includes(key))
-    || !Array.isArray(output.observations) || !output.observations.length || output.observations.length > 3
-    || !Array.isArray(output.limitations) || output.limitations.length > 2) fail();
+  const output = parseGroundedSchema(text);
   const refs = new Map(context.evidence.filter(row => row.facts !== null).map(row => [row.ref, row]));
-  let textLength = 0;
   for (const [index, row] of output.observations.entries()) {
-    if (!isPlainObject(row) || Object.keys(row).some(key => !['evidenceRefs', 'interpretation', 'advisoryRecommendation'].includes(key))
-      || !Array.isArray(row.evidenceRefs) || !row.evidenceRefs.length) fail();
     if (row.evidenceRefs.some(ref => !refs.has(ref))) fail('EVIDENCE_REFERENCE_INVALID', `observations[${index}].evidenceRefs`);
     const allowed = JSON.stringify(row.evidenceRefs.map(ref => refs.get(ref).facts));
     // Numeric values only: never let digits embedded in SKUs authorize claims.
@@ -136,11 +130,6 @@ const validateGroundedOutput = (text, context) => {
     for (const field of ['interpretation', 'advisoryRecommendation']) {
       const value = row[field];
       const path = `observations[${index}].${field}`;
-      if (typeof value !== 'string' || !value.trim()) fail('TEXT_FIELD_INVALID', path);
-      // A grouped three-product synthesis can legitimately exceed 360 characters
-      // in one field. Retain both per-field and whole-response bounds.
-      textLength += value.length;
-      if (value.length > 900 || textLength > 2160) fail('OUTPUT_TEXT_TOO_LONG', path);
       if (cleanText(value, 900) !== value) fail('UNSAFE_CONTENT', path);
       const claims = value.replace(/no (?:fue |esta |es )?aprobado|no (?:demuestra|prueba|garantiza|implica)/gi, '[negado]');
       if (/(?:fraude confirmado|probabilidad de abandono|1\s*[-−]\s*WAPE|causa(?:lidad)? (?:demostrada|confirmada)|MA28 es (?:ML|machine learning)|HGB.*28.*aprobado|\b(?:confirmo|ejecut[eé]|registr[eé]) (?:la |una )?(?:venta|compra))/i.test(claims)
