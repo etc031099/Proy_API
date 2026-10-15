@@ -173,7 +173,7 @@ for (const failure of ['401', '429', '5xx', 'timeout', 'malformed', 'tool_call',
   assert.match(result.answer, /conservan los hechos/); assert.equal(result.pendingAction, undefined);
   assert.doesNotMatch(JSON.stringify(result), /fictional-test-key|PRIVATE-REASONING|private body/);
   assert.ok(f.events.some(row => row.type === 'synthesis_finished' && row.status === 'REJECTED'));
-  if (failure === 'bad_grounding') assert.equal(result.usage.totalTokens, 1100);
+  if (['bad_grounding', 'tool_call', 'length'].includes(failure)) assert.equal(result.usage.totalTokens, 1100);
   else { assert.equal(result.usage.totalTokens, null); assert.ok(result.usage.providerFailures.length); }
   if (failure === 'timeout') assert.equal(aborted, true);
 });

@@ -10,6 +10,8 @@ const actionItem = { sku: true, name: true, quantity: true, stock: true, resulti
 const shape = {
   grounded: { route: true, responseIntent: true, domains: [true], skills: [true], noHistoricalSkuData: true,
     failures: [{ skillId: true, kind: true, code: true, httpStatus: true }],
+    responseDiagnostic: { providerResponseReceived: true, httpStatus: true, contentPresent: true, contentLength: true,
+      finishReason: true, usagePresent: true, usageParseResult: true, validationResult: true, validationReason: true },
     contextMetrics: { bytes: true, chars: true, estimatedTokens: true, tokenCountIsEstimate: true } },
   v3Views: [{ kind: true, title: true, subtitle: true, metrics: [{ label: true, value: true }],
     items: [{ type: true, key: true, label: true, secondaryLabel: true, selectMessage: true, metrics: [{ label: true, value: true }] }], note: true }],

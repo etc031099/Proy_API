@@ -57,10 +57,15 @@ const createNeutralProvider = ({ provider, model, generate, prices = [], timeout
       const source = result.usage || {}, usage = Object.fromEntries(['inputTokens', 'outputTokens', 'totalTokens', 'cachedInputTokens', 'cacheMissInputTokens', 'reasoningTokens']
         .map(field => [field, validCount(source[field]) ? source[field] : null]));
       if (usage.cachedInputTokens !== null && usage.inputTokens !== null && usage.cachedInputTokens > usage.inputTokens) throw unavailable();
-      return deepFreeze({ text: result.text, provider, model, usage,
+      return deepFreeze({ text: result.text, provider, model, usage, responseDiagnostic: result.responseDiagnostic,
         latencyMs: performance.now() - start, ...estimateCostUsd({ provider, model, usage, prices: priceConfig, at: clock().toISOString() }) });
     } catch (error) {
       const safe = unavailable();
+      if (provider === 'deepseek' && error?.responseDiagnostic) {
+        safe.responseDiagnostic = error.responseDiagnostic;
+        safe.usage = error.usage;
+        Object.assign(safe, estimateCostUsd({ provider, model, usage: error.usage, prices: priceConfig, at: clock().toISOString() }));
+      }
       safe.failureKind = controller.signal.aborted ? 'TIMEOUT' : ({
         DEEPSEEK_AUTH_FAILED: 'AUTHENTICATION', DEEPSEEK_RATE_LIMITED: 'RATE_LIMIT', DEEPSEEK_UNAVAILABLE: 'UNAVAILABLE',
         DEEPSEEK_INVALID_RESPONSE: 'INVALID_RESPONSE', DEEPSEEK_NETWORK_ERROR: 'NETWORK',

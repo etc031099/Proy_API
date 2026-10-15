@@ -147,7 +147,7 @@ const createAgentExecution = options => {
         llmRecords.push({ agentId: 'analyst', provider: result.provider, model: result.model, latencyMs: result.latencyMs,
           estimatedCostUsd: result.estimatedCostUsd, pricingVersion: result.pricingVersion,
           estimatedCostRangeUsd: result.estimatedCostRangeUsd,
-          usageAvailable: ['inputTokens', 'outputTokens', 'totalTokens'].some(key => Number.isSafeInteger(result.usage[key])),
+          usageAvailable: ['inputTokens', 'outputTokens', 'totalTokens', 'cachedInputTokens', 'cacheMissInputTokens', 'reasoningTokens'].some(key => Number.isSafeInteger(result.usage[key])),
           ...result.usage, thoughtTokens: null, toolUseTokens: null });
         emit('llm_finished', { agentId: 'analyst', agentRunId, model: result.model, durationMs: result.latencyMs, status: 'SUCCEEDED', ...result.usage });
         emit('agent_finished', { agentId: 'analyst', agentRunId, durationMs: performance.now() - start, status: 'SUCCEEDED' });
@@ -155,10 +155,14 @@ const createAgentExecution = options => {
       } catch (error) {
         failed = true;
         llmRecords.push({ agentId: 'analyst', provider: neutralProvider.provider, model: neutralProvider.model,
-          latencyMs: performance.now() - start, usageAvailable: false, providerFailure: error?.failureKind || 'INVALID_RESPONSE' });
+          latencyMs: performance.now() - start,
+          usageAvailable: ['inputTokens', 'outputTokens', 'totalTokens', 'cachedInputTokens', 'cacheMissInputTokens', 'reasoningTokens'].some(key => Number.isSafeInteger(error?.usage?.[key])),
+          ...error.usage, thoughtTokens: null, toolUseTokens: null,
+          estimatedCostUsd: error.estimatedCostUsd, estimatedCostRangeUsd: error.estimatedCostRangeUsd,
+          pricingVersion: error.pricingVersion, providerFailure: error?.failureKind || 'INVALID_RESPONSE' });
         emit('llm_finished', { agentId: 'analyst', agentRunId, model: neutralProvider.model, durationMs: performance.now() - start, status: 'FAILED' });
         emit('agent_finished', { agentId: 'analyst', agentRunId, durationMs: performance.now() - start, status: 'FAILED' });
-        throw new AgentError('AGENT_PROVIDER_FAILED');
+        throw Object.assign(new AgentError('AGENT_PROVIDER_FAILED'), { responseDiagnostic: error.responseDiagnostic });
       } finally { active--; }
     },
     recordGroundedSynthesis(accepted) {

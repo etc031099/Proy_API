@@ -23,7 +23,12 @@ const readDeepSeekConfig = (env = process.env) => {
 };
 
 const normalizeDeepSeekUsage = source => {
+  if (source !== undefined && source !== null && !isPlainObject(source)) throw failure('DEEPSEEK_INVALID_RESPONSE');
   const usage = isPlainObject(source) ? source : {};
+  for (const value of [usage.prompt_tokens, usage.completion_tokens, usage.total_tokens, usage.prompt_cache_hit_tokens,
+    usage.prompt_cache_miss_tokens, usage.prompt_tokens_details?.cached_tokens, usage.completion_tokens_details?.reasoning_tokens]) {
+    if (value !== undefined && value !== null && !count(value)) throw failure('DEEPSEEK_INVALID_RESPONSE');
+  }
   const parsed = { inputTokens: count(usage.prompt_tokens) ? usage.prompt_tokens : null,
     outputTokens: count(usage.completion_tokens) ? usage.completion_tokens : null,
     totalTokens: count(usage.total_tokens) ? usage.total_tokens : null,
@@ -59,17 +64,35 @@ const createDeepSeekProvider = ({ env = process.env, fetchImpl = globalThis.fetc
         response = await fetchImpl(config.endpoint, { method: 'POST', redirect: 'error', signal: request.signal,
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey.trim()}` }, body: JSON.stringify(body) });
       } catch { throw failure(request.signal.aborted ? 'DEEPSEEK_TIMEOUT' : 'DEEPSEEK_NETWORK_ERROR'); }
-      if (!response.ok) throw failure(response.status === 401 || response.status === 403 ? 'DEEPSEEK_AUTH_FAILED'
-        : response.status === 429 ? 'DEEPSEEK_RATE_LIMITED' : 'DEEPSEEK_UNAVAILABLE');
+      const diagnostic = { providerResponseReceived: true, httpStatus: response.status,
+        contentPresent: false, contentLength: 0, finishReason: null, usagePresent: false,
+        usageParseResult: 'ABSENT', validationResult: 'REJECTED', validationReason: 'HTTP_ERROR' };
+      const reject = reason => { throw Object.assign(failure('DEEPSEEK_INVALID_RESPONSE'),
+        { responseDiagnostic: { ...diagnostic, validationReason: reason }, usage: parsedUsage }); };
+      let parsedUsage = normalizeDeepSeekUsage();
+      if (!response.ok) throw Object.assign(failure(response.status === 401 || response.status === 403 ? 'DEEPSEEK_AUTH_FAILED'
+        : response.status === 429 ? 'DEEPSEEK_RATE_LIMITED' : 'DEEPSEEK_UNAVAILABLE'), { responseDiagnostic: diagnostic });
       let result;
-      try { result = await response.json(); } catch { throw failure('DEEPSEEK_INVALID_RESPONSE'); }
+      try { result = await response.json(); } catch { reject('ENVELOPE_JSON_INVALID'); }
       const choice = result?.choices?.[0], message = choice?.message;
+      diagnostic.contentPresent = typeof message?.content === 'string' && Boolean(message.content.trim());
+      diagnostic.contentLength = typeof message?.content === 'string' ? message.content.length : 0;
+      diagnostic.finishReason = ['stop', 'length', 'tool_calls', 'content_filter', 'insufficient_system_resource'].includes(choice?.finish_reason) ? choice.finish_reason : null;
+      diagnostic.usagePresent = result?.usage !== undefined && result?.usage !== null;
+      try {
+        parsedUsage = normalizeDeepSeekUsage(result?.usage);
+        diagnostic.usageParseResult = !diagnostic.usagePresent ? 'ABSENT'
+          : ['inputTokens', 'outputTokens', 'totalTokens'].every(key => parsedUsage[key] !== null) ? 'COMPLETE' : 'INCOMPLETE';
+      } catch { diagnostic.usageParseResult = 'INVALID'; reject('USAGE_INVALID'); }
+      if (choice?.finish_reason === 'length') reject('OUTPUT_TRUNCATED');
       if (!isPlainObject(result) || result.model !== config.model || result.choices?.length !== 1
         || choice?.finish_reason !== 'stop' || message?.role !== 'assistant' || message.tool_calls?.length || message.function_call
         || typeof message?.content !== 'string' || !message.content.trim() || message.content.length > 6000)
-        throw failure('DEEPSEEK_INVALID_RESPONSE');
+        reject(!diagnostic.contentPresent ? 'CONTENT_EMPTY' : result.model !== config.model ? 'MODEL_MISMATCH'
+          : choice?.finish_reason !== 'stop' ? 'FINISH_REASON_UNSUPPORTED' : 'ENVELOPE_SCHEMA_INVALID');
       // Drop reasoning_content and all provider envelope data before crossing the boundary.
-      return { text: message.content, usage: normalizeDeepSeekUsage(result.usage) };
+      return { text: message.content, usage: parsedUsage,
+        responseDiagnostic: { ...diagnostic, validationResult: 'ACCEPTED', validationReason: 'NONE' } };
     } });
 };
 module.exports = { createDeepSeekProvider, readDeepSeekConfig, normalizeDeepSeekUsage };

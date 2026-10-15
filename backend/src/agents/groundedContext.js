@@ -73,9 +73,9 @@ const contextMetrics = context => ({ bytes: Buffer.byteLength(JSON.stringify(con
   tokenCountIsEstimate: true });
 
 const validateGroundedOutput = (text, context) => {
-  const fail = () => { throw new Error('GROUNDED_INVALID_RESPONSE'); };
+  const fail = (reason = 'OUTPUT_SCHEMA_INVALID') => { throw Object.assign(new Error('GROUNDED_INVALID_RESPONSE'), { validationReason: reason }); };
   let output;
-  try { output = JSON.parse(text); } catch { fail(); }
+  try { output = JSON.parse(text); } catch { fail('CONTENT_JSON_INVALID'); }
   if (!isPlainObject(output) || Object.keys(output).some(key => !['observations', 'limitations'].includes(key))
     || !Array.isArray(output.observations) || !output.observations.length || output.observations.length > 3
     || !Array.isArray(output.limitations) || output.limitations.length > 2) fail();
@@ -84,17 +84,29 @@ const validateGroundedOutput = (text, context) => {
     if (!isPlainObject(row) || Object.keys(row).some(key => !['evidenceRefs', 'interpretation', 'advisoryRecommendation'].includes(key))
       || !Array.isArray(row.evidenceRefs) || !row.evidenceRefs.length || row.evidenceRefs.some(ref => !refs.has(ref))) fail();
     const allowed = JSON.stringify(row.evidenceRefs.map(ref => refs.get(ref).facts));
-    const numbers = new Set(allowed.match(/-?\d+(?:\.\d+)?/g) || []);
+    // Numeric values only: never let digits embedded in SKUs authorize claims.
+    const numericFacts = [];
+    const collect = value => {
+      if (typeof value === 'number' && Number.isFinite(value)) numericFacts.push(value);
+      else if (Array.isArray(value)) value.forEach(collect);
+      else if (isPlainObject(value)) Object.values(value).forEach(collect);
+    };
+    row.evidenceRefs.forEach(ref => collect(refs.get(ref).facts));
     const skus = new Set(allowed.match(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/g) || []);
     for (const field of ['interpretation', 'advisoryRecommendation']) {
       const value = row[field];
       if (typeof value !== 'string' || !value.trim() || value.length > 360 || cleanText(value, 360) !== value) fail();
       const claims = value.replace(/no (?:fue |esta |es )?aprobado|no (?:demuestra|prueba|garantiza|implica)/gi, '[negado]');
       if (/(?:fraude confirmado|probabilidad de abandono|1\s*[-−]\s*WAPE|causa(?:lidad)? (?:demostrada|confirmada)|MA28 es (?:ML|machine learning)|HGB.*28.*aprobado|\b(?:confirmo|ejecut[eé]|registr[eé]) (?:la |una )?(?:venta|compra))/i.test(claims)
-        || /(?:FP.?Growth|lift).{0,80}(?:demuestra|prueba|garantiza).{0,30}(?:causa|ventas)/i.test(claims)) fail();
-      if ((value.match(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/g) || []).some(sku => !skus.has(sku))) fail();
-      const remaining = value.replace(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/g, '');
-      if ((remaining.match(/-?\d+(?:[.,]\d+)?/g) || []).some(number => !numbers.has(number.replace(',', '.')))) fail();
+        || /(?:FP.?Growth|lift).{0,80}(?:demuestra|prueba|garantiza).{0,30}(?:causa|ventas)/i.test(claims)) fail('UNSUPPORTED_SEMANTIC_CLAIM');
+      if ((value.match(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/g) || []).some(sku => !skus.has(sku))) fail('UNKNOWN_ENTITY');
+      const remaining = value.replace(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/g, '')
+        .replace(/\bMA28\b/g, allowed.includes('MOVING_AVERAGE_28') ? '' : 'MA28');
+      if ((remaining.match(/-?\d+(?:[.,]\d+)?/g) || []).some(number => {
+        const normalized = number.replace(',', '.'), claim = Number(normalized), decimals = normalized.split('.')[1]?.length;
+        return !numericFacts.some(fact => fact === claim
+          || decimals >= 1 && decimals <= 2 && Number(fact.toFixed(decimals)) === claim);
+      })) fail('UNSUPPORTED_NUMBER');
     }
   }
   if (output.limitations.some(value => typeof value !== 'string' || value.length > 240 || !HALLUCINATION_CONTRACT.includes(value))) fail();
