@@ -52,6 +52,29 @@ const naturalProductListReference = message => {
   const singular = reference.replace(/s$/, '');
   return aliases[singular] || reference;
 };
+const naturalInventoryFilter = message => {
+  const normalized = clean(message).replace(/[¿?¡!.]/g, '').trim();
+  if (!/\b(?:por acabarse|acabando|con poco stock|stock bajo|deberia reponer|deberian reponer|debo reponer|deberia pedir|deberian pedir)\b/.test(normalized)) return null;
+  const prefix = normalized.match(/^(?:cual(?:es)?|que) (.+?) (?:esta|estan|deberia|deberian|debo)\b/);
+  if (!prefix) return null;
+  let reference = prefix[1].replace(/^(?:los |las |el |la )/, '').trim();
+  reference = reference.replace(/^productos? (?:de )?/, '').trim();
+  const categoryAliases = { gaseosa: 'BEB-GAS', gaseosas: 'BEB-GAS', galleta: 'GAL', galletas: 'GAL',
+    leche: 'DES-LEC', leches: 'DES-LEC', pan: 'PAN', panes: 'PAN' };
+  const words = reference.split(/\s+/);
+  const categoryIndex = words.findIndex(word => categoryAliases[word]);
+  let lookup = reference, brandFilter = null;
+  if (categoryIndex >= 0) {
+    const category = categoryAliases[words[categoryIndex]];
+    const brand = words.filter((_, index) => index !== categoryIndex).join(' ').trim();
+    lookup = category;
+    brandFilter = brand || null;
+  }
+  if (!lookup || /^(?:productos?|inventario|stock)$/.test(lookup)) return null;
+  const condition = /\b(?:deberia reponer|deberian reponer|debo reponer|deberia pedir|deberian pedir)\b/.test(normalized)
+    ? 'should_reorder' : 'low_stock';
+  return { lookup, brandFilter, condition, responseMode: 'inventory-filter' };
+};
 const operationalDateOf = binding => binding.operationalDate || binding.asOfDate;
 const queryPeriod = (message, binding, memory, followup = false) => {
   const operationalDate = operationalDateOf(binding);
@@ -168,7 +191,9 @@ const machineLearningPlan = (text, message, binding, memory) => {
 
 const routeV3 = (message, state, binding) => {
   const text = clean(message), memory = state || {};
-  if (/^(?:quien gano el partido de ayer|cual es la capital de japon|escribeme una historia)$/.test(text.replace(/[¿?¡!.]/g, '').trim())) return null;
+  if (/^saca\s+(?:\d+|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\b/.test(text))
+    return { clarificationQuestion: '¿Quieres registrar una venta para descontar esas unidades o solo corregir el stock? «Saca» puede referirse a movimientos distintos; no prepararé una operación hasta que lo aclares.' };
+  if (/^(?:quien gano el partido de ayer|cual es la capital de japon|escribeme una historia(?: de .+)?|que laptop me recomiendas)$/.test(text.replace(/[¿?¡!.]/g, '').trim())) return null;
   if (/^(?:vende|vender|compra|comprar|prepara(?:r)? (?:una )?compra|crea|crear|avisa|avisame|actualiza|ajusta|confirma|confirmar|confirmo|hazlo|correcto|cancela|cancelar|si hazlo|procede|adelante|no lo hagas|no hagas nada|mejor no)\b/.test(text)
     || /^(?:ese|el segundo)$/.test(text)) return null;
   const coverageQuestion = /\b(?:cobertura|coverage)\b/.test(text)
@@ -183,6 +208,8 @@ const routeV3 = (message, state, binding) => {
   }
   const machineLearning = machineLearningPlan(text, message, binding, memory);
   if (machineLearning) return machineLearning;
+  const inventoryFilter = naturalInventoryFilter(message);
+  if (inventoryFilter) return inventoryFilter;
   const stockReference = naturalStockReference(message);
   if (stockReference) return { lookup: stockReference, responseMode: 'minimal' };
   const productListReference = naturalProductListReference(message);
@@ -629,6 +656,11 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
 const renderV3 = (skillId, result, args, responseMode = null) => {
   const d = result.data, date = result.metadata.asOf;
   const items = d.items || [];
+  if (responseMode === 'inventory-filter' && skillId === 'get_inventory_intelligence') {
+    if (result.status === 'PARTIAL' || d.reasonCode === 'LIVE_FORECAST_REQUIRED') return 'No pude verificar qué productos reponer porque falta evidencia de pronóstico para esa recomendación. No inferí una cantidad.';
+    if (!items.length) return `No encontré productos que coincidan con esa marca o categoría ${args.flag === 'should_reorder' ? 'recomendados para reposición' : 'bajo la condición de bajo stock'}.`;
+    return items.map(item => `${label(item)}: ${units(item.stock?.onHand)} disponibles; ${args.flag === 'should_reorder' ? 'reposición recomendada' : 'bajo stock'}.`).join('\n');
+  }
   if (responseMode === 'minimal' && skillId === 'get_inventory_intelligence' && items.length === 1) {
     return `${label(items[0])}: ${units(items[0].stock?.onHand)} disponibles.`;
   }
@@ -763,8 +795,34 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
       ? { tasks: [task('get_business_analytics', { mode: 'rank', entityType: 'category', categoryRef: selected.key })] }
       : { tasks: [task(selected.type === 'product' ? 'get_inventory_intelligence' : selected.type === 'customer' ? 'get_customer_intelligence' : 'get_supplier_intelligence', { mode: 'detail', [`${selected.type}Ref`]: selected.key })] };
     scope.pending = null; save();
-  } else if (choiceLike) return { answer: 'Elige una entidad de la lista vigente o indica su nombre/código.', clarification: true, intent: 'v3_selection', agent: 'coordinator' };
+  } else if (choiceLike && !plan?.clarificationQuestion) return { answer: 'Elige una entidad de la lista vigente o indica su nombre/código.', clarification: true, intent: 'v3_selection', agent: 'coordinator' };
   if (!plan) return null;
+  if (plan.responseMode === 'inventory-filter') {
+    const all = [], pageSize = 5, maximumCandidates = 20;
+    let totalMatches = 0;
+    for (let offset = 0; offset < maximumCandidates; offset += pageSize) {
+      const resolution = await service.resolveEntity('product', plan.lookup, context, offset);
+      const page = resolution.candidates?.length ? resolution.candidates : resolution.entity ? [resolution.entity] : [];
+      totalMatches = resolution.pagination?.totalMatches || page.length;
+      all.push(...page);
+      if (!page.length || all.length >= totalMatches || all.length >= maximumCandidates) break;
+    }
+    if (totalMatches > all.length && all.length >= maximumCandidates) return {
+      answer: 'Hay demasiadas coincidencias para revisar con seguridad en una sola consulta. Indica una categoría o marca más específica.',
+      clarification: true, intent: 'v3_inventory_filter', agent: 'coordinator'
+    };
+    const normalizedBrand = plan.brandFilter ? normalize(plan.brandFilter) : null;
+    const matching = all.filter(row => !normalizedBrand || normalize(row.label || row.name || '').includes(normalizedBrand));
+    const skus = [];
+    for (const sku of new Set(matching.map(row => row.key || row.sku).filter(Boolean))) {
+      if (skus.length >= maximumCandidates || [...skus, sku].join('|').length > 490) break;
+      skus.push(sku);
+    }
+    if (!skus.length) return { answer: 'No encontré productos que coincidan con esa marca o categoría.', clarification: false, intent: 'v3_inventory_filter', agent: 'coordinator' };
+    plan = { responseMode: 'inventory-filter', tasks: [task('get_inventory_intelligence', {
+      mode: 'summary', flag: plan.condition, productRefs: skus.join('|'), limit: maximumCandidates
+    })] };
+  }
   if (plan.lookup) {
     for (const type of ['product', 'customer', 'supplier']) {
       const resolution = await service.resolveEntity(type, plan.lookup, context);
@@ -827,6 +885,11 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
       if (responseMode === 'minimal' && current.skillId === 'get_inventory_intelligence' && view.items?.length === 1) {
         view.metrics = view.items[0].metrics.filter(metric => metric.label === 'Stock');
         view.items[0].metrics = view.items[0].metrics.filter(metric => metric.label === 'Stock');
+        view.note = undefined;
+      }
+      if (responseMode === 'inventory-filter' && current.skillId === 'get_inventory_intelligence') {
+        view.metrics = [];
+        view.items = view.items.map(item => ({ ...item, metrics: item.metrics.filter(metric => ['Stock', 'Riesgo'].includes(metric.label)) }));
         view.note = undefined;
       }
       v3Views.push(view);

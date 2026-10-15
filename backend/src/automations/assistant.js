@@ -63,7 +63,21 @@ const withActionAssistant = (runtime, service, options = {}) => {
     const draftKey = keyFor(req, input.conversationId);
     let previous = drafts.get(draftKey);
     const explicit = actionIntent(input.message);
-    if (explicit && v3State) await runtime.clearV3Selection?.(req, input.conversationId);
+    const actionOrdinal = ordinalSelection(input.message);
+    let selectionActionProblem = null;
+    if (explicit && ['create_sale', 'create_purchase'].includes(explicit) && actionOrdinal.matched && v3State?.pending
+      && v3State.pending.type === 'product' && v3State.ranking?.type === 'product') {
+      const index = actionOrdinal.index === -1 ? v3State.ranking.items.length - 1 : actionOrdinal.index;
+      const candidate = actionOrdinal.index === null ? null : v3State.ranking.items[index];
+      if (!candidate?.key) selectionActionProblem = 'Esa opción no está en la lista vigente. Elige una de las opciones mostradas; no se preparó ninguna operación.';
+      let quantity;
+      if (!selectionActionProblem) {
+        try { quantity = parseAction(input.message, explicit).items?.[0]?.quantity; } catch { quantity = null; }
+        if (!Number.isSafeInteger(quantity) || quantity < 1) selectionActionProblem = 'Indica una cantidad válida junto con la opción, por ejemplo «vende 2 de la segunda». No se preparó ninguna operación.';
+        else input = { ...input, message: `${explicit === 'create_sale' ? 'vende' : 'compra'} ${quantity} del ${candidate.key}` };
+      }
+    }
+    if (explicit && v3State && !selectionActionProblem) await runtime.clearV3Selection?.(req, input.conversationId);
     if (v3State?.pending && !explicit && decision !== 'cancel'
       && (/^(?:[1-5]|opcion [1-5]|si(?:,? ese)?|ok|vale|dale|ver mas|siguiente|anterior)$/.test(normalized)
         || ordinalSelection(input.message).matched
@@ -98,6 +112,7 @@ const withActionAssistant = (runtime, service, options = {}) => {
     const started = performance.now(), conversationId = input.conversationId || randomUUID();
     const context = createActionContext(req, { conversationId }), key = keyFor(req, conversationId);
     let pendingAction, answer, clarification = false, previewShown = false, execution, suggestions = [], suggestionsExpiresAt, suggestionsPagination, suggestionsEntityType;
+    if (selectionActionProblem) return response(selectionActionProblem, undefined, true);
     if (!previous && candidateCommand) return response('No hay una lista de opciones vigente. Inicia nuevamente la búsqueda.', undefined, true);
     if (pendingQuestion) {
       const pending = await service.get(context, previous.pendingActionId);
@@ -182,11 +197,15 @@ const withActionAssistant = (runtime, service, options = {}) => {
       try {
         const ordinalCorrection = !explicit && (previous?.selection || previous?.supplierChoices && /\bproveedor\b/.test(normalized)
           || previous?.productChoices && /\bproducto\b/.test(normalized)) && ordinalSelection(input.message).matched;
-        // A selection-only turn cannot silently discard simultaneous numeric
-        // changes or bypass the quantity parser. Ask for separate turns instead.
-        if (ordinalCorrection && /\d|\b(?:cantidad|unidades?|stock|minimo|umbral)\b/.test(numericWords(normalized)))
+        const combinedSelectionQuantity = ordinalCorrection && previous?.selection?.slot === 'product'
+          && ['create_sale', 'create_purchase'].includes(previous.action) && ordinalSelection(input.message).index !== null
+          && /^\s*(?:\d+|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\s+de\s+(?:el |la )?(?:primer[oa]?|segund[oa]|tercer[oa]?|cuart[oa]|quint[oa]|sext[oa]|ultim[oa])\s*$/i.test(input.message);
+        // A named selection alone selects a candidate. Quantity+ordinal is
+        // accepted only for an existing product sale/purchase draft and still
+        // flows through normal resolve + preview, never confirmation.
+        if (ordinalCorrection && /\d|\b(?:cantidad|unidades?|stock|minimo|umbral)\b/.test(numericWords(normalized)) && !combinedSelectionQuantity)
           return response('Elige primero una opción de la lista. Después puedes corregir la cantidad o condición antes de confirmar.', undefined, true);
-        extracted = ordinalCorrection
+        extracted = ordinalCorrection && !combinedSelectionQuantity
           ? { action: skillId } : parseAction(input.message, skillId);
       }
       catch (error) {

@@ -92,7 +92,11 @@ function updateDraft(previous, extracted, message) {
         draft.supplierChoices = structuredClone(draft.selection);
         delete draft.selectedSupplier;
       }
-      if (slot === 'product') { draft.productChoices = structuredClone(draft.selection); draft.items[index].ref = selected._id; }
+      if (slot === 'product') {
+        draft.productChoices = structuredClone(draft.selection); draft.items[index].ref = selected._id;
+        const selectedQuantity = extracted.items?.[0]?.quantity;
+        if (Number.isSafeInteger(selectedQuantity) && selectedQuantity > 0) draft.items[index].quantity = selectedQuantity;
+      }
       else if (slot === 'productSupplier') {
         if (draft.supplierId && draft.supplierId !== selected._id) delete draft.purchasePrice;
         draft.supplierId = selected._id; draft.enrichment = 'supplier';

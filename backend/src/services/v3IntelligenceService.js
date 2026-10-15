@@ -195,7 +195,8 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
     }
     if (args.productRefs) {
       const refs = args.productRefs.split('|');
-      if (args.productRef || refs.length > 5 || refs.some(ref => !ref.trim() || ref.length > 100)) throw new AgentError('AGENT_INVALID_SKILL_ARGS');
+      const maxProductRefs = spec.domain === 'inventory' && ['low_stock', 'should_reorder'].includes(args.flag) ? 20 : 5;
+      if (args.productRef || refs.length > maxProductRefs || refs.some(ref => !ref.trim() || ref.length > 100)) throw new AgentError('AGENT_INVALID_SKILL_ARGS');
       const skus = [];
       for (let index = 0; index < refs.length; index++) {
         const resolution = await resolveEntity('product', refs[index], invocation.context);
