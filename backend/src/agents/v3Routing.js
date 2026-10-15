@@ -93,7 +93,7 @@ const naturalInventoryConditionList = message => {
   if (/\b(?:ventas?|vendi|vendimos)\b/.test(normalized) && /\b(?:reponer|reposicion)\b/.test(normalized)) return null;
   if (/\bpedidos? pendientes?\b/.test(normalized) && /\by\b/.test(normalized)) return null;
   const specificReference = /\b(?:coca cola|coca-cola|gloria|inca kola|gaseosas?|galletas?|leches?|pan frances|panes?)\b/.test(normalized);
-  const listLanguage = /\bproductos\b/.test(normalized) && /\b(?:que|cuales|lista|muestrame|dime)\b/.test(normalized)
+  const listLanguage = /\bproductos?\b/.test(normalized) && /\b(?:que|cuales|lista|muestrame|dime)\b/.test(normalized)
     || /\bcuales\b/.test(normalized) && /\b(?:reponer|pedir|reabastecer|por debajo del? minimo|por debajo de su minimo)\b/.test(normalized)
     || /^stock bajo$/.test(normalized)
     || /\bque se (?:me )?esta acabando\b/.test(normalized);
@@ -978,6 +978,11 @@ const handleV3 = async ({ message, state, context, service, run, commit }) => {
       candidateCount: candidates.length, resumedSkillId: plan.tasks[memory.pending?.taskIndex || 0].skillId };
   } else if (choiceLike && !plan?.clarificationQuestion) return { answer: 'Elige una entidad de la lista vigente o indica su nombre/código.', clarification: true, intent: 'v3_selection', agent: 'coordinator' };
   if (!plan) return null;
+  // A new explicit request replaces the visible selection list, while the active
+  // product remains available for an unambiguous cross-domain pronoun within TTL.
+  if (!choiceLike && !selected && plan.tasks?.length) {
+    scope.pending = null; scope.ranking = null; save();
+  }
   if (plan.responseMode === 'inventory-filter') {
     const all = [], pageSize = 5, maximumCandidates = 20;
     let totalMatches = 0;

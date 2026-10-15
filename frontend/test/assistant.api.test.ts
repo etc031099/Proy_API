@@ -14,6 +14,15 @@ const instance = (apiClient as unknown as { instance: {
   get: (url: string, config?: unknown) => Promise<unknown>;
   delete: (url: string) => Promise<unknown>;
 } }).instance;
+it.each(['AGENT_PROVIDER_FAILED', 'AGENT_SKILL_FAILED', 'AGENT_INVALID_REQUEST', 'AGENT_INTERNAL_ERROR'])('J3 preserves only a safe error code: %s', async code => {
+  vi.spyOn(instance, 'post').mockRejectedValue({ isAxiosError: true, response: { status: 503, data: { code, message: 'PRIVATE_PROVIDER' } } });
+  await expect(apiClient.sendAgentMessage({ message: 'consulta' })).rejects.toMatchObject({ code });
+});
+it('J3 discards unknown backend error codes and raw text', async () => {
+  vi.spyOn(instance, 'post').mockRejectedValue({ isAxiosError: true, response: { status: 500, data: { code: 'PRIVATE_PROVIDER', message: 'PRIVATE' } } });
+  await expect(apiClient.sendAgentMessage({ message: 'consulta' })).rejects.toMatchObject({ code: undefined,
+    message: 'No pude completar la consulta en este momento. Intenta nuevamente.' });
+});
 it('assistant uses existing API instance and only sends message/conversationId', async () => {
   const post = vi.spyOn(instance, 'post').mockResolvedValue({ data: { success: true, data: { answer: 'OK' } } });
   const input = { message: 'stock bajo', conversationId: 'example' };
@@ -22,7 +31,7 @@ it('assistant uses existing API instance and only sends message/conversationId',
 });
 it.each([503, 429, 400, 500])('assistant sanitizes HTTP %s without exposing provider payload', async status => {
   vi.spyOn(instance, 'post').mockRejectedValue({ isAxiosError: true, response: { status, data: { message: 'secret raw provider' } } });
-  await expect(apiClient.sendAgentMessage({ message: 'hello' })).rejects.toMatchObject({ status, message: 'No fue posible consultar el asistente.', retryable: status === 503 || status === 429 });
+  await expect(apiClient.sendAgentMessage({ message: 'hello' })).rejects.toMatchObject({ status, message: 'No pude completar la consulta en este momento. Intenta nuevamente.', retryable: status === 503 || status === 429 });
 });
 it('assistant sanitizes network failures with manual retry', async () => {
   vi.spyOn(instance, 'post').mockRejectedValue({ isAxiosError: true });

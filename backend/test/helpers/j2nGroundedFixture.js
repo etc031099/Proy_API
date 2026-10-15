@@ -70,7 +70,8 @@ const synthesisFor = context => {
   } else observation = make([B], 'Las ventas observadas suman 100 unidades.', 'Revisa la tendencia del periodo antes de decidir.');
   return { observations: [observation], limitations: [] };
 };
-function fixture({ output, finish = 'stop', outputTokens = 250, status = 'READY', failSkill, modifyResult, noProvider = false } = {}) {
+function fixture({ output, finish = 'stop', outputTokens = 250, status = 'READY', failSkill, modifyResult, noProvider = false,
+  transport, providerTimeoutMs = 15000 } = {}) {
   const calls = [], requests = [], events = [], resolutions = [];
   let genericCalls = 0;
   const service = { async resolveContext() { return binding; },
@@ -91,12 +92,13 @@ function fixture({ output, finish = 'stop', outputTokens = 250, status = 'READY'
       if (modifyResult) modifyResult(result, skill.id);
       return result;
     } };
-  const neutralProvider = noProvider ? null : createDeepSeekProvider({ env: { DEEPSEEK_API_KEY: 'fictional-only', DEEPSEEK_MAX_OUTPUT_TOKENS: '500' },
+  const neutralProvider = noProvider ? null : createDeepSeekProvider({ env: { DEEPSEEK_API_KEY: 'fictional-only', DEEPSEEK_MAX_OUTPUT_TOKENS: '500', DEEPSEEK_TIMEOUT_MS: String(providerTimeoutMs) },
     fetchImpl: async (_url, options) => {
       const body = JSON.parse(options.body); requests.push(body);
       assert.equal(body.max_tokens, 500); assert.deepEqual(body.response_format, { type: 'json_object' });
       assert.equal(body.tools, undefined);
       const compact = JSON.parse(body.messages[1].content), value = output ? output(compact) : synthesisFor(compact);
+      if (transport) return transport({ body, compact, value });
       return { ok: true, status: 200, json: async () => ({ model: 'deepseek-flash', choices: [{ finish_reason: finish,
         message: { role: 'assistant', content: typeof value === 'string' ? value : JSON.stringify(value), reasoning_content: 'PRIVATE-REASONING' } }],
         usage: { prompt_tokens: 1800, completion_tokens: outputTokens, total_tokens: 1800 + outputTokens,

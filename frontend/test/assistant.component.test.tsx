@@ -27,6 +27,32 @@ const response: AgentResponse = {
 beforeEach(() => { send.mockReset(); localStorage.clear(); vi.mocked(apiClient.listAgentConversations).mockResolvedValue({ success: true,
   data: { items: [], pagination: { page: 1, limit: 10, total: 0, totalPages: 1 } } }); });
 function submit(text = 'stock bajo') { fireEvent.change(screen.getByLabelText('Tu consulta'), { target: { value: text } }); fireEvent.click(screen.getByRole('button', { name: 'Enviar' })); }
+it('J3 renders an OUT_OF_DOMAIN success as an answer with zero activity, not a UI error', async () => {
+  send.mockResolvedValue({ success: true, data: { ...response, intent: 'out_of_domain',
+    answer: 'Puedo ayudarte con ventas, inventario, clientes y proveedores. Esa consulta está fuera de ese ámbito.',
+    participants: [], actions: [], evidence: [], usage: { ...response.usage, totalSkillCalls: 0 } } });
+  render(<AssistantPage />); submit('de q equipo eres hincha?');
+  await screen.findByText(/Esa consulta está fuera de ese ámbito/);
+  expect(screen.queryByText('No pude completar la consulta en este momento. Intenta nuevamente.')).toBeNull();
+  expect(send).toHaveBeenCalledTimes(1);
+});
+it.each([
+  [400, 'AGENT_INVALID_REQUEST', 'La consulta no es válida. Escribe una pregunta más clara dentro del límite permitido.'],
+  [403, 'AGENT_SKILL_NOT_ALLOWED', 'No tienes acceso a esta consulta. Revisa tu sesión y tus permisos.'],
+  [503, 'AGENT_PROVIDER_FAILED', 'La interpretación con IA no está disponible temporalmente. Intenta nuevamente.'],
+  [503, 'AGENT_SKILL_FAILED', 'No pude consultar los datos del negocio en este momento. Intenta nuevamente.'],
+  [500, 'AGENT_INTERNAL_ERROR', 'No pude completar la consulta en este momento. Intenta nuevamente.'],
+  [409, 'AGENT_HISTORY_BUSY', 'Esta conversación tiene una consulta en proceso. Espera a que termine.'],
+  [404, 'AGENT_CONVERSATION_NOT_FOUND', 'La conversación ya no está disponible. Inicia una nueva.'],
+] as const)('J3 displays a controlled error for %s/%s without automatic retry', async (status, code, message) => {
+  send.mockRejectedValue(new AgentApiError(status, code)); render(<AssistantPage />); submit();
+  await screen.findByText(message); expect(send).toHaveBeenCalledTimes(1);
+});
+it('J3 renders a provider safe fallback as a successful response', async () => {
+  send.mockResolvedValue({ success: true, data: { ...response, answer: 'No pude generar una interpretación validada; se conservan los hechos obtenidos. Stock observado: 21.' } });
+  render(<AssistantPage />); submit('Analiza el inventario');
+  await screen.findByText(/se conservan los hechos obtenidos/); expect(send).toHaveBeenCalledTimes(1);
+});
 it('J2M displays safe limitation diagnostics without generated prose', () => {
   render(<AgentActivity response={{ ...response, grounded: { route: 'GROUNDED_LLM', responseDiagnostic: {
     validationResult: 'REJECTED', validationReason: 'LIMITATION_NOT_ALLOWED', validationField: 'limitations[0]',
@@ -270,7 +296,7 @@ it('shows safe error and recovers on explicit retry without duplicating user mes
 });
 it('unknown error is generic, no raw payload and no automatic retry', async () => {
   send.mockRejectedValue(new Error('private secret')); render(<AssistantPage />); submit(); await screen.findByRole('alert');
-  expect(screen.getByText('No fue posible consultar el asistente.')).toBeTruthy(); expect(screen.queryByText('private secret')).toBeNull(); expect(send).toHaveBeenCalledTimes(1);
+  expect(screen.getByText('No pude completar la consulta en este momento. Intenta nuevamente.')).toBeTruthy(); expect(screen.queryByText('private secret')).toBeNull(); expect(send).toHaveBeenCalledTimes(1);
 });
 it('shows final fallback model, physical attempts and partial known usage without treating fallback as an error', async () => {
   const reported = { usageAvailable: true, inputTokens: 10, outputTokens: 3, thoughtTokens: 2,

@@ -58,7 +58,7 @@ const errors = {
   AGENT_BUDGET_EXCEEDED: [429, 'Se alcanzó el límite de ejecución. Inténtalo más tarde.'],
   AGENT_PROVIDER_FAILED: [503, 'El servicio de IA no está disponible temporalmente.'],
   AGENT_SKILL_FAILED: [503, 'No fue posible consultar los datos temporalmente.'],
-  AGENT_INTERNAL_ERROR: [500, 'No fue posible consultar el asistente.']
+  AGENT_INTERNAL_ERROR: [500, 'No pude completar la consulta en este momento. Intenta nuevamente.']
 };
 
 // One runtime per router; memory, routing and usage belong to AG-R5, not HTTP.
@@ -94,7 +94,7 @@ const createAgentMessagesHandler = ({ enabled, orchestrator, history } = {}) => 
     if (result.grounded) data.grounded = require('../services/agentHistoryProjection').publicResponse(result).grounded;
     return res.json({ success: true, data });
   } catch (error) {
-    return fail(error.code);
+    return fail(error?.code);
   }
   };
 };

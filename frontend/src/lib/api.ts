@@ -9,10 +9,27 @@ import { IntelligenceReadCache, type IntelligenceRevision } from './intelligence
 
 export class AgentApiError extends Error {
   constructor(readonly status?: number, readonly code?: string, readonly conversationId?: string) {
-    super('No fue posible consultar el asistente.');
+    super('No pude completar la consulta en este momento. Intenta nuevamente.');
     this.name = 'AgentApiError';
   }
   get retryable() { return this.code !== 'AGENT_HISTORY_PERSISTENCE_FAILED' && (this.status === undefined || this.status === 503 || this.status === 429); }
+}
+
+export function agentErrorMessage(failure: unknown): string {
+  const error = failure instanceof AgentApiError ? failure : undefined;
+  if (['AGENT_HISTORY_PERSISTENCE_FAILED', 'AGENT_HISTORY_CONFLICT'].includes(error?.code || ''))
+    return 'No se pudo confirmar el resultado guardado. Recarga el historial antes de enviar otra consulta.';
+  if (error?.code === 'AGENT_HISTORY_BUSY') return 'Esta conversación tiene una consulta en proceso. Espera a que termine.';
+  if (error?.code === 'AGENT_HISTORY_LIMIT') return 'Esta conversación alcanzó su límite. Inicia una nueva.';
+  if (error?.code === 'AGENT_CONVERSATION_NOT_FOUND') return 'La conversación ya no está disponible. Inicia una nueva.';
+  if (error?.code === 'AGENT_PROVIDER_FAILED') return 'La interpretación con IA no está disponible temporalmente. Intenta nuevamente.';
+  if (error?.code === 'AGENT_SKILL_FAILED') return 'No pude consultar los datos del negocio en este momento. Intenta nuevamente.';
+  if (error?.status === 400) return 'La consulta no es válida. Escribe una pregunta más clara dentro del límite permitido.';
+  if (error?.status === 401 || error?.status === 403) return 'No tienes acceso a esta consulta. Revisa tu sesión y tus permisos.';
+  if (error?.status === 429) return 'Se alcanzó el límite de consultas. Espera un momento antes de reintentar.';
+  if (error?.status === 404) return 'El asistente todavía no está habilitado.';
+  if (error?.status === 503) return 'El módulo analítico no está disponible en este momento.';
+  return 'No pude completar la consulta en este momento. Intenta nuevamente.';
 }
 
 export class DemandForecastApiError extends Error {
@@ -492,7 +509,9 @@ class ApiClient {
       return response.data;
     } catch (error) {
       const data = axios.isAxiosError(error) ? error.response?.data : undefined;
-      const code = typeof data?.code === 'string' && /^AGENT_HISTORY_[A-Z_]+$/.test(data.code) ? data.code : undefined;
+      const code = typeof data?.code === 'string' && (/^AGENT_HISTORY_[A-Z_]+$/.test(data.code)
+        || ['AGENT_INVALID_REQUEST', 'AGENT_SKILL_NOT_ALLOWED', 'AGENT_BUDGET_EXCEEDED', 'AGENT_PROVIDER_FAILED',
+          'AGENT_SKILL_FAILED', 'AGENT_INTERNAL_ERROR', 'AGENT_DISABLED', 'AGENT_RATE_LIMITED', 'AGENT_CONVERSATION_NOT_FOUND'].includes(data.code)) ? data.code : undefined;
       const id = typeof data?.conversationId === 'string' && /^[a-f\d-]{36}$/i.test(data.conversationId) ? data.conversationId : undefined;
       throw new AgentApiError(axios.isAxiosError(error) ? error.response?.status : 500, code, id);
     }

@@ -316,6 +316,10 @@ const withActionAssistant = (runtime, service, options = {}) => {
     async getContextSnapshot(req, id) { return { ...await runtime.getContextSnapshot?.(req, id), operationDraft: compactDraft(drafts.get(keyFor(req, id)), now()) }; },
     forgetConversation(req, id) { drafts.delete(keyFor(req, id)); return runtime.forgetConversation?.(req, id); },
     async handle(req, input) {
+      if (typeof input?.message === 'string') {
+        input = { ...input, message: require('../utils/conversationalInput').normalizeConversationalInput(input.message) };
+        if (require('../agents/domainGate').isUnsafeControlRequest(input.message)) return runtime.handle(req, input);
+      }
       const key = keyFor(req, input.conversationId), preceding = locks.get(key) || Promise.resolve();
       const work = preceding.catch(() => {}).then(() => handle(req, input)); locks.set(key, work);
       try { return await work; } finally { if (locks.get(key) === work) locks.delete(key); }

@@ -12,7 +12,7 @@ import { V3ResponseCards } from '@/components/assistant/V3ResponseCards';
 import { assistantDisplayText } from '@/lib/assistantPresentation';
 import { useAuth } from '@/contexts/AuthContext';
 import { activeConversationKey, readActiveConversation, writeActiveConversation } from '@/lib/agentHistory';
-import { apiClient, AgentApiError } from '@/lib/api';
+import { apiClient, AgentApiError, agentErrorMessage } from '@/lib/api';
 import type { AgentMessageRequest, AgentResponse, AgentConversationList, HistoryPagination } from '@/types/agent';
 
 const suggestions = ['Muéstrame los productos con stock bajo', '¿Cuánto vendimos este mes?',
@@ -119,17 +119,12 @@ export default function AssistantPage() {
       void refreshHistory();
     } catch (failure) {
       if (identity.current !== scope) return;
-      const status = failure instanceof AgentApiError ? failure.status : 500;
       if (failure instanceof AgentApiError && failure.conversationId) {
         setConversationId(failure.conversationId); request.input.conversationId = failure.conversationId;
         if (storageKey) writeActiveConversation(storageKey, failure.conversationId);
       }
       void refreshHistory();
-      setError({ text: failure instanceof AgentApiError && ['AGENT_HISTORY_PERSISTENCE_FAILED', 'AGENT_HISTORY_CONFLICT'].includes(failure.code || '')
-        ? 'No se pudo confirmar el resultado guardado. Recarga el historial antes de enviar otra consulta.'
-        : status === 503 || status === undefined ? 'El módulo analítico no está disponible en este momento.'
-        : status === 429 ? 'Se alcanzó el límite de consultas. Espera un momento antes de reintentar.'
-          : status === 404 ? 'El asistente todavía no está habilitado.' : 'No fue posible consultar el asistente.',
+      setError({ text: agentErrorMessage(failure),
       retryable: failure instanceof AgentApiError && failure.retryable });
     } finally { if (identity.current === scope) { inFlight.current = false; setLoading(false); } }
   }

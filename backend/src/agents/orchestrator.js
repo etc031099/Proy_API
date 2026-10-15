@@ -173,7 +173,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, neutralProv
   },
   async handle(req, input) {
     if (!isPlainObject(input) || Reflect.ownKeys(input).some(key => !['message', 'conversationId'].includes(key))) throw new AgentError('AGENT_INVALID_REQUEST');
-    const message = validateAgentMessage(input.message);
+    const message = require('../utils/conversationalInput').normalizeConversationalInput(validateAgentMessage(input.message));
     const conversationId = input.conversationId ?? randomUUID();
     if (!isTraceId(conversationId)) throw new AgentError('AGENT_INVALID_REQUEST');
     const context = createAgentRequestContext(req, { conversationId });
@@ -208,6 +208,9 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, neutralProv
             await require('./grounded').handleGrounded({ message, context, service: v3Service, run, execution })
             || require('./v3Routing').handleV3({ message, state, context, service: v3Service, run, commit })) : null;
         if (v3Response) {
+          if ((v3Response.grounded || v3Response.intent === 'out_of_domain') && state.v3Context) {
+            commit({ v3Context: { ...state.v3Context, pending: null, ranking: null } });
+          }
           answer = v3Response.answer; plan = { intent: v3Response.intent, agent: v3Response.agent, contextProvenance: v3Response.contextProvenance };
           question = v3Response.clarification ? answer : null;
         } else {
@@ -238,7 +241,8 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, neutralProv
                 })()));
         plan = deterministicPlan || plan;
         if (!deterministicPlan) {
-          const routing = await classifyAgentIntent(execution, message);
+          // V3 unknown requests clarify locally; only evidence-backed synthesis uses its provider.
+          const routing = v3Service ? { requiresClarification: true } : await classifyAgentIntent(execution, message);
           if (routing.requiresClarification) plan = clarify('¿Deseas consultar productos, ventas, inventario o demanda?');
           else if (routing.intent === 'out_of_scope') plan = { intent: 'unsupported', agent: 'coordinator' };
           else {
