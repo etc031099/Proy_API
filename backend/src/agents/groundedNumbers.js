@@ -8,7 +8,7 @@ const stripStructuralListMarkers = text => text.replace(
   /(^|\n)([ \t]{0,3}(?:[-*+][ \t]+)?)([1-3])[.)](?=[ \t]+\S)/g, '$1$2');
 const NUMBER_PATTERNS = Object.freeze(['LINE_LIST_MARKER', 'PAREN_INDEX', 'BRACKET_INDEX', 'HASH_INDEX',
   'ORDINAL_INDEX', 'ENTITY_PRESENTATION', 'QUANTITY_WITH_UNIT', 'PERCENTAGE', 'DECIMAL_METRIC',
-  'STANDALONE_NUMBER', 'UNKNOWN_CONTEXT', 'EVIDENCE_REFERENCE']);
+  'STANDALONE_NUMBER', 'UNKNOWN_CONTEXT', 'EVIDENCE_REFERENCE', 'CURRENCY_AMOUNT', 'DATE_VALUE']);
 const UNIT_START = /^(?:unidad(?:es)?|proveedor(?:es)?|productos?|tickets?|dias?|semanas?|ml|kg|mg|g|l|%|por ciento)\b/u;
 const numberPattern = (text, match) => {
   const before = normalize(text.slice(Math.max(0, match.index - 45), match.index));
@@ -33,11 +33,14 @@ const stripExplicitIndexLabels = text => text.replace(
     return UNIT_START.test(following) || /^\d|^%/.test(following) ? marker : `${line}${indent}`;
   });
 const numericEvidence = facts => {
-  const numbers = [], presentations = [];
-  const collect = value => {
+  const numbers = [], presentations = [], dates = [], monetaryAmounts = [], percentages = [];
+  const collect = (value, currency = 'PEN') => {
     if (typeof value === 'number' && Number.isFinite(value)) numbers.push(value);
-    else if (Array.isArray(value)) value.forEach(collect);
+    else if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+      && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value) dates.push(value);
+    else if (Array.isArray(value)) value.forEach(item => collect(item, currency));
     else if (isPlainObject(value)) {
+      const localCurrency = value.currency || currency;
       // Only product identities, never arbitrary strings or numeric SKU suffixes.
       if (typeof value.sku === 'string') for (const field of ['productName', 'name', 'displayName']) {
         if (typeof value[field] !== 'string') continue;
@@ -46,11 +49,18 @@ const numericEvidence = facts => {
           if (prefix.length >= 2) presentations.push({ prefix, amount: numberValue(match[1]), unit: match[2].toLowerCase() });
         }
       }
-      Object.values(value).forEach(collect);
+      for (const [key, item] of Object.entries(value)) {
+        if (typeof item === 'number' && Number.isFinite(item)) {
+          if (/Cents$/.test(key) && localCurrency === 'PEN') monetaryAmounts.push(item / 100);
+          if (['support', 'confidence'].includes(key) && item >= 0 && item <= 1) percentages.push(Number((item * 100).toFixed(12)));
+          else if (/(?:Pct|Percent|Percentage)$/.test(key)) percentages.push(item);
+        }
+        collect(item, localCurrency);
+      }
     }
   };
-  facts.forEach(collect);
-  return { numbers, presentations };
+  facts.forEach(fact => collect(fact));
+  return { numbers, presentations, dates, monetaryAmounts, percentages };
 };
 const withoutPresentationNumbers = (text, presentations) => text.replace(PACK, (match, amount, unit, offset) => {
   // A shortened name must retain >=2 consecutive words from the generated name,
@@ -70,13 +80,33 @@ const withoutPresentationNumbers = (text, presentations) => text.replace(PACK, (
   return supported ? '[presentación]' : match;
 });
 const unsupportedNumberDetails = (text, evidence) => {
-  const metricText = withoutPresentationNumbers(stripExplicitIndexLabels(stripStructuralListMarkers(text)), evidence.presentations);
-  return [...metricText.matchAll(/-?\d+(?:[.,]\d+)?/g)].filter(match => {
-    const number = match[0];
+  const supported = (number, facts) => {
     const normalized = number.replace(',', '.'), claim = Number(normalized), decimals = normalized.split('.')[1]?.length;
-    return !evidence.numbers.some(fact => fact === claim
+    return facts.some(fact => fact === claim
       || decimals >= 1 && decimals <= 2 && Number(fact.toFixed(decimals)) === claim);
-  }).map(match => ({ value: numberValue(match[0]), pattern: numberPattern(metricText, match) }));
+  };
+  const typedRejected = [];
+  let metricText = withoutPresentationNumbers(stripExplicitIndexLabels(stripStructuralListMarkers(text)), evidence.presentations);
+  // Exact cited dates authorize only that date token, never its year/month as quantities.
+  metricText = metricText.replace(/\b\d{4}-\d{2}-\d{2}\b/g, (date, index) => {
+    if (!evidence.dates.includes(date)) typedRejected.push({ value: Number(date.slice(0, 4)), pattern: 'DATE_VALUE', index });
+    return ' '.repeat(date.length);
+  });
+  // Representation conversions are field-typed and local to a monetary/percentage
+  // mention. Their values never enter the general business-number whitelist.
+  metricText = metricText.replace(/(?:\bPEN\b|S\/)\s*(-?\d[\d.,]*)/gi, (match, token, index) => {
+    const number = token.replace(/[.,]$/, '');
+    if (!/^-?\d+(?:[.,]\d+)?$/.test(number) || !supported(number, evidence.monetaryAmounts))
+      typedRejected.push({ value: Number.parseFloat(number.replace(',', '.')), pattern: 'CURRENCY_AMOUNT', index });
+    return ' '.repeat(match.length);
+  }).replace(/(?<![\w.,])(-?\d+(?:[.,]\d+)?)\s*(?:%|por ciento\b)/gi, (match, number, index) => {
+    if (!supported(number, evidence.percentages)) typedRejected.push({ value: numberValue(number), pattern: 'PERCENTAGE', index });
+    return ' '.repeat(match.length);
+  });
+  return [...typedRejected, ...[...metricText.matchAll(/-?\d+(?:[.,]\d+)?/g)]
+    .filter(match => !supported(match[0], evidence.numbers))
+    .map(match => ({ value: numberValue(match[0]), pattern: numberPattern(metricText, match), index: match.index }))]
+    .sort((a, b) => a.index - b.index).map(({ value, pattern }) => ({ value, pattern }));
 };
 const unsupportedNumbers = (text, evidence) => [...new Set(unsupportedNumberDetails(text, evidence).map(detail => detail.value))];
 module.exports = { numericEvidence, stripStructuralListMarkers, unsupportedNumbers, unsupportedNumberDetails, NUMBER_PATTERNS };

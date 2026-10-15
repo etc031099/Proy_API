@@ -231,6 +231,8 @@ const withActionAssistant = (runtime, service, options = {}) => {
       const unclear = skillId !== 'create_stock_alert_rule' && !previous && !extracted.direct && (skillId === 'create_product' ? !Object.keys(extracted.product || {}).length
         : !extracted.items?.length || /\b(?:tres|dos|cinco)\s+botellas/.test(normalized));
       if (unclear) {
+        if (require('../agents/providers/selection').selectedProvider() !== 'gemini')
+          return response('Indica el producto y la cantidad para preparar un preview; no se ejecutó ninguna operación.', undefined, true);
         execution = createAgentExecution({ context: context.agentContext, ...(options.onEvent ? { onEvent: options.onEvent } : {}), ...(options.provider ? { provider: options.provider } : {}) });
         try {
           const result = await execution.generateStructured({ agentId: 'operations', schema: extractionSchema,

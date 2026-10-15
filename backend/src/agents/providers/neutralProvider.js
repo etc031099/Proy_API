@@ -4,6 +4,7 @@ const { isPlainObject, deepFreeze } = require('../contracts');
 const validCount = n => Number.isSafeInteger(n) && n >= 0;
 const validId = value => typeof value === 'string' && /^[\w.-]{1,100}$/.test(value);
 const unavailable = () => Object.assign(new Error('Provider response unavailable'), { code: 'AGENT_PROVIDER_FAILED' });
+const MAX_PROVIDER_MESSAGE_BYTES = 8000;
 
 // Pricing is supplied by trusted server configuration, never by request arguments.
 const estimateCostUsd = ({ provider, model, usage, prices = [], at = new Date().toISOString() }) => {
@@ -46,7 +47,7 @@ const createNeutralProvider = ({ provider, model, generate, prices = [], timeout
       || ![300, 600].includes(request.maxTokens) || !Number.isFinite(request.temperature) || request.temperature < 0 || request.temperature > 1
       || request.messages.some(message => !isPlainObject(message) || Object.keys(message).some(key => !['role', 'content'].includes(key))
         || !['system', 'user'].includes(message.role) || typeof message.content !== 'string')
-      || Buffer.byteLength(JSON.stringify(request.messages), 'utf8') > 8000) throw unavailable();
+      || Buffer.byteLength(JSON.stringify(request.messages), 'utf8') > MAX_PROVIDER_MESSAGE_BYTES) throw unavailable();
     const start = performance.now(), controller = new AbortController();
     let timer;
     try {
@@ -75,4 +76,4 @@ const createNeutralProvider = ({ provider, model, generate, prices = [], timeout
     } finally { clearTimeout(timer); }
   } });
 };
-module.exports = { createNeutralProvider, estimateCostUsd };
+module.exports = { createNeutralProvider, estimateCostUsd, MAX_PROVIDER_MESSAGE_BYTES };

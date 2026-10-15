@@ -11,6 +11,6 @@ const isOutOfDomain = message => {
   const sportsTime = '(?:hoy|ayer|manana|pasado manana|esta semana|esta noche|el domingo|domingo|el sabado|sabado|el lunes|lunes|el martes|martes|el miercoles|miercoles|el jueves|jueves|el viernes|viernes)';
   const sportsQuestion = new RegExp(`^(?:quien(?:es)? juega(?:n)? (?:${sportsTime})|que partidos? hay (?:${sportsTime})|quien(?:es)? gano (?:(?:el )?partido )?(?:${sportsTime}))$`);
   return sportsQuestion.test(text)
-    || /^(?:quien gano (?:el )?partido(?: de)? ayer|(?:cual es la )?capital de francia|cuentame un cuento|que laptop me recomiendas|cuanto cuesta bitcoin|quien es el presidente de [\p{L}\s]+|como escribo un curriculum)$/u.test(text);
+    || /^(?:quien gano (?:el )?partido(?: de)? ayer|(?:cual es la )?capital de francia|cuentame un cuento|que laptop me recomiendas|cuanto cuesta bitcoin|precio (?:de|del) bitcoin|que clima hay (?:hoy|manana)|(?:dame |quiero )?una receta de cocina|quien es el presidente de(?:l)? [\p{L}\s]+|como escribo un curriculum)$/u.test(text);
 };
 module.exports = { normalize, isOutOfDomain, OUT_OF_DOMAIN_ANSWER };

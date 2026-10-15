@@ -19,7 +19,11 @@ const classifyGrounded = message => {
   if (/productos? nuevos?/.test(text) && /incorpor|compr|recomiend/.test(text))
     return result('new_products', [B, M, I], { noHistoricalSkuData: true });
   if (/promocion/.test(text) && /convendr|recom|lanzar/.test(text)) return result('promotion', [B, F, M, I]);
-  if (/client/.test(text) && /reten|prioriz/.test(text)) return result('customer_retention', [C]);
+  if (/client/.test(text) && /reten|prioriz|recuper/.test(text)) return result('customer_retention', [C]);
+  if (/repon|reposicion/.test(text) && /proveedor/.test(text) && /conviene|deberia|prioriz|recomiend/.test(text))
+    return result('inventory_priorities', [I, F, S]);
+  if (/stock|inventario/.test(text) && /demanda/.test(text) && /preocup|prioriz|recomiend/.test(text))
+    return result('inventory_demand_priorities', [I, F]);
   if (/proveedor/.test(text) && /recom|elegir|conviene|prioriz/.test(text) && !/ventas|forecast|stock/.test(text))
     return result('supplier_advice', [S, I]);
   if (/ventas/.test(text) && /stock/.test(text) && /forecast|pronostico/.test(text) && /compr|recom|prioriz|analiz/.test(text))
@@ -30,10 +34,10 @@ const classifyGrounded = message => {
   if (/potencial/.test(text) && /quiebre/.test(text)) return result('stockout_opportunity', [B, I, F]);
   if (((/prioriz|recomiend/.test(text) && /inventario|repon|reposicion/.test(text)) || /deberia.*repon.*por que/.test(text))
     && !/^que deberia reponer$/.test(text)) return result('inventory_priorities', [I, F, S]);
-  if (/mejorar.*ventas|estrategia.*ventas|conclusiones.*ventas/.test(text)) return result('sales_advice', [B]);
+  if (/mejorar.*ventas|estrategia.*ventas|conclusiones.*ventas|(?:interpreta|analiza).*ventas/.test(text)) return result('sales_advice', [B]);
   if (/implica|interpreta|conclusiones/.test(text) && /wape|hgb|ma28|modelo|metrica/.test(text))
     return result('ml_interpretation', [F]);
-  if (/resume.*negocio|conclusiones.*datos|que deberia mejorar primero|decisiones.*manana|algo preocupante.*negocio|interpreta.*salud|analiza.*negocio/.test(text))
+  if (/resume.*negocio|conclusiones.*datos|que deberia mejorar primero|decisiones.*manana|algo preocupante.*negocio|interpreta.*salud|analiza.*negocio|que deberia (?:priorizar hoy|revisar primero).*negocio|senal preocupante.*negocio/.test(text))
     return result('business_health_interpretation', /manana/.test(text) ? [H, I, F] : [H]);
   return { route: 'DETERMINISTIC' };
 };
@@ -44,6 +48,12 @@ const buildGroundedPlan = (message, binding) => {
   const parsed = resolveOperationalPeriod(message, binding.operationalDate || binding.asOfDate || binding.referenceDate);
   if (parsed.clarificationQuestion) return { ...classification, clarificationQuestion: parsed.clarificationQuestion, tasks: [] };
   const sku = message.match(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/)?.[0];
+  if (classification.responseIntent === 'ml_interpretation' && sku) return { ...classification, tasks: [],
+    clarificationQuestion: 'La evaluación del modelo es global, no por SKU. ¿Quieres revisar esa evaluación o el pronóstico operativo del producto?' };
+  const horizon = Number(normalize(message).match(/\b(?:para|proximos?|horizonte(?: de)?)\s+(\d+)\s+dias?\b/)?.[1]
+    || (/manana/.test(normalize(message)) ? 1 : 7));
+  if (classification.skills.includes(F) && classification.responseIntent !== 'ml_interpretation' && ![1, 7, 14].includes(horizon))
+    return { ...classification, tasks: [], clarificationQuestion: 'El pronóstico operativo admite únicamente horizontes de 1, 7 o 14 días. ¿Cuál deseas consultar?' };
   const tasks = classification.skills.map(skillId => {
     let args = { limit: 3 };
     if (skillId === B) args = { ...args, mode: 'summary', ...parsed.period,
@@ -53,7 +63,7 @@ const buildGroundedPlan = (message, binding) => {
     if (skillId === I) args = { ...args, mode: 'recommendations',
       ...(classification.responseIntent === 'sales_stock_opportunity' ? { flag: 'low_stock' } : {}), ...(sku ? { productRef: sku } : {}) };
     if (skillId === F) args = { ...args, mode: classification.responseIntent === 'ml_interpretation' ? 'evaluation' : 'rank',
-      horizonDays: /manana/.test(normalize(message)) ? 1 : 7, ...(sku ? { productRef: sku, mode: 'detail' } : {}) };
+      horizonDays: horizon, ...(sku ? { productRef: sku, mode: 'detail' } : {}) };
     if (skillId === C) args = { ...args, mode: 'rank', segment: 'AT_RISK', metric: 'recency', ...parsed.period };
     if (skillId === S) args = { ...args, mode: 'summary', ...parsed.period, ...(sku ? { productRef: sku } : {}) };
     if (skillId === M) args = { ...args, mode: 'rules' }; // serving enforces the approved frozen artifact

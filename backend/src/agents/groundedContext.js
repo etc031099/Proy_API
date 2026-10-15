@@ -4,6 +4,7 @@ const { V3_IDS } = require('./v3Skills');
 const { parseGroundedSchema } = require('./groundedOutputSchema');
 const { numericEvidence, unsupportedNumberDetails } = require('./groundedNumbers');
 const { buildAllowedLimitations, validateLimitations } = require('./groundedLimitations');
+const { MAX_PROVIDER_MESSAGE_BYTES } = require('./providers/neutralProvider');
 const MAX_CONTEXT_BYTES = 6400;
 const HALLUCINATION_CONTRACT = Object.freeze([
   'Usa exclusivamente los hechos y referencias entregados; no inventes cifras ni entidades.',
@@ -14,7 +15,9 @@ const HALLUCINATION_CONTRACT = Object.freeze([
   'No conviertas WAPE en accuracy. K-Means es exploratorio, no predicción de churn.',
   'Sin historial de SKU nuevo: recomendación exploratoria, nunca forecast validado.'
 ]);
-const cleanText = (value, max = 120) => String(value).replace(/@[a-z\d.-]+\.[a-z]{2,}|\b[a-f\d]{24,}\b|\bBearer\s+\S+|AIza[\w-]{20,}|\b\d{9,15}\b|(?:mongodb(?:\+srv)?|https?):\/\/\S+/gi, '[omitido]')
+const cleanText = (value, max = 120) => String(value)
+  .replace(/\b(?:authorization|cookie|(?:deepseek|gemini|telegram)[_-]?(?:api[_-]?)?(?:key|token)|api[_-]?key|jwt|secret|password)\s*[:=]\s*(?:Bearer\s+)?\S+/gi, '[omitido]')
+  .replace(/\bsk-[\w-]{16,}|\beyJ[\w-]*\.[\w-]+\.[\w-]+\b|\b\d{6,12}:[\w-]{20,}\b|\b[\w.+-]+@[a-z\d.-]+\.[a-z]{2,}|\b[a-f\d]{24,}\b|\bBearer\s+\S+|AIza[\w-]{20,}|\b\d{9,15}\b|(?:mongodb(?:\+srv)?|https?):\/\/\S+/gi, '[omitido]')
   .replace(/[\r\n\t\x00-\x1f]/g, ' ').slice(0, max);
 // Known structured fields only. Raw documents, free-form metadata and PII never pass.
 const COMMON = 'items total summary available status availabilityStatus reasonCodes availability limitations currency name displayName sku productName customerCode customerName supplierCode supplierName categoryCode categoryName metric metricName count value amount';
@@ -53,7 +56,7 @@ const replenishmentFacts = (skillId, data, skus) => {
     ...pick(row, ['reorderPoint', 'rop']) })) };
   if (skillId === 'get_product_forecast') return { ...pick(data, ['method', 'forecastSource', 'horizonDays', 'availabilityStatus']),
     items: (data?.items || []).filter(row => skus.has(row.sku)).slice(0, 3)
-      .map(row => pick(row, ['sku', 'productName', 'status', 'expectedUnitsNext7d'])) };
+      .map(row => pick(row, ['sku', 'productName', 'status', 'expectedUnitsNext1d', 'expectedUnitsNext7d', 'expectedUnitsNext14d'])) };
   if (skillId === 'get_supplier_intelligence') {
     const items = (data?.items || []).flatMap(row => {
       const products = (row.productsSupplied || []).filter(product => skus.has(product.sku));
@@ -69,7 +72,7 @@ const replenishmentFacts = (skillId, data, skus) => {
   return data;
 };
 
-const buildGroundedContext = ({ question, plan, results, binding }) => {
+const buildGroundedContext = ({ question, plan, results, binding, systemPrompt }) => {
   const wanted = new Set(plan.skills);
   const replenishment = plan.responseIntent === 'inventory_priorities';
   const skus = new Set((results.find(row => row.skillId === 'get_inventory_intelligence')?.result.data?.items || []).slice(0, 3)
@@ -81,7 +84,7 @@ const buildGroundedContext = ({ question, plan, results, binding }) => {
       scope: { asOfDate: meta.asOf || binding.operationalDate,
         period: meta.period ? { startDate: meta.period.startDate, endDate: meta.period.endDate } : null,
         mode: meta.freshness === 'FROZEN_HISTORICAL' ? 'FROZEN' : meta.dataMode || 'UNKNOWN',
-        source: meta.source || null, frozenCutoff: meta.frozenCutoff || null,
+        source: meta.source ? cleanText(meta.source) : null, frozenCutoff: meta.frozenCutoff || null,
         dataVersion: meta.dataVersion || null, snapshotHash: meta.snapshotHash || null,
         observationsClosedThrough: meta.observationsClosedThrough || null,
         ...(replenishment && skillId === 'get_supplier_intelligence' ? { supplierMetricScope: 'SUPPLIER_AGGREGATE' } : {}) },
@@ -96,9 +99,12 @@ const buildGroundedContext = ({ question, plan, results, binding }) => {
     noHistoricalSkuData: plan.noHistoricalSkuData === true,
     constraints: HALLUCINATION_CONTRACT, evidence, allowedLimitations: buildAllowedLimitations(evidence) };
   const bytes = () => Buffer.byteLength(JSON.stringify(context), 'utf8');
+  const messagesFit = () => !systemPrompt || Buffer.byteLength(JSON.stringify([
+    { role: 'system', content: systemPrompt }, { role: 'user', content: JSON.stringify(context) }
+  ]), 'utf8') <= MAX_PROVIDER_MESSAGE_BYTES;
   // Trim whole structured facts rather than slicing serialized JSON. Each omission
   // stays explicit and its source/cutoff remains attached.
-  while (bytes() > MAX_CONTEXT_BYTES) {
+  while (bytes() > MAX_CONTEXT_BYTES || !messagesFit()) {
     const largest = evidence.filter(row => row.facts !== null).sort((a, b) => JSON.stringify(b.facts).length - JSON.stringify(a.facts).length)[0];
     if (!largest) throw new Error('GROUNDED_CONTEXT_TOO_LARGE');
     if (Array.isArray(largest.facts?.items) && largest.facts.items.length > 1) largest.facts.items.pop();
@@ -121,7 +127,11 @@ const validateGroundedOutput = (text, context) => {
   for (const [index, row] of output.observations.entries()) {
     if (row.evidenceRefs.some(ref => !refs.has(ref))) fail('EVIDENCE_REFERENCE_INVALID', `observations[${index}].evidenceRefs`);
     const allowed = JSON.stringify(row.evidenceRefs.map(ref => refs.get(ref).facts));
-    const numericFacts = numericEvidence(row.evidenceRefs.map(ref => refs.get(ref).facts));
+    const numericFacts = numericEvidence(row.evidenceRefs.flatMap(ref => {
+      const evidence = refs.get(ref), scope = evidence.scope || {};
+      return [evidence.facts, { asOfDate: scope.asOfDate, frozenCutoff: scope.frozenCutoff,
+        observationsClosedThrough: scope.observationsClosedThrough, period: scope.period }];
+    }));
     const skus = new Set(allowed.match(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/g) || []);
     for (const field of ['interpretation', 'advisoryRecommendation']) {
       const value = row[field];

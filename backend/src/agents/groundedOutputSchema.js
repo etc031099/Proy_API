@@ -7,16 +7,16 @@ const GROUNDED_OUTPUT_SCHEMA = deepFreeze({ type: 'object', additionalProperties
     observations: { type: 'array', minItems: 1, maxItems: 3, items: {
       type: 'object', additionalProperties: false,
       required: ['evidenceRefs', 'interpretation', 'advisoryRecommendation'], properties: {
-        evidenceRefs: { type: 'array', minItems: 1, maxItems: 4, items: text(16) },
+        evidenceRefs: { type: 'array', minItems: 1, maxItems: 4, uniqueItems: true, items: text(16) },
         interpretation: text(900), advisoryRecommendation: text(900)
       } } },
-    limitations: { type: 'array', maxItems: 2, items: { ...text(240),
+    limitations: { type: 'array', maxItems: 2, uniqueItems: true, items: { ...text(240),
       description: 'Only codes explicitly listed in context.allowedLimitations; otherwise return [].' } }
   } });
 const MAX_OUTPUT_TEXT = 2160;
 const SCHEMA_REASONS = Object.freeze(['JSON_PARSE_FAILED', 'REQUIRED_FIELD_MISSING', 'WRONG_TYPE',
   'TOO_MANY_RECOMMENDATIONS', 'FIELD_TOO_LONG', 'UNKNOWN_FIELD', 'EMPTY_RECOMMENDATIONS',
-  'TOO_MANY_ITEMS', 'EMPTY_ARRAY', 'EMPTY_TEXT']);
+  'TOO_MANY_ITEMS', 'EMPTY_ARRAY', 'EMPTY_TEXT', 'DUPLICATE_ITEMS']);
 const parseGroundedSchema = input => {
   const fail = (schemaReason, schemaField, legacyReason = 'OUTPUT_SCHEMA_INVALID') => {
     throw Object.assign(new Error('GROUNDED_INVALID_RESPONSE'), { validationReason: legacyReason,
@@ -41,6 +41,7 @@ const parseGroundedSchema = input => {
       if (!Array.isArray(value)) fail('WRONG_TYPE', path);
       if (value.length < (schema.minItems || 0)) fail(path === 'observations' ? 'EMPTY_RECOMMENDATIONS' : 'EMPTY_ARRAY', path);
       if (value.length > schema.maxItems) fail(path === 'observations' ? 'TOO_MANY_RECOMMENDATIONS' : 'TOO_MANY_ITEMS', path);
+      if (schema.uniqueItems && new Set(value).size !== value.length) fail('DUPLICATE_ITEMS', path);
       value.forEach((item, index) => check(item, schema.items, `${path}[${index}]`));
     } else {
       if (typeof value !== 'string') fail('WRONG_TYPE', path);

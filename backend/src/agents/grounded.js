@@ -62,7 +62,18 @@ const handleGrounded = async ({ message, context, service, run, execution }) => 
       }
     } catch (error) { incomplete = true; failures.push({ skillId: task.skillId, ...safeFailure(error) }); }
   }
-  const compact = buildGroundedContext({ question: message, plan, results, binding });
+  const systemPrompt = `${COMPACT_SYNTHESIS_PROMPT} ${GROUNDED_PROSE_INSTRUCTION} ${LIMITATIONS_INSTRUCTION} Devuelve exclusivamente un objeto JSON conforme a este JSON Schema: ${JSON.stringify(GROUNDED_OUTPUT_SCHEMA)}. Todos los campos required son obligatorios. Sin null, campos extra, markdown ni texto externo. evidenceRefs es un array de referencias E existentes en evidence. Máximo global ${MAX_OUTPUT_TEXT} caracteres entre interpretation y advisoryRecommendation. Ejemplo de forma (sustituye textos y referencias con hechos): {"observations":[{"evidenceRefs":["E1"],"interpretation":"Hecho sustentado.","advisoryRecommendation":"Recomendación sustentada."}],"limitations":[]}`;
+  let compact;
+  try { compact = buildGroundedContext({ question: message, plan, results, binding, systemPrompt }); }
+  catch (error) {
+    const diagnostic = safeGroundedDiagnostic({ validationReason: error?.message === 'GROUNDED_CONTEXT_TOO_LARGE'
+      ? 'CONTEXT_BUDGET_EXCEEDED' : 'CONTEXT_BUILD_FAILED' });
+    logGroundedValidation(diagnostic);
+    return { intent: plan.responseIntent, agent: 'analyst',
+      answer: `No pude preparar un contexto de análisis seguro; se conservan los hechos obtenidos.\n\n${facts.map(fact => fact.split('\n').slice(0, 2).join('\n')).join('\n')}`,
+      grounded: { route: plan.route, responseIntent: plan.responseIntent, domains: plan.domains, skills: plan.skills,
+        failures, responseDiagnostic: diagnostic } };
+  }
   const grounded = { route: plan.route, responseIntent: plan.responseIntent, domains: plan.domains,
     skills: plan.skills, failures, contextMetrics: contextMetrics(compact), noHistoricalSkuData: compact.noHistoricalSkuData };
   // Keep fallback readable; full structured evidence remains in activity.
@@ -80,7 +91,7 @@ const handleGrounded = async ({ message, context, service, run, execution }) => 
   else {
     try {
       const generated = await execution.generateGrounded({ maxTokens: 600, temperature: 0,
-        messages: [{ role: 'system', content: `${COMPACT_SYNTHESIS_PROMPT} ${GROUNDED_PROSE_INSTRUCTION} ${LIMITATIONS_INSTRUCTION} Devuelve exclusivamente un objeto JSON conforme a este JSON Schema: ${JSON.stringify(GROUNDED_OUTPUT_SCHEMA)}. Todos los campos required son obligatorios. Sin null, campos extra, markdown ni texto externo. evidenceRefs es un array de referencias E existentes en evidence. Máximo global ${MAX_OUTPUT_TEXT} caracteres entre interpretation y advisoryRecommendation. Ejemplo de forma (sustituye textos y referencias con hechos): {"observations":[{"evidenceRefs":["E1"],"interpretation":"Hecho sustentado.","advisoryRecommendation":"Recomendación sustentada."}],"limitations":[]}` },
+        messages: [{ role: 'system', content: systemPrompt },
           { role: 'user', content: JSON.stringify(compact) }] });
       grounded.responseDiagnostic = { ...generated.responseDiagnostic, provider: generated.provider, model: generated.model };
       const interpreted = validateGroundedOutput(generated.text, compact);
