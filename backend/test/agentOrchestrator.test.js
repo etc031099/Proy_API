@@ -250,7 +250,7 @@ test('supplier correction selects only from the visible page; pure negation has 
 // are replaced; fakes assert tenant predicates and expose no write methods.
 const fixture = ({ products = [product(1), product(2), product(3, 'B')], contacts = [], provider, emptySalesHistory = false, emptyProductSalesHistory = false,
   forecastService = { getDemandForecast: async () => structuredClone(forecast) }, memory = createConversationMemory(), onEvent,
-  businessHistory, now = clock } = {}) => {
+  businessHistory, now = clock, v3Service } = {}) => {
   const calls = [];
   const reads = [];
   const matches = (row, match) => row.businessId === match.businessId
@@ -346,7 +346,8 @@ const fixture = ({ products = [product(1), product(2), product(3, 'B')], contact
     }]));
   Product.collection = { name: 'products' };
   const orchestrator = createAgentOrchestrator({ provider: adapter, memory, clock: now, onEvent,
-    dependencies: { models: { Product, Transaction, Contact, ...alertModels }, forecastService, toObjectId: value => value } });
+    dependencies: { models: { Product, Transaction, Contact, ...alertModels }, forecastService, toObjectId: value => value,
+      ...(v3Service ? { v3Service } : {}) } });
   return { calls, reads, orchestrator, run: (message, conversationId, request = req()) => orchestrator.handle(request, { message, ...(conversationId ? { conversationId } : {}) }) };
 };
 
@@ -2011,6 +2012,33 @@ test('LLM-assisted business summary keeps all current and historical evidence wi
   assert.equal(f.calls[0].input.messages.length, 1);
   assert.equal(payload.activity.period.startDate, '2026-10-01');
   assert.equal(payload.historicalContext.period.startDate, '2025-07-01');
+});
+
+test('H.6-FIX1 out-of-domain examples reach the existing classifier once and retain provider usage metadata', async () => {
+  const { V3 } = require('../src/services/v3IntelligenceService');
+  const seen = [];
+  const provider = { generateStructured: async input => {
+    seen.push(input);
+    return generated({ intent: 'out_of_scope', targetAgent: 'coordinator', requiresClarification: false });
+  }, generateWithTools: async () => { throw new Error('out-of-domain must not invoke tools'); } };
+  const f = fixture({ provider, v3Service: { resolveContext: async () => V3 } });
+  for (const message of ['¿Quién ganó el partido de ayer?', '¿Cuál es la capital de Japón?',
+    'Escríbeme una historia de terror.', '¿Qué laptop me recomiendas?']) {
+    const result = await f.run(message, randomUUID(), req(V3.businessId));
+    assert.equal(result.intent, 'unsupported', message);
+    assert.equal(result.usage.totalLlmCalls, 1, message);
+    assert.equal(result.usage.totalTokens, 17, message);
+  }
+  assert.equal(seen.length, 4);
+});
+
+test('H.6-FIX1 ambiguous “saca” asks before any write, resolver, or LLM call', async () => {
+  const { V3 } = require('../src/services/v3IntelligenceService');
+  const f = fixture({ v3Service: { resolveContext: async () => V3 } });
+  const result = await f.run('saca 2 de la segunda', randomUUID(), req(V3.businessId));
+  assert.match(result.answer, /venta|corregir el stock/);
+  assert.equal(result.usage.totalLlmCalls, 0); assert.equal(result.usage.totalTokens, 0);
+  assert.equal(f.calls.length, 0); assert.equal(f.reads.length, 0);
 });
 
 test('missing product references ask a natural clarification without calling Gemini', async () => {

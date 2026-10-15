@@ -12,6 +12,7 @@ require('./inventoryMovement.test');
 require('./mlServiceClient.test');
 require('./v3Intelligence.test');
 require('./assistantNaturalLanguageH6.test');
+require('./assistantNaturalLanguageH6Fix1.test');
 require('./v3BusinessIntelligenceDashboard.test');
 require('./demandForecastService.test');
 require('./transactionsRoutes.test');

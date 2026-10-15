@@ -58,10 +58,10 @@ test('P3A a newer READ keeps ownership of price questions despite an older previ
 const vendor = { _id: 'dddddddddddddddddddddddd', name: 'Distribuidora Inka SAC' };
 const request = (businessId = 'SYNTHETIC', userId = 'aaaaaaaaaaaaaaaaaaaaaaaa') => ({ businessId,
   user: { _id: userId, businessId, role: 'user', isActive: true } });
-function fixture({ products = [p1, p2], suppliers = [vendor], configured = [vendor], clock = Date.now } = {}) {
+function fixture({ products = [p1, p2], suppliers = [vendor], configured = [vendor], clock = Date.now, businessId = 'SYNTHETIC' } = {}) {
   const prepared = [], cancelled = [], confirmed = [], pending = new Map(), argsById = new Map();
   const resolver = async (model, context, ref, type, offset = 0) => {
-    assert.equal(context.businessId, 'SYNTHETIC');
+    assert.equal(context.businessId, businessId);
     const rows = model === Product ? products : suppliers;
     const exact = rows.find(row => row._id === ref || row.sku === ref);
     if (exact) return { value: structuredClone(exact), confidence: 'EXACT' };
@@ -110,6 +110,53 @@ test('H.5 prepare purchase by exact SKU shows preview then natural cancellation 
   assert.equal(preview.usage.totalLlmCalls, 0);
   assert.equal(cancel.usage.totalLlmCalls, 0);
   assert.equal(preview.usage.totalTokens + cancel.usage.totalTokens, 0);
+});
+test('H.6-FIX1 explicit sale + ordinal from a V3 candidate list creates preview only', async () => {
+  const { V3 } = require('../src/services/v3IntelligenceService');
+  const { createAgentRequestContext } = require('../src/agents/contracts');
+  const { contextBinding } = require('../src/agents/memory');
+  const { handleV3 } = require('../src/agents/v3Routing');
+  const f = fixture({ businessId: V3.businessId });
+  const req = request(V3.businessId), context = createAgentRequestContext(req, { conversationId: f.conversationId });
+  const stored = {};
+  const candidates = [p1, p2].map(row => ({ id: row._id, key: row.sku, label: row.name, type: 'product' }));
+  f.runtime.handle = async (_request, input) => handleV3({ message: input.message, state: stored, context, service: {
+    resolveContext: async () => ({ ...V3, operationalDate: '2026-10-14', asOfDate: V3.referenceDate }),
+    resolveEntity: async () => ({ type: 'product', query: 'BEB-GAS', entity: null, candidates,
+      pagination: { totalMatches: 2, offset: 0, limit: 5, hasMore: false, hasPrevious: false } })
+  }, run: async () => assert.fail('a list query must not execute a write or inventory action'), commit: patch => Object.assign(stored, patch) });
+  f.runtime.getContextSnapshot = async () => stored;
+  const clearCalls = []; f.runtime.clearV3Selection = async () => { clearCalls.push(true); stored.v3Context = null; };
+  const listed = await f.adapter.handle(req, { message: '¿Qué gaseosas tengo?', conversationId: f.conversationId });
+  assert.match(listed.answer, /1\. Coca-Cola 500ML[\s\S]*2\. Coca Cola 1\.5 litros/);
+  const invalid = await f.adapter.handle(req, { message: 'vende 2 de la quinta', conversationId: f.conversationId });
+  assert.match(invalid.answer, /no está en la lista vigente/i);
+  assert.equal(f.prepared.length, 0); assert.equal(f.confirmed.length, 0);
+  const preview = await f.adapter.handle(req, { message: 'vende 2 de la segunda', conversationId: f.conversationId });
+  assert.ok(preview.pendingAction?.pendingActionId); assert.equal(f.prepared.length, 1);
+  assert.deepEqual(f.prepared[0].products, [{ productId: p2._id, quantity: 2 }]);
+  assert.equal(f.confirmed.length, 0); assert.equal(f.cancelled.length, 0); assert.equal(clearCalls.length, 1);
+  assert.equal(preview.usage.totalLlmCalls, 0); assert.equal(preview.usage.totalTokens, 0);
+  const cancelled = await f.adapter.handle(req, { message: 'cancela', conversationId: f.conversationId });
+  assert.match(cancelled.answer, /cancelada|cancelad/i);
+  assert.equal(f.confirmed.length, 0); assert.equal(f.cancelled.length, 1);
+  assert.equal(f.prepared.length, 1); assert.equal(f.confirmed.length, 0);
+});
+test('H.6-FIX1 purchase draft accepts quantity + ordinal together, previews, then cancels without execution', async () => {
+  const products = [p1, p2].map((row, index) => ({ ...row,
+    name: index === 0 ? 'Gaseosa Coca-Cola 500 ml' : 'Gaseosa Inca Kola 500 ml',
+    supplierPrices: [{ supplierId: vendor._id, purchasePrice: 4.5 }] }));
+  const f = fixture({ products });
+  const candidates = await f.send('quiero comprar gaseosa');
+  assert.match(candidates.answer, /Elige|coincidencia/i);
+  assert.equal(f.prepared.length, 0);
+  const preview = await f.send('5 de la segunda');
+  assert.ok(preview.pendingAction?.pendingActionId);
+  assert.deepEqual(f.prepared[0].products, [{ productId: p2._id, quantity: 5 }]);
+  assert.equal(f.confirmed.length, 0);
+  const cancelled = await f.send('cancela');
+  assert.match(cancelled.answer, /cancelad/i);
+  assert.equal(f.cancelled.length, 1); assert.equal(f.confirmed.length, 0);
 });
 const pagedProducts = () => Array.from({ length: 28 }, (_, i) => ({ ...p1, _id: (i + 1).toString(16).padStart(24, '0'),
   name: `Food ${i % 4} variant ${i}`, sku: `PAGE-${i}` }));
