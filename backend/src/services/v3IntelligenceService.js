@@ -244,7 +244,10 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
     }
     let body;
     try { body = await client.intelligence(spec.domain, request, { signal: invocation.signal }); }
-    catch (error) { const safe = unavailable(); if (error?.functionalCode) safe.functionalCode = error.functionalCode; throw safe; }
+    catch (error) { const safe = unavailable(); if (error?.functionalCode) safe.functionalCode = error.functionalCode;
+      if (Number.isInteger(error?.httpStatus)) safe.httpStatus = error.httpStatus;
+      if (error?.diagnostic) safe.diagnostic = error.diagnostic;
+      throw safe; }
     const meta = body?.metadata;
     const expectedSource = request.dataMode === 'LIVE' ? 'HISTORICAL_PLUS_OPERATIONAL_SNAPSHOT' : 'CANONICAL_V3_BUNDLE';
     const expectedContract = request.dataMode === 'LIVE' ? 'm6.9f4-live-intelligence-v1' : 'm6.9b-v3-intelligence-v1';
@@ -278,8 +281,16 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
     }
     if (request.period && data.period && (data.period.startDate !== request.period.startDate || data.period.endDate !== request.period.endDate)) throw unavailable();
     if (data.kpis && ['revenueCents', 'unitsSold', 'ticketCount'].some(key => !Number.isFinite(data.kpis[key]))) throw unavailable();
-    if (spec.domain === 'inventory' && responseItems.some(row => !isPlainObject(row.stock) || !Number.isFinite(row.stock.onHand)
-      || !isPlainObject(row.recommendation) || !Number.isSafeInteger(row.recommendation.recommendedQty) || !isPlainObject(row.risk))) throw unavailable();
+    if (spec.domain === 'inventory' && responseItems.some(row => {
+      const partialRecommendation = request.dataMode === 'LIVE' && body.status === 'PARTIAL' && data.availabilityStatus === 'PARTIAL'
+        && row.recommendation?.status === 'LIVE_FORECAST_REQUIRED' && row.recommendation.recommendedQty === null
+        && row.recommendation.shouldReorder === null;
+      return !isPlainObject(row.stock) || !Number.isFinite(row.stock.onHand) || !isPlainObject(row.risk)
+        || !isPlainObject(row.recommendation) || (!Number.isSafeInteger(row.recommendation.recommendedQty) && !partialRecommendation);
+    })) {
+      const error = unavailable(); error.functionalCode = 'INVENTORY_RESPONSE_INVALID';
+      error.diagnostic = { internalCause: 'AGENT_SKILL_VALIDATION_ERROR' }; throw error;
+    }
     if (spec.domain === 'forecast' && responseItems.some(row => row.status === 'READY'
       ? !Number.isFinite(row[`expectedUnitsNext${request.horizonDays || 7}d`])
       : !['COLD_START', 'INSUFFICIENT_HISTORY'].includes(row.status))) throw unavailable();

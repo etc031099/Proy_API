@@ -39,13 +39,15 @@ const createMlServiceClient = ({
       );
 
       if (!response.ok) {
+        const failure = new MlServiceUnavailableError();
+        if (v3 && Number.isInteger(response.status)) failure.httpStatus = response.status;
         if (v3) {
           const body = await response.json().catch(() => null);
           const allowed = ['PRODUCT_NOT_FOUND', 'CUSTOMER_NOT_FOUND', 'SUPPLIER_NOT_FOUND', 'AMBIGUOUS_ENTITY', 'INVALID_PERIOD', 'UNSUPPORTED_HORIZON', 'INSUFFICIENT_HISTORY', 'ARTIFACT_UNAVAILABLE', 'SCENARIO_NOT_SUPPORTED', 'TENANT_MISMATCH'];
           const code = body?.code || body?.error?.code || body?.detail?.code;
-          if (allowed.includes(code)) { const error = new MlServiceUnavailableError(); error.functionalCode = code; throw error; }
+          if (allowed.includes(code)) failure.functionalCode = code;
         }
-        throw new MlServiceUnavailableError();
+        throw failure;
       }
       const body = await response.json();
       if (v3) return body;
@@ -61,7 +63,9 @@ const createMlServiceClient = ({
       return body;
     } catch (error) {
       if (error instanceof MlServiceUnavailableError) throw error;
-      throw new MlServiceUnavailableError();
+      const failure = new MlServiceUnavailableError();
+      if (v3 && controller.signal.aborted) failure.diagnostic = { internalCause: 'AGENT_SKILL_TIMEOUT' };
+      throw failure;
     } finally {
       clearTimeout(timeout);
       signal?.removeEventListener('abort', abort);

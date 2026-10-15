@@ -28,6 +28,7 @@ require('./replenishmentPlanning.test');
 require('./agentGemini.test');
 require('./groundedJ2A.test');
 require('./deepseekJ2B.test');
+require('./groundedJ2C.test');
 require('./agentFailover.test');
 require('./agentSmoke.test');
 require('./agentOrchestrator.test');
