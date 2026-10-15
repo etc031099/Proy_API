@@ -32,7 +32,7 @@ const machineLearningPlan = (text, message, binding, memory) => {
   const overview = /(?:que|cuales).{0,45}(?:algoritmos?|tecnicas?|partes|componentes).{0,50}(?:machine learning|\bml\b|aprendizaje)|(?:machine learning|\bml\b).{0,35}(?:utiliza|usa|aplica|sistema)|que partes.{0,30}usan? ml|que partes.{0,30}no usan? ml/.test(text);
   const noMl = /(?:que partes|que areas|que modulos).{0,45}no usan? (?:ml|machine learning)|inventario.{0,30}(?:usa|utiliza).{0,20}(?:ml|machine learning)|proveedores?.{0,30}(?:usa|utiliza).{0,20}(?:ml|machine learning)|por que no.{0,35}(?:ml|machine learning).{0,25}proveedor|proveedores?.{0,35}(?:ml|machine learning).{0,25}no/.test(text);
   const inventoryConcept = /cobertura|\bcoverage\b|safety stock|stock minimo|punto de reposicion|cantidad sugerida|recomendacion operativa|reponer|reposicion/.test(text)
-    && /que es|que significa|modelo|hgb|ma28|machine learning|\bml\b|confirma una compra|como se calcula/.test(text);
+    && /que es|que significa|interpreta|modelo|hgb|ma28|machine learning|\bml\b|confirma una compra|como se calcula/.test(text);
   const supplierConcept = /proveedor/.test(text) && /score|k.?means|machine learning|\bml\b|clasific|probabilidad/.test(text)
     || /lead time|puntualidad|dependencia/.test(text) && /que es|que significa/.test(text);
   const health = /salud|diagnostico/.test(text) && /negocio|sistema|general/.test(text);
@@ -139,7 +139,7 @@ const routeV3 = (message, state, binding) => {
   if (machineLearning) return machineLearning;
   if (/producto.{0,25}mas importante/.test(text) && !/ventas|vendido|revenue|abc|riesgo|critic/.test(text))
     return { clarificationQuestion: '¿A qué te refieres con “más importante”: más vendido, mayor ingreso, clase ABC o mayor riesgo de inventario?' };
-  const horizonFollowup = /^(?:y )?(?:para )?(?:los )?proximos? \d+ dias?$/.test(text);
+  const horizonFollowup = /^[¿¡ ]*(?:y )?(?:para )?(?:los )?(?:proximos? )?\d+ dias?[?!. ]*$/.test(text);
   if (horizonFollowup && memory.lastFamily !== 'get_product_forecast') {
     return { clarificationQuestion: '¿De qué producto deseas consultar el pronóstico? No hay un pronóstico previo en esta conversación.' };
   }
@@ -172,7 +172,13 @@ const routeV3 = (message, state, binding) => {
     if (/stock/.test(text) && /pronostic|prediccion|forecast|demanda|vendere/.test(text)) {
       const ref = productRef(message) || memory.selectedProduct?.key;
       if (!ref) return { clarificationQuestion: '¿De qué producto deseas consultar el stock y el pronóstico?' };
-      const forecast = routeV3(message, memory, binding);
+      const forecastClause = message.split(/\s+y\s+/i).find(part => {
+        const clause = clean(part);
+        return /pronostic|prediccion|forecast|demanda|vendere/.test(clause) && !/stock/.test(clause);
+      });
+      const forecastInput = forecastClause && normalize(forecastClause).includes(normalize(ref))
+        ? forecastClause : `${forecastClause || ''} de ${ref}`;
+      const forecast = forecastClause ? routeV3(forecastInput, memory, binding) : null;
       if (!forecast?.tasks?.some(row => row.skillId === 'get_product_forecast')) return { clarificationQuestion: 'Indica si deseas el pronóstico de 1, 7 o 14 días.' };
       return { tasks: [task('get_inventory_intelligence', { mode: 'detail', productRef: ref }), ...forecast.tasks] };
     }
@@ -254,9 +260,11 @@ const routeV3 = (message, state, binding) => {
     if (/ayer/.test(text)) args.asOfDate = addCalendarDays(operationalDateOf(binding), -1);
     return { tasks: [task('get_product_forecast', args)] };
   }
-  if (/stock|inventario|disponible/.test(text) && /cuant|queda|qued|tiene|hay|disponible|inventario de|stock de|stock del/.test(text)) {
+  if (!/margen bruto|margen/.test(text) && /stock|inventario|disponible/.test(text)
+    && /cuant|queda|qued|tiene|hay|disponible|inventario de|stock de|stock del/.test(text)) {
     const canReuseProduct = !memory.lastFamily || ['get_inventory_intelligence', 'get_product_forecast', 'get_business_analytics'].includes(memory.lastFamily);
-    const ref = productRef(message) || (canReuseProduct && memory.selectedProduct?.key && /^(?:y |cuanto|que|cual|esta|hay|queda)/.test(text)
+    const explicitProductFollowup = /ese (?:producto|item|articulo)/.test(text);
+    const ref = productRef(message) || ((canReuseProduct || explicitProductFollowup) && memory.selectedProduct?.key && /^(?:[¿¡ ]*y |[¿¡ ]*cuanto|[¿¡ ]*que|[¿¡ ]*cual|[¿¡ ]*esta|[¿¡ ]*hay|[¿¡ ]*queda)/.test(text)
       ? memory.selectedProduct.key : null);
     if (!ref && !/bajo|critico|agot|riesgo|sobre/.test(text)) return { clarificationQuestion: '¿De qué producto deseas consultar el stock disponible?' };
     if (ref) return { tasks: [task('get_inventory_intelligence', { mode: 'detail', productRef: ref })] };
@@ -287,7 +295,7 @@ const routeV3 = (message, state, binding) => {
     const category = trimRef(message.match(/\b(?:de|en)\s+(?:la\s+)?categor[ií]a\s+(.+)$/i)?.[1]), subcategory = trimRef(message.match(/\b(?:de|en)\s+(?:la\s+)?subcategor[ií]a\s+(.+)$/i)?.[1]);
     if (category) args.categoryRef = category;
     if (subcategory) args.subcategoryRef = subcategory;
-    let ref = !category && !subcategory && /vendi de|ventas de/.test(text) ? productRef(message) : null;
+    let ref = !category && !subcategory && /vendi de|ventas de|ventas tuvo/.test(text) ? productRef(message) : null;
     if (ref && /^(?:los?\s+)?(?:ultimos?\s+\d+\s+dias?|hoy|ayer|anteayer|esta semana|este mes|mes pasado)$/i
       .test(normalize(ref))) ref = null;
     if (ref) args.productRef = ref;
