@@ -30,6 +30,7 @@ require('./groundedJ2A.test');
 require('./deepseekJ2B.test');
 require('./groundedJ2C.test');
 require('./deepseekJ2D.test');
+require('./deepseekJ2E.test');
 require('./agentFailover.test');
 require('./agentSmoke.test');
 require('./agentOrchestrator.test');

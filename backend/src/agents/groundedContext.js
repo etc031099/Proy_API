@@ -37,19 +37,55 @@ const projectFacts = (value, skillId, depth = 0) => {
     .map(([key, item]) => [key, projectFacts(item, skillId, depth + 1)]));
 };
 
+// Replenishment synthesis needs candidate facts, not unrelated global supplier
+// catalogues or supplier-wide purchasing totals. Filtering precedes array limits.
+const replenishmentFacts = (skillId, data, skus) => {
+  const pick = (value, keys) => isPlainObject(value)
+    ? Object.fromEntries(keys.filter(key => value[key] !== undefined).map(key => [key, value[key]])) : {};
+  if (skillId === 'get_inventory_intelligence') return { items: (data?.items || []).slice(0, 3).map(row => ({
+    ...pick(row, ['sku', 'productName', 'name']), stock: pick(row.stock, ['onHand', 'incoming']),
+    coverage: pick(row.coverage, ['daysCover']), risk: pick(row.risk, ['level', 'reasonCodes']),
+    inventoryPolicy: pick(row.inventoryPolicy, ['configuredMinimumStock', 'reorderPoint']),
+    recommendation: pick(row.recommendation, ['recommendedQty', 'shouldReorder', 'status']),
+    ...pick(row, ['reorderPoint', 'rop']) })) };
+  if (skillId === 'get_product_forecast') return { ...pick(data, ['method', 'forecastSource', 'horizonDays']),
+    items: (data?.items || []).filter(row => skus.has(row.sku)).slice(0, 3)
+      .map(row => pick(row, ['sku', 'productName', 'status', 'expectedUnitsNext7d'])) };
+  if (skillId === 'get_supplier_intelligence') {
+    const items = (data?.items || []).flatMap(row => {
+      const products = (row.productsSupplied || []).filter(product => skus.has(product.sku));
+      const observed = (row.productsSuppliedObserved || []).filter(sku => skus.has(sku));
+      if (!products.length && !observed.length) return [];
+      // Metrics remain supplier-wide, not a lead-time promise for the SKU.
+      return [{ ...pick(row, ['supplierCode', 'displayName', 'supplierName', 'leadTime', 'punctuality']),
+        productsSupplied: [...products.map(product => pick(product, ['sku', 'name', 'productName'])),
+          ...observed.filter(sku => !products.some(product => product.sku === sku)).map(sku => ({ sku }))] }];
+    }).slice(0, 3);
+    return items.length ? { items } : null;
+  }
+  return data;
+};
+
 const buildGroundedContext = ({ question, plan, results, binding }) => {
   const wanted = new Set(plan.skills);
+  const replenishment = plan.responseIntent === 'inventory_priorities';
+  const skus = new Set((results.find(row => row.skillId === 'get_inventory_intelligence')?.result.data?.items || []).slice(0, 3)
+    .map(row => row.sku).filter(sku => typeof sku === 'string' && sku.length > 0));
   const evidence = results.filter(row => wanted.has(row.skillId) && V3_IDS.includes(row.skillId)).slice(0, 4).map(({ skillId, result }, index) => {
     const meta = result.metadata || {};
+    const data = replenishment ? replenishmentFacts(skillId, result.data, skus) : result.data;
     return { ref: `E${index + 1}`, skillId, status: result.status,
       scope: { asOfDate: meta.asOf || binding.operationalDate,
         period: meta.period ? { startDate: meta.period.startDate, endDate: meta.period.endDate } : null,
         mode: meta.freshness === 'FROZEN_HISTORICAL' ? 'FROZEN' : meta.dataMode || 'UNKNOWN',
         source: meta.source || null, frozenCutoff: meta.frozenCutoff || null,
         dataVersion: meta.dataVersion || null, snapshotHash: meta.snapshotHash || null,
-        observationsClosedThrough: meta.observationsClosedThrough || null },
+        observationsClosedThrough: meta.observationsClosedThrough || null,
+        ...(replenishment && skillId === 'get_supplier_intelligence' ? { supplierMetricScope: 'SUPPLIER_AGGREGATE' } : {}) },
       limited: Boolean(meta.truncated) || (meta.returnedCount || 0) > 3,
-      facts: ['READY', 'NO_DATA', 'PARTIAL'].includes(result.status) ? projectFacts(result.data, skillId) : null };
+      ...(replenishment && skillId === 'get_supplier_intelligence'
+        ? { limited: true, ...(data === null ? { omission: 'NO_CANDIDATE_SUPPLIER_EVIDENCE' } : {}) } : {}),
+      facts: ['READY', 'NO_DATA', 'PARTIAL'].includes(result.status) ? projectFacts(data, skillId) : null };
   });
   const context = { contractVersion: 'grounded-v3-context-v1', question: cleanText(question, 600),
     responseIntent: plan.responseIntent, scenarioId: binding.scenarioId, datasetVersion: binding.datasetVersion,

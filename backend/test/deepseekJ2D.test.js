@@ -26,7 +26,8 @@ const results = [
     { sku: 'ABA-ACE-002', expectedUnitsNext7d: 9.75 }] }, metadata: {} } },
   // Existing synthetic J2B supplier fixture; not claimed to be the cloud supplier response.
   { skillId: 'get_supplier_intelligence', result: { status: 'READY', data: { items: [
-    { supplierCode: 'SUP-05', displayName: 'Proveedor ficticio', pendingOrderCount: 29 }] }, metadata: {} } }
+    { supplierCode: 'SUP-05', displayName: 'Proveedor ficticio', pendingOrderCount: 29,
+      productsSupplied: [{ sku: 'ABA-ACE-002' }] }] }, metadata: {} } }
 ];
 results.forEach(row => { row.result.metadata = { asOf: binding.operationalDate, dataMode: 'LIVE' }; });
 const compact = buildGroundedContext({ question, plan, results, binding });
@@ -34,7 +35,7 @@ const output = () => ({ observations: [
   { evidenceRefs: ['E1', 'E2'], interpretation: 'Cocinero tiene riesgo HIGH, cobertura de 5,0 días y ninguna entrada pendiente.',
     advisoryRecommendation: 'Prioriza revisar ABA-ACE-002: la cantidad sugerida es 24 y MA28 espera 9,75 unidades.' },
   { evidenceRefs: ['E1', 'E2', 'E3'], interpretation: 'Primor tiene cobertura de 7,2 días; Arroz tiene 57 unidades pendientes y demanda esperada de 34,75.',
-    advisoryRecommendation: 'Revisa las entradas de Arroz antes de pedir; consulta SUP-05 y sus 29 órdenes pendientes.' }
+    advisoryRecommendation: 'Revisa las entradas de Arroz antes de pedir; consulta las condiciones de SUP-05 antes de decidir.' }
 ], limitations: [] });
 const usage = { prompt_tokens: 1000, completion_tokens: 200, total_tokens: 1200,
   prompt_cache_hit_tokens: 400, prompt_cache_miss_tokens: 600,

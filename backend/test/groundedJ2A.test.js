@@ -98,7 +98,8 @@ for (const [message, skills] of cases) test(`J2A grounded plan -> skills -> comp
   assert.deepEqual(compact.evidence.map(row => row.skillId), skills);
   assert.ok(contextMetrics(compact).bytes <= MAX_CONTEXT_BYTES);
   contextBytes.push(contextMetrics(compact).bytes);
-  assert.ok(!compact.evidence.some(row => row.facts === null), 'normal domain evidence must fit');
+  assert.ok(compact.evidence.every(row => row.facts !== null || row.omission === 'NO_CANDIDATE_SUPPLIER_EVIDENCE'),
+    'only an explicitly unrelated supplier may be omitted from these fixtures');
 });
 
 test('J2A near-domain examples and product prices are not blocked', () => {
