@@ -545,6 +545,22 @@ const healthInsightLabel = insight => ({
 const displayMoney = cents => Number.isFinite(cents) ? `S/ ${(cents / 100).toFixed(2)}` : 'no disponible';
 const displayNumber = value => Number.isFinite(value) ? Number(value.toFixed(2)) : 'no disponible';
 const percent = value => Number.isFinite(value) ? `${displayNumber(value * 100)}%` : 'no disponible';
+const crossSellCutoff = result => result.metadata.frozenCutoff || result.metadata.asOf || '2026-10-12';
+const crossSellExplanation = result => `FP-Growth resume asociaciones observadas; no demuestra causalidad ni garantiza ventas futuras. El artefacto Market Basket es histórico y está congelado al ${crossSellCutoff(result)}.`;
+const crossSellBaseLabel = (result, args) => {
+  const product = result.metadata.selected?.product || result.data.sourceProduct;
+  if (product?.label) return product.key ? `${product.label} (${product.key})` : product.label;
+  if (product?.name || product?.productName) return `${product.name || product.productName}${product.sku ? ` (${product.sku})` : ''}`;
+  return product?.sku || args.productRef || null;
+};
+const crossSellMetrics = row => [
+  ...(Number.isFinite(row.ticketCount) ? [`${row.ticketCount} tickets observados`] : []),
+  ...(Number.isFinite(row.support) ? [`support ${percent(row.support)}`] : []),
+  ...(Number.isFinite(row.confidence) ? [`confidence ${percent(row.confidence)}`] : []),
+  ...(Number.isFinite(row.lift) ? [`lift ${displayNumber(row.lift)}`] : []),
+  ...(typeof row.stability?.status === 'string' ? [`estabilidad ${row.stability.status}`]
+    : typeof row.stability === 'string' ? [`estabilidad ${row.stability}`] : [])
+].join(' · ');
 const mlExplanation = concept => ({
   supervised: 'El aprendizaje supervisado ajusta un modelo con ejemplos que incluyen una variable objetivo. En este escenario se evaluó HGB para demanda; el método operativo V3 sigue siendo MA28.',
   features: 'Las features son variables de entrada que el modelo usa para estimar su objetivo. La lista siguiente procede del contrato de evaluación; no se recalculan ni se interpretan como causas.',
@@ -700,17 +716,25 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
     const sourceRows = rows.slice(0, 5);
     for (let i = 0; i < sourceRows.length; i++) {
       const row = sourceRows[i], names = row.consequentProducts || [row.recommendedProduct], keys = row.consequentSkus || [row.recommendedSku || row.sku];
-      const detail = args.mode === 'rules' ? [{ label: 'Support', value: percent(row.support) },
-        { label: 'Confidence observada', value: percent(row.confidence) }, { label: 'Lift', value: displayNumber(row.lift) },
-        { label: 'Estabilidad', value: row.stability?.status || row.stability || 'según artefacto' }]
-        : [];
+      const detail = [
+        ...(Number.isFinite(row.support) ? [{ label: 'Support', value: percent(row.support) }] : []),
+        ...(Number.isFinite(row.confidence) ? [{ label: 'Confidence observada', value: percent(row.confidence) }] : []),
+        ...(Number.isFinite(row.lift) ? [{ label: 'Lift', value: displayNumber(row.lift) }] : []),
+        ...(typeof row.stability?.status === 'string' || typeof row.stability === 'string'
+          ? [{ label: 'Estabilidad', value: row.stability?.status || row.stability }] : [])
+      ];
       for (let j = 0; j < Math.min((keys || []).length, 5 - items.length); j++) {
         const key = keys[j], name = names?.[j]; if (!key || !name) continue;
         items.push({ type: 'product', key, label: name, secondaryLabel: key,
-          metrics: [{ label: 'Tickets observados', value: row.ticketCount ?? 'no disponible' }, ...detail], selectMessage: key });
+          metrics: [...(Number.isFinite(row.ticketCount) ? [{ label: 'Tickets observados', value: row.ticketCount }] : []), ...detail], selectMessage: key });
       }
     }
-    note = `${d.available === false ? 'No hay asociaciones validadas para este corte.' : 'FP-Growth describe compras conjuntas observadas; las asociaciones no demuestran causalidad ni garantizan ventas futuras.'} Artefacto congelado al ${result.metadata.frozenCutoff || result.metadata.asOf}.`;
+    const baseLabel = crossSellBaseLabel(result, args);
+    note = d.available === false
+      ? `No se pudieron consultar asociaciones validadas en el artefacto actual de Market Basket.${baseLabel ? ` Producto base: ${baseLabel}.` : ''} ${crossSellExplanation(result)}`
+      : !items.length
+        ? `No se encontraron asociaciones frecuentes disponibles${baseLabel ? ` para ${baseLabel}` : ''} en el artefacto actual. Esto no significa que el producto nunca se compre junto con otros. ${crossSellExplanation(result)}`
+        : crossSellExplanation(result);
   } else if (skillId === 'get_customer_intelligence') {
     kind = 'customer'; title = selected?.label ? `Cliente · ${selected.label}` : 'Inteligencia de clientes';
     for (let i = 0; i < rows.length; i++) {
@@ -752,7 +776,10 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
       label: healthInsightLabel(insight), metrics: [], secondaryLabel: undefined });
     note = `Indicadores descriptivos del corte V3; el resumen no asigna un puntaje global. Market Basket permanece histórico al ${h.marketBasket?.freshness?.analysisCutoff || '2026-10-12'}.`;
   }
-  if (args.concept && mlExplanation(args.concept)) note = [note, mlExplanation(args.concept)].filter(Boolean).join(' ');
+  if (args.concept && mlExplanation(args.concept)
+    && !(skillId === 'get_cross_sell_recommendations' && ['fp_growth', 'causality'].includes(args.concept))) {
+    note = [note, mlExplanation(args.concept)].filter(Boolean).join(' ');
+  }
   return { kind, title, ...(subtitle ? { subtitle } : {}), metrics: metrics.slice(0, 8), items: items.slice(0, skillId === 'get_business_health' ? 5 : 5),
     ...(note ? { note } : {}) };
 };
@@ -780,8 +807,32 @@ const renderV3 = (skillId, result, args, responseMode = null) => {
   }
   const period = result.metadata.period;
   const heading = skillId === 'get_cross_sell_recommendations'
-    ? `Escenario V3 · asociaciones históricas al ${result.metadata.frozenCutoff || date}${period ? ` · ${period.startDate} → ${period.endDate}` : ''}.`
+    ? 'Escenario V3 · Market Basket FROZEN.'
     : `Escenario V3 · ${result.metadata.dataMode === 'LIVE' ? 'datos operativos' : 'histórico'} al ${date}${period ? ` · ${period.startDate === period.endDate ? `el ${period.startDate}` : `${period.startDate} → ${period.endDate}`}` : ''}.`;
+  if (skillId === 'get_cross_sell_recommendations') {
+    const baseLabel = crossSellBaseLabel(result, args);
+    const metricExplanation = ['support', 'confidence', 'lift'].includes(args.concept) ? mlExplanation(args.concept) : null;
+    const methodology = [crossSellExplanation(result), metricExplanation].filter(Boolean).join(' ');
+    if (d.available === false) {
+      return `${heading}\n${baseLabel ? `Producto base: ${baseLabel}.\n` : ''}No se pudieron consultar asociaciones validadas en el artefacto actual de Market Basket.\n${methodology}`;
+    }
+    if (!items.length) {
+      const absence = baseLabel
+        ? `No se encontraron asociaciones frecuentes disponibles para ${baseLabel} en el artefacto actual de Market Basket.`
+        : 'No se encontraron asociaciones frecuentes disponibles en el artefacto actual de Market Basket.';
+      return `${heading}\n${absence} Esto solo indica que no hay una regla disponible bajo los criterios actuales; no significa que el producto nunca se compre junto con otros.\n${methodology}`;
+    }
+    const visible = items.slice(0, 5);
+    const lines = visible.map((row, index) => {
+      const names = row.consequentProducts || [row.recommendedProduct], keys = row.consequentSkus || [row.recommendedSku || row.sku];
+      const associated = (names || []).slice(0, 5).map((name, i) => {
+        const key = keys?.[i]; return name && key ? `${name} (${key})` : name || key;
+      }).filter(Boolean).join(', ');
+      const metrics = crossSellMetrics(row);
+      return `${index + 1}. ${associated}${metrics ? ` · ${metrics}` : ''}.`;
+    });
+    return `${heading}\n${baseLabel ? `Producto base: ${baseLabel}.\n` : ''}${lines.join('\n')}\n${methodology}`;
+  }
   if (skillId === 'get_product_forecast' && args.mode === 'evaluation') {
     const selected = d.selectedOperationalMethod || {}, evaluationRows = d.modelEvaluation || [];
     const lines = [`Método operativo V3: ${selected.algorithm || selected.label || 'no disponible'} (${(selected.horizons || [1, 7, 14]).join('/')} días).`];
@@ -823,7 +874,7 @@ const renderV3 = (skillId, result, args, responseMode = null) => {
     if (skillId === 'get_customer_intelligence') return `${i + 1}. ${label(r)} · ${segmentLabel(r.segment)} · última compra ${r.lastPurchaseDate || 'sin compras'} · ${num(r.ticketCount)} tickets históricos · gasto histórico ${money(r.totalSpentCents)} · ticket promedio ${money(r.averageTicketCents)}${args.mode === 'preferences' ? ` · categoría preferida: ${r.preferences?.favoriteCategoryName || 'no disponible'} · productos habituales: ${(r.preferences?.topProducts || []).slice(0, 5).map(p => p.name || p.sku).join(', ') || 'sin datos'}` : ''}.`;
     if (skillId === 'get_supplier_intelligence' && args.mode === 'alternatives') return `${i + 1}. ${r.sku} · ${(r.alternatives || []).slice(0, 5).map(offer => `${offer.supplierName || offer.supplierCode}: ${money(offer.unitCostCents)}`).join('; ') || 'sin alternativas configuradas'}.`;
     if (skillId === 'get_supplier_intelligence') return `${i + 1}. ${label(r)} (${r.supplierCode}) · ${num(r.purchaseOrderCount)} compras históricas · ${num(r.pendingOrderCount)} pedidos pendientes · gasto histórico recibido ${money(r.receivedSpendCents)} · lead time observado ${num(r.leadTime?.averageDays)} días con ${num(r.leadTime?.sampleSize)} observaciones · puntualidad ${num(r.punctuality?.onTimeRatePct)}% · catálogo exclusivo: ${num(r.exclusiveOfferedSkuCount)} productos · ${(r.productsSupplied || []).slice(0, 5).map(p => p.name || p.productName || p.sku).join(', ')}.`;
-    if (skillId === 'get_cross_sell_recommendations') return `${i + 1}. ${(r.consequentProducts || [r.recommendedProduct]).filter(Boolean).join(', ')} (${(r.consequentSkus || [r.recommendedSku || r.sku]).filter(Boolean).join(', ')}) · ${num(r.ticketCount)} tickets · support ${percent(r.support)} · confidence ${percent(r.confidence)} · lift ${num(r.lift)} · estabilidad ${r.stability?.status || r.stability || 'según artefacto'}.`;
+    if (skillId === 'get_cross_sell_recommendations') return `${i + 1}. ${(r.consequentProducts || [r.recommendedProduct]).filter(Boolean).join(', ')} (${(r.consequentSkus || [r.recommendedSku || r.sku]).filter(Boolean).join(', ')})${crossSellMetrics(r) ? ` · ${crossSellMetrics(r)}` : ''}.`;
     return `${i + 1}. ${label(r)} · ${args.metric === 'units' ? units(r.metric ?? r.units ?? r.unitsSold) : args.metric === 'tickets' ? `${num(r.metric ?? r.ticketCount)} tickets` : money(r.metric ?? r[args.metric === 'gross_margin' ? 'grossMarginCents' : 'revenueCents'])}.`;
   });
   if (skillId === 'get_business_analytics' && d.kpis) {
@@ -840,8 +891,7 @@ const renderV3 = (skillId, result, args, responseMode = null) => {
   if (skillId === 'get_customer_intelligence' && args.segment === 'TOP_HIGH_VALUE') lines.push('El segmento de alto valor se basa en gasto del RFM de 90 días y actividad reciente; el riesgo de inactividad es una categoría distinta y no es el criterio de este ranking.');
   if (skillId === 'get_supplier_intelligence' && d.singleSourceCriticalOrHigh) lines.push(`Dependencia: ${num(d.singleSourceCriticalOrHigh.singleSourceCriticalOrHighSkuCount)} productos críticos o de alto riesgo con un solo proveedor observado/configurado; no es un score de calidad.`);
   if (skillId === 'get_supplier_intelligence' && args.pendingOnly) lines.unshift(`${d.total ?? items.length} proveedores con pedidos pendientes; se muestran hasta 5. La cifra procede de órdenes pendientes registradas.`);
-  if (skillId === 'get_cross_sell_recommendations') lines.push(d.available === false ? 'No hay asociaciones validadas disponibles para ese corte.' : 'Son compras conjuntas observadas; no demuestran causalidad ni garantizan ventas futuras.');
-  if (args.concept && mlExplanation(args.concept)) lines.push(mlExplanation(args.concept));
+  if (skillId !== 'get_cross_sell_recommendations' && args.concept && mlExplanation(args.concept)) lines.push(mlExplanation(args.concept));
   if (skillId === 'get_business_health') {
     const h = d.businessHealth;
     if (h) lines.push(`Ventas: ${money(h.sales?.kpis?.revenueCents)}.`, `Margen bruto: ${num(h.sales?.kpis?.grossMarginPct)}%.`,

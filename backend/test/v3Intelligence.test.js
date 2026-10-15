@@ -25,7 +25,7 @@ const scenario = { businessId: V3.businessId, scenarioId: V3.scenarioId, status:
   metadata: { datasetVersion: V3.datasetVersion, referenceDate: V3.referenceDate, timezone: V3.timezone } };
 function query(value) { return { select() { return this; }, sort() { return this; }, limit() { return this; }, lean() { return this; }, maxTimeMS() { return Promise.resolve(value); } }; }
 function fixture({ corrupt, failed, record = scenario, clock = () => new Date('2026-10-12T18:00:00.000Z'), snapshotBuilder,
-  zeroSalesDates = [], insufficientCustomerRefs = [] } = {}) {
+  zeroSalesDates = [], insufficientCustomerRefs = [], crossSellData } = {}) {
   const calls = [], reads = [], events = [];
   const models = {
     HistoricalScenario: { findOne: filter => { reads.push(filter); return query(record); } },
@@ -97,7 +97,7 @@ function fixture({ corrupt, failed, record = scenario, clock = () => new Date('2
       : { items: [{ sku: 'PAN-FRE-001', name: 'Pan francés', metric: 23, metricName: 'units' }], total: 80 } : { kpis, trends: { revenue: { percentChange: 10 } } };
     else if (domain === 'inventory') data = { items: skus.slice(0, payload.limit).map(inventory), total: skus.length };
     else if (domain === 'forecast') data = payload.mode === 'summary' ? { totalExpectedUnits: 33, horizonDays: payload.horizonDays } : { items: skus.slice(0, payload.limit).map(sku => ({ sku, expectedUnitsNext1d: 2, expectedUnitsNext7d: 14, expectedUnitsNext14d: 28, status: 'READY' })), total: skus.length };
-    else if (domain === 'cross-sell') data = { available: true, items: [{ recommendedSku: 'BEB-GAS-003', recommendedProduct: 'Inca Kola 500 ml', ticketCount: 100, support: .08, confidence: .3, lift: 2, stability: 'STABLE' }] };
+    else if (domain === 'cross-sell') data = crossSellData || { available: true, items: [{ recommendedSku: 'BEB-GAS-003', recommendedProduct: 'Inca Kola 500 ml', ticketCount: 100, support: .08, confidence: .3, lift: 2, stability: 'STABLE' }] };
     else if (domain === 'customers') data = { items: (payload.customerCode ? [payload.customerCode] : customers.slice(0, 5).map(row => row.customerCode)).map(customer), total: payload.customerCode ? 1 : 40,
       ...(payload.period ? { periodMetrics: { [payload.customerCode || 'CLI-001']: { revenueCents: 9876 } } } : {}) };
     else if (domain === 'suppliers') data = { items: (payload.supplierCode ? [payload.supplierCode] : ['SUP-05', 'SUP-01']).map(supplier), total: payload.supplierCode ? 1 : 10 };
@@ -570,8 +570,70 @@ test('V3 forecast and cross-sell cards show approved horizon and observed, selec
   assert.equal(crossSell.v3Views[0].kind, 'cross_sell');
   assert.equal(crossSell.v3Views[0].items[0].label, 'Inca Kola 500 ml');
   assert.equal(crossSell.v3Views[0].items[0].metrics[0].value, 100);
-  assert.match(crossSell.v3Views[0].note, /no demuestran causalidad/);
+  assert.match(crossSell.v3Views[0].note, /no demuestra causalidad/);
   assert.equal(crossSell.v3Views[0].items[0].selectMessage, 'BEB-GAS-003');
+});
+
+test('M6.9J.2T cross-sell with one association shows only supported evidence and one compact frozen explanation', async () => {
+  const f = fixture(), result = await f.run('¿Con qué productos se compra PAN-FRE-001?'); zero(result);
+  assert.equal(f.calls.at(-1).domain, 'cross-sell');
+  assert.match(result.answer, /Pan Francés fresco paquete 4 unidades \(PAN-FRE-001\)/);
+  assert.match(result.answer, /Inca Kola 500 ml \(BEB-GAS-003\)/);
+  assert.match(result.answer, /100 tickets observados/);
+  assert.match(result.answer, /support 8%/);
+  assert.match(result.answer, /confidence 30%/);
+  assert.match(result.answer, /lift 2/);
+  assert.equal((result.answer.match(/FP-Growth/g) || []).length, 1);
+  assert.equal((result.answer.match(/no demuestra causalidad/g) || []).length, 1);
+  assert.match(result.answer, /congelado al 2026-10-12/);
+  assert.match(result.v3Views[0].note, /asociaciones observadas/);
+  assert.equal((result.v3Views[0].note.match(/FP-Growth/g) || []).length, 1);
+  assert.equal(result.v3Views[0].items.length, 1);
+});
+
+test('M6.9J.2T cross-sell with multiple associations respects the existing five-item display limit', async () => {
+  const associatedProducts = definitions.filter(product => product.sku !== 'PAN-FRE-001').slice(0, 6);
+  const associations = associatedProducts.map((product, index) => ({
+    recommendedSku: product.sku, recommendedProduct: product.name,
+    ...(index === 0 ? { ticketCount: 3, support: .02 } : {})
+  }));
+  const f = fixture({ crossSellData: { available: true, total: associations.length, items: associations } });
+  const result = await f.run('¿Con qué productos se compra PAN-FRE-001?'); zero(result);
+  for (const product of associatedProducts.slice(0, 5)) assert.ok(result.answer.includes(product.name));
+  assert.ok(!result.answer.includes(associatedProducts[5].name));
+  assert.equal(result.v3Views[0].items.length, 5);
+  assert.deepEqual(result.v3Views[0].items[0].metrics.map(metric => metric.label), ['Tickets observados', 'Support']);
+  assert.equal(result.v3Views[0].items[1].metrics.length, 0);
+});
+
+test('M6.9J.2T cross-sell with no associations states absence without inventing alternatives', async () => {
+  const f = fixture({ crossSellData: { available: true, total: 0, items: [] } });
+  const result = await f.run('¿Con qué productos se compra PAN-FRE-001?'); zero(result);
+  assert.match(result.answer, /No se encontraron asociaciones frecuentes disponibles/);
+  assert.match(result.answer, /Pan Francés fresco paquete 4 unidades \(PAN-FRE-001\)/);
+  assert.match(result.answer, /no significa que el producto nunca se compre junto con otros/);
+  assert.doesNotMatch(result.answer, /Inca Kola|Producto asociado/);
+  assert.match(result.v3Views[0].note, /No se encontraron asociaciones frecuentes disponibles/);
+  assert.equal(result.v3Views[0].items.length, 0);
+  assert.match(result.answer, /congelado al 2026-10-12/);
+});
+
+test('M6.9J.2T unavailable Market Basket is distinguished from a valid empty association result', async () => {
+  const f = fixture({ crossSellData: { available: false, items: [] } });
+  const result = await f.run('¿Con qué productos se compra PAN-FRE-001?'); zero(result);
+  assert.match(result.answer, /No se pudieron consultar asociaciones validadas/);
+  assert.doesNotMatch(result.answer, /nunca se compre junto con otros/);
+  assert.match(result.answer, /congelado al 2026-10-12/);
+  assert.equal(result.v3Views[0].items.length, 0);
+});
+
+test('M6.9J.2T retains the grounded definition when the user asks what support means', async () => {
+  const f = fixture(), result = await f.run('¿Qué significa support en FP-Growth?'); zero(result);
+  assert.equal(f.calls.at(-1).domain, 'cross-sell');
+  assert.match(result.answer, /proporción de tickets/);
+  assert.equal((result.answer.match(/FP-Growth/g) || []).length, 1);
+  assert.match(result.answer, /no demuestra causalidad/);
+  assert.match(result.answer, /congelado al 2026-10-12/);
 });
 
 test('V3 compound ranked customer remains clickable after its preference continuation', async () => {
