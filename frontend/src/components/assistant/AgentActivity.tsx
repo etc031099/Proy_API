@@ -37,6 +37,15 @@ export function AgentActivity({ response }: { response?: AgentResponse }) {
   return <aside aria-label="Actividad multiagente" className="rounded-xl border bg-card p-5 min-w-0 space-y-5 break-words">
     <h2 className="font-semibold">Actividad de esta respuesta</h2>
     {u.totalLlmCalls === 0 && <p className="rounded-lg bg-emerald-500/10 p-3 text-sm font-medium">Respuesta determinística · 0 tokens IA</p>}
+    {u.provider && u.provider !== 'none' && <section aria-label="Proveedor de inteligencia artificial" className="space-y-1 text-sm">
+      <p className="font-medium">Respuesta asistida por IA</p>
+      <p>Proveedor: {u.provider === 'deepseek' ? 'DeepSeek' : u.provider === 'gemini' ? 'Gemini' : u.provider}</p>
+      {u.model && <p>Modelo: {u.model}</p>}
+      <p>Entrada: {metric(u.totalInputTokens)} · Salida: {metric(u.totalOutputTokens)} · Total: {metric(u.totalTokens)}</p>
+      <p>Costo estimado: {typeof u.estimatedCostUsd === 'number' ? `$${u.estimatedCostUsd.toFixed(8)} USD`
+        : u.estimatedCostRangeUsd ? `$${u.estimatedCostRangeUsd.min.toFixed(8)}–$${u.estimatedCostRangeUsd.max.toFixed(8)} USD (según horario)` : 'No disponible'}</p>
+      <p>Latencia proveedor: {(u.totalProviderLatencyMs / 1000).toFixed(2)} s</p>
+    </section>}
     <dl className="grid grid-cols-2 gap-3 text-sm">
       <div><dt>Agentes</dt><dd>{response.participants.length}</dd></div>
       <div><dt>Llamadas IA</dt><dd>{u.totalLlmCalls}</dd></div>

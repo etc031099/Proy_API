@@ -6,6 +6,7 @@ const { createTraceEvent, createRequestUsage, createEvidence } = require('./obse
 const { createSkillExecutors } = require('./executors');
 const { getGeminiProvider, providerError } = require('./providers/geminiProvider');
 const { DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_TIMEOUT_MS } = require('../config/env');
+const { selectedProvider, configuredGroundedProvider } = require('./providers/selection');
 const { LOGICAL_DEADLINE_MS, MIN_ATTEMPT_MS, parseFallbackModels, safeUsage, knownUsage } = require('./providers/failover');
 
 const GEMINI_CAUSES = new Set(['GEMINI_AUTHENTICATION_FAILED', 'GEMINI_PERMISSION_DENIED', 'GEMINI_MODEL_NOT_FOUND',
@@ -62,7 +63,7 @@ const createAgentExecution = options => {
     throw new AgentError('AGENT_INVALID_REQUEST');
   }
   const provider = options.provider;
-  const neutralProvider = options.neutralProvider;
+  const neutralProvider = options.neutralProvider === undefined ? configuredGroundedProvider() : options.neutralProvider;
   if (neutralProvider && (typeof neutralProvider.generate !== 'function' || !/^[\w.-]{1,100}$/.test(neutralProvider.provider || '')
     || !/^[\w.-]{1,100}$/.test(neutralProvider.model || ''))) throw new AgentError('AGENT_INVALID_REQUEST');
   let groundedCalled = false;
@@ -142,22 +143,28 @@ const createAgentExecution = options => {
       emit('llm_started', { agentId: 'analyst', agentRunId, status: 'STARTED' });
       active++;
       try {
-        const result = await neutralProvider.generate(input);
+        const result = await neutralProvider.generate({ ...input, route: 'GROUNDED_LLM' });
         llmRecords.push({ agentId: 'analyst', provider: result.provider, model: result.model, latencyMs: result.latencyMs,
           estimatedCostUsd: result.estimatedCostUsd, pricingVersion: result.pricingVersion,
+          estimatedCostRangeUsd: result.estimatedCostRangeUsd,
           usageAvailable: ['inputTokens', 'outputTokens', 'totalTokens'].some(key => Number.isSafeInteger(result.usage[key])),
           ...result.usage, thoughtTokens: null, toolUseTokens: null });
         emit('llm_finished', { agentId: 'analyst', agentRunId, model: result.model, durationMs: result.latencyMs, status: 'SUCCEEDED', ...result.usage });
         emit('agent_finished', { agentId: 'analyst', agentRunId, durationMs: performance.now() - start, status: 'SUCCEEDED' });
         return result;
-      } catch {
+      } catch (error) {
         failed = true;
         llmRecords.push({ agentId: 'analyst', provider: neutralProvider.provider, model: neutralProvider.model,
-          latencyMs: performance.now() - start, usageAvailable: false });
+          latencyMs: performance.now() - start, usageAvailable: false, providerFailure: error?.failureKind || 'INVALID_RESPONSE' });
         emit('llm_finished', { agentId: 'analyst', agentRunId, model: neutralProvider.model, durationMs: performance.now() - start, status: 'FAILED' });
         emit('agent_finished', { agentId: 'analyst', agentRunId, durationMs: performance.now() - start, status: 'FAILED' });
         throw new AgentError('AGENT_PROVIDER_FAILED');
       } finally { active--; }
+    },
+    recordGroundedSynthesis(accepted) {
+      if (!accepted) failed = true;
+      emit('synthesis_finished', { agentId: 'analyst', agentRunId: randomUUID(), status: accepted ? 'ACCEPTED' : 'REJECTED',
+        synthesisDiagnostic: accepted ? 'NONE' : 'INVALID_OUTPUT' });
     },
     async executeSkill(input) {
       if (closed) throw new AgentError('AGENT_INVALID_REQUEST');
@@ -239,6 +246,8 @@ const createAgentExecution = options => {
   });
 
   async function runLlmCall(method, input) {
+    // DeepSeek only synthesizes grounded READ facts. Never fall through to Gemini.
+    if (!provider && selectedProvider() !== 'gemini') throw new AgentError('AGENT_PROVIDER_FAILED');
     if (closed || !isPlainObject(input) || Reflect.ownKeys(input).some(key => !['agentId', 'systemInstruction', 'messages', 'schema', 'diagnostics'].includes(key))) {
       throw new AgentError('AGENT_INVALID_REQUEST');
     }

@@ -14,6 +14,12 @@ export interface AgentUsage {
 }
 export interface Participant extends AgentUsage { skillCalls: number; providerLatencyMs: number }
 export interface RequestUsage {
+  provider?: string;
+  model?: string | null;
+  estimatedCostUsd?: number | null;
+  estimatedCostRangeUsd?: { min: number; max: number } | null;
+  cacheMissInputTokens?: number | null;
+  reasoningTokens?: number | null;
   providerGenerations?: ProviderGeneration[];
   totalLlmCalls: number;
   totalSkillCalls: number;

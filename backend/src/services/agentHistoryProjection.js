@@ -28,6 +28,8 @@ const shape = {
   actions: [{ skillId: true, agentId: true, status: true, durationMs: true }],
   evidence: [{ evidenceId: true, sourceType: true, skillId: true, label: true, asOf: true, period, recordCount: true }],
   usage: { provider: true, model: true, llmCalls: true, inputTokens: true, outputTokens: true, estimatedCostUsd: true,
+    cachedInputTokens: true, cacheMissInputTokens: true, reasoningTokens: true,
+    estimatedCostRangeUsd: { min: true, max: true }, providerFailures: [true],
     providerLatencyMs: true, pricingVersions: [true], totalLlmCalls: true, totalSkillCalls: true, totalInputTokens: true, totalOutputTokens: true,
     totalThoughtTokens: true, totalCachedInputTokens: true, totalToolUseTokens: true, totalTokens: true,
     metricsComplete: true, totalProviderLatencyMs: true, totalLatencyMs: true, toolSelectionCycles: true,

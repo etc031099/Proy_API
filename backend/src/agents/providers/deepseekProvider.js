@@ -1,0 +1,75 @@
+'use strict';
+const { createNeutralProvider } = require('./neutralProvider');
+const { isPlainObject } = require('../contracts');
+const { DEEPSEEK_PRICES } = require('../../config/deepseekPricing');
+const failure = code => Object.assign(new Error('DeepSeek response unavailable'), { code });
+const count = value => Number.isSafeInteger(value) && value >= 0;
+
+const readDeepSeekConfig = (env = process.env) => {
+  const model = env.DEEPSEEK_MODEL || 'deepseek-flash';
+  let base;
+  try { base = new URL(env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com'); }
+  catch { throw failure('DEEPSEEK_CONFIGURATION_INVALID'); }
+  const maxOutputTokens = Number(env.DEEPSEEK_MAX_OUTPUT_TOKENS || 300);
+  const timeoutMs = Number(env.DEEPSEEK_TIMEOUT_MS || 15000);
+  if (base.origin !== 'https://api.deepseek.com' || !['/', '/v1', '/v1/'].includes(base.pathname)
+    || base.username || base.password || base.search || base.hash
+    || !['deepseek-flash', 'deepseek-v4-pro'].includes(model)
+    || (env.DEEPSEEK_REASONING_EFFORT || 'none') !== 'none'
+    || !Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 1 || maxOutputTokens > 300
+    || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 20000)
+    throw failure('DEEPSEEK_CONFIGURATION_INVALID');
+  return Object.freeze({ model, endpoint: `${base.href.replace(/\/$/, '')}/chat/completions`, maxOutputTokens, timeoutMs });
+};
+
+const normalizeDeepSeekUsage = source => {
+  const usage = isPlainObject(source) ? source : {};
+  const parsed = { inputTokens: count(usage.prompt_tokens) ? usage.prompt_tokens : null,
+    outputTokens: count(usage.completion_tokens) ? usage.completion_tokens : null,
+    totalTokens: count(usage.total_tokens) ? usage.total_tokens : null,
+    cachedInputTokens: count(usage.prompt_cache_hit_tokens) ? usage.prompt_cache_hit_tokens
+      : count(usage.prompt_tokens_details?.cached_tokens) ? usage.prompt_tokens_details.cached_tokens : null,
+    cacheMissInputTokens: count(usage.prompt_cache_miss_tokens) ? usage.prompt_cache_miss_tokens : null,
+    reasoningTokens: count(usage.completion_tokens_details?.reasoning_tokens) ? usage.completion_tokens_details.reasoning_tokens : null };
+  // Do not replace missing usage with an estimate or zero.
+  if (parsed.inputTokens !== null && parsed.outputTokens !== null && parsed.totalTokens !== null
+    && parsed.inputTokens + parsed.outputTokens !== parsed.totalTokens
+    || parsed.inputTokens !== null && [parsed.cachedInputTokens, parsed.cacheMissInputTokens].some(n => n !== null && n > parsed.inputTokens)
+    || parsed.cachedInputTokens !== null && parsed.cacheMissInputTokens !== null && parsed.inputTokens !== null
+      && parsed.cachedInputTokens + parsed.cacheMissInputTokens !== parsed.inputTokens
+    || count(usage.prompt_cache_hit_tokens) && count(usage.prompt_tokens_details?.cached_tokens)
+      && usage.prompt_cache_hit_tokens !== usage.prompt_tokens_details.cached_tokens
+    || parsed.reasoningTokens !== null && parsed.outputTokens !== null && parsed.reasoningTokens > parsed.outputTokens)
+    throw failure('DEEPSEEK_INVALID_RESPONSE');
+  return parsed;
+};
+
+const createDeepSeekProvider = ({ env = process.env, fetchImpl = globalThis.fetch, clock } = {}) => {
+  const config = readDeepSeekConfig(env), apiKey = env.DEEPSEEK_API_KEY;
+  // Key is held only by this closure; it is never part of config, errors or telemetry.
+  return createNeutralProvider({ provider: 'deepseek', model: config.model, prices: DEEPSEEK_PRICES,
+    timeoutMs: config.timeoutMs, ...(clock ? { clock } : {}), generate: async request => {
+      if (request.route !== 'GROUNDED_LLM' || typeof apiKey !== 'string' || !apiKey.trim()
+        || /[\r\n]/.test(apiKey) || typeof fetchImpl !== 'function') throw failure('DEEPSEEK_CONFIGURATION_INVALID');
+      const body = { model: config.model, messages: request.messages, stream: false,
+        max_tokens: Math.min(request.maxTokens, config.maxOutputTokens), reasoning_effort: 'none',
+        response_format: { type: 'json_object' }, temperature: request.temperature };
+      let response;
+      try {
+        response = await fetchImpl(config.endpoint, { method: 'POST', redirect: 'error', signal: request.signal,
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey.trim()}` }, body: JSON.stringify(body) });
+      } catch { throw failure(request.signal.aborted ? 'DEEPSEEK_TIMEOUT' : 'DEEPSEEK_NETWORK_ERROR'); }
+      if (!response.ok) throw failure(response.status === 401 || response.status === 403 ? 'DEEPSEEK_AUTH_FAILED'
+        : response.status === 429 ? 'DEEPSEEK_RATE_LIMITED' : 'DEEPSEEK_UNAVAILABLE');
+      let result;
+      try { result = await response.json(); } catch { throw failure('DEEPSEEK_INVALID_RESPONSE'); }
+      const choice = result?.choices?.[0], message = choice?.message;
+      if (!isPlainObject(result) || result.model !== config.model || result.choices?.length !== 1
+        || choice?.finish_reason !== 'stop' || message?.role !== 'assistant' || message.tool_calls?.length || message.function_call
+        || typeof message?.content !== 'string' || !message.content.trim() || message.content.length > 6000)
+        throw failure('DEEPSEEK_INVALID_RESPONSE');
+      // Drop reasoning_content and all provider envelope data before crossing the boundary.
+      return { text: message.content, usage: normalizeDeepSeekUsage(result.usage) };
+    } });
+};
+module.exports = { createDeepSeekProvider, readDeepSeekConfig, normalizeDeepSeekUsage };

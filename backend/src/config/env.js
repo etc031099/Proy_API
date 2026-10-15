@@ -171,7 +171,14 @@ const validateEnvironment = (environment = process.env, options = {}) => {
     || geminiTimeoutMs < 1000 || geminiTimeoutMs > 20000) {
     issues.push('GEMINI_TIMEOUT_MS must be an integer between 1000 and 20000');
   }
-  if (agentEnabled && !hasText(environment.GEMINI_API_KEY)) {
+  const llmProvider = String(environment.LLM_PROVIDER || 'gemini').trim().toLowerCase();
+  if (!['gemini', 'deepseek'].includes(llmProvider)) issues.push('LLM_PROVIDER must be gemini or deepseek');
+  if (llmProvider === 'deepseek') {
+    try { require('../agents/providers/deepseekProvider').readDeepSeekConfig(environment); }
+    catch { issues.push('DeepSeek configuration is invalid (URL, model, reasoning, output limit or timeout)'); }
+    if (agentEnabled && !hasText(environment.DEEPSEEK_API_KEY)) issues.push('DEEPSEEK_API_KEY is required when DeepSeek is enabled');
+  }
+  if (agentEnabled && llmProvider === 'gemini' && !hasText(environment.GEMINI_API_KEY)) {
     issues.push('GEMINI_API_KEY is required when AGENT_ENABLED is true');
   }
 
@@ -187,6 +194,7 @@ const validateEnvironment = (environment = process.env, options = {}) => {
     webhookEnabled: webhookUrlConfigured,
     mlEnabled,
     agentEnabled,
+    llmProvider,
     geminiModel,
     geminiTimeoutMs,
     corsAllowedOrigins: Object.freeze([...corsConfiguration.origins])

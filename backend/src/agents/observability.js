@@ -11,6 +11,7 @@ const EVENT_TYPES = Object.freeze([
   'provider_attempt', 'skill_called', 'skill_finished', 'agent_finished', 'request_finished', 'error', 'synthesis_finished'
 ]);
 const TOKEN_FIELDS = ['inputTokens', 'outputTokens', 'thoughtTokens', 'cachedInputTokens', 'toolUseTokens', 'totalTokens'];
+const OPTIONAL_TOKEN_FIELDS = ['cacheMissInputTokens', 'reasoningTokens'];
 const safeCount = value => Number.isSafeInteger(value) && value >= 0;
 const safeDuration = value => typeof value === 'number' && Number.isFinite(value)
   && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
@@ -166,6 +167,16 @@ const createRequestUsage = (options = {}) => {
       usageAvailable: record.usageAvailable, latencyMs: record.latencyMs,
       provider: record.provider || 'gemini', estimatedCostUsd: record.estimatedCostUsd ?? null,
       pricingVersion: record.pricingVersion || null };
+    for (const field of OPTIONAL_TOKEN_FIELDS) {
+      if (record[field] !== undefined && record[field] !== null && !safeCount(record[field])) invalid();
+      copy[field] = record[field] ?? null;
+    }
+    copy.estimatedCostRangeUsd = record.estimatedCostRangeUsd ?? null;
+    if (copy.estimatedCostRangeUsd !== null && (!isPlainObject(copy.estimatedCostRangeUsd)
+      || !['min', 'max'].every(key => Number.isFinite(copy.estimatedCostRangeUsd[key]) && copy.estimatedCostRangeUsd[key] >= 0)
+      || copy.estimatedCostRangeUsd.min > copy.estimatedCostRangeUsd.max)) invalid();
+    copy.providerFailure = record.providerFailure ?? null;
+    if (copy.providerFailure !== null && !['AUTHENTICATION', 'RATE_LIMIT', 'UNAVAILABLE', 'TIMEOUT', 'NETWORK', 'INVALID_RESPONSE', 'CONFIGURATION'].includes(copy.providerFailure)) invalid();
     if (typeof copy.provider !== 'string' || !/^[\w.-]{1,100}$/.test(copy.provider)
       || copy.estimatedCostUsd !== null && (!Number.isFinite(copy.estimatedCostUsd) || copy.estimatedCostUsd < 0)) invalid();
     for (const field of TOKEN_FIELDS) {
@@ -182,7 +193,7 @@ const createRequestUsage = (options = {}) => {
     return copy;
   });
   const sum = (items, field) => {
-    if (items.some(record => !record.usageAvailable || record[field] === null)) return null;
+    if (items.some(record => !record.usageAvailable || record[field] == null)) return null;
     const value = items.reduce((total, record) => total + record[field], 0);
     if (!safeCount(value)) invalid();
     return value;
@@ -204,11 +215,18 @@ const createRequestUsage = (options = {}) => {
   const models = [...new Set(records.map(record => record.model))];
   const estimatedCostUsd = records.some(record => record.estimatedCostUsd === null)
     ? null : records.reduce((sum, record) => sum + record.estimatedCostUsd, 0);
+  const bounds = records.map(row => row.estimatedCostRangeUsd || (row.estimatedCostUsd !== null
+    ? { min: row.estimatedCostUsd, max: row.estimatedCostUsd } : null));
+  const estimatedCostRangeUsd = records.length && bounds.every(Boolean)
+    ? { min: bounds.reduce((sum, row) => sum + row.min, 0), max: bounds.reduce((sum, row) => sum + row.max, 0) } : null;
   return deepFreeze({
     provider: providers.length === 0 ? 'none' : providers.length === 1 ? providers[0] : 'mixed',
     model: models.length === 1 ? models[0] : null,
     llmCalls: records.length, inputTokens: sum(records, 'inputTokens'), outputTokens: sum(records, 'outputTokens'),
-    estimatedCostUsd, providerLatencyMs: totalProviderLatencyMs,
+    estimatedCostUsd, estimatedCostRangeUsd, providerLatencyMs: totalProviderLatencyMs,
+    cachedInputTokens: sum(records, 'cachedInputTokens'), cacheMissInputTokens: sum(records, 'cacheMissInputTokens'),
+    reasoningTokens: sum(records, 'reasoningTokens'),
+    providerFailures: records.map(record => record.providerFailure).filter(Boolean),
     pricingVersions: [...new Set(records.map(record => record.pricingVersion).filter(Boolean))],
     totalLlmCalls: records.length, totalSkillCalls,
     totalInputTokens: sum(records, 'inputTokens'), totalOutputTokens: sum(records, 'outputTokens'),
