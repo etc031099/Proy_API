@@ -89,7 +89,7 @@ const handleGrounded = async ({ message, context, service, run, execution }) => 
       grounded.responseDiagnostic = safeGroundedDiagnostic({ ...(error.responseDiagnostic || grounded.responseDiagnostic), validationResult: 'REJECTED',
         validationReason: error.validationReason || error.responseDiagnostic?.validationReason || 'PROVIDER_UNAVAILABLE',
         validationField: error.validationField, validationLayer: error.validationLayer,
-        schemaReason: error.schemaReason, schemaField: error.schemaField });
+        schemaReason: error.schemaReason, schemaField: error.schemaField, unsupportedNumbers: error.unsupportedNumbers });
       if (plan.responseIntent === 'inventory_priorities') answer = replenishmentFallback(results);
       execution.recordGroundedSynthesis(false); notes.unshift('No pude generar una interpretación validada; se conservan los hechos obtenidos.');
     }

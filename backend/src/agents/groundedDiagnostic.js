@@ -22,12 +22,15 @@ const safeGroundedDiagnostic = (source = {}) => ({
   ...(['SCHEMA', 'GROUNDING'].includes(source.validationLayer) ? { validationLayer: source.validationLayer } : {}),
   ...(SCHEMA_REASONS.includes(source.schemaReason) ? { schemaReason: source.schemaReason } : {}),
   ...(safeSchemaField(source.schemaField) ? { schemaField: source.schemaField } : {}),
+  ...(source.validationReason === 'UNSUPPORTED_NUMBER' && Array.isArray(source.unsupportedNumbers)
+    ? { unsupportedNumbers: source.unsupportedNumbers.slice(0, 3).filter(value => typeof value === 'number'
+      && Number.isFinite(value) && Math.abs(value) <= 1e9) } : {}),
   ...(typeof source.validationField === 'string'
     && /^(?:observations\[[0-2]\]\.(?:interpretation|advisoryRecommendation|evidenceRefs)|limitations\[[01]\])$/.test(source.validationField)
     ? { validationField: source.validationField } : {})
 });
 const logGroundedValidation = source => {
-  // Fixed fields only. Never include generated prose, prompts, error messages or values.
+  // Fixed fields and bounded rejected numbers only. No generated prose, prompts or error messages.
   const diagnostic = safeGroundedDiagnostic(source);
   try { console.info('[GroundedValidation]', JSON.stringify({ groundedValidation: diagnostic })); }
   catch { /* Diagnostic sinks cannot change the synthesis outcome. */ }

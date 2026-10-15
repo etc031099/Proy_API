@@ -2,6 +2,7 @@
 const { deepFreeze, isPlainObject } = require('./contracts');
 const { V3_IDS } = require('./v3Skills');
 const { parseGroundedSchema } = require('./groundedOutputSchema');
+const { numericEvidence, unsupportedNumbers } = require('./groundedNumbers');
 const MAX_CONTEXT_BYTES = 6400;
 const HALLUCINATION_CONTRACT = Object.freeze([
   'Usa exclusivamente los hechos y referencias entregados; no inventes cifras ni entidades.',
@@ -110,22 +111,15 @@ const contextMetrics = context => ({ bytes: Buffer.byteLength(JSON.stringify(con
   tokenCountIsEstimate: true });
 
 const validateGroundedOutput = (text, context) => {
-  const fail = (reason = 'OUTPUT_SCHEMA_INVALID', validationField) => {
-    throw Object.assign(new Error('GROUNDED_INVALID_RESPONSE'), { validationReason: reason, validationLayer: 'GROUNDING', ...(validationField ? { validationField } : {}) });
+  const fail = (reason = 'OUTPUT_SCHEMA_INVALID', validationField, diagnostic = {}) => {
+    throw Object.assign(new Error('GROUNDED_INVALID_RESPONSE'), { validationReason: reason, validationLayer: 'GROUNDING', ...(validationField ? { validationField } : {}), ...diagnostic });
   };
   const output = parseGroundedSchema(text);
   const refs = new Map(context.evidence.filter(row => row.facts !== null).map(row => [row.ref, row]));
   for (const [index, row] of output.observations.entries()) {
     if (row.evidenceRefs.some(ref => !refs.has(ref))) fail('EVIDENCE_REFERENCE_INVALID', `observations[${index}].evidenceRefs`);
     const allowed = JSON.stringify(row.evidenceRefs.map(ref => refs.get(ref).facts));
-    // Numeric values only: never let digits embedded in SKUs authorize claims.
-    const numericFacts = [];
-    const collect = value => {
-      if (typeof value === 'number' && Number.isFinite(value)) numericFacts.push(value);
-      else if (Array.isArray(value)) value.forEach(collect);
-      else if (isPlainObject(value)) Object.values(value).forEach(collect);
-    };
-    row.evidenceRefs.forEach(ref => collect(refs.get(ref).facts));
+    const numericFacts = numericEvidence(row.evidenceRefs.map(ref => refs.get(ref).facts));
     const skus = new Set(allowed.match(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/g) || []);
     for (const field of ['interpretation', 'advisoryRecommendation']) {
       const value = row[field];
@@ -137,11 +131,8 @@ const validateGroundedOutput = (text, context) => {
       if ((value.match(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/g) || []).some(sku => !skus.has(sku))) fail('UNKNOWN_ENTITY', path);
       const remaining = value.replace(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/g, '')
         .replace(/\bMA28\b/g, allowed.includes('MOVING_AVERAGE_28') ? '' : 'MA28');
-      if ((remaining.match(/-?\d+(?:[.,]\d+)?/g) || []).some(number => {
-        const normalized = number.replace(',', '.'), claim = Number(normalized), decimals = normalized.split('.')[1]?.length;
-        return !numericFacts.some(fact => fact === claim
-          || decimals >= 1 && decimals <= 2 && Number(fact.toFixed(decimals)) === claim);
-      })) fail('UNSUPPORTED_NUMBER', path);
+      const rejected = unsupportedNumbers(remaining, numericFacts);
+      if (rejected.length) fail('UNSUPPORTED_NUMBER', path, { unsupportedNumbers: rejected.slice(0, 3) });
     }
   }
   for (const [index, value] of output.limitations.entries()) {
