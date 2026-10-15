@@ -202,10 +202,12 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, neutralProv
         // Access-scope requests are rejected before consulting conversation snapshots, routing LLM, or skills.
         const securityPlan = tenantScopeViolation(message);
         const { isOutOfDomain, OUT_OF_DOMAIN_ANSWER } = require('./domainGate');
-        v3Response = !securityPlan && isOutOfDomain(message)
+        const composite = require('./compositeRouting').splitRequests(message).length > 1;
+        v3Response = !securityPlan && !composite && isOutOfDomain(message)
           ? { intent: 'out_of_domain', agent: 'coordinator', answer: OUT_OF_DOMAIN_ANSWER }
           : !securityPlan && v3Service ? await execution.runAgent('coordinator', async () =>
-            await require('./grounded').handleGrounded({ message, context, service: v3Service, run, execution })
+            ((!composite || require('./compositeRouting').groundedCoversComposite(message))
+              && await require('./grounded').handleGrounded({ message, context, service: v3Service, run, execution }))
             || require('./v3Routing').handleV3({ message, state, context, service: v3Service, run, commit, execution,
               deterministicProbe: () => routeDeterministically(message, state, clock(), conversationId, contextBinding(context), context.businessId) })) : null;
         if (v3Response) {

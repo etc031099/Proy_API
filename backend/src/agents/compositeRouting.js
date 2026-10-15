@@ -1,0 +1,38 @@
+'use strict';
+const { normalize, isOutOfDomain } = require('./domainGate');
+// Split only independent request starts. Product conjunctions (pan y leche),
+// comparisons, and "y por qué" remain owned by their existing domain router.
+const splitRequests = message => String(message).split(/\s+y\s+(?=(?:(?:luego|despues|después|ademas|además)\s+)?(?:q\b|que\b|qué\b|cual(?:es)?\b|quien(?:es)?\b|cu[aá]nt[oa]s?\b|stock\b|inventario\b|ventas\b|clientes\b|proveedores\b|productos\b|salud\b|margen\b|pron[oó]stico\b|forecast\b|dime\b|dame\b|cu[eé]ntame\b|recomi[eé]ndame\b|explicame\b|precio\b|capital\b|de esos\b|predice\b))/i)
+  .map(part => part.trim().replace(/^(?:primero|luego|despu[eé]s|adem[aá]s)\s+(?=dime|dame|stock|ventas)/i, ''));
+const writeClause = message => /\b(?:vende|vender|venta de|compra \d|comprar \d|confirma\w*|hazlo|borra|elimina|ajusta|crea|crear)\b/.test(normalize(message));
+const clarify = () => ({ clarificationQuestion: 'La consulta compuesta contiene partes que no puedo relacionar con seguridad. Indícalas por separado; no asumiré relaciones entre entidades o resultados.' });
+function groundedCoversComposite(message) {
+  const parts = splitRequests(message);
+  if (parts.some(part => writeClause(part) || isOutOfDomain(part))) return false;
+  const plan = require('./groundedRouting').classifyGrounded(message);
+  if (plan.route !== 'GROUNDED_LLM') return false;
+  const signals = { business: /ventas?|vend[ií]|tickets?|margen/, inventory: /stock|inventario|repon/, forecast: /forecast|pronostic|prediccion|demanda/,
+    customers: /clientes?|compradores/, suppliers: /proveedor(?:es)?/, health: /negocio|salud/, 'cross-sell': /juntos|cross.sell|cesta|asociacion/ };
+  return parts.every(part => {
+    const requested = Object.entries(signals).filter(([, pattern]) => pattern.test(normalize(part))).map(([domain]) => domain);
+    if (!requested.length) return /^(?:dime|explica|que|como)\b.*\b(?:prioriz\w*|vigilar|interpret\w*|conclusion\w*)\b/.test(normalize(part));
+    return requested.every(domain => plan.domains.includes(domain));
+  });
+}
+function compositePlan(message, memory, binding, route) {
+  const parts = splitRequests(message);
+  if (parts.length < 2) return null;
+  if (parts.length > 4 || parts.some(writeClause)) return clarify();
+  if (parts.slice(1).some(part => /\b(?:de esos|cada uno|con el|de cada|los dos primeros)\b/.test(normalize(part)))) return clarify();
+  const external = parts.filter(isOutOfDomain), business = parts.filter(part => !isOutOfDomain(part));
+  if (!business.length) return { outOfDomain: true };
+  const plans = business.map(part => route(part, memory, binding));
+  if (plans.some(plan => !plan?.tasks?.length || plan.route || plan.tasks.some(task => task.fromPrevious))) return clarify();
+  const tasks = plans.flatMap(plan => plan.tasks);
+  if (tasks.length > 4) return clarify();
+  // Do not execute a context-dependent clause against a previous turn's entity
+  // when the current composite could establish a different one.
+  if (business.slice(1).some(part => /\b(?:ese|esa|este|su|lo provee)\b/.test(normalize(part)))) return clarify();
+  return { tasks, ...(external.length ? { publicNote: 'La parte externa está fuera del ámbito del sistema. Respondo la parte del negocio.' } : {}) };
+}
+module.exports = { splitRequests, writeClause, compositePlan, groundedCoversComposite };

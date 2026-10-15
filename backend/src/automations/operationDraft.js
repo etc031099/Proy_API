@@ -154,6 +154,9 @@ function updateDraft(previous, extracted, message) {
     if (correction && draft.items?.length) {
       const index = correction[1] ? Number(correction[1]) - 1 : draft.items.length === 1 ? 0 : -1;
       if (draft.items[index]) draft.items[index].quantity = integerToken(correction[2]);
+    } else if (previous && draft.items?.length === 1 && !extracted.supplierRef && /^(?:mejor|pon|cantidad)\s+\S+$/.test(numericText)) {
+      // An unparseable quantity correction must not silently reissue the old quantity.
+      draft.items[0].quantity = integerToken(numericText.split(' ').at(-1));
     } else if (previous?.missingFields?.includes('quantity') && /^\S+(?: unidades?)?$/.test(numericText)) draft.items[previous.itemIndex || 0].quantity = integerToken(numericText.split(' ')[0]);
     else if (!previous || /^(?:vende|vender|compre|compra|comprar|registra)/.test(text)) draft.items = extracted.items;
     const changeProduct = /^(?:no es .+?,? es|cambia (?:el )?producto (?:a|por)|producto|sku)\s+(.+)$/.exec(text);

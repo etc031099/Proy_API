@@ -27,6 +27,18 @@ const response: AgentResponse = {
 beforeEach(() => { send.mockReset(); localStorage.clear(); vi.mocked(apiClient.listAgentConversations).mockResolvedValue({ success: true,
   data: { items: [], pagination: { page: 1, limit: 10, total: 0, totalPages: 1 } } }); });
 function submit(text = 'stock bajo') { fireEvent.change(screen.getByLabelText('Tu consulta'), { target: { value: text } }); fireEvent.click(screen.getByRole('button', { name: 'Enviar' })); }
+it.each([
+  'La parte externa está fuera del ámbito del sistema. Respondo la parte del negocio. Ventas: S/ 500.00.',
+  'La consulta compuesta contiene partes que no puedo relacionar con seguridad. Indícalas por separado.',
+  'Inventario disponible. Proveedores: servicio no disponible. Se conservan los hechos obtenidos.'
+])('J5 renders controlled composite/partial response without generic UI error: %s', async answer => {
+  send.mockResolvedValue({ success: true, data: { ...response, answer,
+    ...(answer.includes('servicio no disponible') ? { actions: [{ ...response.actions[0], status: 'FAILED' as const }] } : {}) } });
+  render(<AssistantPage />); submit('dime ventas y clientes');
+  await screen.findByText(answer);
+  expect(screen.queryByText(/No fue posible consultar el asistente|No pude completar la consulta/)).toBeNull();
+  expect(apiClient.decideAgentAction).not.toHaveBeenCalled(); expect(send).toHaveBeenCalledTimes(1);
+});
 it('J3 renders an OUT_OF_DOMAIN success as an answer with zero activity, not a UI error', async () => {
   send.mockResolvedValue({ success: true, data: { ...response, intent: 'out_of_domain',
     answer: 'Puedo ayudarte con ventas, inventario, clientes y proveedores. Esa consulta está fuera de ese ámbito.',

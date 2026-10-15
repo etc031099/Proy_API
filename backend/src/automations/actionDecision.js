@@ -10,6 +10,7 @@ const CANCEL = new Set(['cancelar', 'cancela', 'cancelalo', 'cancelo', 'cansela'
 const HOLD = new Set(['no', 'no todavia', 'no confirmes', 'no espera', 'todavia no', 'no quiero', 'no procede']);
 function actionDecision(message) {
   const text = normalizeDecision(message);
+  if (/\b(?:no quiero vender|no vendas nada|no hagas ninguna venta|olvida eso)\b/.test(text)) return 'cancel';
   if (/[¿?]/.test(message)) {
     const question = text.replace(/[¿?]/g, '').trim();
     return /\b(?:confirm\w*|hazlo|cancel\w*)\b/.test(question)

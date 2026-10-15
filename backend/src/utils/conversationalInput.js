@@ -1,6 +1,8 @@
 'use strict';
 // Bounded language aliases only; quantities, codes and stored names are unchanged.
 const normalizeConversationalInput = message => message
+  .replace(/^me equivoqu[eé],?\s*quiero\s+(\S+?)(?:\s+unidades?)?[.!]?$/i, 'mejor $1')
+  .replace(/\bventas del mes\b/gi, 'ventas de este mes')
   .replace(/\bq\b/gi, 'que')
   .replace(/\bdl\b/gi, 'del')
   .replace(/\bd(?=\s+(?:el|la|los|las)\b)/gi, 'de')

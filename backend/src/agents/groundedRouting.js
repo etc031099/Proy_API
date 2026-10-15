@@ -38,7 +38,7 @@ const classifyGrounded = message => {
     return result('business_priorities', [B, I, F]);
   if (/vende bien/.test(text) && /poco stock/.test(text)) return result('sales_stock_opportunity', [B, I]);
   if (/potencial/.test(text) && /quiebre/.test(text)) return result('stockout_opportunity', [B, I, F]);
-  if (((/prioriz|recomiend/.test(text) && /inventario|repon|reposicion/.test(text)) || /deberia.*repon.*por que/.test(text))
+  if (((/prioriz|recomiend/.test(text) && /inventario|repon|reposicion/.test(text)) || /(?:debo|deberia).*repon.*por que/.test(text))
     && !/^que deberia reponer$/.test(text)) return result('inventory_priorities', [I, F, S]);
   if (/mejorar.*ventas|estrategia.*ventas|conclusiones.*ventas|(?:interpreta|analiza).*ventas/.test(text)) return result('sales_advice', [B]);
   if (/implica|interpreta|conclusiones/.test(text) && /wape|hgb|ma28|modelo|metrica/.test(text))

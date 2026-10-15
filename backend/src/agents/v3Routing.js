@@ -226,6 +226,14 @@ const routeV3 = (message, state, binding) => {
   const { isOutOfDomain, OUT_OF_DOMAIN_ANSWER } = require('./domainGate');
   if (isOutOfDomain(message)) return { clarificationQuestion: OUT_OF_DOMAIN_ANSWER };
   const text = clean(message), memory = state || {};
+  if (/\b(?:que|cuanto) comprara\b/.test(text))
+    return { clarificationQuestion: 'No hay un modelo que prediga las compras futuras de una persona. Puedo consultar su historial observado o el pronóstico operativo por producto.' };
+  if (/probabilidad/.test(text) && /cliente|se vaya|abandon|agotarse|quiebre/.test(text))
+    return { clarificationQuestion: 'No hay una probabilidad calculada de abandono o agotamiento. Puedo mostrar recencia, riesgo observado o cobertura, sin convertirlos en probabilidades.' };
+  if (/precision|accuracy/.test(text) && /\bsku\b|de (?:este|ese) producto/.test(text))
+    return { clarificationQuestion: 'No hay una precisión individual validada para ese SKU. WAPE describe evaluación agregada y no garantiza un pronóstico individual.' };
+  if (/^(?:dame|muestra|muestrame) (?:mi |el )?inventario$/.test(text))
+    return { tasks: [task('get_inventory_intelligence', { mode: 'summary' })] };
   if (/^saca\s+(?:\d+|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\b/.test(text))
     return { clarificationQuestion: '¿Quieres registrar una venta para descontar esas unidades o solo corregir el stock? «Saca» puede referirse a movimientos distintos; no prepararé una operación hasta que lo aclares.' };
   if (/^(?:ajusta|ajustar|corrige|corregir)\s+(?:el\s+)?stock\b/.test(text))
@@ -317,6 +325,9 @@ const routeV3 = (message, state, binding) => {
     if (ref) return { tasks: [task('get_supplier_intelligence', { mode: 'rank', productRef: ref })] };
     if (/\blo\b/.test(text)) return { clarificationQuestion: '¿De qué producto deseas consultar los proveedores?' };
   }
+  if (/^por que/.test(text) && /proveedor/.test(text) && /peor|mejor/.test(text)
+    && !/tarda|demora|gasto|lead time|puntual|retras/.test(text))
+    return { clarificationQuestion: 'No hay un score global de mejor o peor proveedor. Indica si deseas comparar puntualidad, retrasos, lead time o gasto observado.' };
   if (/^por que/.test(text) && /proveedor/.test(text)) return null;
   if (/alternativas|alternativo/.test(text) && /proveedor/.test(text)) {
     const ref = productRef(message, memory) || trimRef(message.match(/para\s+(.+)$/i)?.[1]) || memory.selectedProduct?.key;
@@ -424,7 +435,7 @@ const routeV3 = (message, state, binding) => {
     return { tasks: [task('get_cross_sell_recommendations', { mode: ref ? 'recommend' : 'rules', ...(ref ? { productRef: ref } : {}) })] };
   }
   if (horizonFollowup || /pronostic|prediccion|forecast|demanda|cuanto vendere|se vendera|manana|proxima semana/.test(text)) {
-    const ref = productRef(message, memory) || (horizonFollowup || /\bsu\b|^y |manana/.test(text)
+    const ref = productRef(message.replace(/\s+(?:(?:para|en|a)\s+)?(?:los\s+)?(?:pr[oó]ximos?\s+)?\d+\s+d[ií]as?[.!?]*$/i, ''), memory) || (horizonFollowup || /\bsu\b|^y |manana/.test(text)
       || memory.selectedProduct?.key && /^(?:pronostico|prediccion|forecast)(?: a | para )/.test(text) ? memory.selectedProduct?.key : null);
     const horizon = Number(text.match(/\b(\d+) dias?\b/)?.[1] || (/manana/.test(text) ? 1 : /14|dos semanas/.test(text) ? 14 : 7));
     if (/como calcul|metodo|metodologia/.test(text)) return { tasks: [task('get_product_forecast', { mode: 'method' })] };
@@ -448,12 +459,14 @@ const routeV3 = (message, state, binding) => {
     if (ref) return { tasks: [task('get_inventory_intelligence', { mode: 'detail', productRef: ref })] };
   }
   if (/reponer|reposicion|deberia pedir|debo pedir|cuanto pedir|agot|acabando|critic|alto riesgo|riesgo|sobrestock|sobrad|lento|sin movimiento|\babc\b|\bxyz\b|\baz\b/.test(text)
-    || /stock bajo|bajos.*stock/.test(text)) {
-    const ref = productRef(message, memory) || (/cuanto|\bsu\b|\breponerlo\b|\bpedirlo\b/.test(text) ? memory.selectedProduct?.key : null);
+    || /stock bajo|poco stock|bajos.*stock/.test(text)) {
+    const candidateRef = productRef(message, memory);
+    const ref = candidateRef && !/^(?:stock bajo|poco stock|bajo stock)$/.test(normalize(candidateRef)) ? candidateRef
+      : /cuanto|\bsu\b|\breponerlo\b|\bpedirlo\b/.test(text) ? memory.selectedProduct?.key : null;
     const args = { mode: ref ? 'detail' : 'rank', metric: 'reorder', ...(ref ? { productRef: ref } : {}) };
     if (/critic/.test(text)) args.risk = 'CRITICAL';
     if (/alto riesgo/.test(text)) args.risk = 'HIGH';
-    if (/stock bajo|bajos.*stock/.test(text)) args.flag = 'low_stock';
+    if (/stock bajo|poco stock|bajos.*stock/.test(text)) args.flag = 'low_stock';
     if (/deberia reponer|deberian reponer|debo reponer|deberia pedir|deberian pedir/.test(text)) args.flag = 'should_reorder';
     if (/sobrestock|sobrad/.test(text)) { args.flag = 'overstock'; args.metric = 'overstock'; }
     if (/lento/.test(text)) args.flag = 'slow_moving';
@@ -924,7 +937,8 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
     if (resolution.entity) memory.selectedProduct = resolution.entity;
   }
   if (memory.pending && /^(?:si(?: ese)?|ok|vale|dale|correcto)$/.test(clean(message))) return { answer: 'Elige una entidad por nombre, código o número. Esta selección no confirma una operación.', clarification: true, intent: 'v3_selection', agent: 'coordinator' };
-  let plan = routeV3(message, memory, binding);
+  let plan = require('./compositeRouting').compositePlan(message, memory, binding, routeV3) || routeV3(message, memory, binding);
+  if (plan?.outOfDomain) return { answer: require('./domainGate').OUT_OF_DOMAIN_ANSWER, intent: 'out_of_domain', agent: 'coordinator' };
   const language = require('./languageNlu');
   if (/^(?:pan|primor)[?!.]*$/i.test(message.trim()) && !memory.pending && !memory.selectedProduct)
     plan = { clarificationQuestion: '¿Quieres consultar stock, pronóstico, productos relacionados o preparar una venta de ese producto?' };
@@ -939,6 +953,7 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
     if (plan.outOfDomain) return { answer: require('./domainGate').OUT_OF_DOMAIN_ANSWER, intent: 'out_of_domain', agent: 'coordinator' };
     if (plan.groundedQuestion) return require('./grounded').handleGrounded({ message: plan.groundedQuestion, context, service, run, execution });
   }
+  const publicNote = plan?.publicNote;
   let responseMode = plan?.responseMode || null;
   let productResolution;
   const rawChoice = message.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
@@ -1039,7 +1054,7 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
     for (const type of types) {
       const resolution = await service.resolveEntity(type, plan.lookup, context);
       if (resolution.entity) {
-        if (type === 'product') { scope.selectedProduct = resolution.entity; scope.pending = null;
+        if (type === 'product') { scope.selectedProduct = resolution.entity; scope.pending = null; scope.ranking = null;
           productResolution = { status: resolution.resolutionStatus || 'SINGLE_MATCH', sku: resolution.entity.key }; }
         plan = { tasks: [task(type === 'product' ? 'get_inventory_intelligence' : type === 'customer' ? 'get_customer_intelligence' : 'get_supplier_intelligence', { mode: 'detail', [`${type}Ref`]: resolution.entity.key })] }; break;
       }
@@ -1077,7 +1092,7 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
   }
   const visibleProductList = ['inventory-condition-list', 'inventory-filter'].includes(responseMode);
   if (visibleProductList) { scope.ranking = null; scope.selectedProduct = null; }
-  const answers = [], v3Views = [], nearestMinimumRows = []; let previous, rankedForResponse = null;
+  const answers = publicNote ? [publicNote] : [], v3Views = [], nearestMinimumRows = []; let previous, rankedForResponse = null;
   for (let i = 0; i < plan.tasks.length; i++) {
     const current = plan.tasks[i];
     if (current.fromPrevious) {
@@ -1239,7 +1254,7 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
       selectionIndex: resolution.selectionIndex || 0, offset: pagination?.offset || 0 };
     if (resolution.type === 'supplier') scope.expiresAt = now + require('./memory').SUPPLIER_SELECTION_TTL_MS;
     scope.ranking = { type: resolution.type, items }; save();
-    return { answer: `Encontré ${pagination?.totalMatches || items.length} coincidencias. Elige una opción por número, nombre o código:\n${items.map((row, i) => `${i + 1}. ${row.label} (${row.key})`).join('\n')}`,
+    return { answer: `${publicNote ? `${publicNote}\n` : ''}Encontré ${pagination?.totalMatches || items.length} coincidencias. Elige una opción por número, nombre o código:\n${items.map((row, i) => `${i + 1}. ${row.label} (${row.key})`).join('\n')}`,
       intent: 'v3_selection', agent: 'coordinator', clarification: true,
       ...(resolution.type === 'product' ? { productResolution: { status: items.length > 1 ? 'MULTIPLE_MATCHES' : 'SINGLE_MATCH', candidateCount: pagination?.totalMatches || items.length } } : {}),
       contextProvenance: { sourceType: 'candidate_snapshot', entityType: resolution.type, query: resolution.query,

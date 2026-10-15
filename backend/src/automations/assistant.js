@@ -57,7 +57,9 @@ const withActionAssistant = (runtime, service, options = {}) => {
       }
     }
     const normalized = input.message.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/^[¿¡]/, '').replace(/[?!.]$/, '');
-    const decision = actionDecision(input.message);
+    const compositeRequests = require('../agents/compositeRouting').splitRequests(input.message);
+    const compositeWrite = compositeRequests.length > 1 && compositeRequests.some(require('../agents/compositeRouting').writeClause);
+    const decision = compositeRequests.length > 1 && !compositeWrite ? null : actionDecision(input.message);
     const expiredDraft = drafts.get(keyFor(req, input.conversationId));
     for (const [key, draft] of drafts) if (draft.expiresAt <= now()) drafts.delete(key);
     const draftKey = keyFor(req, input.conversationId);
@@ -104,10 +106,11 @@ const withActionAssistant = (runtime, service, options = {}) => {
       drafts.set(draftKey, { ...previous, readSuspended: true });
       return runtime.handle(req, input);
     }
-    if (previous?.readSuspended && !explicit && !decision && !pendingQuestion) return runtime.handle(req, input);
+    if (previous?.readSuspended && !explicit && !decision && !pendingQuestion
+      && !/^(?:mejor|me equivoque|cambia|cantidad|pon)\b/.test(normalized)) return runtime.handle(req, input);
     if (explicit === 'create_stock_alert_rule' && require('../agents/intentRouting').tenantScopeViolation(input.message))
       return runtime.handle(req, input); // Preserve the deterministic F9 denial before resolving any product.
-    const contextual = (previous?.selection?.slot === 'product' && /^busca(?:r)?\b/.test(normalized)) || /que me falta|que datos|que proveedores|^(?:mejor|cambia|en vez|no es|opcion|el |la |si\b|no\b|cancel|confirm|hazlo|crear proveedor|elegir proveedor|continuar sin)/.test(normalized)
+    const contextual = (previous?.selection?.slot === 'product' && /^busca(?:r)?\b/.test(normalized)) || /que me falta|que datos|que proveedores|^(?:me equivoque|mejor|cambia|cantidad|pon|en vez|no es|opcion|el |la |si\b|no\b|cancel|confirm|hazlo|crear proveedor|elegir proveedor|continuar sin)/.test(normalized)
       || /^(?:\d+|sku\b|proveedor\b|precio de compra\b|categoria\b)/.test(normalized);
     if (previous && !explicit && !decision && !contextual && !pendingQuestion && /^(?:muestrame|busca|dime|cuanto|que|resume|explica|lista|cuales)\b|[¿?]/.test(normalized)) previous = undefined;
     const skillId = explicit || previous?.action;
@@ -122,6 +125,22 @@ const withActionAssistant = (runtime, service, options = {}) => {
     const started = performance.now(), conversationId = input.conversationId || randomUUID();
     const context = createActionContext(req, { conversationId }), key = keyFor(req, conversationId);
     let pendingAction, answer, clarification = false, previewShown = false, execution, suggestions = [], suggestionsExpiresAt, suggestionsPagination, suggestionsEntityType;
+    if (previous && /^me equivoque\b/.test(normalized)) {
+      if (previous.pendingActionId) {
+        const pending = await service.get(context, previous.pendingActionId);
+        if (pending?.status === 'PENDING') await service.cancelPendingAction(context, pending.pendingActionId);
+      }
+      drafts.delete(key);
+      return response('La corrección no identifica una cantidad o producto válido. Indica nuevamente los datos para preparar otro preview; la operación anterior no se ejecutó.', undefined, true);
+    }
+    if (compositeWrite) {
+      if (previous?.pendingActionId) {
+        const pending = await service.get(context, previous.pendingActionId);
+        if (pending?.status === 'PENDING') await service.cancelPendingAction(context, pending.pendingActionId);
+      }
+      drafts.delete(key);
+      return response('La consulta compuesta mezcla operaciones o confirmaciones con otras peticiones. Envíalas por separado; la venta necesita su propio preview y confirmación. No se ejecutó ninguna operación.', undefined, true);
+    }
     if (selectionActionProblem) return response(selectionActionProblem, undefined, true);
     if (!previous && candidateCommand) return response('No hay una lista de opciones vigente. Inicia nuevamente la búsqueda.', undefined, true);
     if (pendingQuestion) {
