@@ -143,7 +143,7 @@ const writes = [
 const errors = [
   { text:'Forecast de PAN-FRE-001 a 28 días', kind:'clarify' },
   { text:'¿Cuál es la predicción del próximo mes?', kind:'clarify' },
-  { text:'¿Cuánto stock tiene ese producto?', kind:'clarify' },
+  { text:'¿Cuánto stock tiene ese artículo?', kind:'clarify' },
   { text:'¿Cuál es el mejor proveedor?', kind:'clarify' },
   { text:'¿Qué accuracy tiene Isolation Forest?', kind:'unsupported' },
   { text:'¿Qué probabilidad individual tiene esta anomalía?', kind:'unsupported' },
