@@ -133,6 +133,9 @@ const errorCode = error => error?.code === 'AGENT_BUDGET_EXCEEDED' || error?.cod
  * .handle(authenticatedReq, {message, conversationId?}) is the future UI boundary.
  */
 const createAgentOrchestrator = ({ memory = defaultMemory, provider, neutralProvider, dependencies, onEvent = () => {}, clock = () => new Date() } = {}) => Object.freeze({
+  async clearExplanation(req, conversationId) {
+    return memory.withConversation(createAgentRequestContext(req, { conversationId }), (state, commit) => commit({ ...state, lastExplanation: null }));
+  },
   async clearV3Selection(req, conversationId) {
     return memory.withConversation(createAgentRequestContext(req, { conversationId }), (state, commit) => {
       if (state.v3Context) commit({ v3Context: { ...state.v3Context, pending: null, ranking: null } });
@@ -178,7 +181,9 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, neutralProv
     if (!isTraceId(conversationId)) throw new AgentError('AGENT_INVALID_REQUEST');
     const context = createAgentRequestContext(req, { conversationId });
     const startedAt = performance.now();
-    return memory.withConversation(context, async (state, commit) => {
+    return memory.withConversation(context, async (state, commitMemory) => {
+      const patches = {};
+      const commit = patch => { Object.assign(patches, patch); commitMemory(patch); };
       const v3Service = dependencies?.v3Service || (context.businessId === require('../services/v3IntelligenceService').V3.businessId
         ? require('../services/v3IntelligenceService').createV3IntelligenceService({ models: dependencies?.models, clock: dependencies?.clock || clock }) : null);
       const execution = createAgentExecution({ context, onEvent, ...(provider ? { provider } : {}),
@@ -195,7 +200,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, neutralProv
       let v3Response;
       const run = async (agentId, skillId, args = {}) => {
         const result = await execution.executeSkill({ agentId, skillId, args });
-        results.push({ skillId, result });
+        results.push({ skillId, result, args });
         return result;
       };
       try {
@@ -203,13 +208,19 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, neutralProv
         const securityPlan = tenantScopeViolation(message);
         const { isOutOfDomain, OUT_OF_DOMAIN_ANSWER } = require('./domainGate');
         const composite = require('./compositeRouting').splitRequests(message).length > 1;
-        v3Response = !securityPlan && !composite && isOutOfDomain(message)
+        const explanation = !securityPlan && v3Service
+          ? require('./explanationContext').explainPrevious(message, state.lastExplanation, context) : null;
+        v3Response = explanation || (!securityPlan && !composite && isOutOfDomain(message)
           ? { intent: 'out_of_domain', agent: 'coordinator', answer: OUT_OF_DOMAIN_ANSWER }
           : !securityPlan && v3Service ? await execution.runAgent('coordinator', async () =>
             ((!composite || require('./compositeRouting').groundedCoversComposite(message))
               && await require('./grounded').handleGrounded({ message, context, service: v3Service, run, execution }))
             || require('./v3Routing').handleV3({ message, state, context, service: v3Service, run, commit, execution,
-              deterministicProbe: () => routeDeterministically(message, state, clock(), conversationId, contextBinding(context), context.businessId) })) : null;
+              onPublicResult: (skillId, result, args, responseMode) => {
+                const row = results.findLast(item => item.skillId === skillId);
+                if (row) Object.assign(row, { result, args, responseMode });
+              },
+              deterministicProbe: () => routeDeterministically(message, state, clock(), conversationId, contextBinding(context), context.businessId) })) : null);
         if (v3Response) {
           if ((v3Response.grounded || v3Response.intent === 'out_of_domain') && state.v3Context) {
             commit({ v3Context: { ...state.v3Context, pending: null, ranking: null } });
@@ -809,6 +820,18 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, neutralProv
             : 'No pude obtener la información solicitada. Vuelve a intentarlo.';
       }
       if (code) execution.recordError(code, plan.intent);
+      if (v3Service && plan.intent !== 'explain_previous') {
+        const diagnostic = v3Response?.grounded?.responseDiagnostic;
+        const responseType = diagnostic?.validationResult === 'ACCEPTED' ? 'VERIFIED_SYNTHESIS'
+          : v3Response?.grounded || execution.getEvents().some(event => event.type === 'skill_finished' && event.status === 'FAILED')
+            ? 'FALLBACK_FACTS' : 'FACTS';
+        let lastExplanation = null;
+        if (!code && !question && plan.intent !== 'out_of_domain') {
+          try { lastExplanation = require('./explanationContext').rememberExplanation(results, context, responseType); }
+          catch { /* A missing explanation snapshot must not break the original public response. */ }
+        }
+        commitMemory({ ...patches, lastExplanation });
+      }
       const usage = execution.finish();
       const events = execution.getEvents();
       const actions = events.filter(event => event.type === 'skill_finished').map(event => ({ skillId: event.skillId, agentId: event.agentId, status: event.status, durationMs: event.durationMs }));

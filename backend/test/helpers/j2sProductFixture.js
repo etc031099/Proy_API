@@ -65,18 +65,29 @@ function fixture({ now = Date.now, memoryTtl, productRows = rows, contactRows = 
   const runtime = createAgentOrchestrator({ memory: createConversationMemory({ now, ...(memoryTtl ? { ttlMs: memoryTtl } : {}) }),
     clock: () => new Date('2026-10-15T17:00:00Z'), dependencies: { v3Service: service, ...(legacyModels ? { models: legacyModels } : {}) }, provider,
     neutralProvider: neutralProvider === undefined ? { provider: 'mock', model: 'offline', generate: denied } : neutralProvider, onEvent: event => events.push(event) });
-  const actions = withActionAssistant(runtime, {
+  const actionService = {
     async prepare(input) { prepared.push(structuredClone(input.args));
-      const value = { pendingActionId: randomUUID(), status: 'PENDING', summary: 'Preview simulado', expiresAt: new Date(now() + 60000).toISOString() };
+      const items = input.args.products?.map(item => ({ quantity: item.quantity, price: 2, total: item.quantity * 2,
+        stock: 21, resultingStock: input.skillId === 'create_purchase' ? 21 + item.quantity : 21 - item.quantity,
+        sku: productRows.find(row => String(row._id) === String(item.productId))?.sku,
+        name: productRows.find(row => String(row._id) === String(item.productId))?.name }));
+      const value = { pendingActionId: randomUUID(), action: input.skillId, status: 'PENDING', summary: 'Preview simulado',
+        ...(items ? { items, fields: { total: items.reduce((sum, item) => sum + item.total, 0), currency: 'PEN' } } : {}),
+        expiresAt: new Date(now() + 60000).toISOString() };
       pending.set(value.pendingActionId, value); previewArgs.set(value.pendingActionId, structuredClone(input.args)); return value; },
-    async get(_context, key) { return pending.get(key); },
+    async get(_context, key) { const row = pending.get(key); return row?.status === 'PENDING' && Date.parse(row.expiresAt) <= now() ? { ...row, status: 'EXPIRED' } : row; },
     async resolvePending() { return [...pending.values()].find(row => row.status === 'PENDING'); },
-    async confirmPendingAction(_context, key) { mutations.push('mock-only'); confirmations.push({ id: key, args: structuredClone(previewArgs.get(key)) }); const value = pending.get(key); value.status = 'EXECUTED';
-      return { ...value, result: { type: 'sale', total: 4, currency: 'PEN', items: [{ name: 'Producto simulado', quantity: 2, stock: 19 }] } }; },
+    async confirmPendingAction(_context, key) { const value = pending.get(key);
+      if (value.status !== 'PENDING' || Date.parse(value.expiresAt) <= now()) throw Object.assign(new Error('Stale offline preview'), { code: 'ACTION_CANCELLED' });
+      mutations.push('mock-only'); confirmations.push({ id: key, args: structuredClone(previewArgs.get(key)) }); value.status = 'EXECUTED';
+      return { ...value, result: { type: value.action === 'create_purchase' ? 'purchase' : 'sale', total: value.fields?.total ?? 4, currency: 'PEN',
+        items: value.items?.map(row => ({ name: row.name, sku: row.sku, quantity: row.quantity, stock: row.resultingStock }))
+          || [{ name: 'Producto simulado', quantity: 2, stock: 19 }] } }; },
     async cancelPendingAction(_context, key) { const value = pending.get(key); value.status = 'CANCELLED'; return value; }
-  }, { clock: now, provider, supplierLookup: async () => [{ _id: id(500), name: 'Proveedor simulado' }] });
+  };
+  const actions = withActionAssistant(runtime, actionService, { clock: now, provider, supplierLookup: async () => [{ _id: id(500), name: 'Proveedor simulado' }] });
   const conversationId = randomUUID();
-  return { service, runtime, request, actions, calls, catalogReads, events, providerCalls, prepared, mutations, confirmations, previewArgs, conversationId,
+  return { service, runtime, request, actions, actionService, pending, calls, catalogReads, events, providerCalls, prepared, mutations, confirmations, previewArgs, conversationId,
     run: (message, convo = conversationId, req = request) => actions.handle(req, { message, conversationId: convo }),
     snapshot: () => actions.getContextSnapshot(request, conversationId) };
 }

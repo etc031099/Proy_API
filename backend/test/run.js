@@ -17,6 +17,7 @@ require('./assistantRobustnessJ3.http.test');
 require('./assistantLanguageJ4.test');
 require('./assistantLanguageJ41.test');
 require('./professorRedTeamJ5.test');
+require('./cloudFollowupsJ51.test');
 require('./assistantNaturalLanguageH6.test');
 require('./assistantNaturalLanguageH6Fix1.test');
 require('./v3BusinessIntelligenceDashboard.test');

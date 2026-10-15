@@ -58,3 +58,28 @@ test('J5 composite READ, mixed OOD and READ/WRITE cross the real Express route s
   });
   assert.equal(f.prepared.length, 0); assert.equal(f.mutations.length, 0);
 });
+
+test('J51 explanation and changed WRITE preview cross HTTP with preserved conversation and no execution', async t => {
+  t.mock.method(require('../src/models').Product, 'find', require('./helpers/j2sProductFixture').productFind);
+  const f = fixture({ neutralProvider: null }), app = express(); app.use(express.json());
+  app.use('/api/agent', createAgentRoutes({ enabled: true, orchestrator: f.runtime,
+    authenticateMiddleware: (req, res, next) => { req.user = f.request.user; next(); },
+    businessAccessMiddleware: (req, res, next) => { req.businessId = f.request.businessId; next(); },
+    actionService: f.actionService, historyService: { send: (req, input) => f.actions.handle(req, input) } }));
+  const server = await new Promise((resolve, reject) => { const value = app.listen(0, '127.0.0.1', () => resolve(value)); value.once('error', reject); });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const send = async message => {
+    const res = await fetch(`http://127.0.0.1:${server.address().port}/api/agent/messages`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, conversationId: f.conversationId }) });
+    assert.equal(res.status, 200); const body = await res.json(); assert.equal(body.success, true);
+    assert.doesNotMatch(JSON.stringify(body), /reasoning_content|lastExplanation|PRIVATE|No fue posible consultar el asistente/);
+    return body.data;
+  };
+  await send('stock de PAN-FRE-001'); const explanation = await send('por q?');
+  assert.equal(explanation.intent, 'explain_previous'); assert.equal(explanation.usage.totalLlmCalls, 0);
+  const old = await send('vende 2 PAN-FRE-001'); await send('cuanto stock tiene ese?');
+  const changed = await send('mejor quiero 3'); assert.equal(changed.pendingAction.items[0].quantity, 3);
+  assert.equal(changed.pendingAction.fields.total, 6); assert.equal(changed.pendingAction.items[0].resultingStock, 18);
+  assert.notEqual(changed.pendingAction.pendingActionId, old.pendingAction.pendingActionId);
+  await send('cancelar'); assert.equal(f.mutations.length, 0);
+});

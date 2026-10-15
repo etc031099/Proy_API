@@ -297,6 +297,7 @@ const withActionAssistant = (runtime, service, options = {}) => {
       else {
         pendingAction = await service.prepare({ agentId: 'operations', skillId, args: resolved.args, context, externalRequestId: req.agentActionRequestId || randomUUID() });
         draft.pendingActionId = pendingAction.pendingActionId;
+        draft.readSuspended = false;
         draft.confirmationReady = true;
         previewShown = true;
         answer = `${pendingAction.summary} ${skillId === 'create_stock_alert_rule' ? 'La regla todavía no se ha creado. ' : ''}Revisa la tarjeta antes de confirmar. La preparación no modifica el inventario.`;
@@ -307,7 +308,8 @@ const withActionAssistant = (runtime, service, options = {}) => {
       if (safe && (drafts.size < 1000 || drafts.has(key))) drafts.set(key, safe);
     }
     return response(answer, pendingAction, clarification);
-    function response(text, pending, needsClarification) {
+    async function response(text, pending, needsClarification) {
+      await runtime.clearExplanation?.(req, conversationId);
       const activeDraft = drafts.get(key);
       if (activeDraft && !previewShown) activeDraft.confirmationReady = false;
       const realUsage = execution?.getUsage(), latencyMs = performance.now() - started;

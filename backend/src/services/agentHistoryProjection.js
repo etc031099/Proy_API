@@ -67,6 +67,7 @@ const publicResponse = result => {
   return projected;
 };
 const snapshot = state => ({
+  lastExplanation: require('../agents/explanationContext').compactExplanation(state.lastExplanation),
   v3Context: require('../agents/v3Routing').compactV3State(state.v3Context, Date.now()),
   lastReplenishmentPlan: compactBudgetPlan(state.lastReplenishmentPlan, Date.now()),
   lastForecastAnalytics: require('../agents/forecastAnalytics').compactAnalyticsContext(state.lastForecastAnalytics),

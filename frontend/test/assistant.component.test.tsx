@@ -443,3 +443,22 @@ it('shows unavailable provider cost when official usage is missing', () => {
     totalLlmCalls: 1, totalInputTokens: null, totalOutputTokens: null, totalTokens: null, estimatedCostUsd: null } }} />);
   expect(screen.getByText('Costo estimado: No disponible')).toBeTruthy();
 });
+
+it('renders a previous-answer explanation without a generic error or action confirmation', async () => {
+  send.mockResolvedValue({ success: true, data: { ...response, intent: 'explain_previous',
+    answer: 'La recomendación anterior usa stock 21 y cobertura 7 días; no es una lectura nueva.' } });
+  render(<AssistantPage />); submit('por q?');
+  expect(await screen.findByText(/La recomendación anterior usa stock 21/)).toBeTruthy();
+  expect(screen.queryByRole('alert')).toBeNull(); expect(apiClient.decideAgentAction).not.toHaveBeenCalled();
+});
+
+it('renders a changed preview with quantity three and sends no automatic confirmation', async () => {
+  const pending: NonNullable<AgentResponse['pendingAction']> = { pendingActionId: '33333333-3333-4333-8333-333333333333',
+    action: 'create_sale', summary: 'Venta de 3 unidades', fields: { total: 6, currency: 'PEN' },
+    items: [{ name: 'Pan Francés', sku: 'PAN-FRE-001', quantity: 3, price: 2, total: 6, stock: 21, resultingStock: 18 }],
+    expiresAt: '2099-01-01T00:00:00Z', requiresConfirmation: true, status: 'PENDING' };
+  send.mockResolvedValue({ success: true, data: { ...response, intent: 'action', answer: 'Revisa el nuevo preview de 3 unidades.', pendingAction: pending } });
+  render(<AssistantPage />); submit('mejor quiero 3');
+  expect(await screen.findByRole('region', { name: 'Acción pendiente' })).toBeTruthy();
+  expect(screen.getByText('Venta de 3 unidades')).toBeTruthy(); expect(apiClient.decideAgentAction).not.toHaveBeenCalled();
+});

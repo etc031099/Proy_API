@@ -174,6 +174,8 @@ const createConversationMemory = ({ now = Date.now, ttlMs = TTL_MS, maxEntries =
             ? compactSupplierProductListing(patch.supplierProductListing, now) : state.supplierProductListing || null;
           const period = patch.lastPeriod;
           pending = deepFreeze({
+            lastExplanation: Object.hasOwn(patch, 'lastExplanation')
+              ? require('./explanationContext').compactExplanation(patch.lastExplanation, now()) : state.lastExplanation || null,
             v3Context: Object.hasOwn(patch, 'v3Context')
               ? require('./v3Routing').compactV3State(patch.v3Context, now()) : state.v3Context || null,
             lastReplenishmentPlan: Object.hasOwn(patch, 'lastReplenishmentPlan')

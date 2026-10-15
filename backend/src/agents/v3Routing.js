@@ -923,7 +923,7 @@ const renderV3 = (skillId, result, args, responseMode = null) => {
   return `${heading}${forecastDates}\n${lines.join('\n')}`;
 };
 
-const handleV3 = async ({ message, state, context, service, run, commit, execution, deterministicProbe }) => {
+const handleV3 = async ({ message, state, context, service, run, commit, execution, deterministicProbe, onPublicResult }) => {
   let binding;
   try { binding = await service.resolveContext(context); } catch { return { answer: 'El módulo analítico no está disponible en este momento.', intent: 'v3_unavailable', agent: 'coordinator' }; }
   if (!binding) return null;
@@ -1116,6 +1116,7 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
         result = { ...result, data: { ...result.data, items, total: items.length } };
       }
       const displayArgs = current.pendingOnly ? { ...current.args, pendingOnly: true } : current.args;
+      onPublicResult?.(current.skillId, result, displayArgs, responseMode);
       previous = result; answers.push(renderV3(current.skillId, result, displayArgs, responseMode));
       if (responseMode === 'inventory-nearest-minimum' && current.skillId === 'get_inventory_intelligence') {
         nearestMinimumRows.push(...(result.data.items || []));

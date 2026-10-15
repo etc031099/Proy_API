@@ -62,6 +62,16 @@ function fixture({ auditFailure = false, executorFailure = false, postCommitEffe
   return { service, repository, sessions, filters, rows: () => rows, audits: () => audits, writes: () => writes, effects: () => effects,
     expire: () => { time = new Date(time.getTime() + 600001); } };
 }
+test('J51 actual repository rejects superseded preview ID and confirms only replacement in mock transaction', async () => {
+  const f = fixture(); const context = ctx();
+  const prepare = name => f.service.prepare({ skillId: 'create_product', args: { ...product, name }, context, externalRequestId: randomUUID() });
+  const old = await prepare('Preview anterior'); await f.service.cancelPendingAction(context, old.pendingActionId);
+  const next = await prepare('Preview vigente');
+  await assert.rejects(f.service.confirmPendingAction(context, old.pendingActionId), { code: 'ACTION_CANCELLED' });
+  assert.equal(f.writes(), 0); assert.equal(f.effects(), 0);
+  await f.service.confirmPendingAction(context, next.pendingActionId); assert.equal(f.writes(), 1);
+  assert.equal(f.rows().find(row => row.pendingActionId === old.pendingActionId).status, 'CANCELLED');
+});
 test('post-commit effects run once after a committed action, never for preview or rollback', async () => {
   const f = fixture({ postCommitEffect: true });
   const pending = await prepare(f);
