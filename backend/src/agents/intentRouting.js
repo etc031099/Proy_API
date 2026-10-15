@@ -63,8 +63,8 @@ const relativeSalesPeriod = (text, now) => {
   // Consume compound expressions before single-day tokens. Residual temporal
   // expressions indicate a conflict rather than authority to pick one period.
   const range = /\bdesde\s+(anteayer|ayer|hoy)\s+hasta\s+(anteayer|ayer|hoy)\b/.exec(text);
-  const rolling = /\bultim[oa]s?\s+(\d+|siete|treinta)\s+dias(?:\s+hasta\s+hoy)?\b/.exec(text);
-  const tokens = value => [...value.matchAll(/\bultim[oa]s?\s+(?:\d+|siete|treinta)\s+dias(?:\s+hasta\s+hoy)?\b|\banteayer\b|\bayer\b|\bhoy\b|\b(?:esta semana|semana pasada|semana anterior|este mes|mes actual|mes pasado|mes anterior)\b/g)];
+  const rolling = /\b(?:(?:ultim[oa]s?|de|en|durante)\s+)?(\d+|siete|treinta)\s+dias(?:\s+hasta\s+hoy)?\b/.exec(text);
+  const tokens = value => [...value.matchAll(/\b(?:(?:ultim[oa]s?|de|en|durante)\s+)?(?:\d+|siete|treinta)\s+dias(?:\s+hasta\s+hoy)?\b|\banteayer\b|\bayer\b|\bhoy\b|\b(?:esta semana|semana pasada|semana anterior|este mes|mes actual|mes pasado|mes anterior)\b/g)];
   const invalid = () => ({ clarificationQuestion: 'Indica un único periodo o un rango completo con inicio y fin claros.' });
   if (range) {
     if (tokens(text.replace(range[0], '')).length) return invalid();

@@ -205,6 +205,15 @@ const routeV3 = (message, state, binding) => {
       const first = routeV3(parts[0], memory, binding), second = routeV3(parts.slice(1).join(' y '), memory, binding);
       if (first?.tasks && second?.tasks) return { tasks: [...first.tasks, ...second.tasks] };
     }
+    if (/vend[ií]|ventas/.test(text) && (/stock\b/.test(text) || /proveedores?/.test(text) && /pedido|orden|pendient/.test(text))) {
+      const parts = message.split(/\s+y\s+/i);
+      const first = routeV3(parts[0], memory, binding), second = routeV3(parts.slice(1).join(' y '), memory, binding);
+      const secondSkill = second?.tasks?.[0]?.skillId;
+      if (first?.tasks?.[0]?.skillId === 'get_business_analytics'
+        && second?.tasks?.length === 1 && ['get_inventory_intelligence', 'get_supplier_intelligence'].includes(secondSkill)) {
+        return { tasks: [...first.tasks, ...second.tasks] };
+      }
+    }
     if (/proveedor/.test(text) && /tarda|demora/.test(text) && /critic/.test(text)) return { tasks: [task('get_supplier_intelligence', { mode: 'rank', metric: /tarda/.test(text) ? 'lead_time' : 'delays', sortDirection: 'desc', limit: 1 }),
       task('get_inventory_intelligence', { mode: 'rank', risk: 'CRITICAL' }, { fromPrevious: 'supplier' })] };
     if (/mejor cliente|cliente.*compra mas/.test(text) && /suele comprar|preferencia/.test(text)) return { tasks: [task('get_customer_intelligence', { mode: 'rank', metric: 'spend', limit: 1 }),
@@ -227,6 +236,7 @@ const routeV3 = (message, state, binding) => {
     const mode = /prefer|suele comprar|suelen comprar|que compra/.test(text) ? 'preferences' : selected ? 'detail' : 'rank';
     const args = { mode, metric: /frecuencia|frecuente/.test(text) ? 'tickets' : /recencia/.test(text) ? 'recency' : 'spend', ...(selected ? { customerRef: selected } : {}) };
     if (/riesgo/.test(text)) args.segment = 'AT_RISK';
+    if (/alto valor/.test(text)) args.segment = 'TOP_HIGH_VALUE';
     if (/inactiv|dejaron de comprar/.test(text)) args.segment = 'INACTIVE';
     if (/nuevos/.test(text)) args.segment = 'NEW';
     if (/consumidor final/.test(text)) return { clarificationQuestion: 'Consumidor Final es un agregado anónimo; no tiene un perfil RFM individual.' };
@@ -543,6 +553,7 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
           { label: 'Productos habituales', value: (prefs.topProducts || []).slice(0, 3).map(p => p.name || p.sku).join(', ') || 'sin datos' }] : [])
       ]); if (item) items.push(item);
     }
+    if (args.segment === 'TOP_HIGH_VALUE') note = 'Alto valor observado según gasto del RFM de 90 días y actividad reciente. El riesgo de inactividad es una categoría distinta; este ranking no lo usa como criterio.';
     if (d.periodMetrics) metrics.push({ label: 'Gasto del periodo solicitado', value: Object.values(d.periodMetrics).map(row => displayMoney(row.revenueCents)).join(' · ') });
   } else if (skillId === 'get_supplier_intelligence') {
     kind = 'supplier'; title = args.pendingOnly ? 'Proveedores con pedidos pendientes'
@@ -635,6 +646,7 @@ const renderV3 = (skillId, result, args) => {
   if (skillId === 'get_product_forecast' && d.method) lines.push('Se usa MOVING_AVERAGE_28: media móvil de 28 días, seleccionada por su generalización en los horizontes operativos de 1, 7 y 14 días del benchmark V3. No expone confianza ni intervalo de predicción.');
   if (skillId === 'get_product_forecast' && d.totalExpectedUnits !== undefined) lines.push(`Estimación agregada: ${units(d.totalExpectedUnits)} en ${d.horizonDays} ${d.horizonDays === 1 ? 'día' : 'días'} desde el corte del escenario.`);
   if (skillId === 'get_customer_intelligence' && d.periodMetrics) lines.push(`Gasto del periodo solicitado: ${Object.entries(d.periodMetrics).map(([code, row]) => `${code}: ${money(row.revenueCents)}`).join('; ')}. El segmento RFM corresponde a su ventana de 90 días.`);
+  if (skillId === 'get_customer_intelligence' && args.segment === 'TOP_HIGH_VALUE') lines.push('El segmento de alto valor se basa en gasto del RFM de 90 días y actividad reciente; el riesgo de inactividad es una categoría distinta y no es el criterio de este ranking.');
   if (skillId === 'get_supplier_intelligence' && d.singleSourceCriticalOrHigh) lines.push(`Dependencia: ${num(d.singleSourceCriticalOrHigh.singleSourceCriticalOrHighSkuCount)} productos críticos o de alto riesgo con un solo proveedor observado/configurado; no es un score de calidad.`);
   if (skillId === 'get_supplier_intelligence' && args.pendingOnly) lines.unshift(`${d.total ?? items.length} proveedores con pedidos pendientes; se muestran hasta 5. La cifra procede de órdenes pendientes registradas.`);
   if (skillId === 'get_cross_sell_recommendations') lines.push(d.available === false ? 'No hay asociaciones validadas disponibles para ese corte.' : 'Son compras conjuntas observadas; no demuestran causalidad ni garantizan ventas futuras.');
