@@ -6,6 +6,7 @@ const { createAgentOrchestrator } = require('../src/agents/orchestrator');
 const { createConversationMemory } = require('../src/agents/memory');
 const { classifyGrounded, buildGroundedPlan } = require('../src/agents/groundedRouting');
 const { isOutOfDomain } = require('../src/agents/domainGate');
+const { routeForecastTemporalQuery } = require('../src/agents/forecastRouting');
 const { buildGroundedContext, contextMetrics, validateGroundedOutput, MAX_CONTEXT_BYTES } = require('../src/agents/groundedContext');
 const { createNeutralProvider, estimateCostUsd } = require('../src/agents/providers/neutralProvider');
 const { publicResponse } = require('../src/services/agentHistoryProjection');
@@ -33,7 +34,9 @@ const cases = [
 const contextBytes = [];
 test.after(() => console.log('J2A_CONTEXT_BYTES', JSON.stringify({ min: Math.min(...contextBytes), max: Math.max(...contextBytes), samples: contextBytes.length })));
 const outOfDomain = ['¿Quién ganó el partido ayer?', '¿Cuál es la capital de Francia?', 'Cuéntame un cuento.',
-  '¿Qué laptop me recomiendas?', '¿Cuánto cuesta Bitcoin?', '¿Quién es el presidente de X?', '¿Cómo escribo un currículum?'];
+  '¿Qué laptop me recomiendas?', '¿Cuánto cuesta Bitcoin?', '¿Quién es el presidente de X?', '¿Cómo escribo un currículum?',
+  'quien juega mañana', 'qué partido hay mañana', 'quién juega hoy', 'qué partidos hay esta semana',
+  'quién juega el domingo', 'quién ganó ayer'];
 const inventory = { sku: 'PAN-FRE-001', productName: 'Pan francés', stock: { onHand: 21, incoming: 10 },
   inventoryPolicy: { configuredMinimumStock: 5 }, coverage: { daysCover: 2.2 }, risk: { level: 'CRITICAL', reasonCodes: ['STOCKOUT_RISK'] },
   recommendation: { recommendedQty: 9, shouldReorder: true }, supplier: { preferredSupplierCode: 'SUP-05' } };
@@ -106,6 +109,18 @@ test('J2A near-domain examples and product prices are not blocked', () => {
   for (const query of ['precio de Sprite', 'precio del pan', 'cuánto cuesta este producto', 'precio de Coca-Cola',
     'mejorar ventas', 'priorizar inventario', 'retener clientes', 'explicar WAPE', 'explicar K-Means', 'explicar forecast',
     'analizar el negocio', 'precio del producto Bitcoin', 'cuánto stock tengo de laptop']) assert.equal(isOutOfDomain(query), false, query);
+});
+
+test('J2F business forecast language stays inside the business domain', () => {
+  for (const query of ['ventas esperadas mañana', 'pronóstico de mañana', 'cuánto venderé mañana', 'forecast de mañana',
+    'demanda esperada mañana', 'cuánto se venderá de Sprite mañana', 'pronóstico del pan para mañana',
+    'ventas de mañana', 'forecast 1 día', 'ventas últimos 7 días', 'stock del pan'])
+    assert.equal(isOutOfDomain(query), false, query);
+  for (const query of ['pronóstico de mañana', 'cuánto venderé mañana', 'forecast de mañana',
+    'demanda esperada mañana', 'cuánto se venderá de Sprite mañana', 'pronóstico del pan para mañana']) {
+    const plan = routeForecastTemporalQuery(query, {}, new Date('2026-10-15T00:00:00Z'), V3.businessId);
+    assert.equal(plan?.intent, 'ml_historical_clarification', query);
+  }
 });
 
 test('J2A inventory prioritization is not sales-only; retention uses explicit AT_RISK, never spend as churn', async () => {
