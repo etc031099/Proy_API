@@ -70,6 +70,17 @@ test('recovery above minimum rearms a later downward crossing', async (t) => {
   assert.equal(calls.requests.length, 2);
 });
 
+test('manual 3→2, recovery 2→3, sale 3→2 alert twice but continued 2→1 does not', async (t) => {
+  const calls = mockTelegram(t);
+  const minimum = { minStockLevel: 2, sku: 'ABA-SAZ-003' };
+  await notifyLowStock('tenant-a', productAt(2, minimum), 3);
+  await notifyLowStock('tenant-a', productAt(3, minimum), 2);
+  await notifyLowStock('tenant-a', productAt(2, minimum), 3);
+  await notifyLowStock('tenant-a', productAt(1, minimum), 2);
+  assert.equal(calls.requests.length, 2);
+  assert.ok(calls.requests.every(call => call.body.text.includes('ABA-SAZ-003')));
+});
+
 test('zero stock uses an exhausted label and singular counts remain grammatical', async (t) => {
   const calls = mockTelegram(t);
   await notifyLowStock('tenant-a', productAt(0, { minStockLevel: 1 }), 2);

@@ -17,8 +17,8 @@ const ctx = (business = 'A', user, channel = 'assistant', conversation = uuid) =
 const product = { name: 'Prueba', sku: 'SKU-001', price: 10, stock: 5, minStockLevel: 2, currency: 'PEN', category: 'General' };
 // Transactional fixture exercises the actual repository, including session propagation,
 // commit/abort, scoped queries and failure audit, without touching a real business.
-function fixture({ auditFailure = false, executorFailure = false } = {}) {
-  let rows = [], audits = [], writes = 0, version = 0, time = new Date();
+function fixture({ auditFailure = false, executorFailure = false, postCommitEffect = false } = {}) {
+  let rows = [], audits = [], writes = 0, effects = 0, version = 0, time = new Date();
   const filters = [], sessions = [];
   const match = (row, filter) => Object.entries(filter).every(([key, val]) => val && typeof val === 'object' && '$gt' in val
     ? row[key] > val.$gt : String(row[key]) === String(val));
@@ -53,13 +53,31 @@ function fixture({ auditFailure = false, executorFailure = false } = {}) {
       session.audits.push(safeAudit(row, context, status, now, errorCode)); } });
   const executors = Object.fromEntries(['create_product', 'create_inventory_alert', 'create_stock_alert_rule'].map(id => [id, {
     preview: async args => ({ summary: 'Preparar acción', fields: { sku: args.sku || 'alert' } }),
-    async execute(args, context, session) { assert.ok(Object.isFrozen(args)); assert.equal(context.businessId, 'A');
-      if (executorFailure) throw executorFailure instanceof Error ? executorFailure : new Error('password=private'); session.writes++; return { id: 'cccccccccccccccccccccccc' }; }
+    async execute(args, context, session, actionId, snapshot, onCommitted) { assert.ok(Object.isFrozen(args)); assert.equal(context.businessId, 'A');
+      if (executorFailure) throw executorFailure instanceof Error ? executorFailure : new Error('password=private');
+      if (postCommitEffect) onCommitted(() => { effects++; });
+      session.writes++; return { id: 'cccccccccccccccccccccccc' }; }
   }]));
   const service = createActionService({ repository, executors, clock: () => time });
-  return { service, repository, sessions, filters, rows: () => rows, audits: () => audits, writes: () => writes,
+  return { service, repository, sessions, filters, rows: () => rows, audits: () => audits, writes: () => writes, effects: () => effects,
     expire: () => { time = new Date(time.getTime() + 600001); } };
 }
+test('post-commit effects run once after a committed action, never for preview or rollback', async () => {
+  const f = fixture({ postCommitEffect: true });
+  const pending = await prepare(f);
+  assert.equal(f.effects(), 0);
+  await f.service.confirmPendingAction(ctx(), pending.pendingActionId);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.effects(), 1);
+  await f.service.confirmPendingAction(ctx(), pending.pendingActionId);
+  assert.equal(f.effects(), 1);
+
+  const rolledBack = fixture({ postCommitEffect: true, auditFailure: true });
+  const failed = await prepare(rolledBack);
+  await assert.rejects(rolledBack.service.confirmPendingAction(ctx(), failed.pendingActionId));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(rolledBack.effects(), 0);
+});
 const prepare = (f, context = ctx(), args = product, key = randomUUID()) => f.service.prepare({ agentId: 'operations', skillId: 'create_product', args, context, externalRequestId: key });
 const ruleArgs = { productId: 'bbbbbbbbbbbbbbbbbbbbbbbb', operator: '<=', threshold: 3 };
 const prepareRule = f => f.service.prepare({ skillId: 'create_stock_alert_rule', args: ruleArgs, context: ctx(), externalRequestId: randomUUID() });

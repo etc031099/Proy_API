@@ -52,6 +52,21 @@ test('<= crossing, continued low stock, recovery and new crossing form distinct 
   assert.equal(recovery.previousStock, 2); assert.equal(recovery.newStock, 5);
   assert.ok(f.reads.every(filter => filter.businessId === 'A' && filter.productId === 'product-1' && filter.enabled));
 });
+
+test('minimum-2 rule cycles LOW → NORMAL → LOW → NORMAL without duplicate recovery', async () => {
+  const f = fixture([['<=', 2]]);
+  await f.run(3, 2, 'manual-low');
+  await f.run(2, 1, 'still-low');
+  await f.run(1, 3, 'receipt-recovery');
+  await f.run(3, 4, 'still-normal');
+  await f.run(4, 2, 'sale-low');
+  await f.run(2, 3, 'manual-recovery');
+  assert.deepEqual([...f.outbox.values()].map(row => row.eventType), [
+    'inventory.alert.opened', 'inventory.alert.resolved',
+    'inventory.alert.opened', 'inventory.alert.resolved'
+  ]);
+  assert.equal([...f.events.values()].filter(row => row.status === 'RESOLVED').length, 2);
+});
 test('< crossing includes equal-to-threshold as the previous state, but not as the new state', async () => {
   const f = fixture([['<', 3]]);
   await f.run(4, 3); assert.equal(f.events.size, 0);
