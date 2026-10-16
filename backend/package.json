@@ -31,6 +31,7 @@
     "test:integration:ml-prep": "node test/integration/mlPrep.run.js",
     "test:integration:v3-operational": "node --test test/integration/v3OperationalSnapshot.test.js",
     "test:integration:v3-live-contracts": "node test/integration/v3LiveBackendContracts.run.js",
+    "test:integration:forecast-registry": "node test/integration/forecastModelRegistry.run.js",
     "test:integration:demo-v2": "node --test test/integration/demoV2Registration.test.js",
     "import:historical-scenario": "node scripts/import-historical-scenario.js",
     "reset:historical-scenario": "node scripts/reset-historical-scenario.js",

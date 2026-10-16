@@ -9,6 +9,8 @@ const HistoricalScenario = require('./HistoricalScenario');
 const MinimarketV3Record = require('./MinimarketV3Record');
 const V3OperationalRevision = require('./V3OperationalRevision');
 const V3OperationalChange = require('./V3OperationalChange');
+const ForecastModelArtifact = require('./ForecastModelArtifact');
+const ForecastModelRegistry = require('./ForecastModelRegistry');
 
 module.exports = {
   User,
@@ -21,5 +23,7 @@ module.exports = {
   HistoricalScenario,
   MinimarketV3Record,
   V3OperationalRevision,
-  V3OperationalChange
+  V3OperationalChange,
+  ForecastModelArtifact,
+  ForecastModelRegistry
 };
