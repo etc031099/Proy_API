@@ -47,9 +47,9 @@ describe('forecast ML evidence and operative method', () => {
 
   it('renders API metrics and keeps evaluated/rejected HGB separate from statistical operation', async () => {
     const { container } = render(<ForecastEvaluationPanel />);
-    expect(await screen.findByText('Método operativo seleccionado')).toBeTruthy();
+    expect(await screen.findByText('Baseline estadístico de referencia')).toBeTruthy();
     expect(screen.getAllByText('HistGradientBoostingRegressor').length).toBeGreaterThan(0);
-    expect(screen.getByText('Media móvil de 28 días · Método estadístico')).toBeTruthy();
+    expect(screen.getByText('Media móvil de 28 días · evidencia histórica V3')).toBeTruthy();
     expect(screen.getByText(/Evaluado — no aprobado para operación/)).toBeTruthy();
     expect(screen.getAllByText('Ver metodología y limitaciones').length).toBe(2);
     fireEvent.click(screen.getAllByText('Ver metodología y limitaciones')[0]);
@@ -64,7 +64,7 @@ describe('forecast ML evidence and operative method', () => {
 
   it('exposes temporal splits and academic explanations with keyboard-accessible help', async () => {
     render(<ForecastEvaluationPanel />);
-    await screen.findByText('Método operativo seleccionado');
+    await screen.findByText('Baseline estadístico de referencia');
     fireEvent.click(screen.getAllByRole('button', { name: 'Ayuda: WAPE TEST' })[0]);
     expect(screen.getByRole('tooltip').textContent).toContain('Un valor menor indica menor error');
     expect(screen.getAllByText(/Train:/).length).toBe(2);
@@ -80,7 +80,7 @@ describe('forecast ML evidence and operative method', () => {
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.queryByText(/^0[.,]123456$/)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Reintentar evaluación' }));
-    expect(await screen.findByText('Método operativo seleccionado')).toBeTruthy();
+    expect(await screen.findByText('Baseline estadístico de referencia')).toBeTruthy();
   });
 
   it('loads evidence within the Forecast view without selecting a LIVE product', async () => {
@@ -90,7 +90,7 @@ describe('forecast ML evidence and operative method', () => {
     render(<BusinessIntelligenceDashboard />);
     fireEvent.click(screen.getByRole('tab', { name: 'Predicción' }));
     expect(screen.getByRole('heading', { name: 'Pronóstico operativo' })).toBeTruthy();
-    expect(await screen.findByText('Método operativo seleccionado')).toBeTruthy();
+    expect(await screen.findByText('Baseline estadístico de referencia')).toBeTruthy();
     expect(forecast).not.toHaveBeenCalled();
     expect(screen.getAllByRole('tab')).toHaveLength(8);
   });
@@ -100,22 +100,22 @@ describe('forecast ML evidence and operative method', () => {
     const instance = (apiClient as unknown as { instance: { get: (url: string) => Promise<unknown> } }).instance;
     const get = vi.spyOn(instance, 'get').mockResolvedValue({ data: { success: true, data: fixture } });
     expect((await apiClient.getForecastModelEvaluation()).data).toEqual(fixture);
-    await waitFor(() => expect(get).toHaveBeenCalledWith('/intelligence/forecast/evaluation'));
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/intelligence/forecast/evaluation', undefined));
   });
 
   it('explains the six-step ML workflow and category/product rejection without changing API values', async () => {
     render(<ForecastEvaluationPanel />);
-    await screen.findByText('Método operativo seleccionado');
+    await screen.findByText('Baseline estadístico de referencia');
     const flow = screen.getByRole('region', { name: 'Cómo se aplicó Machine Learning' });
     expect(flow.querySelectorAll('li')).toHaveLength(6);
     expect(flow.textContent).toMatch(/Datos históricos.*Preparación de variables.*Entrenamiento HistGradientBoosting.*Validación temporal.*Comparación con baseline.*Decisión operativa/);
-    expect(screen.getByText(/se entrenó y evaluó HistGradientBoostingRegressor, un modelo de aprendizaje supervisado/)).toBeTruthy();
-    expect(screen.getByText('El pronóstico operativo actual utiliza Media Móvil de 28 días.')).toBeTruthy();
+    expect(screen.getByText(/Para la evaluación histórica de demanda se entrenó HistGradientBoostingRegressor, un modelo de aprendizaje supervisado/)).toBeTruthy();
+    expect(screen.getByText(/Ridge se utiliza para 7 y 14 días cuando el registry proporciona/)).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Evaluación histórica del modelo ML — Horizonte de 7 días' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Evaluación histórica V3 · Horizonte de 28 días' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Ayuda: ¿Por qué no fue seleccionado?' }));
     expect(screen.getByRole('tooltip').textContent).toMatch(/resultado agregado.*protección de categorías y productos prioritarios/);
-    expect(screen.getByText(/Horizontes aprobados: 1 \/ 7 \/ 14 días/)).toBeTruthy();
+    expect(screen.getByText(/Horizontes cubiertos por la evaluación histórica: 1 \/ 7 \/ 14 días/)).toBeTruthy();
     expect(screen.queryByText(/sintético|synthetic/i)).toBeNull();
     expect(screen.getByText('legacy').closest('details')?.open).toBe(false);
     expect(screen.getAllByText(/^0[.,]123456$/).length).toBeGreaterThan(0);

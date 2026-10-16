@@ -46,14 +46,51 @@ export interface InventorySummary extends IntelligenceFreshness {
 }
 export interface ProductOption { id: string; sku: string; name: string; presentation: string | null; }
 export interface ForecastResponse extends IntelligenceFreshness {
-  status: Availability | 'READY' | 'INSUFFICIENT_HISTORY';
+  status: Availability | 'READY' | 'INSUFFICIENT_HISTORY' | 'MODEL_NOT_APPROVED' | 'MODEL_UNAVAILABLE' | 'FEATURE_UNAVAILABLE';
   product: { sku: string; name?: string; presentation?: string | null; brand?: string | null; size?: { value: number; unit: string | null } | null };
-  method: 'MOVING_AVERAGE_28' | string;
+  method: 'MOVING_AVERAGE_28' | string | null;
+  reasonCode?: string | null;
+  horizonDays?: 1 | 7 | 14;
+  predictionUnits?: number | null;
+  targetDefinition?: string | null;
+  forecastStartDate?: string | null;
+  forecastEndDate?: string | null;
+  observationsThrough?: string | null;
+  modelFamily?: string | null;
+  recipeId?: string | null;
+  modelVersion?: number | null;
+  trainedAt?: string | null;
+  trainedDataVersion?: string | null;
+  dataCutoff?: string | null;
+  featureVersion?: string | null;
+  promotionPolicyVersion?: string | null;
+  activeModelStatus?: string | null;
+  dataVersion?: string | null;
+  snapshotHash?: string | null;
+  isTrainingPending?: boolean | null;
+  baselineUnits?: number | null;
+  baselineMethod?: string | null;
   observationCutoff: string | null;
   horizons: { '1d': number | null; '7d': number | null; '14d': number | null };
   observedSeries: Array<{ date: string; units: number | null; status: SeriesStatus }>;
   forecastPeriod: { startDate: string | null; selectedHorizonDays: number; units: number | null } | null;
 }
+export interface ForecastActiveModel {
+  horizonDays: 1 | 7 | 14;
+  status: 'ACTIVE' | 'MODEL_NOT_APPROVED' | 'MODEL_UNAVAILABLE';
+  activeModelStatus: 'ACTIVE' | 'NOT_APPROVED' | 'NONE';
+  reasonCode?: string | null;
+  modelFamily: string | null;
+  recipeId: string | null;
+  modelVersion?: number | null;
+  trainedAt?: string | null;
+  trainedDataVersion?: string | null;
+  dataCutoff?: string | null;
+  featureVersion?: string | null;
+  promotionPolicyVersion?: string | null;
+  metrics?: { wape: number | null; mae: number | null; bias: number | null };
+}
+export interface ForecastActiveModels { models: ForecastActiveModel[]; }
 export interface ProductInventory {
   asOf: string;
   timezone: string;

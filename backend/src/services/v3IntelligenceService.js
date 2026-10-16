@@ -174,6 +174,20 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
       if (!isDate(args.asOfDate) || args.asOfDate > binding.operationalDate || args.asOfDate < V3.earliestDate) throw new AgentError('AGENT_INVALID_SKILL_ARGS');
       request.context.asOfDate = args.asOfDate;
     }
+    const trustedLiveRidge = invocation.useLiveRidge === true;
+    if (trustedLiveRidge) {
+      const envelope = invocation.trustedForecastModelEnvelope;
+      if (domain !== 'forecast' || request.dataMode !== 'LIVE' || request.mode !== 'detail'
+          || !args.productRef || typeof args.productRef !== 'string' || !args.productRef.trim()
+          || ![1, 7, 14].includes(request.horizonDays)
+          || envelope != null && (typeof envelope !== 'object'
+            || envelope.metadata?.businessId !== binding.businessId
+            || envelope.metadata?.scenarioId !== binding.scenarioId
+            || envelope.metadata?.horizonDays !== request.horizonDays
+            || envelope.metadata?.status !== 'ACTIVE')) throw new AgentError('AGENT_INVALID_SKILL_ARGS');
+      request.useLiveRidge = true;
+      request.activeRidgeModel = envelope || null;
+    }
     if (args.startDate) {
       if (!isDate(args.endDate) || args.endDate > request.context.asOfDate || args.startDate < V3.earliestDate || args.startDate > args.endDate) throw new AgentError('AGENT_INVALID_SKILL_ARGS');
       request.period = { startDate: args.startDate, endDate: args.endDate };
@@ -293,9 +307,13 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
       const error = unavailable(); error.functionalCode = 'INVENTORY_RESPONSE_INVALID';
       error.diagnostic = { internalCause: 'AGENT_SKILL_VALIDATION_ERROR' }; throw error;
     }
-    if (spec.domain === 'forecast' && responseItems.some(row => row.status === 'READY'
-      ? !Number.isFinite(row[`expectedUnitsNext${request.horizonDays || 7}d`])
-      : !['COLD_START', 'INSUFFICIENT_HISTORY'].includes(row.status))) throw unavailable();
+    if (spec.domain === 'forecast' && responseItems.some(row => trustedLiveRidge
+      ? !['READY', 'MODEL_NOT_APPROVED', 'MODEL_UNAVAILABLE', 'INSUFFICIENT_HISTORY', 'FEATURE_UNAVAILABLE'].includes(row.status)
+        || row.status === 'READY' && (!Number.isFinite(row.predictionUnits)
+          || row.activeModelStatus !== 'ACTIVE' || row.modelVersion !== invocation.trustedForecastModelEnvelope?.metadata?.modelVersion)
+        || row.status !== 'READY' && row.predictionUnits !== null
+      : row.status === 'READY' ? !Number.isFinite(row[`expectedUnitsNext${request.horizonDays || 7}d`])
+        : !['COLD_START', 'INSUFFICIENT_HISTORY'].includes(row.status))) throw unavailable();
     if (count > invocation.skill.maxRecords || Array.isArray(data.items) && count > request.limit) throw unavailable();
     if (supplierOrder) {
       const value = row => supplierOrder.reduce((result, field) => result?.[field], row);

@@ -5,6 +5,8 @@ import hashlib
 import json
 import os
 import time
+import base64
+import binascii
 from collections import OrderedDict, deque
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -375,9 +377,80 @@ class V3IntelligenceRuntime:
         if getattr(self, "live_forecast", None) is None:
             raise V3FunctionalError("LIVE_ANALYTICS_NOT_READY", 501, "LIVE Forecast analytics are not enabled.")
         try:
+            if getattr(request, "useLiveRidge", False):
+                return self._run("forecast", lambda: self._live_ridge_forecast_data(request, live)), live.as_of_date
             return self._run("forecast", lambda: self.live_forecast.forecast_data(request, live))
         except LiveDomainError as error:
             raise V3FunctionalError(error.code, error.status_code, error.message) from None
+
+    def _live_ridge_forecast_data(self, request, live):
+        from types import SimpleNamespace
+        from ml.service.v3_live_ridge import LiveRidgeError, ridge_live_forecast
+
+        if request.mode != "detail" or len(request.skus) != 1 or request.horizonDays not in (1, 7, 14):
+            raise V3FunctionalError("INVALID_REQUEST", 422, "LIVE Ridge supports one product and horizons 1, 7, or 14.")
+        sku = request.skus[0]
+        supplied = request.activeRidgeModel
+        try:
+            decoded, metadata = None, None
+            if supplied is not None:
+                metadata = supplied.metadata.model_dump(mode="python")
+                decoded = base64.b64decode(supplied.artifactDataBase64, validate=True)
+                if len(decoded) != metadata["artifactBytes"] or len(decoded) > 262_144:
+                    raise LiveRidgeError("ARTIFACT_INVALID", "The ACTIVE Ridge artifact size does not match its metadata.")
+            ridge = ridge_live_forecast(dataset=self.dataset, live=live,
+                business_id=request.context.businessId, scenario_id=request.context.scenarioId,
+                sku=sku, horizon_days=request.horizonDays,
+                registry_loader=lambda **_: None if metadata is None else {"metadata": metadata, "artifactData": decoded})
+        except (binascii.Error, ValueError, LiveRidgeError) as error:
+            through = live.snapshot.metadata.observationsClosedThrough
+            reason_code = error.code if isinstance(error, LiveRidgeError) else "ARTIFACT_INVALID"
+            safe_status = {"INSUFFICIENT_HISTORY": "INSUFFICIENT_HISTORY",
+                           "FEATURE_UNAVAILABLE": "FEATURE_UNAVAILABLE",
+                           "PRODUCT_NOT_FOUND": "FEATURE_UNAVAILABLE",
+                           "MODEL_NOT_APPROVED": "MODEL_NOT_APPROVED"}.get(reason_code, "MODEL_UNAVAILABLE")
+            registered = metadata or {}
+            ridge = {"sku": sku, "scenarioId": request.context.scenarioId, "horizonDays": request.horizonDays,
+                "targetDefinition": "effective_units_sold_cumulative_t_plus_1_through_t_plus_h",
+                "forecastStartDate": (through + timedelta(days=1)).isoformat(),
+                "forecastEndDate": (through + timedelta(days=request.horizonDays)).isoformat(),
+                "observationsThrough": through.isoformat(), "featureVersion": "RIDGE_CAUSAL27_V1",
+                "promotionPolicyVersion": "M6.10A22-PROMOTION-v1", "dataVersion": str(live.data_version),
+                "snapshotHash": live.context_hash, "status": safe_status, "reasonCode": reason_code,
+                "predictionUnits": None, "modelFamily": "RIDGE_REGRESSION", "recipeId": "RIDGE-CAUSAL27",
+                "modelVersion": registered.get("modelVersion"), "trainedAt": registered.get("trainedAt"),
+                "trainedDataVersion": registered.get("trainedDataVersion"),
+                "dataCutoff": registered.get("dataCutoff"), "activeModelStatus": registered.get("status", "UNKNOWN")}
+        except Exception:
+            through = live.snapshot.metadata.observationsClosedThrough
+            ridge = {"sku": sku, "scenarioId": request.context.scenarioId, "horizonDays": request.horizonDays,
+                "targetDefinition": "effective_units_sold_cumulative_t_plus_1_through_t_plus_h",
+                "forecastStartDate": (through + timedelta(days=1)).isoformat(),
+                "forecastEndDate": (through + timedelta(days=request.horizonDays)).isoformat(),
+                "observationsThrough": through.isoformat(), "featureVersion": "RIDGE_CAUSAL27_V1",
+                "promotionPolicyVersion": "M6.10A22-PROMOTION-v1", "dataVersion": str(live.data_version),
+                "snapshotHash": live.context_hash, "status": "MODEL_UNAVAILABLE", "reasonCode": "SCORING_UNAVAILABLE",
+                "predictionUnits": None, "modelFamily": "RIDGE_REGRESSION", "recipeId": "RIDGE-CAUSAL27",
+                "modelVersion": None, "trainedAt": None, "trainedDataVersion": None,
+                "dataCutoff": None, "activeModelStatus": "UNKNOWN"}
+
+        baseline_units, observed_series = None, []
+        if request.horizonDays in (7, 14):
+            try:
+                baseline_request = SimpleNamespace(horizonDays=request.horizonDays, categoryCode=None, subcategoryCode=None,
+                    skus=[sku], mode="detail", offset=0, limit=1, includeObservedSeries=True)
+                baseline_data, _ = self.live_forecast.forecast_data(baseline_request, live)
+                baseline_row = (baseline_data.get("items") or [None])[0]
+                if baseline_row and baseline_row.get("status") == "READY":
+                    baseline_units = baseline_row.get(f"expectedUnitsNext{request.horizonDays}d")
+                    observed_series = baseline_row.get("observedSeries") or []
+            except LiveDomainError:
+                pass
+        ridge["baselineUnits"] = baseline_units
+        ridge["baselineMethod"] = "MOVING_AVERAGE_28"
+        ridge["observedSeries"] = observed_series
+        return {"mode": "detail", "horizonDays": request.horizonDays, "total": 1,
+                "items": [ridge], "availabilityStatus": ridge["status"]}
 
     def live_health_data(self, request, live):
         if (getattr(self, "live_forecast", None) is None or getattr(self, "live_adapter", None) is None

@@ -140,7 +140,10 @@ def validate_snapshot(snapshot: V3OperationalSnapshot, *, base_records: Mapping[
     meta = snapshot.metadata
     if ((meta.contractVersion == "1") != (meta.snapshotVersion == "v3-operational-snapshot-v1")):
         _raise_invalid("Snapshot contract and snapshot version do not agree.")
-    if request_body_bytes > SNAPSHOT_MAX_BYTES or meta.payloadBytes > SNAPSHOT_MAX_BYTES:
+    # Forecast requests may carry a bounded, authenticated server-to-server
+    # Ridge artifact beside the snapshot. Validate snapshot bytes separately
+    # below; the API middleware caps the combined forecast envelope at 2 MiB.
+    if meta.payloadBytes > SNAPSHOT_MAX_BYTES:
         _raise_invalid("V3 live snapshot exceeds the request size limit.", 413, "LIVE_SNAPSHOT_TOO_LARGE")
     if (meta.businessId != BUSINESS_ID or request_business_id != BUSINESS_ID
             or meta.businessId != request_business_id):

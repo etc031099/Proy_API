@@ -284,11 +284,48 @@ class InventoryRequest(V3Request, PageRequest):
     metric: Literal["stockout_risk", "low_stock", "overstock", "slow_moving", "abc_a", "az", "single_source_critical", "reorder"] = "reorder"
 
 
+class RidgeActiveArtifactMetadata(StrictSchema):
+    businessId: str = Field(min_length=1, max_length=160)
+    scenarioId: str = Field(min_length=1, max_length=160)
+    horizonDays: StrictInt = Field(ge=7, le=14)
+    modelFamily: str = Field(min_length=1, max_length=80)
+    recipeId: str = Field(min_length=1, max_length=100)
+    modelVersion: StrictInt = Field(ge=1)
+    status: Literal["ACTIVE"]
+    trainedAt: datetime
+    trainedDataVersion: str = Field(pattern=r"^(0|[1-9][0-9]*)$", max_length=19)
+    dataCutoff: date
+    featureVersion: str = Field(min_length=1, max_length=100)
+    featureHash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    promotionPolicyVersion: str = Field(min_length=1, max_length=100)
+    promotionPolicyHash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    artifactHash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    artifactBytes: StrictInt = Field(ge=1, le=262_144)
+
+
+class RidgeActiveArtifact(StrictSchema):
+    metadata: RidgeActiveArtifactMetadata
+    artifactDataBase64: str = Field(min_length=1, max_length=349_528)
+
+
 class ForecastRequest(V3Request, PageRequest):
     mode: Literal["detail", "compare", "rank", "summary", "evaluation"] = "detail"
     skus: list[str] = Field(default_factory=list, max_length=MAX_ENTITY_BATCH)
     horizonDays: StrictInt = Field(default=7, ge=1, le=365)
     includeObservedSeries: StrictBool = False
+    useLiveRidge: StrictBool = False
+    activeRidgeModel: RidgeActiveArtifact | None = None
+
+    @model_validator(mode="after")
+    def live_ridge_scope(self):
+        if self.useLiveRidge:
+            if self.dataMode != "LIVE" or self.mode != "detail" or len(self.skus) != 1 or self.horizonDays not in (1, 7, 14):
+                raise ValueError("LIVE Ridge requires one SKU and an approved operational detail horizon")
+            if self.horizonDays == 1 and self.activeRidgeModel is not None:
+                raise ValueError("One-day Ridge is not approved and cannot carry an artifact")
+        elif self.activeRidgeModel is not None:
+            raise ValueError("A Ridge artifact is only accepted for LIVE Ridge scoring")
+        return self
 
 
 class CrossSellRequest(V3Request, PageRequest):

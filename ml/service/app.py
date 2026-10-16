@@ -57,6 +57,7 @@ class BodyLimitMiddleware:
             await self.app(scope, receive, send)
             return
         content_length = dict(scope["headers"]).get(b"content-length")
+        v3_body_limit = MAX_BODY_BYTES if scope.get("path") == "/v3/intelligence/forecast" else SNAPSHOT_MAX_BYTES
         if content_length:
             try:
                 declared_size = int(content_length)
@@ -64,9 +65,9 @@ class BodyLimitMiddleware:
                 await JSONResponse(status_code=400, content={"detail": "Invalid Content-Length header"})(scope, receive, send)
                 return
             if (scope.get("path", "").startswith("/v3/intelligence/")
-                    and declared_size > SNAPSHOT_MAX_BYTES):
+                    and declared_size > v3_body_limit):
                 await JSONResponse(status_code=413, content={"code": "LIVE_SNAPSHOT_TOO_LARGE",
-                                                              "message": "V3 request exceeds the 1.5 MiB limit."})(scope, receive, send)
+                                                              "message": "V3 request exceeds the supported size limit."})(scope, receive, send)
                 return
             if declared_size > MAX_BODY_BYTES:
                 await JSONResponse(status_code=413, content={"detail": "Request payload is too large"})(scope, receive, send)
@@ -82,7 +83,7 @@ class BodyLimitMiddleware:
                 return
             received_size += len(message.get("body", b""))
             if (scope.get("path", "").startswith("/v3/intelligence/")
-                    and received_size > SNAPSHOT_MAX_BYTES):
+                    and received_size > v3_body_limit):
                 await JSONResponse(status_code=413, content={"code": "LIVE_SNAPSHOT_TOO_LARGE",
                                                               "message": "V3 request exceeds the 1.5 MiB limit."})(scope, receive, send)
                 return
@@ -214,7 +215,8 @@ def create_app(runtime: ModelRuntime | None = None,
         live_context = None
         if payload.dataMode == "LIVE":
             body_bytes = len(await request.body())
-            if body_bytes > SNAPSHOT_MAX_BYTES:
+            request_limit = MAX_BODY_BYTES if domain == "forecast" and getattr(payload, "useLiveRidge", False) else SNAPSHOT_MAX_BYTES
+            if body_bytes > request_limit:
                 raise HTTPException(status_code=413, detail={"code": "LIVE_SNAPSHOT_TOO_LARGE",
                                                             "message": "V3 live snapshot exceeds the request size limit."})
             if not current.ready:
@@ -306,6 +308,8 @@ def create_app(runtime: ModelRuntime | None = None,
     @application.post("/v3/intelligence/forecast", response_model=V3Response,
                       dependencies=[Depends(require_service_secret)])
     async def v3_forecast(request: Request, payload: ForecastRequest) -> V3Response:
+        if payload.useLiveRidge and payload.dataMode != "LIVE":
+            raise HTTPException(status_code=422, detail={"code": "INVALID_PERIOD", "message": "Operational Ridge scoring requires LIVE data."})
         if payload.mode == "evaluation" and payload.dataMode != "HISTORICAL":
             raise HTTPException(status_code=422, detail={"code": "INVALID_PERIOD",
                 "message": "Model evaluation is frozen historical evidence, not LIVE analytics."})

@@ -2,7 +2,7 @@ import axios, { AxiosInstance, AxiosError } from 'axios';
 import type { ForecastEvaluation } from '@/types/forecastEvaluation';
 import { ApiResponse, DemandForecastResponse, DemoV2RegisterData, DemoV3RegisterData } from '@/types';
 import type { AgentMessageRequest, AgentResponse, AgentConversationList, AgentConversationDetail } from '@/types/agent';
-import type { AnalyticsEnvelope, AssociationsAnalytics, BusinessHealthAnalytics, BusinessSummary, CustomerAnalyticsDetail, CustomersAnalytics, ForecastResponse, InventorySummary, ProductInventory, ProductOption, RelatedProductAnalytics, SalesAnalytics, SalesPeriod, SupplierAnalyticsDetail, SuppliersAnalytics } from '@/types/businessIntelligence';
+import type { AnalyticsEnvelope, AssociationsAnalytics, BusinessHealthAnalytics, BusinessSummary, CustomerAnalyticsDetail, CustomersAnalytics, ForecastActiveModels, ForecastResponse, InventorySummary, ProductInventory, ProductOption, RelatedProductAnalytics, SalesAnalytics, SalesPeriod, SupplierAnalyticsDetail, SuppliersAnalytics } from '@/types/businessIntelligence';
 import type { CustomerClustering } from '@/types/customerClustering';
 import type { SalesAnomalies } from '@/types/salesAnomalies';
 import { IntelligenceReadCache, type IntelligenceRevision } from './intelligenceReadCache';
@@ -449,7 +449,13 @@ class ApiClient {
   }
 
   async getBusinessIntelligenceForecast(sku: string, horizonDays: 1 | 7 | 14): Promise<ApiResponse<ForecastResponse> & { code?: string }> {
-    return this.intelligenceRead(`/intelligence/products/${encodeURIComponent(sku)}/forecast`, { horizonDays });
+    // Model promotion can change independently of the business data revision.
+    // Forecast reads therefore deduplicate only in-flight requests and never retain completed values.
+    return this.intelligenceRead(`/intelligence/products/${encodeURIComponent(sku)}/forecast`, { horizonDays }, false);
+  }
+
+  async getBusinessIntelligenceActiveForecastModels(): Promise<AnalyticsEnvelope<ForecastActiveModels>> {
+    return this.intelligenceRead('/intelligence/forecast/models/active', undefined, false);
   }
 
   async getForecastModelEvaluation(): Promise<ApiResponse<ForecastEvaluation> & { code?: string }> {

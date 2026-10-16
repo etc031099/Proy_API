@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BusinessIntelligenceDashboard } from '@/components/business-intelligence/BusinessIntelligenceDashboard';
 import { apiClient } from '@/lib/api';
 import { getTranslation } from '@/i18n/dict';
-import type { BusinessSummary, ForecastResponse, InventorySummary, ProductInventory } from '@/types/businessIntelligence';
+import type { BusinessSummary, ForecastActiveModels, ForecastResponse, InventorySummary, ProductInventory } from '@/types/businessIntelligence';
 
 vi.mock('recharts', () => ({
   ResponsiveContainer: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -24,7 +24,7 @@ const inventoryFixture: InventorySummary = {
 };
 const productOption = { id: 'product-1', sku: 'PAN-FRE-001', name: 'Pan francés', presentation: 'Unidad' };
 const forecastFixture: ForecastResponse = {
-  ...temporal, status: 'READY', product: { sku: 'PAN-FRE-001', name: 'Pan francés', presentation: 'Unidad' }, method: 'MOVING_AVERAGE_28',
+  ...temporal, mode: 'HISTORICAL', status: 'READY', product: { sku: 'PAN-FRE-001', name: 'Pan francés', presentation: 'Unidad' }, method: 'MOVING_AVERAGE_28',
   observationCutoff: '2026-10-13', horizons: { '1d': 2.32, '7d': 16.25, '14d': 32.5 },
   observedSeries: [
     { date: '2026-10-11', units: 4, status: 'CLOSED' },
@@ -33,6 +33,13 @@ const forecastFixture: ForecastResponse = {
     { date: '2026-10-14', units: 2, status: 'PARTIAL' },
   ], forecastPeriod: { startDate: '2026-10-15', selectedHorizonDays: 7, units: 16.25 },
 };
+const activeForecastFixture: ForecastActiveModels = { models: [
+  { horizonDays: 1, status: 'MODEL_NOT_APPROVED', activeModelStatus: 'NOT_APPROVED', modelFamily: 'RIDGE_REGRESSION', recipeId: 'RIDGE-CAUSAL27' },
+  ...([7, 14] as const).map(horizonDays => ({ horizonDays, status: 'ACTIVE' as const, activeModelStatus: 'ACTIVE' as const,
+    modelFamily: 'RIDGE_REGRESSION', recipeId: 'RIDGE-CAUSAL27', modelVersion: 1, trainedAt: '2026-10-15T10:00:00.000Z',
+    trainedDataVersion: '0', dataCutoff: '2026-10-13', featureVersion: 'RIDGE_CAUSAL27_V1', promotionPolicyVersion: 'M6.10A22-PROMOTION-v1',
+    metrics: { wape: 0.2, mae: 1.4, bias: -0.03 } })),
+] };
 const productInventoryFixture: ProductInventory = {
   ...temporal, status: 'READY', availability: 'READY', freshness: { mode: 'LIVE', updatedAt: temporal.updatedAt, dataThrough: temporal.dataThrough },
   product: forecastFixture.product, stock: { onHand: 21, incoming: 0, inventoryPosition: 21 },
@@ -55,6 +62,7 @@ async function openForecast() {
 
 describe('business intelligence dashboard', () => {
   beforeEach(() => { vi.restoreAllMocks(); mockOverview();
+    vi.spyOn(apiClient, 'getBusinessIntelligenceActiveForecastModels').mockResolvedValue(success(activeForecastFixture));
     vi.spyOn(apiClient, 'getForecastModelEvaluation').mockRejectedValue(new Error('Evaluation not part of these LIVE fixtures'));
   });
 
@@ -78,7 +86,7 @@ describe('business intelligence dashboard', () => {
     render(<BusinessIntelligenceDashboard />);
     expect(await screen.findByRole('heading', { name: 'Técnicas analíticas utilizadas' })).toBeTruthy();
     expect(screen.getByText('3 técnicas de Machine Learning y 1 técnica de minería de patrones, elegidas según el problema.')).toBeTruthy();
-    expect(screen.getByText('HistGradientBoostingRegressor')).toBeTruthy();
+    expect(screen.getByText('Ridge Regression')).toBeTruthy();
     expect(screen.getByText('K-Means')).toBeTruthy();
     expect(screen.getByText('Isolation Forest')).toBeTruthy();
     expect(screen.getByText('FP-Growth')).toBeTruthy();
@@ -111,10 +119,30 @@ describe('business intelligence dashboard', () => {
     expect(screen.getByText('Pronóstico 7 días')).toBeTruthy();
     expect(screen.getByText('Pronóstico 14 días')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Pronóstico 28 días/ })).toBeNull();
-    expect(screen.getByText('Media móvil de 28 días')).toBeTruthy();
+    expect(screen.getByText('Media móvil de 28 días (histórico)')).toBeTruthy();
     expect(screen.getByText('Día cerrado sin ventas')).toBeTruthy();
     expect(screen.getByText('Dato faltante')).toBeTruthy();
     expect(screen.getByText('Día parcial')).toBeTruthy();
+  });
+
+  it('shows LIVE Ridge metadata and never substitutes MA28 for the unapproved one-day horizon', async () => {
+    vi.spyOn(apiClient, 'searchBusinessIntelligenceProducts').mockResolvedValue(success({ products: [productOption] }));
+    vi.spyOn(apiClient, 'getBusinessIntelligenceForecast').mockImplementation(async (_sku, days) => success(days === 1
+      ? { ...forecastFixture, mode: 'LIVE', status: 'MODEL_NOT_APPROVED', reasonCode: 'PROMOTION_POLICY_FAILED', method: null,
+        horizonDays: 1, predictionUnits: null, horizons: { '1d': null, '7d': null, '14d': null }, forecastPeriod: { startDate: null, selectedHorizonDays: 1, units: null } }
+      : { ...forecastFixture, mode: 'LIVE', status: 'READY', method: 'RIDGE_REGRESSION', modelFamily: 'RIDGE_REGRESSION',
+        horizonDays: days, modelVersion: 1, featureVersion: 'RIDGE_CAUSAL27_V1', promotionPolicyVersion: 'M6.10A22-PROMOTION-v1',
+        predictionUnits: days === 7 ? 16.25 : 32.5, baselineUnits: 14, forecastPeriod: { startDate: '2026-10-14', selectedHorizonDays: days, units: days === 7 ? 16.25 : 32.5 },
+        horizons: { '1d': null, '7d': days === 7 ? 16.25 : null, '14d': days === 14 ? 32.5 : null } }));
+    render(<BusinessIntelligenceDashboard />);
+    await openForecast();
+    expect(await screen.findByText('Machine Learning Ridge')).toBeTruthy();
+    expect(screen.getByText('Modelo v1')).toBeTruthy();
+    expect(await screen.findByText(/Baseline estadístico MA28/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Pronóstico 1 día/ }));
+    expect(await screen.findByText('Este horizonte de 1 día no tiene un modelo aprobado.')).toBeTruthy();
+    expect(screen.getByText(/No se sustituye por el baseline/)).toBeTruthy();
+    expect(screen.queryByText(/Baseline estadístico MA28/)).toBeNull();
   });
 
   it('renders cold start without forecast numbers or a fake forecast line', async () => {

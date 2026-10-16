@@ -489,7 +489,8 @@ def ridge_live_forecast(*, dataset: Any, live: LiveV3Context, business_id: str,
                                        scenario_id=scenario_id, sku=sku, horizon_days=horizon_days)
         prediction = score_ridge(features, artifact)
     except LiveRidgeError as error:
-        status = error.code if error.code in {"INSUFFICIENT_HISTORY", "FEATURE_UNAVAILABLE", "PRODUCT_NOT_FOUND"} else "MODEL_UNAVAILABLE"
+        status = {"INSUFFICIENT_HISTORY": "INSUFFICIENT_HISTORY", "FEATURE_UNAVAILABLE": "FEATURE_UNAVAILABLE",
+                  "PRODUCT_NOT_FOUND": "FEATURE_UNAVAILABLE"}.get(error.code, "MODEL_UNAVAILABLE")
         return {**common, "status": status, "reasonCode": error.code,
                 "predictionUnits": None, "modelFamily": MODEL_FAMILY, "recipeId": RECIPE_ID,
                 "modelVersion": envelope.get("metadata", {}).get("modelVersion"),

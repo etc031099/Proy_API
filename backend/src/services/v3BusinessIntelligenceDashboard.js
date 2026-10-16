@@ -29,9 +29,10 @@ const safeError = (error, status = 503) => {
   return { code, httpStatus, message };
 };
 
-const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, clock = () => new Date() } = {}) => {
+const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, forecastRegistryService, clock = () => new Date() } = {}) => {
   const service = intelligenceService || createV3IntelligenceService({ models, clock });
   const getModels = () => models || require('../models');
+  const registry = forecastRegistryService || require('./forecastModelRegistryService').createForecastModelRegistryService();
   const loadCatalogProducts = async (businessId, skus, fields) => {
     if (!skus.length) return new Map();
     const rows = await getModels().Product.find({ businessId, scenarioId: V3.scenarioId, isActive: true, sku: { $in: skus } })
@@ -55,11 +56,12 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, cl
     }
     return { authenticated, binding, asOf };
   };
-  const execute = (context, skillId, args = {}, maxRecords = 20) => service.execute({
+  const execute = (context, skillId, args = {}, maxRecords = 20, trusted = {}) => service.execute({
     context: context.authenticated,
     skill: { id: skillId, maxRecords },
     args: { ...args, asOfDate: context.asOf },
     signal: new AbortController().signal,
+    ...trusted,
   });
   const responseMeta = (result, context, domain) => ({
     asOf: context.asOf, timezone: V3.timezone, mode: domain === 'cross-sell' ? 'FROZEN' : result.metadata?.dataMode || null,
@@ -355,6 +357,21 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, cl
         }), total: rowsResult.data?.total ?? 0 } };
     } catch (error) { return { error: safeError(error) }; }
   };
+  const activeForecastModels = async req => {
+    const prepared = await run(req);
+    if (prepared.error) return { error: prepared.error };
+    const { context } = prepared;
+    try {
+      const registered = await Promise.all([7, 14].map(horizonDays => registry.getActiveModelMetadata({
+        businessId: context.authenticated.businessId, scenarioId: V3.scenarioId, horizonDays,
+      })));
+      return { data: { models: [
+        { horizonDays: 1, status: 'MODEL_NOT_APPROVED', activeModelStatus: 'NOT_APPROVED',
+          reasonCode: 'PROMOTION_POLICY_FAILED', modelFamily: 'RIDGE_REGRESSION', recipeId: 'RIDGE-CAUSAL27' },
+        ...registered.map((metadata, index) => publicForecastModelMetadata(metadata, [7, 14][index])),
+      ] } };
+    } catch (error) { return { error: safeError(error) }; }
+  };
   const product = async (req, type) => {
     const horizon = req.query?.horizonDays === undefined ? 7 : Number(req.query.horizonDays);
     if (type === 'forecast' && ![1, 7, 14].includes(horizon)) {
@@ -369,18 +386,31 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, cl
         .lean().maxTimeMS(3000);
       if (!catalogProduct) { const error = new Error('Product not found'); error.functionalCode = 'PRODUCT_NOT_FOUND';
         return { error: safeError(error) }; }
+      const isLiveRidge = type === 'forecast' && context.asOf > V3.historicalCutoff;
+      let trustedForecastModelEnvelope;
+      if (isLiveRidge && horizon !== 1) {
+        try {
+          const active = await registry.getActiveModelArtifact({ businessId: context.authenticated.businessId,
+            scenarioId: V3.scenarioId, horizonDays: horizon });
+          trustedForecastModelEnvelope = active ? trustedForecastEnvelope(active, {
+            businessId: context.authenticated.businessId, scenarioId: V3.scenarioId, horizonDays: horizon,
+          }) : null;
+        } catch (error) { return { error: safeError(error) }; }
+      }
       const args = type === 'forecast'
         ? { mode: 'detail', productRef: sku, horizonDays: horizon, includeObservedSeries: true }
         : { mode: 'detail', productRef: sku };
-      const result = await execute(context, type === 'forecast' ? 'get_product_forecast' : 'get_inventory_intelligence', args);
+      const result = await execute(context, type === 'forecast' ? 'get_product_forecast' : 'get_inventory_intelligence', args, 20,
+        isLiveRidge ? { trustedForecastModelEnvelope, useLiveRidge: true } : {});
       if (result.status === 'NO_DATA' || !result.data?.items?.length) {
+        if (isLiveRidge) return { data: emptyLiveRidgeResponse(context, productIdentityFor(catalogProduct, sku), horizon,
+          result.metadata || {}) };
         return { data: { status: 'NOT_AVAILABLE', asOf: context.asOf, timezone: V3.timezone,
           mode: result.metadata?.dataMode || null, reason: 'INSUFFICIENT_HISTORY', product: { sku } } };
       }
       const row = result.data.items[0];
-      const productIdentity = { sku, name: catalogProduct.name || row.productName || row.name || sku,
-        presentation: catalogProduct.presentation || null, brand: catalogProduct.brand || null,
-        size: catalogProduct.sizeValue == null ? null : { value: catalogProduct.sizeValue, unit: catalogProduct.sizeUnit || null } };
+      const productIdentity = productIdentityFor(catalogProduct, sku, row);
+      if (type === 'forecast' && isLiveRidge) return { data: liveRidgeResponse(row, context, productIdentity, horizon, result.metadata || {}) };
       if (type === 'forecast') return { data: { status: row.status === 'READY' ? 'READY' : row.status,
         asOf: context.asOf, timezone: V3.timezone, mode: result.metadata.dataMode,
         updatedAt: result.metadata.updatedAt || null, dataThrough: result.metadata.dataThrough || null,
@@ -448,11 +478,77 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, cl
       { signal: new AbortController().signal, startDate, endDate, limit }) }; }
     catch (error) { return { error: safeError(error) }; }
   };
-  return Object.freeze({ revision, summary, inventory, sales, customers, customer, suppliers, supplier, associations, productRelated, health, forecastEvaluation, customerClustering, salesAnomalies,
+  return Object.freeze({ revision, summary, inventory, sales, customers, customer, suppliers, supplier, associations, productRelated, health, forecastEvaluation, activeForecastModels, customerClustering, salesAnomalies,
     forecast: req => product(req, 'forecast'), productInventory: req => product(req, 'inventory') });
 };
 
 const finiteOrNull = value => Number.isFinite(value) ? value : null;
+function productIdentityFor(catalogProduct, sku, row = {}) {
+  return { sku, name: catalogProduct.name || row.productName || row.name || sku,
+    presentation: catalogProduct.presentation || null, brand: catalogProduct.brand || null,
+    size: catalogProduct.sizeValue == null ? null : { value: catalogProduct.sizeValue, unit: catalogProduct.sizeUnit || null } };
+}
+function publicForecastModelMetadata(metadata, horizonDays) {
+  if (!metadata || metadata.status !== 'ACTIVE') return { horizonDays, status: 'MODEL_UNAVAILABLE',
+    activeModelStatus: 'NONE', reasonCode: 'ACTIVE_MODEL_NOT_FOUND', modelFamily: null, recipeId: null,
+    modelVersion: null, trainedAt: null, trainedDataVersion: null, dataCutoff: null,
+    featureVersion: null, promotionPolicyVersion: null };
+  return { horizonDays, status: 'ACTIVE', activeModelStatus: 'ACTIVE', modelFamily: metadata.modelFamily,
+    recipeId: metadata.recipeId, modelVersion: metadata.modelVersion,
+    trainedAt: metadata.trainedAt instanceof Date ? metadata.trainedAt.toISOString() : metadata.trainedAt || null,
+    trainedDataVersion: metadata.trainedDataVersion, dataCutoff: metadata.dataCutoff,
+    featureVersion: metadata.featureVersion, promotionPolicyVersion: metadata.promotionPolicyVersion,
+    metrics: { wape: finiteOrNull(metadata.globalWape), mae: finiteOrNull(metadata.globalMae),
+      bias: finiteOrNull(metadata.globalBias) } };
+}
+function trustedForecastEnvelope(active, scope) {
+  const metadata = active?.metadata, bytes = active?.artifactData;
+  if (!metadata || !Buffer.isBuffer(bytes) || !bytes.length || bytes.length > 262_144
+      || metadata.status !== 'ACTIVE' || metadata.businessId !== scope.businessId
+      || metadata.scenarioId !== scope.scenarioId || metadata.horizonDays !== scope.horizonDays) {
+    const error = new Error('Active model artifact does not match the requested scope.');
+    error.functionalCode = 'ARTIFACT_UNAVAILABLE'; throw error;
+  }
+  const fields = ['businessId', 'scenarioId', 'horizonDays', 'modelFamily', 'recipeId', 'modelVersion',
+    'status', 'trainedAt', 'trainedDataVersion', 'dataCutoff', 'featureVersion', 'featureHash',
+    'promotionPolicyVersion', 'promotionPolicyHash', 'artifactHash', 'artifactBytes'];
+  return { metadata: Object.fromEntries(fields.map(key => [key,
+    metadata[key] instanceof Date ? metadata[key].toISOString() : metadata[key]])),
+    artifactDataBase64: bytes.toString('base64') };
+}
+function liveRidgeResponse(row, context, product, horizonDays, metadata) {
+  const trainedDataVersion = typeof row.trainedDataVersion === 'string' ? row.trainedDataVersion : null;
+  const dataVersion = typeof row.dataVersion === 'string' ? row.dataVersion : metadata.dataVersion || null;
+  const isTrainingPending = dataVersion && trainedDataVersion
+    ? decimalVersionGreater(dataVersion, trainedDataVersion) : null;
+  const prediction = row.status === 'READY' ? finiteOrNull(row.predictionUnits) : null;
+  return { status: row.status, reasonCode: row.reasonCode || null, horizonDays,
+    predictionUnits: prediction, targetDefinition: row.targetDefinition || null,
+    forecastStartDate: row.forecastStartDate || null, forecastEndDate: row.forecastEndDate || null,
+    observationsThrough: row.observationsThrough || null, modelFamily: row.modelFamily || null,
+    recipeId: row.recipeId || null, modelVersion: Number.isSafeInteger(row.modelVersion) ? row.modelVersion : null,
+    trainedAt: row.trainedAt || null, trainedDataVersion, dataCutoff: row.dataCutoff || null,
+    featureVersion: row.featureVersion || null, promotionPolicyVersion: row.promotionPolicyVersion || null,
+    activeModelStatus: row.activeModelStatus || 'NONE', dataVersion,
+    snapshotHash: typeof row.snapshotHash === 'string' ? row.snapshotHash : metadata.snapshotHash || null,
+    isTrainingPending, baselineUnits: finiteOrNull(row.baselineUnits),
+    statusAvailability: row.status === 'READY' ? 'AVAILABLE' : row.status,
+    asOf: context.asOf, timezone: V3.timezone, mode: 'LIVE', updatedAt: metadata.updatedAt || null,
+    dataThrough: metadata.dataThrough || null, product,
+    method: row.modelFamily || null, observationCutoff: row.observationsThrough || null,
+    horizons: { '1d': horizonDays === 1 ? prediction : null, '7d': horizonDays === 7 ? prediction : null,
+      '14d': horizonDays === 14 ? prediction : null },
+    observedSeries: Array.isArray(row.observedSeries) ? row.observedSeries : [],
+    forecastPeriod: { startDate: row.forecastStartDate || null, selectedHorizonDays: horizonDays, units: prediction } };
+}
+function emptyLiveRidgeResponse(context, product, horizonDays, metadata) {
+  return liveRidgeResponse({ status: 'MODEL_UNAVAILABLE', reasonCode: 'FORECAST_RESULT_MISSING',
+    dataVersion: metadata.dataVersion, snapshotHash: metadata.snapshotHash }, context, product, horizonDays, metadata);
+}
+function decimalVersionGreater(left, right) {
+  if (!/^(0|[1-9]\d*)$/.test(left) || !/^(0|[1-9]\d*)$/.test(right)) return null;
+  return left.length !== right.length ? left.length > right.length : left > right;
+}
 const parseLimit = value => value === undefined ? 20 : /^\d{1,2}$/.test(String(value)) && Number(value) >= 1 && Number(value) <= 20 ? Number(value) : null;
 const parseOffset = value => value === undefined ? 0 : /^\d{1,5}$/.test(String(value)) && Number(value) <= 10000 ? Number(value) : null;
 const addDays = (value, amount) => { const date = new Date(`${value}T00:00:00.000Z`); date.setUTCDate(date.getUTCDate() + amount); return date.toISOString().slice(0, 10); };

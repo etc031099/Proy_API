@@ -45,16 +45,24 @@ test('sales parallel reads stay bounded, ordered and share one request context',
   assert.deepEqual(result.data.series.map(row => row.date), ['2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11', '2026-10-12', '2026-10-13', '2026-10-14']);
   assert.ok(result.data.series.every(row => row.revenue.value === 12 && row.units === 2));
 });
-const makeDashboard = ({ fail, partial = false, productPresent = true, supplierNoHistory = false,
+const makeDashboard = ({ fail, partial = false, productPresent = true, supplierNoHistory = false, activeModelMissing = false, forecastFeatureUnavailable = false,
   crossSellItems = [{ antecedentSkus: ['SKU-1'], consequentSkus: ['SKU-2'], recommendedSku: 'SKU-2',
     recommendedProduct: 'Producto dos', ticketCount: 32,
     support: .003, confidence: .4, lift: 1.8, stability: { status: 'STABLE' } }] } = {}) => {
   const calls = [];
+  const registryCalls = [];
+  const forecastRegistryService = {
+    async getActiveModelMetadata(scope) { registryCalls.push({ kind: 'metadata', ...scope });
+      return activeModelMissing ? null : modelMetadata(scope.horizonDays); },
+    async getActiveModelArtifact(scope) { registryCalls.push({ kind: 'artifact', ...scope });
+      return activeModelMissing ? null : { metadata: modelMetadata(scope.horizonDays), artifactData: Buffer.from('ridge-fixture') }; }
+  };
   const intelligenceService = {
     async resolveContext(context) { calls.push({ kind: 'context', businessId: context.businessId });
       return { businessId: V3.businessId, operationalDate: '2026-10-14' }; },
     async execute(invocation) {
-      calls.push({ kind: invocation.skill.id, context: invocation.context, args: invocation.args });
+      calls.push({ kind: invocation.skill.id, context: invocation.context, args: invocation.args,
+        useLiveRidge: invocation.useLiveRidge, trustedForecastModelEnvelope: invocation.trustedForecastModelEnvelope });
       if (fail) { const error = new Error('private upstream error'); error.functionalCode = fail; throw error; }
       const metadata = { dataMode: 'LIVE', updatedAt: '2026-10-14T18:00:00.000Z', dataThrough: '2026-10-14T17:55:00.000Z' };
       switch (invocation.skill.id) {
@@ -101,7 +109,27 @@ const makeDashboard = ({ fail, partial = false, productPresent = true, supplierN
             customers: { atRiskCount: 4, freshness: { status: 'LIVE' }, alerts: [] }, suppliers: { pending: 4, freshness: { status: 'LIVE' }, alerts: [] },
             forecast: { knownCount: 80, freshness: { status: 'LIVE' }, alerts: [] }, marketBasket: { available: true,
               freshness: { mode: 'FROZEN', cutoff: '2026-10-12' }, alerts: [] } }, alerts: [] } };
-        case 'get_product_forecast': return { status: 'READY', metadata, data: { items: [{ sku: 'SKU-1', productName: 'Producto uno',
+        case 'get_product_forecast': if (invocation.useLiveRidge) {
+          const days = invocation.args.horizonDays;
+          const hasActive = days === 1 || Boolean(invocation.trustedForecastModelEnvelope);
+          const rowStatus = days === 1 ? 'MODEL_NOT_APPROVED' : forecastFeatureUnavailable ? 'FEATURE_UNAVAILABLE'
+            : hasActive ? 'READY' : 'MODEL_UNAVAILABLE';
+          return { status: 'READY', metadata, data: { items: [{ sku: 'SKU-1', productName: 'Producto uno',
+            status: rowStatus,
+            reasonCode: days === 1 ? 'PROMOTION_POLICY_FAILED' : rowStatus === 'FEATURE_UNAVAILABLE' ? 'FEATURE_UNAVAILABLE'
+              : hasActive ? null : 'ACTIVE_MODEL_NOT_FOUND',
+            horizonDays: days, predictionUnits: rowStatus !== 'READY' ? null : days === 7 ? 16.25 : 32.5,
+            modelFamily: days === 1 || !hasActive ? 'RIDGE_REGRESSION' : 'RIDGE_REGRESSION', recipeId: 'RIDGE-CAUSAL27',
+            targetDefinition: 'effective_units_sold_cumulative_t_plus_1_through_t_plus_h',
+            forecastStartDate: '2026-10-14', forecastEndDate: days === 1 ? '2026-10-14' : `2026-10-${days === 7 ? '20' : '27'}`,
+            observationsThrough: '2026-10-13', featureVersion: 'RIDGE_CAUSAL27_V1', promotionPolicyVersion: 'M6.10A22-PROMOTION-v1',
+            modelVersion: hasActive && days !== 1 ? 1 : null, trainedAt: hasActive ? '2026-10-15T10:00:00.000Z' : null,
+            trainedDataVersion: hasActive ? '0' : null, dataCutoff: hasActive ? '2026-10-13' : null,
+            activeModelStatus: days === 1 ? 'NOT_APPROVED' : hasActive ? 'ACTIVE' : 'NONE',
+            dataVersion: '1', snapshotHash: 'a'.repeat(64), baselineUnits: days === 1 ? null : days === 7 ? 14 : 28,
+            observedSeries: [{ date: '2026-10-13', units: 0, status: 'ZERO' }] }] } };
+        }
+          return { status: 'READY', metadata: { ...metadata, dataMode: 'HISTORICAL' }, data: { items: [{ sku: 'SKU-1', productName: 'Producto uno',
           status: 'READY', observationsThrough: '2026-10-13', expectedUnitsNext1d: 2.32, expectedUnitsNext7d: 16.25,
           expectedUnitsNext14d: 32.5, observedSeries: [{ date: '2026-10-13', units: 0, status: 'ZERO' }], forecastStartDate: '2026-10-14' }] } };
         default: throw new Error('unexpected skill');
@@ -116,8 +144,17 @@ const makeDashboard = ({ fail, partial = false, productPresent = true, supplierN
       return [{ sku: 'SKU-1', name: 'Producto uno 500 g', presentation: 'Bolsa' }];
     } })
   } };
-  return { service: createV3BusinessIntelligenceDashboard({ models, intelligenceService }), calls };
+  return { service: createV3BusinessIntelligenceDashboard({ models, intelligenceService, forecastRegistryService }), calls, registryCalls };
 };
+
+function modelMetadata(horizonDays) {
+  return { businessId: V3.businessId, scenarioId: V3.scenarioId, horizonDays, status: 'ACTIVE',
+    modelFamily: 'RIDGE_REGRESSION', recipeId: 'RIDGE-CAUSAL27', modelVersion: 1,
+    trainedAt: new Date('2026-10-15T10:00:00.000Z'), trainedDataVersion: '0', dataCutoff: '2026-10-13',
+    featureVersion: 'RIDGE_CAUSAL27_V1', featureHash: 'b'.repeat(64), promotionPolicyVersion: 'M6.10A22-PROMOTION-v1',
+    promotionPolicyHash: 'c'.repeat(64), artifactHash: 'd'.repeat(64), artifactBytes: Buffer.byteLength('ridge-fixture'),
+    globalWape: 0.2, globalMae: 1.4, globalBias: -0.03 };
+}
 
 test('dashboard summary preserves genuine zero sales and unavailable/partial margin as null', async () => {
   for (const partial of [false, true]) {
@@ -143,15 +180,57 @@ test('dashboard summary derives tenant only from the authenticated request and s
   assert.ok(executions.every(row => row.context.businessId === V3.businessId));
 });
 
-test('forecast contract returns 1/7/14 totals and certified series; 28d is rejected', async () => {
-  const { service } = makeDashboard();
+test('LIVE forecast uses exact ACTIVE Ridge artifact for 7/14; horizon 1 is not approved and 28d is rejected', async () => {
+  const { service, calls, registryCalls } = makeDashboard();
   const { data } = await service.forecast(request({ horizonDays: '14' }, { sku: 'SKU-1' }));
-  assert.equal(data.horizons['1d'], 2.32);
-  assert.equal(data.forecastPeriod.units, 32.5);
+  assert.equal(data.horizons['1d'], null);
+  assert.equal(data.horizons['14d'], 32.5);
+  assert.equal(data.method, 'RIDGE_REGRESSION');
+  assert.equal(data.modelVersion, 1);
+  assert.equal(data.baselineUnits, 28);
   assert.equal(data.forecastPeriod.selectedHorizonDays, 14);
   assert.equal(data.observedSeries[0].status, 'ZERO');
   assert.equal(data.product.presentation, 'Bolsa');
+  const seven = await service.forecast(request({ horizonDays: '7' }, { sku: 'SKU-1' }));
+  assert.equal(seven.data.horizons['7d'], 16.25);
+  assert.equal(registryCalls.filter(row => row.kind === 'artifact').length, 2);
+  const one = await service.forecast(request({ horizonDays: '1' }, { sku: 'SKU-1' }));
+  assert.equal(one.data.status, 'MODEL_NOT_APPROVED');
+  assert.equal(one.data.horizons['1d'], null);
+  assert.equal(one.data.baselineUnits, null);
+  assert.equal(registryCalls.filter(row => row.kind === 'artifact').length, 2, 'one day must not read a registry artifact');
+  assert.equal(calls.filter(row => row.kind === 'get_product_forecast' && row.useLiveRidge).length, 3);
   assert.equal((await service.forecast(request({ horizonDays: '28' }, { sku: 'SKU-1' }))).error.code, 'UNSUPPORTED_HORIZON');
+});
+
+test('LIVE forecast without an ACTIVE artifact fails closed and active model metadata is safely scoped', async () => {
+  const { service, registryCalls } = makeDashboard({ activeModelMissing: true });
+  const result = await service.forecast(request({ horizonDays: '7' }, { sku: 'SKU-1' }));
+  assert.equal(result.data.status, 'MODEL_UNAVAILABLE');
+  assert.equal(result.data.horizons['7d'], null);
+  assert.equal(result.data.baselineUnits, 14);
+  const active = await service.activeForecastModels(request());
+  assert.deepEqual(active.data.models.map(row => row.status), ['MODEL_NOT_APPROVED', 'MODEL_UNAVAILABLE', 'MODEL_UNAVAILABLE']);
+  assert.ok(active.data.models.every(row => !('artifactData' in row) && !('artifactHash' in row)));
+  assert.ok(registryCalls.every(row => row.businessId === V3.businessId && row.scenarioId === V3.scenarioId));
+});
+
+test('LIVE forecast with unavailable Ridge features returns an explicit null prediction', async () => {
+  const { service } = makeDashboard({ forecastFeatureUnavailable: true });
+  const result = await service.forecast(request({ horizonDays: '7' }, { sku: 'SKU-1' }));
+  assert.equal(result.data.status, 'FEATURE_UNAVAILABLE');
+  assert.equal(result.data.horizons['7d'], null);
+  assert.equal(result.data.predictionUnits, null);
+  assert.equal(result.data.modelVersion, 1);
+});
+
+test('historical forecast remains MA28 and does not read the active Ridge registry', async () => {
+  const { service, registryCalls } = makeDashboard();
+  const result = await service.forecast(request({ horizonDays: '14', asOf: V3.historicalCutoff }, { sku: 'SKU-1' }));
+  assert.equal(result.data.mode, 'HISTORICAL');
+  assert.equal(result.data.method, 'MOVING_AVERAGE_28');
+  assert.equal(result.data.horizons['14d'], 32.5);
+  assert.equal(registryCalls.length, 0);
 });
 
 test('inventory detail exposes approved values without inventing preventive semantics', async () => {
@@ -199,7 +278,7 @@ test('snapshot and tenant failures are mapped to safe messages without internal 
 test('dashboard routes apply authentication before business access and analytics handlers', async () => {
   const router = createBusinessIntelligenceDashboardRoutes({
     service: Object.fromEntries(['revision', 'summary', 'sales', 'customers', 'customer', 'suppliers', 'supplier', 'associations', 'productRelated',
-      'health', 'inventory', 'forecast', 'productInventory'].map(name => [name, async () => ({ data: {} })]))
+      'health', 'inventory', 'forecast', 'activeForecastModels', 'productInventory'].map(name => [name, async () => ({ data: {} })]))
   });
   assert.equal(router.stack[0].handle, authenticate);
   let status, body;
@@ -210,6 +289,8 @@ test('dashboard routes apply authentication before business access and analytics
   const headers = {};
   res.set = (key, value) => { headers[key] = value; return res; };
   await router.stack.find(layer => layer.route?.path === '/revision').route.stack[0].handle(request(), res);
+  assert.equal(headers['Cache-Control'], 'no-store');
+  await router.stack.find(layer => layer.route?.path === '/forecast/models/active').route.stack[0].handle(request(), res);
   assert.equal(headers['Cache-Control'], 'no-store');
 });
 
