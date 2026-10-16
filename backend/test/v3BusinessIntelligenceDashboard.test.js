@@ -137,25 +137,34 @@ const makeDashboard = ({ fail, partial = false, productPresent = true, supplierN
       }
     }
   };
-  const product = { name: 'Producto uno 500 g', presentation: 'Bolsa', brand: 'Demo', sizeValue: 500, sizeUnit: 'g' };
+  const product = { sku: 'SKU-1', name: 'Producto uno 500 g', presentation: 'Bolsa', brand: 'Demo', sizeValue: 500, sizeUnit: 'g' };
+  const registryRead = value => ({ select() { return this; }, read() { return this; }, readConcern() { return this; },
+    lean() { return this; }, maxTimeMS: async () => value });
+  const artifactBytes = Buffer.from('ridge-fixture');
   const models = { Product: {
-    findOne: () => ({ select() { return this; }, lean() { return this; }, maxTimeMS: async () => productPresent ? product : null }),
+    findOne: () => ({ select() { return this; }, sort() { return this; }, lean() { return this; }, maxTimeMS: async () => productPresent ? product : null }),
     find: filter => ({ select() { return this; }, lean() { return this; }, maxTimeMS: async () => {
       assert.equal(filter.businessId, V3.businessId);
       return [{ sku: 'SKU-1', name: 'Producto uno 500 g', presentation: 'Bolsa' }];
     } })
-  } };
-  return { service: createV3BusinessIntelligenceDashboard({ models, intelligenceService, forecastRegistryService }), calls, registryCalls };
+  }, ForecastModelRegistry: { findOne: filter => registryRead(activeModelMissing ? null
+    : { activeArtifactId: `artifact-${filter.horizonDays}`, activeModelVersion: 1 }) },
+  ForecastModelArtifact: { findOne: filter => registryRead(activeModelMissing ? null : ({ ...modelMetadata(Number(String(filter._id).split('-').at(-1))),
+    _id: `artifact-${filter.horizonDays}`, artifactBytes: artifactBytes.length,
+    artifactHash: require('node:crypto').createHash('sha256').update(artifactBytes).digest('hex'), artifactData: artifactBytes })) } };
+  return { service: createV3BusinessIntelligenceDashboard({ models, intelligenceService, forecastRegistryService }), calls, registryCalls, models };
 };
 
 function modelMetadata(horizonDays) {
   return { businessId: V3.businessId, scenarioId: V3.scenarioId, horizonDays, status: 'ACTIVE',
     modelFamily: 'RIDGE_REGRESSION', recipeId: 'RIDGE-CAUSAL27', modelVersion: 1,
     trainedAt: new Date('2026-10-15T10:00:00.000Z'), trainedDataVersion: '0', dataCutoff: '2026-10-13',
-    featureVersion: 'RIDGE_CAUSAL27_V1', featureHash: 'b'.repeat(64), promotionPolicyVersion: 'M6.10A22-PROMOTION-v1',
+    featureVersion: 'RIDGE_CAUSAL27_V1', featureHash: '84e928e62343eb9d9b7d9e0dc8843ea8e9395ae135997287f5b7ea3a02a860f5', promotionPolicyVersion: 'M6.10A22-PROMOTION-v1',
     promotionPolicyHash: 'c'.repeat(64), artifactHash: 'd'.repeat(64), artifactBytes: Buffer.byteLength('ridge-fixture'),
     globalWape: 0.2, globalMae: 1.4, globalBias: -0.03 };
 }
+const diagnosticRead = value => ({ select() { return this; }, read() { return this; }, readConcern() { return this; },
+  lean() { return this; }, maxTimeMS: async () => value });
 
 test('dashboard summary preserves genuine zero sales and unavailable/partial margin as null', async () => {
   for (const partial of [false, true]) {
@@ -212,8 +221,95 @@ test('LIVE forecast without an ACTIVE artifact fails closed and active model met
   assert.equal(result.data.baselineUnits, 14);
   const active = await service.activeForecastModels(request());
   assert.deepEqual(active.data.models.map(row => row.status), ['MODEL_NOT_APPROVED', 'MODEL_UNAVAILABLE', 'MODEL_UNAVAILABLE']);
+  assert.equal(active.data.forecastServing.scenarioId, V3.scenarioId);
+  assert.equal(active.data.forecastServing.horizons['1'].reasonCode, 'PROMOTION_POLICY_FAILED');
+  assert.equal(active.data.forecastServing.horizons['7'].reasonCode, 'REGISTRY_NOT_FOUND');
+  assert.equal(active.data.models[1].registryFound, false);
+  assert.equal(active.data.models[1].mlLoadStatus, 'NOT_CHECKED');
   assert.ok(active.data.models.every(row => !('artifactData' in row) && !('artifactHash' in row)));
   assert.ok(registryCalls.every(row => row.businessId === V3.businessId && row.scenarioId === V3.scenarioId));
+});
+
+test('active forecast diagnostics distinguish empty registry, missing pointer and missing artifact without writes', async () => {
+  const cases = [
+    { label: 'registry missing', registry: null, artifact: null, reason: 'REGISTRY_NOT_FOUND' },
+    { label: 'pointer missing', registry: { activeArtifactId: null, activeModelVersion: null }, artifact: null, reason: 'ACTIVE_POINTER_MISSING' },
+    { label: 'artifact missing', registry: { activeArtifactId: 'a7', activeModelVersion: 1 }, artifact: null, reason: 'ACTIVE_ARTIFACT_NOT_FOUND' },
+  ];
+  for (const scenario of cases) {
+    const { service, models } = makeDashboard({ activeModelMissing: true });
+    let writes = 0;
+    models.ForecastModelRegistry.findOne = () => diagnosticRead(scenario.registry);
+    models.ForecastModelArtifact.findOne = () => diagnosticRead(scenario.artifact);
+    for (const model of [models.ForecastModelRegistry, models.ForecastModelArtifact]) {
+      model.create = model.updateOne = model.findOneAndUpdate = () => { writes++; throw new Error('diagnostic must remain read-only'); };
+    }
+    const { data } = await service.activeForecastModels(request({ businessId: 'ATTACKER-QUERY-MUST-BE-IGNORED' }));
+    assert.equal(data.models[1].reasonCode, scenario.reason, scenario.label);
+    assert.equal(data.models[1].mlLoadStatus, 'NOT_CHECKED');
+    assert.equal(writes, 0);
+  }
+});
+
+test('active forecast diagnostics classify artifact status, feature contract and integrity safely', async () => {
+  const cases = [
+    { status: 'CANDIDATE', featureVersion: 'RIDGE_CAUSAL27_V1', featureHash: '84e928e62343eb9d9b7d9e0dc8843ea8e9395ae135997287f5b7ea3a02a860f5', reason: 'ACTIVE_ARTIFACT_NOT_ACTIVE' },
+    { status: 'ACTIVE', featureVersion: 'OTHER', featureHash: '84e928e62343eb9d9b7d9e0dc8843ea8e9395ae135997287f5b7ea3a02a860f5', reason: 'FEATURE_CONTRACT_MISMATCH' },
+    { status: 'ACTIVE', featureVersion: 'RIDGE_CAUSAL27_V1', featureHash: '84e928e62343eb9d9b7d9e0dc8843ea8e9395ae135997287f5b7ea3a02a860f5', badHash: true, reason: 'ARTIFACT_HASH_MISMATCH' },
+  ];
+  for (const scenario of cases) {
+    const { service, models } = makeDashboard({ activeModelMissing: true });
+    const bytes = Buffer.from('diagnostic-artifact');
+    const artifact = { businessId: V3.businessId, scenarioId: V3.scenarioId, horizonDays: 7, modelFamily: 'RIDGE_REGRESSION',
+      recipeId: 'RIDGE-CAUSAL27', modelVersion: 1, status: scenario.status, trainedDataVersion: '0', dataCutoff: '2026-10-15',
+      featureVersion: scenario.featureVersion, featureHash: scenario.featureHash, promotionPolicyVersion: 'M6.10A22-PROMOTION-v1',
+      artifactBytes: bytes.length, artifactHash: scenario.badHash ? '0'.repeat(64)
+        : require('node:crypto').createHash('sha256').update(bytes).digest('hex'), artifactData: bytes };
+    models.ForecastModelRegistry.findOne = () => diagnosticRead({ activeArtifactId: 'artifact-7', activeModelVersion: 1 });
+    models.ForecastModelArtifact.findOne = () => diagnosticRead(artifact);
+    const { data } = await service.activeForecastModels(request());
+    assert.equal(data.models[1].reasonCode, scenario.reason);
+    assert.equal(data.models[1].artifactFound, true);
+    assert.equal(data.models[1].artifactHashValid, scenario.badHash ? false : true);
+    assert.equal(JSON.stringify(data).includes('diagnostic-artifact'), false);
+    assert.equal(JSON.stringify(data).includes(artifact.artifactHash), false);
+  }
+});
+
+test('valid ACTIVE forecast diagnostics execute a READ serving check and return only safe metadata', async () => {
+  const { service, models } = makeDashboard();
+  const { data } = await service.activeForecastModels(request());
+  assert.equal(data.models[0].status, 'MODEL_NOT_APPROVED');
+  assert.equal(data.models[1].status, 'ACTIVE', JSON.stringify(data.models[1]));
+  assert.equal(data.models[1].reasonCode, 'MODEL_READY');
+  assert.equal(data.models[1].mlLoadStatus, 'READY');
+  assert.equal(data.models[1].mlLoadReasonCode, null);
+  assert.equal(data.forecastServing.dataVersion, '1');
+  assert.equal(data.forecastServing.observationsClosedThrough, '2026-10-13');
+  assert.equal(data.models[1].featureHashMatches, true);
+  assert.equal(Object.hasOwn(data.models[1], 'artifactData'), false);
+  assert.equal(Object.hasOwn(data.models[1], 'artifactHash'), false);
+  assert.equal(JSON.stringify(data).includes('ridge-fixture'), false);
+  assert.equal(JSON.stringify(data).includes('secret'), false);
+});
+
+test('health diagnostic reports dependencies and sanitizes failures and timeout', async () => {
+  const partial = await makeDashboard().service.healthDiagnostic(request({ period: 'TODAY' }));
+  assert.equal(partial.data.httpStatus, 200);
+  assert.equal(partial.data.dependencyStatus.inventory, 'READY');
+  assert.equal(partial.data.dependencyStatus.healthAssembly, 'PARTIAL');
+  const failed = await makeDashboard({ fail: 'PRIVATE_MONGO_URI' }).service.healthDiagnostic(request());
+  assert.equal(failed.data.httpStatus, 503);
+  assert.equal(failed.data.dependencyStatus.healthAssembly, 'FAILED');
+  assert.equal(failed.data.reasonCode, 'HEALTH_DEPENDENCY_FAILED');
+  assert.doesNotMatch(JSON.stringify(failed.data), /PRIVATE|mongo|uri|stack/i);
+  const timeoutService = createV3BusinessIntelligenceDashboard({ diagnosticTimeoutMs: 1,
+    forecastRegistryService: { getActiveModelArtifact: async () => null, getActiveModelMetadata: async () => null },
+    intelligenceService: { resolveContext: async () => ({ operationalDate: '2026-10-14', scenarioId: V3.scenarioId }),
+      execute: () => new Promise(() => {}) } });
+  const timeout = await timeoutService.healthDiagnostic(request());
+  assert.equal(timeout.data.httpStatus, 504);
+  assert.equal(timeout.data.reasonCode, 'HEALTH_DIAGNOSTIC_TIMEOUT');
 });
 
 test('LIVE forecast with unavailable Ridge features returns an explicit null prediction', async () => {
@@ -304,7 +400,7 @@ test('snapshot and tenant failures are mapped to safe messages without internal 
 test('dashboard routes apply authentication before business access and analytics handlers', async () => {
   const router = createBusinessIntelligenceDashboardRoutes({
     service: Object.fromEntries(['revision', 'summary', 'sales', 'customers', 'customer', 'suppliers', 'supplier', 'associations', 'productRelated',
-      'health', 'inventory', 'forecast', 'activeForecastModels', 'productInventory'].map(name => [name, async () => ({ data: {} })]))
+      'health', 'healthDiagnostic', 'inventory', 'forecast', 'activeForecastModels', 'productInventory'].map(name => [name, async () => ({ data: {} })]))
   });
   assert.equal(router.stack[0].handle, authenticate);
   let status, body;
@@ -317,6 +413,8 @@ test('dashboard routes apply authentication before business access and analytics
   await router.stack.find(layer => layer.route?.path === '/revision').route.stack[0].handle(request(), res);
   assert.equal(headers['Cache-Control'], 'no-store');
   await router.stack.find(layer => layer.route?.path === '/forecast/models/active').route.stack[0].handle(request(), res);
+  assert.equal(headers['Cache-Control'], 'no-store');
+  await router.stack.find(layer => layer.route?.path === '/health/diagnostics').route.stack[0].handle(request(), res);
   assert.equal(headers['Cache-Control'], 'no-store');
 });
 

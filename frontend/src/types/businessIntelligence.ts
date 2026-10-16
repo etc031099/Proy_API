@@ -98,9 +98,24 @@ export interface ForecastActiveModel {
   dataCutoff?: string | null;
   featureVersion?: string | null;
   promotionPolicyVersion?: string | null;
+  registryFound?: boolean;
+  activePointerFound?: boolean;
+  artifactFound?: boolean;
+  artifactStatus?: string | null;
+  horizonMatches?: boolean | null;
+  recipeMatches?: boolean | null;
+  featureHashMatches?: boolean | null;
+  artifactHashValid?: boolean | null;
+  mlLoadStatus?: 'READY' | 'FAILED' | 'NOT_CHECKED';
+  mlLoadReasonCode?: string | null;
   metrics?: { wape: number | null; mae: number | null; bias: number | null };
 }
-export interface ForecastActiveModels { models: ForecastActiveModel[]; }
+export interface ForecastActiveModels {
+  models: ForecastActiveModel[];
+  forecastServing?: { businessId: string; scenarioId: string; asOf: string; dataVersion: string | null; observationsClosedThrough: string | null;
+    snapshotStatus: 'AVAILABLE' | 'UNAVAILABLE'; snapshotReasonCode: string | null;
+    horizons: Record<string, { status: string; reasonCode: string | null; mlLoadStatus?: string; mlLoadReasonCode?: string | null }> };
+}
 export interface ProductInventory {
   asOf: string;
   timezone: string;
