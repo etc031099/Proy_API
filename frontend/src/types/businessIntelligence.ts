@@ -116,6 +116,17 @@ export interface ForecastActiveModels {
     snapshotStatus: 'AVAILABLE' | 'UNAVAILABLE'; snapshotReasonCode: string | null;
     horizons: Record<string, { status: string; reasonCode: string | null; mlLoadStatus?: string; mlLoadReasonCode?: string | null }> };
 }
+export interface HealthDiagnostic {
+  httpStatus: number;
+  dependencyStatus: { inventory: string; forecast: string; supplier: string; healthAssembly: string };
+  reasonCode: string | null;
+  elapsedMs: number;
+}
+export interface AuthenticatedDiagnosticResult<T> {
+  httpStatus: number;
+  data?: T;
+  code?: string;
+}
 export interface ProductInventory {
   asOf: string;
   timezone: string;

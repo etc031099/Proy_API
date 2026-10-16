@@ -62,7 +62,9 @@ async function openForecast() {
 
 describe('business intelligence dashboard', () => {
   beforeEach(() => { vi.restoreAllMocks(); mockOverview();
-    vi.spyOn(apiClient, 'getBusinessIntelligenceActiveForecastModels').mockResolvedValue(success(activeForecastFixture));
+    vi.spyOn(apiClient, 'getForecastModelDiagnostics').mockResolvedValue({ httpStatus: 200, data: activeForecastFixture });
+    vi.spyOn(apiClient, 'getHealthDiagnostics').mockResolvedValue({ httpStatus: 200, data: { httpStatus: 200,
+      dependencyStatus: { inventory: 'READY', forecast: 'READY', supplier: 'READY', healthAssembly: 'READY' }, reasonCode: null, elapsedMs: 12 } });
     vi.spyOn(apiClient, 'getForecastModelEvaluation').mockRejectedValue(new Error('Evaluation not part of these LIVE fixtures'));
   });
 

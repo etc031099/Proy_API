@@ -12,6 +12,7 @@ import type { BusinessSummary, ForecastActiveModel, ForecastResponse, Intelligen
 import { ExtendedAnalyticsPanel, type ExtendedTab } from './ExtendedAnalyticsPanel';
 import { ChartCard, MetricInfo, MetricLabel } from './MetricInfo';
 import { ForecastEvaluationPanel } from './ForecastEvaluationPanel';
+import { ForecastDiagnosticsPanel } from './ForecastDiagnosticsPanel';
 import { AnalyticsErrorBoundary } from './AnalyticsErrorBoundary';
 
 type TabKey = 'summary' | 'forecast' | 'inventory' | ExtendedTab;
@@ -126,15 +127,6 @@ export function BusinessIntelligenceDashboard() {
   const retryOverview = () => { apiClient.invalidateIntelligenceReads(); void loadOverview(); };
 
   useEffect(() => {
-    if (tab !== 'forecast') return;
-    let current = true;
-    void apiClient.getBusinessIntelligenceActiveForecastModels().then(response => {
-      if (current) setActiveForecastModels(response.success && response.data ? response.data.models : null);
-    }).catch(() => { if (current) setActiveForecastModels(null); });
-    return () => { current = false; };
-  }, [tab]);
-
-  useEffect(() => {
     const requestId = ++detailsRequest.current;
     setForecast(null); setProductInventory(null); setDetailError(false);
     if (!selected || !['forecast', 'inventory'].includes(tab)) { setDetailState('ready'); return; }
@@ -219,7 +211,7 @@ export function BusinessIntelligenceDashboard() {
       </section>}
       {tab === 'forecast' && <section id="intelligence-panel-forecast" role="tabpanel" aria-labelledby="intelligence-tab-forecast" tabIndex={0} className="mt-4 space-y-6">
         <div><h2 className="text-xl font-semibold">Pronóstico operativo</h2><p className="text-sm text-muted-foreground">Machine Learning Ridge para 7 y 14 días; MA28 se conserva como baseline estadístico.</p></div>
-        <ForecastActiveModelsPanel models={activeForecastModels} />
+        <ForecastDiagnosticsPanel onForecastModelsChange={setActiveForecastModels} />
         <Card><CardContent className="p-5"><ProductPicker selected={selected} onSelect={chooseProduct} /></CardContent></Card>
         {!selected && <EmptyProductState />}
         {selected && detailState === 'loading' && <LoadingDetail label="Cargando predicción…" />}
@@ -252,11 +244,6 @@ function ClassificationChart({ title, counts, colors, help }: { title: string; c
 function LoadingDetail({ label }: { label: string }) { return <Card role="status"><CardContent className="flex min-h-40 items-center justify-center gap-3 p-6"><Loader2 className="h-5 w-5 animate-spin text-primary" aria-hidden="true" />{label}</CardContent></Card>; }
 function RankingTable({ rows, onSelect }: { rows: InventorySummary['items']; onSelect: (row: InventorySummary['items'][number]) => void }) {
   return <Card><CardHeader><CardTitle>Productos que requieren atención</CardTitle><CardDescription>Ranking entregado por la analítica de inventario; selecciona un producto para ver su detalle.</CardDescription></CardHeader><CardContent>{rows.length ? <div className="overflow-x-auto"><table className="w-full min-w-[700px] text-sm"><caption className="sr-only">Ranking de riesgo y reposición</caption><thead><tr className="border-b text-left text-muted-foreground">{['Producto', 'Stock', 'Cobertura', 'Riesgo', 'Reposición', 'Cantidad sugerida'].map(label => <th key={label} scope="col" className="px-3 py-3 font-medium">{label}</th>)}</tr></thead><tbody>{rows.map(row => <tr key={row.sku} className="border-b last:border-0"><td className="px-3 py-3"><button type="button" onClick={() => onSelect(row)} className="text-left font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{row.productName}{row.presentation ? <span className="block text-xs font-normal text-muted-foreground">{row.presentation}</span> : null}<span className="block text-xs font-normal text-muted-foreground">{row.sku}</span></button></td><td className="px-3 py-3">{safeNumber(row.stock)}</td><td className="px-3 py-3">{row.coverageDays === null ? 'No disponible' : `${safeNumber(row.coverageDays, 1)} días`}</td><td className="px-3 py-3"><RiskBadge risk={row.risk} /></td><td className="px-3 py-3">{row.reorderNow === null ? 'No disponible' : row.reorderNow ? 'Sí' : 'No'}</td><td className="px-3 py-3">{row.recommendedQty === null ? 'No disponible' : `${safeNumber(row.recommendedQty)} unidades`}</td></tr>)}</tbody></table></div> : <p className="rounded-md border border-dashed p-5 text-center text-sm text-muted-foreground">El análisis no devolvió productos en el ranking.</p>}</CardContent></Card>;
-}
-function ForecastActiveModelsPanel({ models }: { models: ForecastActiveModel[] | null }) {
-  if (models === null) return <Card role="status"><CardContent className="p-4 text-sm text-muted-foreground">No se pudo consultar el estado de los modelos aprobados.</CardContent></Card>;
-  const label = (model: ForecastActiveModel) => model.horizonDays === 1 ? '1 día' : `${model.horizonDays} días`;
-  return <Card><CardHeader><CardTitle>Modelos operativos</CardTitle><CardDescription>Ridge se utiliza únicamente cuando existe un modelo ACTIVE aprobado; MA28 queda como baseline de comparación.</CardDescription></CardHeader><CardContent className="grid gap-3 sm:grid-cols-3">{models.map(model => <div key={model.horizonDays} className="rounded-lg border p-3"><p className="font-medium">{label(model)}</p><p className="mt-1 text-sm">{model.status === 'ACTIVE' ? 'Ridge activo' : model.status === 'MODEL_NOT_APPROVED' ? 'Sin aprobación para operación' : 'Modelo no disponible'}</p>{model.modelVersion != null && <p className="mt-1 text-xs text-muted-foreground">Versión {model.modelVersion}{model.trainedAt ? ` · Entrenado ${formatDate(model.trainedAt)}` : ''}{model.trainedDataVersion ? ` · Revisión de entrenamiento ${model.trainedDataVersion}` : ''}</p>}{model.dataCutoff && <p className="mt-1 text-xs text-muted-foreground">Corte de entrenamiento: {formatLocalDay(model.dataCutoff)}</p>}{model.featureVersion && <p className="mt-1 text-xs text-muted-foreground">Contrato de features: {model.featureVersion}</p>}{model.promotionPolicyVersion && <p className="mt-1 text-xs text-muted-foreground">Política: {model.promotionPolicyVersion}</p>}{model.metrics && <p className="mt-1 text-xs text-muted-foreground">WAPE {safeNumber(model.metrics.wape, 3)} · MAE {safeNumber(model.metrics.mae, 3)} · sesgo {safeNumber(model.metrics.bias, 3)}</p>}</div>)}</CardContent></Card>;
 }
 function ForecastPanel({ forecast, horizon, setHorizon, activeModels }: { forecast: ForecastResponse; horizon: Horizon; setHorizon: (horizon: Horizon) => void; activeModels: ForecastActiveModel[] | null }) {
   const selectedUnits = forecast.forecastPeriod?.selectedHorizonDays === horizon ? forecast.forecastPeriod.units : null;

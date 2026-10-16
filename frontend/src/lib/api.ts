@@ -2,7 +2,7 @@ import axios, { AxiosInstance, AxiosError } from 'axios';
 import type { ForecastEvaluation } from '@/types/forecastEvaluation';
 import { ApiResponse, DemandForecastResponse, DemoV2RegisterData, DemoV3RegisterData } from '@/types';
 import type { AgentMessageRequest, AgentResponse, AgentConversationList, AgentConversationDetail } from '@/types/agent';
-import type { AnalyticsEnvelope, AssociationsAnalytics, BusinessHealthAnalytics, BusinessSummary, CustomerAnalyticsDetail, CustomersAnalytics, ForecastActiveModels, ForecastResponse, InventorySummary, ProductInventory, ProductOption, RelatedProductAnalytics, SalesAnalytics, SalesPeriod, SupplierAnalyticsDetail, SuppliersAnalytics } from '@/types/businessIntelligence';
+import type { AnalyticsEnvelope, AssociationsAnalytics, AuthenticatedDiagnosticResult, BusinessHealthAnalytics, BusinessSummary, CustomerAnalyticsDetail, CustomersAnalytics, ForecastActiveModels, ForecastResponse, HealthDiagnostic, InventorySummary, ProductInventory, ProductOption, RelatedProductAnalytics, SalesAnalytics, SalesPeriod, SupplierAnalyticsDetail, SuppliersAnalytics } from '@/types/businessIntelligence';
 import type { CustomerClustering } from '@/types/customerClustering';
 import type { SalesAnomalies } from '@/types/salesAnomalies';
 import { IntelligenceReadCache, type IntelligenceRevision } from './intelligenceReadCache';
@@ -58,6 +58,21 @@ class ApiClient {
     if (!session) return load();
     const normalized = Object.entries(params || {}).filter(([, value]) => value !== undefined).sort(([a], [b]) => a.localeCompare(b));
     return this.intelligenceCache.read(JSON.stringify([path, normalized]), load, versioned);
+  }
+  private async diagnosticRead<T>(path: string): Promise<AuthenticatedDiagnosticResult<T>> {
+    try {
+      // Same Axios instance/interceptors as all dashboard requests; validateStatus
+      // keeps 401 visible to this panel rather than triggering the global redirect.
+      const response = await this.instance.get(path, { timeout: 15_000, validateStatus: () => true });
+      const body = response.data as { success?: unknown; data?: T; code?: unknown } | undefined;
+      const code = typeof body?.code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(body.code) ? body.code : undefined;
+      return { httpStatus: response.status,
+        ...(body?.success === true && body.data !== undefined ? { data: body.data } : {}),
+        ...(code ? { code } : {}) };
+    } catch (error) {
+      const status = axios.isAxiosError(error) ? error.response?.status || 0 : 0;
+      return { httpStatus: status, code: status === 401 ? 'SESSION_UNAUTHORIZED' : 'SERVICE_TEMPORARILY_UNAVAILABLE' };
+    }
   }
   private instance: AxiosInstance;
 
@@ -456,6 +471,14 @@ class ApiClient {
 
   async getBusinessIntelligenceActiveForecastModels(): Promise<AnalyticsEnvelope<ForecastActiveModels>> {
     return this.intelligenceRead('/intelligence/forecast/models/active', undefined, false);
+  }
+
+  async getForecastModelDiagnostics(): Promise<AuthenticatedDiagnosticResult<ForecastActiveModels>> {
+    return this.diagnosticRead('/intelligence/forecast/models/active');
+  }
+
+  async getHealthDiagnostics(): Promise<AuthenticatedDiagnosticResult<HealthDiagnostic>> {
+    return this.diagnosticRead('/intelligence/health/diagnostics');
   }
 
   async getForecastModelEvaluation(): Promise<ApiResponse<ForecastEvaluation> & { code?: string }> {
