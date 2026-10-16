@@ -1,0 +1,69 @@
+{
+  "id": "M6.10A22-PROMOTION-v1",
+  "scope": "offline development eligibility; not independent production certification",
+  "status": "FROZEN_BEFORE_REEVALUATION",
+  "horizons": [1, 7, 14],
+  "folds": ["F2", "F3", "VALIDATION"],
+  "baseline": "B3_MEAN_28",
+  "global": {
+    "pooledRelativeWapeImprovementMin": 0.05,
+    "pooledAbsoluteNormalizedBiasMax": 0.10,
+    "pooledMacroMaeRatioMax": 1.10,
+    "positiveImprovementFoldsMin": 2,
+    "latestFoldWapeRatioMax": 1.0,
+    "eachFoldWapeRatioMax": 1.10,
+    "eachFoldAbsoluteNormalizedBiasMax": 0.20,
+    "eachFoldMacroMaeRatioMax": 1.10
+  },
+  "support": {
+    "pooledOriginsMin": 28,
+    "observedUniqueDayUnitsMin": 20,
+    "interpretation": "Reporting support floor, not independent sample size or confidence guarantee; unique-day units from existing A.2 diagnosis, not overlapping target sums."
+  },
+  "categoryAndSegment": {
+    "pooledWapeRatioOrdinaryMax": 1.10,
+    "ordinaryPassGroupFractionMin": 0.80,
+    "ordinaryPassTargetVolumeFractionMin": 0.90,
+    "pooledWapeRatioCatastrophicMax": 1.50,
+    "pooledAbsoluteNormalizedBiasCatastrophicMax": 0.50,
+    "lowDemandMaeExcessMaxPerDay": 0.10,
+    "scope": "category and original demand-segment families evaluated separately; unsupported groups never count as ordinary passes"
+  },
+  "priority": {
+    "membership": "union of top10 lists selected by TRAIN-only revenue in the three folds; evaluate those SKU in all folds",
+    "pooledMaeRatioOrdinaryMax": 1.20,
+    "pooledAbsoluteNormalizedBiasOrdinaryMax": 0.20,
+    "ordinaryPassSkuFractionMin": 0.80,
+    "medianRelativeMaeDegradationMax": 0.0,
+    "pooledMaeRatioCatastrophicMax": 1.50,
+    "pooledAbsoluteNormalizedBiasCatastrophicMax": 0.50,
+    "supportedFoldMaeRatioCatastrophicMax": 1.50,
+    "supportedFoldAbsoluteNormalizedBiasCatastrophicMax": 0.50,
+    "zeroBaselineMaeExcessMaxPerDay": 0.10
+  },
+  "selection": {
+    "primary": "lowest pooled WAPE among quality-eligible causal ML recipes",
+    "nearTieRelativeWapeTolerance": 0.01,
+    "nearTieRule": "among recipes within 1% of best pooled WAPE, fewer fitted estimators, then lower profiled warm p95, artifact bytes, lexical name; unknown timing sorts last",
+    "noEligible": "do not select a rejected model or run further experiments"
+  },
+  "operational": {
+    "newSkuWithoutCertifiedCoverage": "INSUFFICIENT_HISTORY; no artificial forecast",
+    "minimumClosedObservedDaysForExistingFeatureContract": 29,
+    "newSkuAdditionalCondition": "must be covered by a newly accepted artifact/validated inference contract; 29 dates alone do not certify unknown-SKU quality",
+    "coldStartQualityCertified": false,
+    "fitSecondsPerHorizonMax": 60,
+    "isolatedRssMiBMax": 384,
+    "warmP95Batch80MsMax": 500,
+    "artifactBytesPerHorizonMax": 5242880,
+    "bundleCoherence": "must have existing audited evidence or subsequent focal validation; no new predictions/metrics generated here",
+    "failedCandidate": "keep previous ACTIVE; without ACTIVE ML, stay explicitly transitional/not ML-compliant, do not rename MA28",
+    "automaticPromotionImplemented": false
+  },
+  "rationale": {
+    "global": "Retain existing global margins; pool errors rather than arithmetic-average ratios. Paired majority plus latest non-inferiority and per-fold limits prevents a single high-volume fold hiding drift.",
+    "local": "Keep ordinary 10% group and 20% SKU tolerances. Replace unanimity with fixed exception budgets: at least 4/5 groups, 9/10 target volume, 8/10 priority SKU and nonpositive median priority deterioration.",
+    "catastrophic": "An increase of one half in error or signed volume imbalance is a fixed red line above ordinary tolerance, not an estimate optimized to outcomes. These are conservative provisional risk budgets for a synthetic academic scenario, not statistically derived universal constants or verified commercial cost tolerances.",
+    "postSelection": "All outcomes were previously seen. Freeze prevents further outcome-dependent edits but cannot remove selection bias. Eligibility is exploratory; no p-values, confidence or unbiased generalization claims."
+  }
+}

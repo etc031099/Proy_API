@@ -13,6 +13,7 @@ const ForecastModelArtifact = require('./ForecastModelArtifact');
 const ForecastModelRegistry = require('./ForecastModelRegistry');
 const ForecastMlUpdateEvent = require('./ForecastMlUpdateEvent');
 const ForecastMlUpdateState = require('./ForecastMlUpdateState');
+const ForecastTrainingJob = require('./ForecastTrainingJob');
 
 module.exports = {
   User,
@@ -29,5 +30,6 @@ module.exports = {
   ForecastModelArtifact,
   ForecastModelRegistry,
   ForecastMlUpdateEvent,
-  ForecastMlUpdateState
+  ForecastMlUpdateState,
+  ForecastTrainingJob
 };

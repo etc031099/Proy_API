@@ -56,6 +56,9 @@ function classifyChange(change, { affectedLocalDate = null, closedThrough }) {
 }
 
 const eligible = (row, now) => {
+  if (row.lastFailureRetryable === false && row.lastFailedDataVersion != null
+      && version(row.lastFailedDataVersion) === version(row.latestDataVersion)
+      && row.lastFailedMatureOrigin >= row.latestMatureOrigin) return false;
   const newMatureOrigin = row.latestMatureOrigin > (row.lastTrainedMatureOrigin || row.initialMatureOrigin);
   const correction = row.historicalCorrectionVersion != null;
   const debounceDone = row.nextEligibleAt <= now;
@@ -173,11 +176,17 @@ async function claimEligibleUpdate({ businessId = config.businessId, scenarioId 
     .limit(10).setOptions({ useBigInt64: true }).lean();
   for (const row of rows) {
     if (!eligible(row, now)) continue;
+    // Unrelated writes also advance the global journal revision. Pin the export
+    // to that revision without inventing another relevant training event.
+    const currentRevision = await Revision.findById(businessId).setOptions({ useBigInt64: true }).lean();
+    if (!currentRevision || version(currentRevision.revision) < version(row.latestDataVersion)) continue;
+    const inputVersion = version(currentRevision.revision);
     const claimed = await State.findOneAndUpdate({ _id: row._id, status: 'READY',
       latestDataVersion: row.latestDataVersion, fencingToken: row.fencingToken,
       nextEligibleAt: { $lte: now } }, { $set: { status: 'CLAIMED', leaseOwner,
       leaseUntil: new Date(now.getTime() + LEASE_MS), lastAttemptAt: now,
-      claimedDataVersion: row.latestDataVersion, claimedMatureOrigin: row.latestMatureOrigin,
+      latestDataVersion: inputVersion, claimedDataVersion: inputVersion, claimedMatureOrigin: row.latestMatureOrigin,
+      claimedObservationsClosedThrough: row.observationsClosedThrough,
       claimedCorrectionVersion: row.historicalCorrectionVersion }, $inc: { fencingToken: 1 } },
     { new: true }).setOptions({ useBigInt64: true }).lean();
     if (claimed) {
@@ -185,6 +194,7 @@ async function claimEligibleUpdate({ businessId = config.businessId, scenarioId 
       return { businessId, scenarioId, horizonDays: claimed.horizonDays,
         inputDataVersion: String(claimed.claimedDataVersion),
         latestMatureOrigin: claimed.claimedMatureOrigin,
+        observationsClosedThrough: claimed.claimedObservationsClosedThrough,
         historicalCorrection: claimed.claimedCorrectionVersion != null,
         affectedLocalDate: claimed.affectedLocalDate,
         leaseOwner, fencingToken: claimed.fencingToken, leaseUntil: claimed.leaseUntil };
@@ -194,26 +204,47 @@ async function claimEligibleUpdate({ businessId = config.businessId, scenarioId 
 }
 
 async function finishUpdate({ businessId, scenarioId, horizonDays, leaseOwner, fencingToken,
-  success, failureCode, now = new Date() }) {
+  success, failureCode, retryable = true, inputDataVersion, processedMatureOrigin,
+  modelVersion = null, outcome = 'PROMOTED', jobKey = null, onFinish, now = new Date() }) {
   const key = scope({ businessId, scenarioId, horizonDays });
   if (typeof leaseOwner !== 'string' || !Number.isSafeInteger(fencingToken) || fencingToken < 1) throw new Error('Invalid claim');
   if (!success && (typeof failureCode !== 'string' || !/^[A-Z][A-Z0-9_]{0,79}$/.test(failureCode))) {
     throw new Error('Invalid sanitized failure code');
   }
+  if (success && !['PROMOTED', 'REJECTED', 'NO_PROMOTION_INSUFFICIENT_HISTORY'].includes(outcome)) throw new Error('Invalid ACK outcome');
+  if (modelVersion != null && (!Number.isSafeInteger(modelVersion) || modelVersion < 1)) throw new Error('Invalid ACK modelVersion');
+  if (jobKey != null && !/^[a-f0-9]{64}$/.test(jobKey)) throw new Error('Invalid ACK job key');
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const session = await mongoose.startSession();
     try {
       session.startTransaction({ readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });
       const row = await State.findOne({ ...key, status: 'CLAIMED', leaseOwner, fencingToken,
         leaseUntil: { $gt: now } }).session(session).setOptions({ useBigInt64: true });
-      if (!row) { await session.abortTransaction(); return false; }
+      if (!row) {
+        const prior = success && jobKey ? await State.findOne({ ...key, lastAckJobKey: jobKey,
+          lastAckFencingToken: fencingToken, lastProcessedDataVersion: version(inputDataVersion),
+          lastTrainedMatureOrigin: processedMatureOrigin, lastOutcome: outcome,
+          lastModelVersion: modelVersion }).session(session).lean() : null;
+        await session.abortTransaction();
+        return Boolean(prior);
+      }
       const claimedVersion = version(row.claimedDataVersion);
+      if ((inputDataVersion != null && version(inputDataVersion) !== claimedVersion)
+          || (processedMatureOrigin != null && processedMatureOrigin !== row.claimedMatureOrigin)) {
+        throw Object.assign(new Error('ACK differs from claimed dataset'), { code: 'ACK_DATASET_MISMATCH' });
+      }
       const newerEvent = version(row.latestDataVersion) > claimedVersion;
+      const newerMatureOrigin = row.latestMatureOrigin > row.claimedMatureOrigin;
       if (success) {
         row.lastProcessedDataVersion = claimedVersion;
         row.lastTrainedMatureOrigin = row.claimedMatureOrigin;
         row.lastSuccessAt = now;
         row.lastFailureCode = null;
+        row.lastFailureRetryable = null;
+        row.lastOutcome = outcome;
+        row.lastModelVersion = modelVersion;
+        row.lastAckFencingToken = fencingToken;
+        row.lastAckJobKey = jobKey;
         if (row.historicalCorrectionVersion != null
             && version(row.historicalCorrectionVersion) <= claimedVersion) {
           row.historicalCorrectionVersion = null;
@@ -222,19 +253,24 @@ async function finishUpdate({ businessId, scenarioId, horizonDays, leaseOwner, f
       } else {
         row.lastFailureAt = now;
         row.lastFailureCode = failureCode;
+        row.lastFailureRetryable = retryable;
+        row.lastFailedDataVersion = claimedVersion;
+        row.lastFailedMatureOrigin = row.claimedMatureOrigin;
         row.nextEligibleAt = new Date(Math.max(row.nextEligibleAt.getTime(), now.getTime() + DEBOUNCE_MS));
       }
-      row.status = success && !newerEvent && row.historicalCorrectionVersion == null ? 'IDLE' : 'PENDING';
+      row.status = success && !newerEvent && !newerMatureOrigin && row.historicalCorrectionVersion == null ? 'IDLE' : 'PENDING';
       if (row.status === 'IDLE') row.pendingSince = now;
       row.leaseOwner = null;
       row.leaseUntil = null;
       row.claimedDataVersion = null;
       row.claimedMatureOrigin = null;
+      row.claimedObservationsClosedThrough = null;
       row.claimedCorrectionVersion = null;
       if (newerEvent && row.nextEligibleAt < new Date(row.lastDirtyAt.getTime() + DEBOUNCE_MS)) {
         row.nextEligibleAt = new Date(row.lastDirtyAt.getTime() + DEBOUNCE_MS);
       }
       await row.save({ session });
+      if (onFinish) await onFinish(session);
       let commitError;
       for (let commitAttempt = 0; commitAttempt < 2; commitAttempt += 1) {
         try { await session.commitTransaction(); commitError = null; break; }
@@ -250,7 +286,7 @@ async function finishUpdate({ businessId, scenarioId, horizonDays, leaseOwner, f
         throw commitError;
       }
       log(success ? 'ML_UPDATE_ACKED' : 'ML_UPDATE_FAILED', { horizonDays, dataVersion: String(claimedVersion),
-        ...(success ? {} : { failureCode }) });
+        ...(success ? { outcome, modelVersion } : { failureCode, retryable }) });
       return true;
     } catch (error) {
       if (session.inTransaction()) await session.abortTransaction();

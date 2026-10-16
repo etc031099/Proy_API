@@ -10,6 +10,7 @@ const PROMOTION_POLICY_VERSION = 'M6.10A22-PROMOTION-v1';
 const PROMOTION_POLICY_HASH = '522a2af4ec30f83b016d7c9bc8886e775f1871a4bb9469963648e5539e25cdc3';
 const MAX_ARTIFACT_BYTES = 5 * 1024 * 1024;
 const MAX_LINEAGE_BYTES = 16 * 1024;
+const MAX_CHECKS_BYTES = 256 * 1024;
 const MAX_INT64 = 9223372036854775807n;
 
 class ForecastRegistryError extends Error {
@@ -28,7 +29,7 @@ const isFiniteNumber = value => typeof value === 'number' && Number.isFinite(val
 const isIsoDay = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
   && Number.isFinite(Date.parse(`${value}T00:00:00.000Z`))
   && new Date(`${value}T00:00:00.000Z`).toISOString().slice(0, 10) === value;
-const cloneJson = (value, label) => {
+const cloneJson = (value, label, maxBytes = MAX_LINEAGE_BYTES) => {
   const active = new Set();
   const visit = (item, depth = 0) => {
     if (depth > 12) fail('INVALID_METADATA', `${label} nesting exceeds the supported limit.`, 400);
@@ -55,7 +56,7 @@ const cloneJson = (value, label) => {
   };
   const result = visit(value);
   const bytes = Buffer.byteLength(JSON.stringify(result), 'utf8');
-  if (bytes > MAX_LINEAGE_BYTES) fail('INVALID_METADATA', `${label} exceeds the supported size.`, 400);
+  if (bytes > maxBytes) fail('INVALID_METADATA', `${label} exceeds the supported size.`, 400);
   return result;
 };
 
@@ -93,6 +94,8 @@ function validateCandidateInput(input) {
     fail('PROMOTION_POLICY_MISMATCH', 'Candidate must reference the frozen M6.10A22 promotion policy.', 400);
   }
   for (const field of ['globalWape', 'globalMae', 'globalBias']) {
+    if (field !== 'globalMae' && input[field] === null && input.checks?.status === 'REJECTED'
+        && input.checks?.model?.actual_units === 0) continue;
     if (!isFiniteNumber(input[field]) || (field !== 'globalBias' && input[field] < 0)) {
       fail('INVALID_METRICS', `${field} must be finite${field === 'globalBias' ? '' : ' and nonnegative'}.`, 400);
     }
@@ -100,7 +103,7 @@ function validateCandidateInput(input) {
   if (typeof input.triggerReason !== 'string' || !input.triggerReason.trim() || input.triggerReason.length > 120) {
     fail('INVALID_MODEL_METADATA', 'triggerReason is required and must be at most 120 characters.', 400);
   }
-  const checks = cloneJson(input.checks, 'checks');
+  const checks = cloneJson(input.checks, 'checks', MAX_CHECKS_BYTES);
   if (!checks || Array.isArray(checks) || typeof checks !== 'object') fail('INVALID_MODEL_METADATA', 'checks must be a JSON object.', 400);
   const lineage = cloneJson(input.lineage, 'lineage');
   if (!lineage || Array.isArray(lineage) || typeof lineage !== 'object') fail('INVALID_MODEL_METADATA', 'lineage must be a JSON object.', 400);
@@ -191,9 +194,20 @@ function createForecastModelRegistryService({ artifactModel = ForecastModelArtif
   const transact = work => inBoundedTransaction(work, startSession || (() => mongoose.startSession()));
 
   async function createCandidateMetadata(input) {
-    const candidate = validateCandidateInput(input || {});
+    const artifactFactory = input?.artifactFactory;
+    const precondition = input?.precondition;
+    const onCreated = input?.onCreated;
+    if (artifactFactory != null && typeof artifactFactory !== 'function') {
+      fail('INVALID_ARTIFACT', 'artifactFactory must be an internal function.', 400);
+    }
+    if (precondition != null && typeof precondition !== 'function') fail('INVALID_PRECONDITION', 'precondition must be an internal function.', 400);
+    const { artifactFactory: ignored, precondition: ignoredPrecondition, onCreated: ignoredCreated, ...candidateInput } = input || {};
+    const candidate = validateCandidateInput(artifactFactory
+      ? { ...candidateInput, artifactData: Buffer.alloc(0), artifactHash: undefined }
+      : candidateInput);
     const fingerprint = candidateFingerprint(candidate);
     return transact(async session => {
+      if (precondition) await precondition(session);
       const scope = { businessId: candidate.businessId, scenarioId: candidate.scenarioId,
         horizonDays: candidate.horizonDays };
       if (candidate.idempotencyKey) {
@@ -202,6 +216,13 @@ function createForecastModelRegistryService({ artifactModel = ForecastModelArtif
         if (prior) {
           if (prior.idempotencyFingerprint !== fingerprint) fail('IDEMPOTENCY_KEY_CONFLICT', 'idempotencyKey was already used for different candidate metadata.', 409);
           verifyArtifact(prior);
+          if (artifactFactory) {
+            const repeatedBytes = await artifactFactory(prior.modelVersion, session);
+            if (!Buffer.isBuffer(repeatedBytes) || sha256(repeatedBytes) !== prior.artifactHash) {
+              fail('IDEMPOTENCY_KEY_CONFLICT', 'idempotencyKey was already used for different artifact bytes.', 409);
+            }
+          }
+          if (onCreated) await onCreated(session, publicMetadata(prior));
           return publicMetadata(prior);
         }
       }
@@ -211,6 +232,14 @@ function createForecastModelRegistryService({ artifactModel = ForecastModelArtif
         { new: true, upsert: true, setDefaultsOnInsert: true, session, runValidators: true }).maxTimeMS(5000);
       const modelVersion = registry.lastIssuedModelVersion;
       if (!Number.isSafeInteger(modelVersion) || modelVersion < 1) fail('VERSION_EXHAUSTED', 'Model version counter is invalid.', 503);
+      if (artifactFactory) {
+        const built = await artifactFactory(modelVersion, session);
+        if (!Buffer.isBuffer(built) || built.length < 1 || built.length > MAX_ARTIFACT_BYTES) {
+          fail('INVALID_ARTIFACT', 'Versioned artifact factory returned invalid bytes.', 400);
+        }
+        candidate.artifactData = Buffer.from(built);
+        candidate.artifactHash = sha256(candidate.artifactData);
+      }
       const artifactId = new mongoose.Types.ObjectId();
       const document = {
         ...scope, modelFamily: candidate.modelFamily, recipeId: candidate.recipeId, modelVersion,
@@ -228,6 +257,7 @@ function createForecastModelRegistryService({ artifactModel = ForecastModelArtif
       };
       const [created] = await artifactModel.create([{ _id: artifactId, ...document }], { session });
       verifyArtifact(created);
+      if (onCreated) await onCreated(session, publicMetadata(created));
       return publicMetadata(created);
     });
   }
@@ -262,7 +292,7 @@ function createForecastModelRegistryService({ artifactModel = ForecastModelArtif
     return artifact;
   }
 
-  async function promoteCandidate({ businessId, scenarioId, horizonDays, modelVersion, expectedGeneration }) {
+  async function promoteCandidate({ businessId, scenarioId, horizonDays, modelVersion, expectedGeneration, precondition, onPromoted }) {
     validateScope({ businessId, scenarioId, horizonDays });
     if (!Number.isSafeInteger(modelVersion) || modelVersion < 1
         || !Number.isSafeInteger(expectedGeneration) || expectedGeneration < 0) {
@@ -270,6 +300,7 @@ function createForecastModelRegistryService({ artifactModel = ForecastModelArtif
     }
     const scope = { businessId: businessId.trim(), scenarioId: scenarioId.trim(), horizonDays };
     return transact(async session => {
+      if (precondition) await precondition(session);
       const registry = await registryModel.findOne(scope).session(session).maxTimeMS(5000);
       if (!registry) fail('REGISTRY_NOT_FOUND', 'No model registry pointer exists for this tenant, scenario, and horizon.', 404);
       const candidate = await artifactModel.findOne({ ...scope, modelVersion }).session(session)
@@ -278,6 +309,7 @@ function createForecastModelRegistryService({ artifactModel = ForecastModelArtif
       if (candidate.status === 'ACTIVE' && String(registry.activeArtifactId) === String(candidate._id)
           && registry.activeModelVersion === candidate.modelVersion) {
         verifyArtifact(candidate.toObject({ getters: false, virtuals: false }));
+        if (onPromoted) await onPromoted(session, publicMetadata(candidate));
         return { promoted: true, idempotent: true, generation: registry.generation, artifact: publicMetadata(candidate) };
       }
       if (registry.generation !== expectedGeneration) fail('CONFLICT', 'Registry generation changed before candidate promotion.', 409);
@@ -308,12 +340,14 @@ function createForecastModelRegistryService({ artifactModel = ForecastModelArtif
         activeArtifactId: candidate._id, activeModelVersion: modelVersion, updatedAt: new Date()
       }, $inc: { generation: 1 } }, { session, runValidators: true }).exec();
       if (pointerUpdate.modifiedCount !== 1) fail('CONFLICT', 'Registry compare-and-swap failed; candidate promotion was rolled back.', 409);
+      if (onPromoted) await onPromoted(session, publicMetadata(candidate));
       return { promoted: true, idempotent: false, generation: expectedGeneration + 1,
         artifact: publicMetadata(candidate) };
     });
   }
 
-  async function transitionCandidate({ businessId, scenarioId, horizonDays, modelVersion, status, failureCode = null }) {
+  async function transitionCandidate({ businessId, scenarioId, horizonDays, modelVersion, status, failureCode = null,
+    precondition, onTransition }) {
     validateScope({ businessId, scenarioId, horizonDays });
     if (!Number.isSafeInteger(modelVersion) || modelVersion < 1) fail('INVALID_MODEL_VERSION', 'modelVersion must be a positive safe integer.', 400);
     if (!['REJECTED', 'FAILED'].includes(status)) fail('INVALID_STATUS', 'Only REJECTED or FAILED candidate transitions are supported.', 400);
@@ -322,9 +356,13 @@ function createForecastModelRegistryService({ artifactModel = ForecastModelArtif
     }
     const scope = { businessId: businessId.trim(), scenarioId: scenarioId.trim(), horizonDays };
     return transact(async session => {
+      if (precondition) await precondition(session);
       const artifact = await artifactModel.findOne({ ...scope, modelVersion }).session(session).maxTimeMS(5000);
       if (!artifact) fail('CANDIDATE_NOT_FOUND', 'Candidate was not found in the requested tenant, scenario, and horizon.', 404);
-      if (artifact.status === status) return { changed: false, idempotent: true, artifact: publicMetadata(artifact) };
+      if (artifact.status === status) {
+        if (onTransition) await onTransition(session, publicMetadata(artifact));
+        return { changed: false, idempotent: true, artifact: publicMetadata(artifact) };
+      }
       if (artifact.status !== 'CANDIDATE') fail('CANDIDATE_NOT_TRANSITIONABLE', 'Only a CANDIDATE can be rejected or marked failed.', 409);
       const result = await artifactModel.updateOne({ ...scope, modelVersion, status: 'CANDIDATE' },
         { $set: { status, failureCode: status === 'FAILED' ? failureCode : null } },
@@ -332,6 +370,7 @@ function createForecastModelRegistryService({ artifactModel = ForecastModelArtif
       if (result.modifiedCount !== 1) fail('CONFLICT', 'Candidate status changed during transition.', 409);
       artifact.status = status;
       artifact.failureCode = status === 'FAILED' ? failureCode : null;
+      if (onTransition) await onTransition(session, publicMetadata(artifact));
       return { changed: true, idempotent: false, artifact: publicMetadata(artifact) };
     });
   }
@@ -391,6 +430,7 @@ function verifyPromotionMetadata(artifact) {
 }
 
 module.exports = {
+  inBoundedTransaction,
   createForecastModelRegistryService,
   ForecastRegistryError,
   HORIZONS: Object.freeze([...HORIZONS]),

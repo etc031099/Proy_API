@@ -25,11 +25,19 @@ const schema = new mongoose.Schema({
   fencingToken: { type: Number, required: true, default: 0 },
   claimedDataVersion: { type: mongoose.Schema.Types.BigInt, default: null },
   claimedMatureOrigin: { type: String, default: null },
+  claimedObservationsClosedThrough: { type: String, default: null },
   claimedCorrectionVersion: { type: mongoose.Schema.Types.BigInt, default: null },
   lastAttemptAt: { type: Date, default: null },
   lastSuccessAt: { type: Date, default: null },
   lastFailureAt: { type: Date, default: null },
-  lastFailureCode: { type: String, default: null }
+  lastFailureCode: { type: String, default: null },
+  lastFailureRetryable: { type: Boolean, default: null },
+  lastFailedDataVersion: { type: mongoose.Schema.Types.BigInt, default: null },
+  lastFailedMatureOrigin: { type: String, default: null },
+  lastOutcome: { type: String, enum: ['PROMOTED', 'REJECTED', 'NO_PROMOTION_INSUFFICIENT_HISTORY', null], default: null },
+  lastModelVersion: { type: Number, default: null },
+  lastAckFencingToken: { type: Number, default: null },
+  lastAckJobKey: { type: String, default: null }
 }, { timestamps: true, versionKey: false, strict: 'throw' });
 
 schema.index({ businessId: 1, scenarioId: 1, horizonDays: 1 },
