@@ -106,10 +106,18 @@ def _xyz(weekly_units: list[float]) -> dict[str, Any]:
             "weeksObserved": len(weekly_units), "zeroSalesWeeks": zeros}
 
 
-def _forecast_demand_until(days: float, forecast: dict[str, float]) -> tuple[float, bool]:
-    """Interpolate only between approved cumulative horizons; cap beyond 14d."""
+def _forecast_demand_until(days: float, forecast: dict[str, float], *, ridge_live: bool = False) -> tuple[float | None, bool]:
+    """Return cumulative demand; LIVE Ridge uses only exact 7d/14d anchors."""
     if days <= 0:
         return 0.0, False
+    if ridge_live:
+        horizon = int(days) if float(days).is_integer() else None
+        field = {7: "expectedUnitsNext7d", 14: "expectedUnitsNext14d"}.get(horizon)
+        value = forecast.get(field) if field else None
+        if (field is None or isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(float(value)) or value < 0):
+            return None, False
+        return float(value), False
     p1 = float(forecast["expectedUnitsNext1d"])
     p7 = float(forecast["expectedUnitsNext7d"])
     p14 = float(forecast["expectedUnitsNext14d"])
@@ -147,7 +155,7 @@ def evaluate_sku(
     lead_time_days: float, configured_lead_time_days: float, lead_time_std_days: float,
     lead_time_source: str, lead_time_sample_size: int,
     supplier: dict[str, Any] | None, active_offers: list[dict[str, Any]],
-    pack_multiple: int, min_order_qty: int, consumption_value: dict[str, Any],
+    pack_multiple: int, min_order_qty: int, consumption_value: dict[str, Any], ridge_live: bool = False,
 ) -> dict[str, Any]:
     """Evaluate one SKU. Inputs are already tenant/scenario scoped and immutable."""
     sku = str(product["sku"])
@@ -199,10 +207,11 @@ def evaluate_sku(
     effective_depletion_days = _days_to_depletion(on_hand, daily_forecast, incoming_orders, cutoff)
     lead = max(0.0, float(lead_time_days))
     review = float(REVIEW_DAYS)
-    horizon_days = min(lead, 14.0)
-    demand_during_lead, truncated_lead_forecast = _forecast_demand_until(horizon_days, forecast)
+    horizon_days = lead if ridge_live else min(lead, 14.0)
+    demand_during_lead, truncated_lead_forecast = _forecast_demand_until(horizon_days, forecast, ridge_live=ridge_live)
+    lead_demand_available = demand_during_lead is not None
     reasons: list[str] = []
-    if low_or_no_demand:
+    if low_or_no_demand and lead_demand_available:
         safety_raw = 0.0
         safety_stock = 0
         reorder_raw = 0.0
@@ -212,7 +221,7 @@ def evaluate_sku(
         should_reorder = False
         recommended_qty = 0
         reasons.append("LOW_DEMAND")
-    else:
+    elif lead_demand_available:
         safety_raw = SERVICE_Z * math.sqrt(lead * sigma_demand**2 + expected_daily**2 * max(0.0, lead_time_std_days)**2)
         safety_stock = max(1, math.ceil(safety_raw))
         reorder_raw = demand_during_lead + safety_stock
@@ -242,17 +251,21 @@ def evaluate_sku(
             reasons.append("LEAD_TIME_EXCEEDS_FORECAST_HORIZON")
         if len(observable) < 14:
             reasons.append("INSUFFICIENT_DEMAND_VARIABILITY_HISTORY")
+    else:
+        safety_raw = safety_stock = reorder_raw = reorder_point = target_raw = target_stock = None
+        should_reorder = recommended_qty = None
+        reasons.append("UNSUPPORTED_LEAD_TIME" if lead > 0 else "INSUFFICIENT_FORECAST_INPUTS")
 
     minimum = int(product.get("minStockInitial", 0))
     low_stock = int(on_hand) <= minimum
     if low_stock:
         reasons.append("LOW_STOCK")
     days_for_risk = effective_depletion_days
-    if low_or_no_demand:
+    if low_or_no_demand and lead_demand_available:
         risk = "LOW"
         risk_reason = "no material expected demand in approved forecast horizons"
         coverage_status = "LOW_OR_NO_RECENT_DEMAND"
-    else:
+    elif lead_demand_available:
         coverage_status = "APPROXIMATE_7_14D_MEAN"
         if int(on_hand) <= 0 or (days_for_risk is not None and days_for_risk <= 1):
             risk = "CRITICAL"
@@ -266,11 +279,15 @@ def evaluate_sku(
         else:
             risk = "LOW"
             risk_reason = "on-hand cover exceeds lead time plus review cycle"
+    else:
+        risk = None
+        risk_reason = None
+        coverage_status = "APPROXIMATE_7_14D_MEAN"
 
     abc = consumption_value["abc"]
     matrix = f"{abc}-{xyz['xyz']}" if abc in {"A", "B", "C"} else "UNCLASSIFIED"
     annual_value = int(consumption_value["consumptionValueCents"])
-    lead_demand_raw, lead_clipped = _forecast_demand_until(min(lead, 14.0), forecast)
+    lead_demand_raw, lead_clipped = _forecast_demand_until(horizon_days, forecast, ridge_live=ridge_live)
     configured_supplier_name = (supplier or {}).get("displayName")
     expected_arrival = (cutoff + timedelta(days=math.ceil(lead))).isoformat() if lead > 0 else cutoff.isoformat()
     offer_suppliers = sorted({str(offer["supplierCode"]) for offer in active_offers})
@@ -287,10 +304,14 @@ def evaluate_sku(
         "asOfDate": cutoff.isoformat(), "currency": product.get("currency", "PEN"),
         "stock": {"onHand": int(on_hand), "incoming": incoming_units, "inventoryPosition": position,
                   "pendingOrders": list(incoming_orders), "overdueOrUnknownExpectedArrivalUnits": 0},
-        "forecast": {"source": "MOVING_AVERAGE_28", "strategyVersion": forecast_bundle.STRATEGY_VERSION,
-                     "cutoffDate": forecast["cutoffDate"], "expected1d": forecast["expectedUnitsNext1d"],
+        "forecast": {"source": "RIDGE_CAUSAL27" if ridge_live else "MOVING_AVERAGE_28",
+                     "strategyVersion": "RIDGE-CAUSAL27" if ridge_live else forecast_bundle.STRATEGY_VERSION,
+                     "modelVersion7": forecast.get("modelVersion7"), "modelVersion14": forecast.get("modelVersion14"),
+                     "cutoffDate": forecast["cutoffDate"], "expected1d": forecast.get("expectedUnitsNext1d"),
                      "expected7d": forecast["expectedUnitsNext7d"], "expected14d": forecast["expectedUnitsNext14d"]},
-        "demand": {"expectedDaily": daily_forecast, "rule": "mean(expectedUnitsNext7d/7, expectedUnitsNext14d/14)",
+        "demand": {"expectedDaily": daily_forecast,
+                   "source": "APPROXIMATE_RATE_FROM_RIDGE_7_14" if ridge_live else "MOVING_AVERAGE_28",
+                   "rule": "mean(expectedUnitsNext7d/7, expectedUnitsNext14d/14)",
                    "sigmaDailyLast28Observable": sigma_demand, "observableDaysLast28": len(observable),
                    "exposureDaysLast28": exposure_days, "validLeadTimeDemand": lead_demand_raw,
                    "leadTimeDemandClippedTo14d": lead_clipped},
@@ -307,13 +328,16 @@ def evaluate_sku(
                             "reorderPoint": reorder_point, "targetStockRaw": target_raw, "targetStock": target_stock,
                             "configuredMinimumStock": minimum},
         "risk": {"level": risk, "reason": risk_reason, "reasonCodes": list(dict.fromkeys(reasons)),
+                 "status": "AVAILABLE" if risk is not None else "PARTIAL",
                  "approxDaysToDepletionWithKnownInbound": days_for_risk, "isProbability": False,
                  "lowStock": low_stock, "lowStockSeparateFromRisk": True,
                  "projectedStockoutDate": None, "projectedStockoutDateStatus": "UNAVAILABLE_NO_APPROVED_DAILY_CURVE"},
         "coverage": {"daysCover": cover, "status": coverage_status},
         "recommendation": {"shouldReorder": should_reorder, "recommendedQty": recommended_qty,
+                            "status": "AVAILABLE" if recommended_qty is not None else "PARTIAL",
                             "targetStock": target_stock, "packMultiple": pack_multiple, "minOrderQty": min_order_qty,
-                            "expectedReceiptDate": expected_arrival if recommended_qty > 0 else None,
+                            "expectedReceiptDate": expected_arrival
+                                if recommended_qty is not None and recommended_qty > 0 else None,
                             "quantityIsIntegerAndPackAdjusted": True},
         "classification": {"abc": abc, "abcValueCents": annual_value,
                            "abcCumulativeValueShare": consumption_value["cumulativeValueShare"],

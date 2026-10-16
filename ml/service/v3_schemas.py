@@ -282,6 +282,18 @@ class InventoryRequest(V3Request, PageRequest):
     xyz: Literal["X", "Y", "Z"] | None = None
     flag: Literal["low_stock", "overstock", "slow_moving", "dead_stock", "single_source", "should_reorder"] | None = None
     metric: Literal["stockout_risk", "low_stock", "overstock", "slow_moving", "abc_a", "az", "single_source_critical", "reorder"] = "reorder"
+    activeRidgeModels: list[RidgeActiveArtifact] = Field(default_factory=list, max_length=2)
+
+    @model_validator(mode="after")
+    def live_inventory_ridge_scope(self):
+        if self.activeRidgeModels:
+            horizons = [item.metadata.horizonDays for item in self.activeRidgeModels]
+            if (self.dataMode != "LIVE" or sorted(horizons) != sorted(set(horizons))
+                    or any(horizon not in (7, 14) for horizon in horizons)
+                    or any(item.metadata.businessId != self.context.businessId
+                           or item.metadata.scenarioId != self.context.scenarioId for item in self.activeRidgeModels)):
+                raise ValueError("LIVE inventory Ridge artifacts must be unique and tenant/scenario scoped to horizons 7/14")
+        return self
 
 
 class RidgeActiveArtifactMetadata(StrictSchema):
@@ -373,6 +385,22 @@ class SupplierRequest(V3Request, PageRequest):
 class HealthRequest(V3Request):
     period: PeriodRange | None = None
     limit: StrictInt = Field(default=5, ge=1, le=5)
+    activeRidgeModels: list[RidgeActiveArtifact] = Field(default_factory=list, max_length=2)
+
+    @model_validator(mode="after")
+    def live_health_ridge_scope(self):
+        if self.activeRidgeModels:
+            horizons = [item.metadata.horizonDays for item in self.activeRidgeModels]
+            if (self.dataMode != "LIVE" or sorted(horizons) != sorted(set(horizons))
+                    or any(horizon not in (7, 14) for horizon in horizons)
+                    or any(item.metadata.businessId != self.context.businessId
+                           or item.metadata.scenarioId != self.context.scenarioId for item in self.activeRidgeModels)):
+                raise ValueError("LIVE Health Ridge artifacts must be unique and tenant/scenario scoped to horizons 7/14")
+        return self
+
+
+InventoryRequest.model_rebuild()
+HealthRequest.model_rebuild()
 
 
 class V3Metadata(StrictSchema):

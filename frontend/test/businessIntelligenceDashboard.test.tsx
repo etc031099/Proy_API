@@ -233,4 +233,18 @@ describe('business intelligence dashboard', () => {
     expect(screen.getByText('A: 40')).toBeTruthy();
     expect(screen.getByText('X: 55')).toBeTruthy();
   });
+
+  it('does not render unavailable LIVE risk counts as zero or as LOW', async () => {
+    const partialSummary: InventorySummary = { ...inventoryFixture, availabilityStatus: 'PARTIAL', summary: {
+      ...inventoryFixture.summary, riskCounts: { critical: null, high: null, medium: null, low: null },
+      riskCountsStatus: 'PARTIAL', riskUnavailableCount: 5, reorderCount: null,
+    } };
+    vi.spyOn(apiClient, 'getInventoryAnalytics').mockResolvedValue(success(partialSummary));
+    render(<BusinessIntelligenceDashboard />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Inventario' }));
+    expect(await screen.findByText(/Distribución parcial: 5 productos no tienen un nivel de riesgo calculable/)).toBeTruthy();
+    expect(screen.queryByRole('img', { name: /Distribución de riesgo:/ })).toBeNull();
+    expect(screen.getByText('No disponible')).toBeTruthy();
+    expect(screen.queryByText('Bajo 0')).toBeNull();
+  });
 });

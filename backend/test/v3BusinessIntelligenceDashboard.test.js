@@ -62,7 +62,8 @@ const makeDashboard = ({ fail, partial = false, productPresent = true, supplierN
       return { businessId: V3.businessId, operationalDate: '2026-10-14' }; },
     async execute(invocation) {
       calls.push({ kind: invocation.skill.id, context: invocation.context, args: invocation.args,
-        useLiveRidge: invocation.useLiveRidge, trustedForecastModelEnvelope: invocation.trustedForecastModelEnvelope });
+        useLiveRidge: invocation.useLiveRidge, trustedForecastModelEnvelope: invocation.trustedForecastModelEnvelope,
+        trustedInventoryRidgeModels: invocation.trustedInventoryRidgeModels });
       if (fail) { const error = new Error('private upstream error'); error.functionalCode = fail; throw error; }
       const metadata = { dataMode: 'LIVE', updatedAt: '2026-10-14T18:00:00.000Z', dataThrough: '2026-10-14T17:55:00.000Z' };
       switch (invocation.skill.id) {
@@ -258,8 +259,33 @@ test('inventory ranking returns compact typed fields in engine order with tenant
   const { service } = makeDashboard();
   const { data } = await service.inventory(request({ limit: '5' }));
   assert.deepEqual(data.items[0], { sku: 'SKU-1', productName: 'Producto uno 500 g', presentation: 'Bolsa', stock: 1,
-    coverageDays: 1.5, risk: 'HIGH', riskReasonCodes: ['LOW_COVERAGE'], recommendedQty: 4, reorderNow: true });
+    coverageDays: 1.5, risk: 'HIGH', riskReasonCodes: ['LOW_COVERAGE'], recommendedQty: 4, reorderNow: true,
+    availabilityStatus: null, coverageStatus: 'AVAILABLE', coverageReasonCode: null, riskStatus: null,
+    riskReasonCode: null, recommendationStatus: null, recommendationReasonCode: null });
   assert.equal(data.total, 1);
+});
+
+test('LIVE inventory and health receive only tenant-scoped ACTIVE Ridge 7/14 artifacts', async () => {
+  const { service, calls, registryCalls } = makeDashboard();
+  await service.inventory(request());
+  await service.health(request({ period: 'LAST_30_DAYS' }));
+  const operations = calls.filter(row => ['get_inventory_intelligence', 'get_business_health'].includes(row.kind));
+  assert.ok(operations.length >= 3);
+  for (const operation of operations) {
+    const models = operation.trustedInventoryRidgeModels;
+    assert.equal(models.length, 2);
+    assert.deepEqual(models.map(model => model.metadata.horizonDays).sort((a, b) => a - b), [7, 14]);
+    assert.ok(models.every(model => model.metadata.businessId === V3.businessId
+      && model.metadata.scenarioId === V3.scenarioId && model.metadata.status === 'ACTIVE'));
+  }
+  assert.equal(registryCalls.filter(row => row.kind === 'artifact').length, operations.length * 2);
+});
+
+test('missing ACTIVE Ridge artifacts are passed as absent models for partial LIVE inventory/health', async () => {
+  const { service, calls } = makeDashboard({ activeModelMissing: true });
+  await service.inventory(request());
+  const operation = calls.find(row => row.kind === 'get_inventory_intelligence');
+  assert.deepEqual(operation.trustedInventoryRidgeModels, []);
 });
 
 test('snapshot and tenant failures are mapped to safe messages without internal details', () => {

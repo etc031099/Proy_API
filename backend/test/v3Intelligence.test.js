@@ -524,6 +524,43 @@ test('V3 HTTP request is actually aborted by the parent skill signal without ret
   const request = client.intelligence('business', {}, { signal: parent.signal }); parent.abort();
   await assert.rejects(request, error => error.code === 'ML_SERVICE_UNAVAILABLE'); assert.equal(count, 1); assert.equal(actualSignal.aborted, true);
 });
+
+test('LIVE inventory accepts explicit partial null recommendation but rejects an unjustified null', async () => {
+  const markPartial = result => {
+    if (!result.data?.items?.some(row => row.stock && row.recommendation)) return result;
+    result.status = 'PARTIAL'; result.data.availabilityStatus = 'PARTIAL';
+    for (const row of result.data.items) if (row.stock && row.recommendation) {
+      row.recommendation = { shouldReorder: null, recommendedQty: null, status: 'PARTIAL',
+        availabilityStatus: 'PARTIAL', reasonCode: 'UNSUPPORTED_LEAD_TIME' };
+    }
+    return result;
+  };
+  const partial = fixture({ clock: () => new Date('2026-10-14T17:30:00.000Z'), corrupt: markPartial });
+  const accepted = await partial.run('¿Cuánto stock tiene PAN-FRE-001?');
+  zero(accepted);
+  assert.equal(accepted.v3Views[0].kind, 'inventory');
+
+  let invalidEnvelopeInjected = false;
+  const unjustified = fixture({ clock: () => new Date('2026-10-14T17:30:00.000Z'), corrupt: result => {
+    if (result.data?.items?.some(row => row.stock && row.recommendation)) {
+      invalidEnvelopeInjected = true;
+      result.status = 'OK';
+      for (const row of result.data.items) if (row.stock && row.recommendation) {
+        row.recommendation.recommendedQty = null; row.recommendation.shouldReorder = null;
+      }
+    }
+    return result;
+  } });
+  const rejected = await unjustified.run('¿Cuánto stock tiene PAN-FRE-001?');
+  assert.equal(invalidEnvelopeInjected, true);
+  assert.equal(unjustified.calls.at(-1).domain, 'inventory');
+  assert.equal(unjustified.calls.at(-1).payload.dataMode, 'LIVE');
+  await assert.rejects(unjustified.service.execute({ context: req(),
+    skill: { id: 'get_inventory_intelligence', maxRecords: 20 },
+    args: { mode: 'detail', productRef: 'PAN-FRE-001' }, signal: new AbortController().signal }),
+  error => error.code === 'ML_SERVICE_UNAVAILABLE');
+});
+
 test('V3 supplier largest/smallest lead-time ranking orders the full aggregate set before paging', async () => {
   const f = fixture(); const slow = await f.run('Qué proveedor tarda más'); zero(slow);
   assert.ok(slow.answer.indexOf('SUP-05') < slow.answer.indexOf('SUP-01')); assert.equal(f.calls.at(-1).payload.limit, 20);

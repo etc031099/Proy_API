@@ -43,6 +43,10 @@ def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _get(item: Any, name: str, default: Any = None) -> Any:
+    return item.get(name, default) if isinstance(item, dict) else getattr(item, name, default)
+
+
 def _rss_mb() -> float:
     return round(psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024), 2)
 
@@ -168,7 +172,6 @@ class V3IntelligenceRuntime:
                                     or (getattr(self, "live_inventory_supplier", None) is not None and name in {"inventory", "supplier"})
                                     or (getattr(self, "live_forecast", None) is not None and name == "forecast")
                                     or (getattr(self, "live_adapter", None) is not None
-                                        and getattr(self, "live_forecast", None) is not None
                                         and getattr(self, "live_inventory_supplier", None) is not None
                                         and getattr(self, "health", None) is not None and name == "health")))
                                 for name in self.domains},
@@ -360,7 +363,7 @@ class V3IntelligenceRuntime:
         if getattr(self, "live_inventory_supplier", None) is None:
             raise V3FunctionalError("LIVE_ANALYTICS_NOT_READY", 501, "LIVE Inventory analytics are not enabled.")
         try:
-            forecasts = self.live_forecast.all_forecasts(live) if getattr(self, "live_forecast", None) else None
+            forecasts = self._live_inventory_ridge_forecasts(request, live)
             return self._run("inventory", lambda: self.live_inventory_supplier.inventory_data(request, live, forecasts))
         except LiveDomainError as error:
             raise V3FunctionalError(error.code, error.status_code, error.message) from None
@@ -383,7 +386,53 @@ class V3IntelligenceRuntime:
         except LiveDomainError as error:
             raise V3FunctionalError(error.code, error.status_code, error.message) from None
 
-    def _live_ridge_forecast_data(self, request, live):
+    def _live_inventory_ridge_forecasts(self, request, live):
+        """Score only ACTIVE Ridge 7/14 for inventory; never call the MA28 adapter."""
+        supplied = {int(model.metadata.horizonDays): model for model in getattr(request, "activeRidgeModels", ())}
+        skus = {str(_get(row, "sku")) for row in getattr(self.dataset, "products", ()) if _get(row, "sku")}
+        skus.update(str(_get(row, "sku")) for row in live.products_by_key.values() if _get(row, "sku"))
+        rows = []
+        for sku in sorted(skus):
+            scored = {}
+            for horizon in (7, 14):
+                model = supplied.get(horizon)
+                if model is None:
+                    scored[horizon] = {"status": "MODEL_UNAVAILABLE", "reasonCode": "ACTIVE_MODEL_UNAVAILABLE",
+                        "predictionUnits": None, "modelVersion": None}
+                    continue
+                single_request = type("RidgeInventoryRequest", (), {})()
+                single_request.mode, single_request.skus = "detail", [sku]
+                single_request.horizonDays = horizon
+                single_request.activeRidgeModel = model
+                single_request.context = request.context
+                try:
+                    result = self._live_ridge_forecast_data(single_request, live, include_baseline=False)
+                    scored[horizon] = result["items"][0]
+                except Exception:
+                    scored[horizon] = {"status": "MODEL_UNAVAILABLE", "reasonCode": "SCORING_UNAVAILABLE",
+                        "predictionUnits": None, "modelVersion": model.metadata.modelVersion}
+            seven, fourteen = scored[7], scored[14]
+            rows.append({"sku": sku,
+                "status": "READY" if seven.get("status") == "READY" and fourteen.get("status") == "READY" else "PARTIAL",
+                "horizon1Status": "MODEL_NOT_APPROVED", "horizon1ReasonCode": "FORECAST_1D_NOT_APPROVED",
+                "horizon7Status": seven.get("status"), "horizon7ReasonCode": seven.get("reasonCode"),
+                "horizon14Status": fourteen.get("status"), "horizon14ReasonCode": fourteen.get("reasonCode"),
+                "expectedUnitsNext7d": seven.get("predictionUnits"),
+                "expectedUnitsNext14d": fourteen.get("predictionUnits"),
+                "modelVersion7": seven.get("modelVersion"), "modelVersion14": fourteen.get("modelVersion"),
+                # Internal cache identity includes artifact/feature/promotion lineage,
+                # not merely the numeric version or forecast output.
+                "artifactHash7": (supplied[7].metadata.artifactHash if 7 in supplied else None),
+                "artifactHash14": (supplied[14].metadata.artifactHash if 14 in supplied else None),
+                "featureHash7": (supplied[7].metadata.featureHash if 7 in supplied else None),
+                "featureHash14": (supplied[14].metadata.featureHash if 14 in supplied else None),
+                "promotionPolicyHash7": (supplied[7].metadata.promotionPolicyHash if 7 in supplied else None),
+                "promotionPolicyHash14": (supplied[14].metadata.promotionPolicyHash if 14 in supplied else None),
+                "cutoffDate": seven.get("observationsThrough") or fourteen.get("observationsThrough") or
+                    live.snapshot.metadata.observationsClosedThrough.isoformat()})
+        return rows
+
+    def _live_ridge_forecast_data(self, request, live, *, include_baseline=True):
         from types import SimpleNamespace
         from ml.service.v3_live_ridge import LiveRidgeError, ridge_live_forecast
 
@@ -435,7 +484,7 @@ class V3IntelligenceRuntime:
                 "dataCutoff": None, "activeModelStatus": "UNKNOWN"}
 
         baseline_units, observed_series = None, []
-        if request.horizonDays in (7, 14):
+        if include_baseline and request.horizonDays in (7, 14):
             try:
                 baseline_request = SimpleNamespace(horizonDays=request.horizonDays, categoryCode=None, subcategoryCode=None,
                     skus=[sku], mode="detail", offset=0, limit=1, includeObservedSeries=True)
@@ -447,13 +496,13 @@ class V3IntelligenceRuntime:
             except LiveDomainError:
                 pass
         ridge["baselineUnits"] = baseline_units
-        ridge["baselineMethod"] = "MOVING_AVERAGE_28"
+        ridge["baselineMethod"] = "MOVING_AVERAGE_28" if include_baseline else None
         ridge["observedSeries"] = observed_series
         return {"mode": "detail", "horizonDays": request.horizonDays, "total": 1,
                 "items": [ridge], "availabilityStatus": ridge["status"]}
 
     def live_health_data(self, request, live):
-        if (getattr(self, "live_forecast", None) is None or getattr(self, "live_adapter", None) is None
+        if (getattr(self, "live_adapter", None) is None
                 or getattr(self, "live_inventory_supplier", None) is None or self.health is None):
             raise V3FunctionalError("LIVE_ANALYTICS_NOT_READY", 501, "LIVE Business Health is not enabled.")
         from types import SimpleNamespace
@@ -466,7 +515,7 @@ class V3IntelligenceRuntime:
                       "risk": None, "abc": None, "xyz": None, "flag": None}
             business, _ = self.live_adapter.business_data(SimpleNamespace(**{**common, "mode": "compare"}), live)
             customer, _ = self.live_adapter.customer_data(SimpleNamespace(**common), live)
-            forecasts = self.live_forecast.all_forecasts(live)
+            forecasts = self._live_inventory_ridge_forecasts(request, live)
             inventory = self.live_inventory_supplier._inventory_rows(live, forecasts)
             supplier, _ = self.live_inventory_supplier.supplier_data(SimpleNamespace(**common), live)
 
@@ -487,6 +536,14 @@ class V3IntelligenceRuntime:
                     "freshness": dict(live.freshness("marketBasket"))})
             offer_rows = self.suppliers._offers(BASKET_CUTOFF)
             exposure = self.suppliers._critical_exposure(inventory, offer_rows)
+            unavailable_risk = inventory["summary"].get("riskUnavailableCount", 0)
+            exposure["availabilityStatus"] = "PARTIAL" if unavailable_risk else "AVAILABLE"
+            exposure["unavailableRiskCount"] = unavailable_risk
+            exposure["analyzedRiskCount"] = len(inventory["products"]) - unavailable_risk
+            if unavailable_risk:
+                # The known exposure rows remain useful, but a complete
+                # population count cannot be claimed when some risks are null.
+                exposure["singleSourceCriticalOrHighSkuCount"] = None
             supplier_component = {"suppliers": [row for row in supplier["items"]
                     if row.get("purchaseSpendSharePct") is not None],
                 "summary": supplier["summary"], "criticalInventorySupplierExposure": exposure}
@@ -496,11 +553,16 @@ class V3IntelligenceRuntime:
                 "customers": customer.get("items", [])}
             inventory_summary = {**inventory["summary"],
                 "overstockEstimatedValueCents": None,
-                "forecastSource": "MOVING_AVERAGE_28", "forecastHorizons": [1, 7, 14]}
-            ready_forecasts = [row for row in forecasts if row.get("status") == "READY"]
-            forecast_totals = {f"forecastExpectedUnitsNext{h}d": round(sum(float(row[f"expectedUnitsNext{h}d"])
-                for row in ready_forecasts), 4) if len(ready_forecasts) == len(inventory["products"]) else None
-                for h in (1, 7, 14)}
+                "forecastSource": "RIDGE_CAUSAL27", "forecastHorizons": [7, 14],
+                "forecastStatus": inventory["summary"].get("forecastAvailability", "PARTIAL")}
+            ready7 = [row for row in forecasts if row.get("horizon7Status") == "READY"]
+            ready14 = [row for row in forecasts if row.get("horizon14Status") == "READY"]
+            forecast_totals = {
+                "forecastExpectedUnitsNext7d": round(sum(float(row["expectedUnitsNext7d"]) for row in ready7), 4)
+                    if len(ready7) == len(inventory["products"]) else None,
+                "forecastExpectedUnitsNext14d": round(sum(float(row["expectedUnitsNext14d"]) for row in ready14), 4)
+                    if len(ready14) == len(inventory["products"]) else None,
+                "forecastExpectedUnitsNext1d": None}
             inventory_summary.update(forecast_totals)
             insights = self.health._insights(business, customer_summary, {"summary": inventory_summary},
                                              supplier_component, basket)
@@ -521,6 +583,10 @@ class V3IntelligenceRuntime:
                 "inactiveCount": customer_summary["segmentDistribution"].get("INACTIVE", 0),
                 "newCount": customer_summary["segmentDistribution"].get("NEW", 0)})
             sections["inventory"].update(inventory_summary)
+            sections["inventory"]["status"] = "PARTIAL" if (
+                inventory["summary"].get("forecastAvailability") != "AVAILABLE"
+                or inventory["summary"].get("riskUnavailableCount", 0)
+                or inventory["summary"].get("recommendationUnavailableCount", 0)) else "AVAILABLE"
             sections["suppliers"].update({"summary": supplier["summary"],
                 "topSpendShares": sorted([{"supplierCode": row["supplierCode"], "sharePct": row.get("purchaseSpendSharePct")}
                     for row in supplier["items"] if row.get("purchaseSpendSharePct") is not None],
@@ -533,11 +599,13 @@ class V3IntelligenceRuntime:
             freshness["customer"]["engineVersion"] = LiveBusinessCustomerAdapter.ENGINE_VERSION
             freshness["inventory"]["engineVersion"] = LiveInventorySupplierAdapter.ENGINE_VERSION
             freshness["supplier"]["engineVersion"] = LiveInventorySupplierAdapter.ENGINE_VERSION
-            freshness["forecast"] = self.live_forecast._freshness(live, [row.get("observationsThrough") for row in ready_forecasts])
+            freshness["forecast"] = {**dict(live.freshness("inventory")), "modelVersion7": inventory["summary"].get("modelVersion7"),
+                "modelVersion14": inventory["summary"].get("modelVersion14")}
             if isinstance(sections["marketBasket"].get("freshness"), dict):
                 freshness["marketBasket"] = sections["marketBasket"]["freshness"]
-            sections["forecast"] = {"source": "MOVING_AVERAGE_28", "horizons": [1, 7, 14],
-                "knownCount": len(ready_forecasts), "missingCount": len(forecasts) - len(ready_forecasts),
+            sections["forecast"] = {"source": "RIDGE_CAUSAL27", "horizons": [7, 14],
+                "status": "AVAILABLE" if len(ready7) == len(forecasts) and len(ready14) == len(forecasts) else "PARTIAL",
+                "knownCount": min(len(ready7), len(ready14)), "missingCount": len(forecasts) - min(len(ready7), len(ready14)),
                 **forecast_totals, "freshness": freshness["forecast"]}
             sections["sales"]["freshness"] = freshness["business"]
             sections["margin"]["freshness"] = freshness["business"]
@@ -552,7 +620,8 @@ class V3IntelligenceRuntime:
                        or customer.get("availabilityStatus") == "PARTIAL"
                        or inventory["summary"].get("forecastAvailability") != "AVAILABLE"
                        or inventory_partial
-                       or len(ready_forecasts) != len(forecasts) or supplier.get("availabilityStatus") == "PARTIAL"
+                       or len(ready7) != len(forecasts) or len(ready14) != len(forecasts)
+                       or supplier.get("availabilityStatus") == "PARTIAL"
                        or not basket.get("available"))
             return {"contractVersion": m68.HEALTH_VERSION, "scenarioId": SCENARIO_ID,
                 "datasetVersion": DATASET_VERSION, "datasetSha256": DATASET_SHA256,

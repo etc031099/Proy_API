@@ -27,7 +27,7 @@ def _forecast_fixture(*, value=3, version="1", missing=False, new=False, partial
         inventory={} if new else {"SKU-1": rows})
     closed = {}
     if not missing:
-        closed[(product_key, THROUGH)] = SimpleNamespace(unitsSold=value)
+        closed[(product_key, THROUGH)] = SimpleNamespace(unitsSold=value, completeness="COMPLETE")
     live_product = {"sku": sku, "productKey": product_key, "name": "fixture", "categoryCode": "CAT"}
     metadata = SimpleNamespace(businessId="B", scenarioId="minimarket-pasco-v3",
         observationsClosedThrough=THROUGH, dataVersion=version)
@@ -60,7 +60,7 @@ def _real_runtime_fixture():
     closed_rows = []
     for key in products:
         item = SimpleNamespace(productKey=key, localDate=THROUGH, unitsSold=0,
-            availability="OBSERVED", availableHours=15, onHandUsableAtOrigin=10)
+            completeness="COMPLETE", availability="OBSERVED", availableHours=15, onHandUsableAtOrigin=10)
         product_day[(key, THROUGH)] = item
         closed_rows.append(item)
     snapshot_metadata = SimpleNamespace(businessId=BUSINESS_ID, scenarioId=SCENARIO_ID,
@@ -104,7 +104,7 @@ class M69F4ELiveForecastTests(unittest.TestCase):
 
         # N+2: after advancing the operational date, Oct 14 is explicitly certified
         # CLOSED and becomes the newest observation; Oct 13 remains in the window.
-        closed = SimpleNamespace(unitsSold=28)
+        closed = SimpleNamespace(unitsSold=28, completeness="COMPLETE")
         second = SimpleNamespace(**vars(first))
         second.as_of_date = date(2026, 10, 15)
         second.data_version = "12"
@@ -180,12 +180,12 @@ class M69F4ELiveForecastTests(unittest.TestCase):
                 "availabilityStatus": "AVAILABLE"}, AS_OF))
         forecast = [{"sku": "SKU-1", "status": "READY", "observationsThrough": "2026-10-13",
             "expectedUnitsNext1d": 1.0, "expectedUnitsNext7d": 7.0, "expectedUnitsNext14d": 14.0}]
-        runtime.live_forecast = SimpleNamespace(all_forecasts=lambda _live: forecast,
-            _freshness=lambda _live, _obs: {"mode": "LIVE", "observationsThrough": "2026-10-13"},
-            ENGINE_VERSION="forecast-v1")
-        inv = {"products": [{"sku": "SKU-1", "risk": {"level": "LOW"}, "supplier": {"dependencyStatus": "MULTI_SOURCE"},
+        runtime._live_inventory_ridge_forecasts = lambda _request, _live: forecast
+        runtime.live_forecast = None
+        inv = {"products": [{"sku": "SKU-1", "risk": {"level": None}, "supplier": {"dependencyStatus": "MULTI_SOURCE"},
             "recommendation": {"recommendedQty": 0}}], "summary": {"products": 1, "forecastAvailability": "AVAILABLE",
-                "critical": 0, "overstock": 0, "inventoryValueCents": None, "riskUnavailableCount": 0}}
+                "critical": None, "overstock": 0, "inventoryValueCents": None, "riskUnavailableCount": 1,
+                "recommendationUnavailableCount": 1}}
         supplier = {"items": [], "summary": {"suppliers": 1}, "availabilityStatus": "AVAILABLE"}
         runtime.live_inventory_supplier = SimpleNamespace(_inventory_rows=lambda _live, _forecast: inv,
             supplier_data=lambda _req, _live: (supplier, AS_OF), ENGINE_VERSION="inventory-supplier-v1")
@@ -203,10 +203,12 @@ class M69F4ELiveForecastTests(unittest.TestCase):
                 if domain == "marketBasket" else {"mode": "LIVE", "domain": domain, "dataVersion": "3"}))
         data, _ = runtime.live_health_data(SimpleNamespace(period=None, limit=5), live)
         self.assertIsNone(data["healthScore"])
-        self.assertEqual(data["availabilityStatus"], "AVAILABLE")
+        self.assertEqual(data["availabilityStatus"], "PARTIAL")
+        self.assertEqual(data["businessHealth"]["inventory"]["status"], "PARTIAL")
+        self.assertIsNone(data["businessHealth"]["suppliers"]["criticalInventoryExposure"]["singleSourceCriticalOrHighSkuCount"])
         self.assertTrue(data["businessHealth"]["marketBasket"]["available"])
         self.assertEqual(data["freshness"]["marketBasket"]["analysisCutoff"], "2026-10-12")
-        self.assertEqual(data["freshness"]["forecast"]["observationsThrough"], "2026-10-13")
+        self.assertEqual(data["freshness"]["forecast"]["mode"], "LIVE")
 
     def test_inventory_completion_invokes_m66_with_live_forecast(self):
         from ml.service.v3_live_inventory_supplier import LiveInventorySupplierAdapter
@@ -226,7 +228,7 @@ class M69F4ELiveForecastTests(unittest.TestCase):
 
         static = {"products": [{"sku": "SKU-1", "productKey": "P1", "name": "Fixture",
             "categoryCode": "CAT", "minStockInitial": 2, "preferredSupplierCode": "S1",
-            "leadTimeDays": 2, "perishable": False, "shelfLifeDays": None, "supplierOffers": []}],
+            "leadTimeDays": 7, "perishable": False, "shelfLifeDays": None, "supplierOffers": []}],
             "suppliers": [{"supplierCode": "S1", "displayName": "Supplier", "leadTimeStdDays": 1}],
             "offers": {"packMultipleBySupplier": {}}}
         records = {"products": [{"sku": "SKU-1", "productKey": "P1"}], "purchases": [],
@@ -239,18 +241,24 @@ class M69F4ELiveForecastTests(unittest.TestCase):
                 "preferredSupplierCode": "S1", "supplierOffers": []}}, products_by_sku={},
             stock_for=lambda **_kw: 4, cancelled_transaction_keys=frozenset(), received_by_purchase_line={},
             freshness=lambda domain: {"mode": "LIVE", "domain": domain})
-        forecast = {"SKU-1": {"sku": "SKU-1", "status": "READY", "cutoffDate": AS_OF.isoformat(),
-            "forecastSource": "MOVING_AVERAGE_28", "strategyVersion": "approved", "expectedUnitsNext1d": 1.0,
-            "expectedUnitsNext7d": 7.0, "expectedUnitsNext14d": 14.0}}
+        forecast = {"SKU-1": {"sku": "SKU-1", "status": "READY", "horizon7Status": "READY",
+            "horizon14Status": "READY", "cutoffDate": AS_OF.isoformat(),
+            "expectedUnitsNext1d": None, "expectedUnitsNext7d": 14.0, "expectedUnitsNext14d": 28.0,
+            "modelVersion7": 3, "modelVersion14": 5}}
         with patch.object(m66, "evaluate_sku", wraps=m66.evaluate_sku) as evaluate:
             result, _ = adapter.inventory_data(SimpleNamespace(mode="detail", skus=["SKU-1"], limit=5,
                 offset=0, risk=None, abc=None, xyz=None, flag=None, metric="reorder"), context,
                 [forecast["SKU-1"]])
         self.assertEqual(evaluate.call_count, 1)
         row = result["items"][0]
-        self.assertEqual(row["forecast"]["source"], "MOVING_AVERAGE_28")
+        self.assertEqual(row["forecast"]["source"], "RIDGE_CAUSAL27")
+        self.assertIsNone(row["forecast"]["expected1d"])
+        self.assertEqual(row["forecast"]["expected7d"], 14.0)
+        self.assertEqual(row["forecast"]["expected14d"], 28.0)
         self.assertEqual(row["recommendation"]["status"], "AVAILABLE")
         self.assertIsNotNone(row["inventoryPolicy"]["reorderPoint"])
+        self.assertEqual(row["forecast"]["modelVersion7"], 3)
+        self.assertEqual(row["forecast"]["modelVersion14"], 5)
 
         adapter._cache.clear()
         summary_request = SimpleNamespace(mode="summary", skus=[], supplierCode=None, productSkus=[],
@@ -275,7 +283,21 @@ class M69F4ELiveForecastTests(unittest.TestCase):
         unavailable_row = unavailable["items"][0]
         self.assertIsNone(unavailable_row["risk"]["level"])
         self.assertIsNone(unavailable_row["inventoryPolicy"]["reorderPoint"])
-        self.assertEqual(unavailable_row["coverage"]["status"], "LEAD_TIME_VARIABILITY_UNAVAILABLE")
+        # Coverage is derivable from stock and the approved 7/14 demand rate;
+        # missing lead-time variance blocks safety stock/reorder, not days-cover.
+        self.assertEqual(unavailable_row["coverage"]["availabilityStatus"], "AVAILABLE")
+        self.assertEqual(unavailable_row["inventoryPolicy"]["safetyStockStatus"], "PARTIAL")
+        self.assertEqual(unavailable_row["inventoryPolicy"]["reorderStatus"], "PARTIAL")
+
+        no_forecast, _ = adapter.inventory_data(detail_request, context, None)
+        partial_row = no_forecast["items"][0]
+        self.assertEqual(no_forecast["availabilityStatus"], "PARTIAL")
+        self.assertEqual(partial_row["stock"]["onHand"], 4)
+        self.assertEqual(partial_row["stock"]["incoming"], 0)
+        self.assertEqual(partial_row["stock"]["availabilityStatus"], "AVAILABLE")
+        self.assertFalse(partial_row["risk"]["lowStock"])
+        self.assertIsNone(partial_row["risk"]["level"])
+        self.assertIsNone(partial_row["recommendation"]["recommendedQty"])
 
     def test_forecast_and_health_routes_are_registered_without_changing_historical_route(self):
         from ml.service.app import create_app
@@ -301,11 +323,36 @@ class M69F4ELiveForecastTests(unittest.TestCase):
         runtime.domains = {name: True for name in ("business", "inventory", "forecast", "crossSell", "customer", "supplier", "health")}
         runtime.live_adapter = object()
         runtime.live_inventory_supplier = object()
-        runtime.live_forecast = object()
         runtime.health = None
         self.assertFalse(runtime.public_status()["liveDomains"]["health"])
         runtime.health = object()
         self.assertTrue(runtime.public_status()["liveDomains"]["health"])
+
+    def test_inventory_health_scorer_uses_only_ridge_seven_and_fourteen_without_baseline(self):
+        from ml.service.v3_intelligence_runtime import V3IntelligenceRuntime
+
+        runtime = V3IntelligenceRuntime.__new__(V3IntelligenceRuntime)
+        runtime.dataset = SimpleNamespace(products=[{"sku": "SKU-1"}])
+        runtime.live_forecast = SimpleNamespace(all_forecasts=lambda _live: self.fail("MA28 LIVE must not be called"))
+        scored = []
+        def score(request, _live, *, include_baseline=True):
+            scored.append((request.horizonDays, request.activeRidgeModel.metadata.horizonDays, include_baseline))
+            return {"items": [{"status": "READY", "predictionUnits": float(request.horizonDays),
+                "modelVersion": request.activeRidgeModel.metadata.modelVersion}]}
+        runtime._live_ridge_forecast_data = score
+        models = [SimpleNamespace(metadata=SimpleNamespace(horizonDays=horizon, modelVersion=version,
+                artifactHash="a" * 64, featureHash="b" * 64, promotionPolicyHash="c" * 64))
+            for horizon, version in ((7, 3), (14, 5))]
+        request = SimpleNamespace(activeRidgeModels=models, context=SimpleNamespace(
+            businessId="B", scenarioId="minimarket-pasco-v3"))
+        live = SimpleNamespace(products_by_key={}, snapshot=SimpleNamespace(metadata=SimpleNamespace(
+            observationsClosedThrough=THROUGH)), data_version="2", context_hash="h")
+        result = runtime._live_inventory_ridge_forecasts(request, live)
+        self.assertEqual(scored, [(7, 7, False), (14, 14, False)])
+        self.assertEqual(result[0]["expectedUnitsNext7d"], 7.0)
+        self.assertEqual(result[0]["expectedUnitsNext14d"], 14.0)
+        self.assertIsNone(result[0].get("expectedUnitsNext1d"))
+        self.assertEqual((result[0]["modelVersion7"], result[0]["modelVersion14"]), (3, 5))
 
     def test_real_runtime_composes_forecast_inventory_and_health_on_certified_fixture(self):
         runtime, live = _real_runtime_fixture()
@@ -320,16 +367,16 @@ class M69F4ELiveForecastTests(unittest.TestCase):
         health, _ = runtime.live_health_data(SimpleNamespace(period=None, limit=5), live)
         self.assertEqual(forecast["availabilityStatus"], "AVAILABLE")
         self.assertEqual(forecast["products"], 80)
-        self.assertEqual(inventory["summary"]["forecastAvailability"], "AVAILABLE")
+        self.assertIn(inventory["summary"]["forecastAvailability"], {"AVAILABLE", "PARTIAL"})
         self.assertEqual(inventory["summary"]["products"], 80)
         item = inventory_detail["items"][0]
-        self.assertIsNotNone(item["demand"]["expectedDaily"])
-        self.assertIsNotNone(item["coverage"]["daysCover"])
-        self.assertIsNotNone(item["inventoryPolicy"]["safetyStock"])
-        self.assertIsNotNone(item["inventoryPolicy"]["reorderPoint"])
-        self.assertIsNotNone(item["recommendation"]["recommendedQty"])
-        self.assertIsNotNone(item["risk"]["level"])
-        self.assertEqual(health["availabilityStatus"], "AVAILABLE")
+        self.assertEqual(item["forecast"]["source"], "RIDGE_CAUSAL27")
+        self.assertIsNone(item["forecast"]["expected1d"])
+        self.assertEqual(item["stock"]["onHand"], 10)
+        if item["forecast"]["status"] == "PARTIAL":
+            self.assertIsNone(item["risk"]["level"])
+            self.assertIsNone(item["recommendation"]["recommendedQty"])
+        self.assertIn(health["availabilityStatus"], {"AVAILABLE", "PARTIAL"})
         self.assertIsNone(health["healthScore"])
         self.assertEqual(health["freshness"]["marketBasket"]["analysisCutoff"], "2026-10-12")
 

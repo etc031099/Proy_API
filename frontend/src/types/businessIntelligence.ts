@@ -32,8 +32,15 @@ export interface InventoryRankingItem {
   sku: string; productName: string; presentation: string | null; stock: number | null;
   coverageDays: number | null; risk: RiskLevel | null; riskReasonCodes: string[];
   recommendedQty: number | null; reorderNow: boolean | null;
+  availabilityStatus?: string | null; coverageStatus?: string | null; coverageReasonCode?: string | null;
+  riskStatus?: string | null; riskReasonCode?: string | null;
+  recommendationStatus?: string | null; recommendationReasonCode?: string | null;
 }
 export interface InventorySummary extends IntelligenceFreshness {
+  availabilityStatus?: Availability | string;
+  reasonCode?: string | null;
+  fieldAvailability?: Record<string, string> | null;
+  unavailableCount?: number | null;
   summary: {
     totalProducts: number | null;
     riskCounts: { critical: number | null; high: number | null; medium: number | null; low: number | null };
@@ -41,6 +48,9 @@ export interface InventorySummary extends IntelligenceFreshness {
     slowMovingCount?: number | null; deadStockCount?: number | null;
     abcCounts?: Record<string, number> | null; xyzCounts?: Record<string, number> | null;
     abcXyzCounts?: Record<string, number> | null;
+    riskCountsStatus?: string | null; riskUnavailableCount?: number | null;
+    recommendationUnavailableCount?: number | null; forecastAvailability?: string | null;
+    modelVersion7?: number | null; modelVersion14?: number | null;
   };
   items: InventoryRankingItem[]; total: number; flag?: string | null;
 }
@@ -103,10 +113,11 @@ export interface ProductInventory {
   product: ForecastResponse['product'];
   stock: { onHand: number | null; incoming: number | null; inventoryPosition: number | null };
   demand: { expectedDaily: number | null; expectedUnitsNext1d: number | null; expectedUnitsNext7d: number | null; expectedUnitsNext14d: number | null };
-  coverage: { daysCover: number | null; status: string | null };
-  inventoryPolicy: { safetyStock: number | null; reorderPoint: number | null };
-  recommendation: { reorderNow: boolean | null; preventiveRecommendation: boolean | null; recommendedQty: number | null };
-  risk: { level: RiskLevel | null; reasonCodes: string[] };
+  fieldAvailability?: Record<string, string> | null;
+  coverage: { daysCover: number | null; status: string | null; availabilityStatus?: string | null; reasonCode?: string | null };
+  inventoryPolicy: { safetyStock: number | null; reorderPoint: number | null; status?: string | null; reasonCode?: string | null; safetyStockStatus?: string | null; reorderStatus?: string | null };
+  recommendation: { reorderNow: boolean | null; preventiveRecommendation: boolean | null; recommendedQty: number | null; status?: string | null; availabilityStatus?: string | null; reasonCode?: string | null };
+  risk: { level: RiskLevel | null; reasonCodes: string[]; status?: string | null; availabilityStatus?: string | null; reasonCode?: string | null };
   classification: { abc: string | null; xyz: string | null };
 }
 export interface IntelligenceApiError { code: string; message: string; }

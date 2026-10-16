@@ -188,6 +188,17 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
       request.useLiveRidge = true;
       request.activeRidgeModel = envelope || null;
     }
+    if (invocation.trustedInventoryRidgeModels !== undefined) {
+      const models = invocation.trustedInventoryRidgeModels;
+      const horizons = Array.isArray(models) ? models.map(model => model?.metadata?.horizonDays) : [];
+      if (!['inventory', 'health'].includes(domain) || request.dataMode !== 'LIVE'
+          || !Array.isArray(models) || models.length > 2
+          || new Set(horizons).size !== horizons.length
+          || models.some(model => !model || model.metadata?.businessId !== binding.businessId
+            || model.metadata?.scenarioId !== binding.scenarioId || model.metadata?.status !== 'ACTIVE'
+            || ![7, 14].includes(model.metadata?.horizonDays))) throw new AgentError('AGENT_INVALID_SKILL_ARGS');
+      request.activeRidgeModels = models;
+    }
     if (args.startDate) {
       if (!isDate(args.endDate) || args.endDate > request.context.asOfDate || args.startDate < V3.earliestDate || args.startDate > args.endDate) throw new AgentError('AGENT_INVALID_SKILL_ARGS');
       request.period = { startDate: args.startDate, endDate: args.endDate };
@@ -298,10 +309,17 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
     if (request.period && data.period && (data.period.startDate !== request.period.startDate || data.period.endDate !== request.period.endDate)) throw unavailable();
     if (data.kpis && ['revenueCents', 'unitsSold', 'ticketCount'].some(key => !Number.isFinite(data.kpis[key]))) throw unavailable();
     if (spec.domain === 'inventory' && responseItems.some(row => {
-      const partialRecommendation = request.dataMode === 'LIVE' && body.status === 'PARTIAL' && data.availabilityStatus === 'PARTIAL'
-        && row.recommendation?.status === 'LIVE_FORECAST_REQUIRED' && row.recommendation.recommendedQty === null
-        && row.recommendation.shouldReorder === null;
-      return !isPlainObject(row.stock) || !Number.isFinite(row.stock.onHand) || !isPlainObject(row.risk)
+      const partialReasonCodes = new Set(['FORECAST_HORIZON_UNAVAILABLE', 'INSUFFICIENT_FORECAST_INPUTS',
+        'UNSUPPORTED_LEAD_TIME', 'STOCK_UNAVAILABLE']);
+      const partialStock = request.dataMode === 'LIVE' && body.status === 'PARTIAL'
+        && data.availabilityStatus === 'PARTIAL' && row.stock?.availabilityStatus === 'PARTIAL'
+        && row.stock.reasonCode === 'STOCK_UNAVAILABLE' && row.stock.onHand === null;
+      const partialRecommendation = request.dataMode === 'LIVE' && body.status === 'PARTIAL'
+        && data.availabilityStatus === 'PARTIAL' && row.recommendation?.status === 'PARTIAL'
+        && row.recommendation.availabilityStatus === 'PARTIAL'
+        && partialReasonCodes.has(row.recommendation.reasonCode)
+        && row.recommendation.recommendedQty === null && row.recommendation.shouldReorder === null;
+      return !isPlainObject(row.stock) || (!Number.isFinite(row.stock.onHand) && !partialStock) || !isPlainObject(row.risk)
         || !isPlainObject(row.recommendation) || (!Number.isSafeInteger(row.recommendation.recommendedQty) && !partialRecommendation);
     })) {
       const error = unavailable(); error.functionalCode = 'INVENTORY_RESPONSE_INVALID';

@@ -63,6 +63,25 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
     signal: new AbortController().signal,
     ...trusted,
   });
+  const liveRidgeModelsFor = async context => Promise.all([7, 14].map(async horizonDays => {
+    try {
+      const active = await registry.getActiveModelArtifact({ businessId: context.authenticated.businessId,
+        scenarioId: V3.scenarioId, horizonDays });
+      return active ? trustedForecastEnvelope(active, { businessId: context.authenticated.businessId,
+        scenarioId: V3.scenarioId, horizonDays }) : null;
+    } catch (_) {
+      // An unavailable/corrupt ACTIVE artifact makes forecast-dependent
+      // inventory fields partial; it must not suppress independent stock data.
+      return null;
+    }
+  }));
+  const executeInventoryHealth = async (context, skillId, args = {}, maxRecords = 20) => {
+    if (context.asOf <= V3.historicalCutoff) return execute(context, skillId, args, maxRecords);
+    const envelopes = await liveRidgeModelsFor(context);
+    return execute(context, skillId, args, maxRecords, {
+      trustedInventoryRidgeModels: envelopes.filter(Boolean),
+    });
+  };
   const responseMeta = (result, context, domain) => ({
     asOf: context.asOf, timezone: V3.timezone, mode: domain === 'cross-sell' ? 'FROZEN' : result.metadata?.dataMode || null,
     updatedAt: result.metadata?.updatedAt || null, dataThrough: result.metadata?.dataThrough || null,
@@ -239,7 +258,7 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
     if (!period) return { error: invalidPeriodError() };
     if (!limit || limit > 5) return { error: invalidLimitError('El límite debe estar entre 1 y 5.') };
     try {
-      const result = await execute(context, 'get_business_health', { ...periodArgs(period), limit }, 5);
+      const result = await executeInventoryHealth(context, 'get_business_health', { ...periodArgs(period), limit }, 5);
       const data = result.data || {}, sections = data.businessHealth || {};
       return { data: { ...responseMeta(result, context, 'health'), status: data.availabilityStatus || result.status,
         period: data.period || period, domains: Object.fromEntries(['sales', 'margin', 'customers', 'inventory', 'suppliers', 'forecast', 'marketBasket']
@@ -293,7 +312,7 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
     try {
       const [business, inventory, suppliers] = await Promise.all([
         execute(context, 'get_business_analytics', { mode: 'summary', startDate: today, endDate: today }),
-        execute(context, 'get_inventory_intelligence', { mode: 'summary' }),
+        executeInventoryHealth(context, 'get_inventory_intelligence', { mode: 'summary' }),
         execute(context, 'get_supplier_intelligence', { mode: 'summary', startDate: V3.earliestDate, endDate: today }),
       ]);
       const kpis = business.data?.kpis || {}, inv = inventory.data?.summary || {};
@@ -332,9 +351,9 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
     if (flag && !allowedFlags.includes(flag)) return { error: invalidRequestError() };
     try {
       const [summaryResult, rowsResult] = await Promise.all([
-        execute(context, 'get_inventory_intelligence', { mode: 'summary' }),
-        flag ? execute(context, 'get_inventory_intelligence', { mode: 'summary', flag, limit })
-          : execute(context, 'get_inventory_intelligence', { mode: 'rank', metric: 'stockout_risk', limit }),
+        executeInventoryHealth(context, 'get_inventory_intelligence', { mode: 'summary' }),
+        flag ? executeInventoryHealth(context, 'get_inventory_intelligence', { mode: 'summary', flag, limit })
+          : executeInventoryHealth(context, 'get_inventory_intelligence', { mode: 'rank', metric: 'stockout_risk', limit }),
       ]);
       const summary = summaryResult.data?.summary || {};
       const rankedItems = rowsResult.data?.items || [];
@@ -345,15 +364,30 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
           reorderCount: finiteOrNull(summary.shouldReorder), lowStockCount: finiteOrNull(summary.lowStock),
           overstockCount: finiteOrNull(summary.overstock), slowMovingCount: finiteOrNull(summary.slowMoving),
           deadStockCount: finiteOrNull(summary.deadStock), incomingUnits: finiteOrNull(summary.incomingUnits),
+          riskCountsStatus: summary.riskCountsStatus || null,
+          riskUnavailableCount: finiteOrNull(summary.riskUnavailableCount),
+          recommendationUnavailableCount: finiteOrNull(summary.recommendationUnavailableCount),
+          forecastAvailability: summary.forecastAvailability || null,
+          modelVersion7: finiteOrNull(summary.modelVersion7), modelVersion14: finiteOrNull(summary.modelVersion14),
           abcCounts: summaryResult.data?.abcCounts || null, xyzCounts: summaryResult.data?.xyzCounts || null,
-          abcXyzCounts: summaryResult.data?.abcXyzCounts || null }, flag,
+          abcXyzCounts: summaryResult.data?.abcXyzCounts || null },
+        availabilityStatus: summaryResult.data?.availabilityStatus || summaryResult.status,
+        reasonCode: summaryResult.data?.reasonCode || null,
+        fieldAvailability: summaryResult.data?.fieldAvailability || null,
+        unavailableCount: finiteOrNull(summaryResult.data?.unavailableCount), flag,
         items: rankedItems.map(row => {
           const catalogProduct = catalog.get(row.sku);
           return { sku: row.sku, productName: catalogProduct?.name || row.productName || row.sku,
             presentation: catalogProduct?.presentation || null, stock: finiteOrNull(row.stock?.onHand),
             coverageDays: finiteOrNull(row.coverage?.daysCover), risk: row.risk?.level || null,
             riskReasonCodes: row.risk?.reasonCodes || [], recommendedQty: finiteOrNull(row.recommendation?.recommendedQty),
-            reorderNow: row.recommendation?.shouldReorder ?? null };
+            reorderNow: row.recommendation?.shouldReorder ?? null,
+            availabilityStatus: row.status || null,
+            coverageStatus: row.coverage?.status || null,
+            coverageReasonCode: row.coverage?.reasonCode || null,
+            riskStatus: row.risk?.status || null, riskReasonCode: row.risk?.reasonCode || null,
+            recommendationStatus: row.recommendation?.status || null,
+            recommendationReasonCode: row.recommendation?.reasonCode || null };
         }), total: rowsResult.data?.total ?? 0 } };
     } catch (error) { return { error: safeError(error) }; }
   };
@@ -430,12 +464,19 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
           inventoryPosition: finiteOrNull(row.stock?.inventoryPosition) },
         demand: { expectedDaily: finiteOrNull(row.demand?.expectedDaily), expectedUnitsNext1d: finiteOrNull(row.demand?.expectedUnitsNext1d),
           expectedUnitsNext7d: finiteOrNull(row.demand?.expectedUnitsNext7d), expectedUnitsNext14d: finiteOrNull(row.demand?.expectedUnitsNext14d) },
-        coverage: { daysCover: finiteOrNull(row.coverage?.daysCover), status: row.coverage?.status || null },
-        inventoryPolicy: { safetyStock: finiteOrNull(row.inventoryPolicy?.safetyStock), reorderPoint: finiteOrNull(row.inventoryPolicy?.reorderPoint) },
+        fieldAvailability: row.availabilityStatus || result.data?.fieldAvailability || null,
+        coverage: { daysCover: finiteOrNull(row.coverage?.daysCover), status: row.coverage?.status || null,
+          availabilityStatus: row.coverage?.availabilityStatus || null, reasonCode: row.coverage?.reasonCode || null },
+        inventoryPolicy: { safetyStock: finiteOrNull(row.inventoryPolicy?.safetyStock), reorderPoint: finiteOrNull(row.inventoryPolicy?.reorderPoint),
+          status: row.inventoryPolicy?.status || null, reasonCode: row.inventoryPolicy?.reasonCode || null,
+          safetyStockStatus: row.inventoryPolicy?.safetyStockStatus || null, reorderStatus: row.inventoryPolicy?.reorderStatus || null },
         recommendation: { reorderNow: row.recommendation?.shouldReorder ?? null,
           preventiveRecommendation: null,
-          recommendedQty: finiteOrNull(row.recommendation?.recommendedQty) },
-        risk: { level: row.risk?.level || null, reasonCodes: row.risk?.reasonCodes || [] },
+          recommendedQty: finiteOrNull(row.recommendation?.recommendedQty), status: row.recommendation?.status || null,
+          availabilityStatus: row.recommendation?.availabilityStatus || null,
+          reasonCode: row.recommendation?.reasonCode || null },
+        risk: { level: row.risk?.level || null, reasonCodes: row.risk?.reasonCodes || [], status: row.risk?.status || null,
+          availabilityStatus: row.risk?.availabilityStatus || null, reasonCode: row.risk?.reasonCode || null },
         classification: { abc: row.classification?.abc || null, xyz: row.classification?.xyz || null } } };
     } catch (error) {
       if (type === 'forecast' && error?.functionalCode === 'INSUFFICIENT_HISTORY') return { data: {

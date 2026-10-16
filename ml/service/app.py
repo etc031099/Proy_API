@@ -234,8 +234,7 @@ def create_app(runtime: ModelRuntime | None = None,
                     or (domain in {"inventory", "supplier"}
                         and getattr(current, "live_inventory_supplier", None) is None)
                     or (domain == "forecast" and getattr(current, "live_forecast", None) is None)
-                    or (domain == "health" and (getattr(current, "live_forecast", None) is None
-                        or getattr(current, "live_inventory_supplier", None) is None
+                    or (domain == "health" and (getattr(current, "live_inventory_supplier", None) is None
                         or getattr(current, "live_adapter", None) is None
                         or getattr(current, "health", None) is None))):
                 raise HTTPException(status_code=501, detail={"code": "LIVE_ANALYTICS_NOT_READY",

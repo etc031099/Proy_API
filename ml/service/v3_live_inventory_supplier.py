@@ -1,10 +1,11 @@
 """LIVE inventory and supplier views over the immutable backend snapshot.
 
 This is deliberately a wrapper, not a second forecasting/replenishment engine:
-M6.6 evaluates inventory policies using the approved LIVE MA28 forecast inputs.
+M6.6 evaluates inventory policies using approved LIVE Ridge 7/14 inputs.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import OrderedDict, defaultdict
 from datetime import date, datetime, timedelta
@@ -45,7 +46,7 @@ def _local_date(value: datetime) -> date:
 class LiveInventorySupplierAdapter:
     """Bounded cache of immutable per-snapshot projections; no historical mutation."""
 
-    ENGINE_VERSION = "m6.9f4e-live-inventory-supplier-v2"
+    ENGINE_VERSION = "m6.10a361-live-ridge-inventory-v1"
 
     def __init__(self, records: dict[str, Any], static: dict[str, Any], inventory_engine,
                  supplier_engine):
@@ -64,9 +65,11 @@ class LiveInventorySupplierAdapter:
 
     def inventory_data(self, request, live: LiveV3Context, forecast_rows=None):
         meta = live.snapshot.metadata
+        forecast_identity = hashlib.sha256(json.dumps(forecast_rows or [], sort_keys=True,
+            separators=(",", ":"), default=str, allow_nan=False).encode("utf-8")).hexdigest()
         key = (meta.businessId, meta.scenarioId, live.data_version, live.context_hash,
                live.as_of_date.isoformat(), "inventory", self.ENGINE_VERSION,
-               "with-forecast" if forecast_rows is not None else "without-forecast")
+               forecast_identity)
         with self._lock:
             rows = self._cache.get(key)
             if rows is None:
@@ -77,6 +80,7 @@ class LiveInventorySupplierAdapter:
             else:
                 self._cache.move_to_end(key)
         values = list(rows["products"])
+        unavailable = 0
         if request.skus:
             missing = set(request.skus) - {row["sku"] for row in values}
             if missing:
@@ -84,14 +88,9 @@ class LiveInventorySupplierAdapter:
             wanted = set(request.skus)
             values = [row for row in values if row["sku"] in wanted]
         # Missing forecast evidence must not look like an empty successful filter.
-        if request.risk and rows["summary"]["forecastAvailability"] != "AVAILABLE":
-            return {"availabilityStatus": "PARTIAL", "reasonCode": "LIVE_FORECAST_REQUIRED",
-                    "total": 0, "analyzedCount": 0, "unavailableCount": len(values),
-                    "items": [], "freshness": {**dict(live.freshness("inventory")),
-                    "engineVersion": self.ENGINE_VERSION}}, live.as_of_date
         if request.risk:
+            unavailable += sum(row["risk"].get("level") is None for row in values)
             values = [row for row in values if row["risk"]["level"] == request.risk]
-        unavailable = 0
         if request.abc:
             unavailable = max(unavailable, sum(row["classification"]["abc"] is None for row in values))
             values = [row for row in values if row["classification"]["abc"] == request.abc]
@@ -99,9 +98,12 @@ class LiveInventorySupplierAdapter:
             unavailable = max(unavailable, sum(row["classification"]["xyz"] is None for row in values))
             values = [row for row in values if row["classification"]["xyz"] == request.xyz]
         if request.flag:
-            if request.flag in {"should_reorder", "overstock"} and rows["summary"]["forecastAvailability"] != "AVAILABLE":
-                return {"availabilityStatus": "PARTIAL", "reasonCode": "LIVE_FORECAST_REQUIRED",
-                        "total": 0, "analyzedCount": 0, "unavailableCount": len(values), "items": []}, live.as_of_date
+            if request.flag == "low_stock":
+                unavailable += sum(row["risk"].get("lowStock") is None for row in values)
+            if request.flag in {"should_reorder", "overstock"}:
+                dependent = "recommendedQty" if request.flag == "should_reorder" else "overstock"
+                unavailable += sum((row["recommendation"].get(dependent) if dependent == "recommendedQty"
+                                    else row["classification"].get(dependent)) is None for row in values)
             if request.flag in {"slow_moving", "dead_stock"}:
                 field = "slowMoving" if request.flag == "slow_moving" else "deadStock"
                 unavailable = max(unavailable, sum(row["classification"][field] is None for row in values))
@@ -115,19 +117,29 @@ class LiveInventorySupplierAdapter:
         if request.mode == "detail" and not request.skus:
             raise LiveDomainError("AMBIGUOUS_ENTITY", 409, "A resolved product SKU is required for inventory detail.")
         if request.mode == "rank":
-            if rows["summary"]["forecastAvailability"] != "AVAILABLE":
-                return {"availabilityStatus": "PARTIAL", "reasonCode": "LIVE_FORECAST_REQUIRED",
-                        "metric": request.metric, "total": 0, "analyzedCount": 0,
-                        "unavailableCount": len(values), "items": [],
-                        "freshness": {**dict(live.freshness("inventory")), "engineVersion": self.ENGINE_VERSION}}, live.as_of_date
-            ranking = {"low_stock": "low_stock", "overstock": "overstock", "reorder": "reorder",
-                "stockout_risk": "stockout_risk", "abc_a": "abc_a", "az": "az",
+            ranking = {"overstock": "overstock", "reorder": "reorder",
+                "stockout_risk": "stockout_risk", "low_stock": "low_stock", "slow_moving": "slow_moving",
+                "abc_a": "abc_a", "az": "az",
                 "single_source_critical": "single_source_critical"}.get(request.metric)
             if ranking is None:
                 return {"availabilityStatus": "PARTIAL", "reasonCode": "INSUFFICIENT_FORECAST_EVIDENCE",
                         "metric": request.metric, "total": 0, "analyzedCount": 0,
                         "unavailableCount": len(values), "items": []}, live.as_of_date
-            values = m66.rank_products(values, ranking)
+            rank_requirements = {
+                "stockout_risk": lambda row: row["risk"].get("level") in _RISK_LEVELS,
+                "reorder": lambda row: row["recommendation"].get("shouldReorder") is not None
+                    and row["recommendation"].get("recommendedQty") is not None
+                    and row["risk"].get("level") in _RISK_LEVELS,
+                "overstock": lambda row: row["classification"].get("overstock") is not None,
+                "single_source_critical": lambda row: row["risk"].get("level") in {"CRITICAL", "HIGH"},
+                "low_stock": lambda row: row["risk"].get("lowStock") is not None,
+                "abc_a": lambda row: row["classification"].get("abc") is not None,
+                "az": lambda row: row["classification"].get("abcXyz") is not None,
+                "slow_moving": lambda row: row["classification"].get("slowMoving") is not None,
+            }
+            eligible = [row for row in values if rank_requirements[ranking](row)]
+            unavailable += len(values) - len(eligible)
+            values = m66.rank_products(eligible, ranking)
         page = values[request.offset:request.offset + request.limit]
         if request.mode in {"detail", "rank", "recommendations"} or request.skus or request.flag or request.risk or request.abc or request.xyz:
             data = {"total": len(values), "analyzedCount": len(values), "unavailableCount": unavailable,
@@ -139,13 +151,22 @@ class LiveInventorySupplierAdapter:
                     "unavailableCount": rows["summary"]["unavailableCount"]}
         # A partial status reflects evidence unavailable for at least one SKU,
         # not a missing adapter. Forecast-dependent policies remain explicit nulls.
+        dependent_partial = any(rows["summary"].get(key, 0) for key in (
+            "coverageUnavailableCount", "riskUnavailableCount", "recommendationUnavailableCount",
+            "overstockUnavailableCount"))
         data["availabilityStatus"] = "PARTIAL" if (unavailable or rows["summary"]["unavailableCount"]
-                                                    or rows["summary"]["forecastAvailability"] != "AVAILABLE") else "AVAILABLE"
-        data["fieldAvailability"] = {"stock": "AVAILABLE", "incoming": "AVAILABLE",
-            "minimumStock": "AVAILABLE", "forecast": "AVAILABLE" if rows["summary"]["forecastAvailability"] == "AVAILABLE" else "PARTIAL",
-            "coverage": "AVAILABLE" if rows["summary"]["forecastAvailability"] == "AVAILABLE" else "PARTIAL",
-            "risk": "AVAILABLE" if rows["summary"]["forecastAvailability"] == "AVAILABLE" else "PARTIAL",
-            "reorder": "AVAILABLE" if rows["summary"]["forecastAvailability"] == "AVAILABLE" else "PARTIAL", "abc": "AVAILABLE" if rows["summary"]["abcAvailable"] and not rows["summary"]["abcUnavailableCount"] else "PARTIAL",
+            or rows["summary"]["forecastAvailability"] != "AVAILABLE" or dependent_partial) else "AVAILABLE"
+        if unavailable or rows["summary"]["forecastAvailability"] != "AVAILABLE" or dependent_partial:
+            data["reasonCode"] = "FORECAST_HORIZON_UNAVAILABLE"
+            data["unavailableCount"] = max(unavailable, data.get("unavailableCount", 0))
+        data["fieldAvailability"] = {"stock": "PARTIAL" if rows["summary"]["unavailableCount"] else "AVAILABLE",
+            "incoming": "PARTIAL" if rows["summary"].get("incomingUnavailableCount", 0) else "AVAILABLE",
+            "minimumStock": "PARTIAL" if rows["summary"].get("minimumStockUnavailableCount", 0) else "AVAILABLE",
+            "lowStock": "PARTIAL" if rows["summary"].get("lowStockUnavailableCount", 0) else "AVAILABLE",
+            "forecast": "AVAILABLE" if rows["summary"]["forecastAvailability"] == "AVAILABLE" else "PARTIAL",
+            "coverage": "AVAILABLE" if rows["summary"].get("coverageUnavailableCount", 0) == 0 else "PARTIAL",
+            "risk": "AVAILABLE" if rows["summary"].get("riskUnavailableCount", 0) == 0 else "PARTIAL",
+            "reorder": "AVAILABLE" if rows["summary"].get("recommendationUnavailableCount", 0) == 0 else "PARTIAL", "abc": "AVAILABLE" if rows["summary"]["abcAvailable"] and not rows["summary"]["abcUnavailableCount"] else "PARTIAL",
             "xyz": "AVAILABLE" if rows["summary"]["xyzAvailable"] else "PARTIAL",
             "slowMoving": "PARTIAL" if rows["summary"]["slowMovingUnavailableCount"] else "AVAILABLE",
             "deadStock": "PARTIAL" if rows["summary"]["deadStockUnavailableCount"] else "AVAILABLE"}
@@ -305,7 +326,7 @@ class LiveInventorySupplierAdapter:
             incoming = sum(int(item["units"]) for item in incoming_orders)
             minimum = _get(product, "minStock", _get(product, "minStockInitial"))
             known_stock = stock is not None
-            low = bool(known_stock and minimum is not None and stock <= int(minimum))
+            low = (stock <= int(minimum)) if known_stock and minimum is not None else None
             new_sku = sku not in base_skus
             abc_row = abc.get(sku)
             xyz_row = xyz_by_sku.get(sku, {})
@@ -339,27 +360,56 @@ class LiveInventorySupplierAdapter:
                 "saleDays30": sale_days30, "unitsSold60": sold60, "productObservableAgeDays": age}
             row = {"sku": sku, "productKey": product_key, "productName": _get(product, "name", sku),
                 "categoryCode": _get(product, "categoryCode"), "asOfDate": cutoff.isoformat(),
-                "stock": {"onHand": stock, "incoming": incoming if known_stock else None,
+                "stock": {"onHand": stock, "incoming": incoming,
                           "inventoryPosition": stock + incoming if known_stock else None,
-                          "pendingOrders": incoming_orders, "overdueOrUnknownExpectedArrivalUnits": overdue.get(sku, 0) if known_stock else None},
-                "coverage": {"daysCover": None, "status": "LIVE_FORECAST_REQUIRED"},
-                "demand": {"expectedDaily": None, "source": None},
+                          "availabilityStatus": "AVAILABLE" if known_stock else "PARTIAL",
+                          "reasonCode": None if known_stock else "STOCK_UNAVAILABLE",
+                          "pendingOrders": incoming_orders, "overdueOrUnknownExpectedArrivalUnits": overdue.get(sku, 0)},
+                "coverage": {"daysCover": None, "status": "PARTIAL", "reasonCode": "FORECAST_HORIZON_UNAVAILABLE",
+                    "availabilityStatus": "PARTIAL"},
+                "demand": {"expectedDaily": None, "source": "APPROXIMATE_RATE_FROM_RIDGE_7_14",
+                    "status": "PARTIAL", "reasonCode": "FORECAST_HORIZON_UNAVAILABLE", "availabilityStatus": "PARTIAL"},
                 "inventoryPolicy": {"configuredMinimumStock": minimum,
                     "safetyStock": None, "reorderPoint": None,
                     "configuredSafetyStock": _get(product, "safetyStock"),
                     "configuredReorderPoint": _get(product, "reorderPoint"),
-                    "status": "LIVE_FORECAST_REQUIRED"},
-                "risk": {"level": None, "reasonCodes": ["LIVE_FORECAST_REQUIRED"], "lowStock": low if minimum is not None and known_stock else None,
-                    "status": "PARTIAL" if known_stock else "STOCK_UNAVAILABLE"},
+                    "status": "PARTIAL", "reasonCode": "FORECAST_HORIZON_UNAVAILABLE",
+                    "safetyStockStatus": "PARTIAL", "reorderStatus": "PARTIAL"},
+                "risk": {"level": None, "reasonCodes": ["FORECAST_HORIZON_UNAVAILABLE"], "lowStock": low if minimum is not None and known_stock else None,
+                    "status": "PARTIAL" if known_stock else "STOCK_UNAVAILABLE",
+                    "reasonCode": "FORECAST_HORIZON_UNAVAILABLE", "availabilityStatus": "PARTIAL",
+                    "projectedStockoutDate": None, "projectedStockoutDateStatus": "UNAVAILABLE_NO_APPROVED_DAILY_CURVE"},
                 "classification": classification,
                 "recommendation": {"shouldReorder": None, "recommendedQty": None,
-                    "status": "LIVE_FORECAST_REQUIRED"},
+                    "status": "PARTIAL", "reasonCode": "FORECAST_HORIZON_UNAVAILABLE", "availabilityStatus": "PARTIAL"},
                 "supplier": {"preferredSupplierCode": _get(product, "preferredSupplierCode"),
                     "dependencyStatus": ("SINGLE_SOURCE" if len(_get(product, "supplierOffers", ()) or offers_by_sku.get(sku, ())) == 1
                         else "MULTI_SOURCE" if (_get(product, "supplierOffers", ()) or offers_by_sku.get(sku, ()))
                         else "NO_ACTIVE_OFFER"),
                     "activeOfferCount": len(_get(product, "supplierOffers", ()) or offers_by_sku.get(sku, ()))}}
-            if forecast_by_sku.get(sku, {}).get("status") == "READY" and known_stock:
+            forecast_row = forecast_by_sku.get(sku, {})
+            row["forecast"] = {"source": "RIDGE_CAUSAL27", "status": "PARTIAL",
+                "reasonCode": "FORECAST_HORIZON_UNAVAILABLE", "expected1d": None,
+                "expected7d": None, "expected14d": None,
+                "modelVersion7": forecast_row.get("modelVersion7"),
+                "modelVersion14": forecast_row.get("modelVersion14"),
+                "horizon7Status": forecast_row.get("horizon7Status", "MODEL_UNAVAILABLE"),
+                "horizon14Status": forecast_row.get("horizon14Status", "MODEL_UNAVAILABLE")}
+            row["coverage"].update({"status": "PARTIAL", "reasonCode": "INSUFFICIENT_FORECAST_INPUTS"})
+            row["demand"].update({"source": "APPROXIMATE_RATE_FROM_RIDGE_7_14", "status": "PARTIAL",
+                "reasonCode": "INSUFFICIENT_FORECAST_INPUTS"})
+            row["inventoryPolicy"].update({"status": "PARTIAL", "reasonCode": "INSUFFICIENT_FORECAST_INPUTS"})
+            row["recommendation"].update({"status": "PARTIAL", "reasonCode": "INSUFFICIENT_FORECAST_INPUTS"})
+            row["risk"].update({"status": "PARTIAL", "reasonCode": "INSUFFICIENT_FORECAST_INPUTS",
+                "projectedStockoutDate": None, "projectedStockoutDateStatus": "UNAVAILABLE_NO_APPROVED_DAILY_CURVE"})
+            ridge7 = forecast_row.get("expectedUnitsNext7d")
+            ridge14 = forecast_row.get("expectedUnitsNext14d")
+            valid_pair = (forecast_row.get("horizon7Status", forecast_row.get("status")) == "READY"
+                and forecast_row.get("horizon14Status", forecast_row.get("status")) == "READY"
+                and all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                    and math.isfinite(float(value)) and value >= 0 for value in (ridge7, ridge14))
+                and float(ridge14) >= float(ridge7))
+            if valid_pair and known_stock:
                 projection = product if isinstance(product, dict) else {
                     name: getattr(product, name, None) for name in ("sku", "productKey", "name", "active", "minStock",
                         "safetyStock", "reorderPoint", "categoryCode", "subcategoryCode", "perishable", "shelfLifeDays",
@@ -396,7 +446,7 @@ class LiveInventorySupplierAdapter:
                         lead = lead_std = None
                 observable_days = sum(float(item.get("availableHours") or 0) > 0 and int(item.get("onHandUsableAtOrigin") or 0) > 0
                                       for item in history[-28:])
-                if lead is not None and lead_std is not None and observable_days >= 14:
+                if True:
                     offer_rows = offers_by_sku.get(sku, [])
                     preferred_offers = _get(product, "supplierOffers", ()) or offer_rows
                     active_offers = []
@@ -407,38 +457,93 @@ class LiveInventorySupplierAdapter:
                             "preferred": bool(_get(offer, "preferred", supplier_key == preferred)),
                             "unitCostCents": _get(offer, "costCents"), "currency": _get(offer, "currency")})
                     supplier_info = supplier_configs.get(preferred, {})
-                    evaluated = m66.evaluate_sku(product=definition, forecast=forecast_by_sku[sku],
+                    approved_forecast = {**forecast_row,
+                        "expectedUnitsNext1d": None,
+                        "expectedUnitsNext7d": float(ridge7), "expectedUnitsNext14d": float(ridge14),
+                        "cutoffDate": forecast_row.get("cutoffDate", cutoff.isoformat()), "status": "READY"}
+                    evaluated = m66.evaluate_sku(product=definition, forecast=approved_forecast,
                         daily_rows=history, on_hand=stock, incoming_orders=incoming_orders, cutoff=cutoff,
-                        lead_time_days=lead, configured_lead_time_days=float(_get(definition, "leadTimeDays", lead) or lead),
-                        lead_time_std_days=lead_std, lead_time_source=lead_source, lead_time_sample_size=lead_n,
+                        lead_time_days=lead if lead is not None else 0.0,
+                        configured_lead_time_days=float(_get(definition, "leadTimeDays", lead or 0) or lead or 0),
+                        lead_time_std_days=lead_std if lead_std is not None else 0.0,
+                        lead_time_source=lead_source if lead is not None else "UNAVAILABLE", lead_time_sample_size=lead_n,
                         supplier=supplier_info, active_offers=active_offers,
                         pack_multiple=int(pack_multiples.get(f"{preferred}:{sku}", pack_multiples.get(preferred, 1))),
-                        min_order_qty=1, consumption_value=abc_complete[sku])
+                        min_order_qty=1, consumption_value=abc_complete[sku], ridge_live=True)
                     row = self._from_m66(row, evaluated)
-                    threshold, excess = m66._estimate_excess_units(
-                        inventory_position=row["stock"]["inventoryPosition"],
-                        expected_daily=row["demand"]["expectedDaily"],
-                        safety_stock=row["inventoryPolicy"]["safetyStock"], lead_time_days=lead,
-                        perishable=bool(definition.get("perishable")), shelf_life_days=definition.get("shelfLifeDays"))
-                    row["classification"]["excessUnitsEstimated"] = excess
-                    row["classification"]["overstock"] = excess > 0
-                    if definition.get("perishable"):
-                        row["classification"]["overstockThresholdUnits"] = threshold
+                    if minimum is None:
+                        row["risk"]["lowStock"] = None
+                        row["classification"]["lowStock"] = None
+                    lead_supported = lead is not None and (float(lead).is_integer() and int(lead) in (7, 14))
+                    safety_available = lead is not None and lead_std is not None and observable_days >= 14
+                    row["forecast"].update({"status": "AVAILABLE", "reasonCode": None,
+                        "expected7d": float(ridge7), "expected14d": float(ridge14)})
+                    row["coverage"].update({"status": "AVAILABLE", "reasonCode": None})
+                    row["demand"].update({"status": "AVAILABLE", "reasonCode": None,
+                        "expectedDaily": (float(ridge7) / 7 + float(ridge14) / 14) / 2,
+                        "source": "APPROXIMATE_RATE_FROM_RIDGE_7_14"})
+                    row["inventoryPolicy"].update({"status": "AVAILABLE", "reasonCode": None})
+                    row["coverage"]["availabilityStatus"] = "AVAILABLE"
+                    row["demand"]["availabilityStatus"] = "AVAILABLE"
+                    row["inventoryPolicy"]["safetyStockStatus"] = "AVAILABLE" if safety_available else "PARTIAL"
+                    row["inventoryPolicy"]["reorderStatus"] = "AVAILABLE" if lead_supported and safety_available else "PARTIAL"
+                    row["forecast"]["modelVersion7"] = forecast_row.get("modelVersion7")
+                    row["forecast"]["modelVersion14"] = forecast_row.get("modelVersion14")
+                    if not safety_available:
+                        row["inventoryPolicy"].update({"safetyStockRaw": None, "safetyStock": None,
+                            "status": "PARTIAL", "reasonCode": "INSUFFICIENT_FORECAST_INPUTS"})
+                    if not lead_supported or not safety_available:
+                        reason = "UNSUPPORTED_LEAD_TIME" if lead is not None and not lead_supported else "INSUFFICIENT_FORECAST_INPUTS"
+                        row["recommendation"].update({"shouldReorder": None, "recommendedQty": None,
+                            "targetStock": None, "status": "PARTIAL", "reasonCode": reason})
+                        lead_demand_value = evaluated["demand"]["validLeadTimeDemand"] if lead is not None else None
+                        row["demand"]["validLeadTimeDemand"] = lead_demand_value
+                        row["inventoryPolicy"].update({"expectedDemandDuringLeadTime": lead_demand_value,
+                            "reorderPointRaw": None, "reorderPoint": None, "targetStockRaw": None,
+                            "targetStock": None, "status": "PARTIAL", "reasonCode": reason})
+                        row["risk"].update({"level": None, "reason": None, "status": "PARTIAL", "reasonCode": reason})
+                    row["recommendation"]["availabilityStatus"] = "AVAILABLE" if lead_supported and safety_available else "PARTIAL"
+                    row["risk"]["availabilityStatus"] = "AVAILABLE" if lead_supported and safety_available else "PARTIAL"
+                    if lead is None:
+                        row["supplier"].update({"leadTimeDays": None, "leadTimeSource": "UNAVAILABLE"})
+                    if row["demand"].get("expectedDaily") is not None and row["inventoryPolicy"].get("safetyStock") is not None:
+                        threshold, excess = m66._estimate_excess_units(
+                            inventory_position=row["stock"]["inventoryPosition"],
+                            expected_daily=row["demand"]["expectedDaily"],
+                            safety_stock=row["inventoryPolicy"]["safetyStock"], lead_time_days=float(lead or 0),
+                            perishable=bool(definition.get("perishable")), shelf_life_days=definition.get("shelfLifeDays"))
+                        row["classification"]["excessUnitsEstimated"] = excess
+                        row["classification"]["overstock"] = excess > 0
+                        row["classification"]["overstockStatus"] = "AVAILABLE"
+                        if definition.get("perishable"):
+                            row["classification"]["overstockThresholdUnits"] = threshold
+                        else:
+                            row["classification"]["overstockThresholdDaysCover"] = max(30.0, 2 * (float(lead or 0) + m66.REVIEW_DAYS))
                     else:
-                        row["classification"]["overstockThresholdDaysCover"] = max(30.0, 2 * (lead + m66.REVIEW_DAYS))
-                    if excess:
-                        row["risk"]["reasonCodes"].append("OVERSTOCK")
-                else:
-                    if observable_days < 14:
-                        row["coverage"]["status"] = "INSUFFICIENT_AVAILABILITY_HISTORY"
-                    elif lead is None:
-                        row["coverage"]["status"] = "LEAD_TIME_UNAVAILABLE"
-                    else:
-                        row["coverage"]["status"] = "LEAD_TIME_VARIABILITY_UNAVAILABLE"
-                    row["demand"].update({"expectedDaily": None, "source": "MOVING_AVERAGE_28"})
-                    row["inventoryPolicy"]["status"] = "INSUFFICIENT_EVIDENCE"
-                    row["recommendation"]["status"] = "INSUFFICIENT_EVIDENCE"
-                    row["risk"]["reasonCodes"] = ["INSUFFICIENT_EVIDENCE"]
+                        row["classification"]["overstock"] = None
+                        row["classification"]["excessUnitsEstimated"] = None
+                        row["classification"]["overstockStatus"] = "PARTIAL"
+            elif valid_pair:
+                row["forecast"].update({"status": "AVAILABLE", "reasonCode": None,
+                    "expected7d": float(ridge7), "expected14d": float(ridge14)})
+                row["demand"].update({"expectedDaily": (float(ridge7) / 7 + float(ridge14) / 14) / 2,
+                    "source": "APPROXIMATE_RATE_FROM_RIDGE_7_14", "status": "AVAILABLE", "reasonCode": None})
+                row["coverage"].update({"status": "PARTIAL", "reasonCode": "STOCK_UNAVAILABLE"})
+                row["inventoryPolicy"].update({"status": "PARTIAL", "reasonCode": "STOCK_UNAVAILABLE"})
+                row["recommendation"].update({"status": "PARTIAL", "reasonCode": "STOCK_UNAVAILABLE"})
+                row["risk"].update({"status": "PARTIAL", "reasonCode": "STOCK_UNAVAILABLE"})
+                row["coverage"]["availabilityStatus"] = "PARTIAL"
+                row["demand"]["availabilityStatus"] = "AVAILABLE"
+                row["inventoryPolicy"].update({"safetyStockStatus": "PARTIAL", "reorderStatus": "PARTIAL"})
+                row["recommendation"]["availabilityStatus"] = "PARTIAL"
+                row["risk"]["availabilityStatus"] = "PARTIAL"
+            else:
+                row["forecast"]["reasonCode"] = "FORECAST_HORIZON_UNAVAILABLE"
+                row["demand"].update({"reasonCode": "FORECAST_HORIZON_UNAVAILABLE"})
+                row["coverage"].update({"reasonCode": "FORECAST_HORIZON_UNAVAILABLE"})
+                row["inventoryPolicy"].update({"reasonCode": "FORECAST_HORIZON_UNAVAILABLE"})
+                row["recommendation"].update({"reasonCode": "FORECAST_HORIZON_UNAVAILABLE"})
+                row["risk"].update({"reasonCode": "FORECAST_HORIZON_UNAVAILABLE"})
             rows.append(row)
         known = sum(row["stock"]["onHand"] is not None for row in rows)
         abc_counts = {key: sum(row["classification"]["abc"] == key for row in rows) for key in ("A", "B", "C")}
@@ -450,11 +555,24 @@ class LiveInventorySupplierAdapter:
             pair = row["classification"]["abcXyz"]
             if pair in matrix:
                 matrix[pair] += 1
+        all_horizons_ready = (forecast_rows is not None and len(forecast_by_sku) >= len(rows)
+            and all(forecast_by_sku.get(row["sku"], {}).get("horizon7Status",
+                forecast_by_sku.get(row["sku"], {}).get("status")) == "READY"
+                and forecast_by_sku.get(row["sku"], {}).get("horizon14Status",
+                forecast_by_sku.get(row["sku"], {}).get("status")) == "READY" for row in rows))
+        incoming_unknown = sum(row["stock"]["incoming"] is None for row in rows)
         summary = {"products": len(rows), "analyzedCount": known, "unavailableCount": len(rows) - known,
-            "incomingUnits": sum(row["stock"]["incoming"] or 0 for row in rows),
+            "minimumStockUnavailableCount": sum(row["inventoryPolicy"].get("configuredMinimumStock") is None for row in rows),
+            "incomingUnits": (None if incoming_unknown else sum(row["stock"]["incoming"] for row in rows)),
+            "incomingUnavailableCount": incoming_unknown,
             "lowStock": sum(row["risk"]["lowStock"] is True for row in rows),
+            "lowStockUnavailableCount": sum(row["risk"]["lowStock"] is None for row in rows),
             "inventoryValueCents": None, "critical": None, "high": None, "medium": None, "shouldReorder": None,
-            "forecastAvailability": "AVAILABLE" if forecast_rows is not None and all(r.get("status") == "READY" for r in forecast_rows if r.get("sku") in products) else "PARTIAL", "abcAvailable": costs_complete,
+            "forecastAvailability": "AVAILABLE" if all_horizons_ready else "PARTIAL", "abcAvailable": costs_complete,
+            "modelVersion7": next((forecast_by_sku.get(row["sku"], {}).get("modelVersion7") for row in rows
+                if forecast_by_sku.get(row["sku"], {}).get("modelVersion7") is not None), None),
+            "modelVersion14": next((forecast_by_sku.get(row["sku"], {}).get("modelVersion14") for row in rows
+                if forecast_by_sku.get(row["sku"], {}).get("modelVersion14") is not None), None),
             "abcUnavailableCount": sum(row["classification"]["abc"] is None for row in rows),
             "xyzAvailable": all(row["classification"]["xyzStatus"] != "INSUFFICIENT_HISTORY" for row in rows),
             "xyzUnavailableCount": sum(row["classification"]["xyz"] is None for row in rows),
@@ -465,14 +583,24 @@ class LiveInventorySupplierAdapter:
                 if row["demand"].get("expectedDaily") is None:
                     summary["forecastAvailability"] = "PARTIAL"
             summary.update(_risk_counts(rows))
-            risk_unavailable = summary["riskUnavailableCount"] > 0
-            summary["shouldReorder"] = (None if risk_unavailable else
+            recommendation_unavailable = sum(row["recommendation"].get("recommendedQty") is None for row in rows)
+            summary["shouldReorder"] = (None if recommendation_unavailable else
                 sum(row["recommendation"].get("shouldReorder") is True for row in rows))
-            summary["recommendedProducts"] = sum((row["recommendation"].get("recommendedQty") or 0) > 0 for row in rows)
-            summary["overstock"] = (None if risk_unavailable else
+            summary["recommendedProducts"] = (None if recommendation_unavailable else
+                sum(row["recommendation"].get("recommendedQty", 0) > 0 for row in rows))
+            overstock_unavailable = sum(row["classification"].get("overstock") is None for row in rows)
+            summary["overstock"] = (None if overstock_unavailable else
                 sum(row["classification"].get("overstock") is True for row in rows))
-            summary["recommendationUnavailableCount"] = sum(row["recommendation"].get("recommendedQty") is None for row in rows)
-            value_complete = all(_get(products[sku], "costPriceCents") is not None for sku in products if _get(products[sku], "active", True))
+            summary["overstockUnavailableCount"] = overstock_unavailable
+            summary["coverageUnavailableCount"] = sum(row["coverage"].get("daysCover") is None for row in rows)
+            summary["riskUnavailableCount"] = sum(row["risk"].get("level") is None for row in rows)
+            summary["riskCountsStatus"] = "PARTIAL" if summary["riskUnavailableCount"] else "AVAILABLE"
+            summary["lowStockStatus"] = "PARTIAL" if summary["lowStockUnavailableCount"] else "AVAILABLE"
+            if summary["lowStockUnavailableCount"]:
+                summary["lowStock"] = None
+            summary["recommendationUnavailableCount"] = recommendation_unavailable
+            value_complete = (all(_get(products[sku], "costPriceCents") is not None for sku in products if _get(products[sku], "active", True))
+                and all(row["stock"]["onHand"] is not None for row in rows))
             summary["inventoryValueCents"] = (sum(int(row["stock"]["onHand"] or 0) * int(_get(products[row["sku"]], "costPriceCents", 0)) for row in rows
                 if row["stock"]["onHand"] is not None) if value_complete else None)
         return {"products": rows, "summary": summary, "abcCounts": abc_counts,
