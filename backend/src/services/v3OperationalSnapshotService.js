@@ -71,7 +71,8 @@ async function getDataVersion(businessId, { session, majority = false } = {}) {
   return row?.revision == null ? '0' : String(row.revision);
 }
 
-async function bumpV3OperationalRevision({ businessId, session, changes = [], effectiveAtUtc = new Date() }) {
+async function bumpV3OperationalRevision({ businessId, session, changes = [], effectiveAtUtc = new Date(),
+  mlAffectedLocalDate = null }) {
   if (businessId !== config.businessId) return null;
   if (!session || !session.inTransaction()) throw new Error('V3 revision must be bumped inside the owning Mongo transaction.');
   await resolveV3OperationalScenario(businessId, { session });
@@ -96,6 +97,11 @@ async function bumpV3OperationalRevision({ businessId, session, changes = [], ef
       effectiveAtUtc, ...change
     }));
     await V3OperationalChange.insertMany(docs, { session, ordered: true });
+    const { recordCommittedChange } = require('./forecastMlUpdateCoordinator');
+    for (const [eventOrdinal, change] of changes.entries()) {
+      await recordCommittedChange({ businessId, scenarioId: config.scenarioId, dataVersion: revision,
+        change, eventOrdinal, session, affectedLocalDate: mlAffectedLocalDate });
+    }
   }
   return revision.toString();
 }
@@ -219,7 +225,9 @@ async function recordV3Transaction({ businessId, session, transaction, contact =
       transactionOrigin: reference.origin, type: transaction.type, kind: 'CANCEL',
       affectedStableLineKeys: reference.lineKeys };
   } else projection = transactionProjection(transaction, contact, productIdentities);
-  return bumpV3OperationalRevision({ businessId, session, effectiveAtUtc: effectiveAtUtc || transaction.date || new Date(), changes: [{
+  return bumpV3OperationalRevision({ businessId, session, effectiveAtUtc: effectiveAtUtc || transaction.date || new Date(),
+    mlAffectedLocalDate: operation === 'CANCEL' && isSale ? limaDate(new Date(transaction.date)) : null,
+    changes: [{
     entityType, entityKey: idOf(transaction._id), operation, projection
   }] });
 }

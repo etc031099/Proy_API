@@ -11,6 +11,8 @@ const V3OperationalRevision = require('./V3OperationalRevision');
 const V3OperationalChange = require('./V3OperationalChange');
 const ForecastModelArtifact = require('./ForecastModelArtifact');
 const ForecastModelRegistry = require('./ForecastModelRegistry');
+const ForecastMlUpdateEvent = require('./ForecastMlUpdateEvent');
+const ForecastMlUpdateState = require('./ForecastMlUpdateState');
 
 module.exports = {
   User,
@@ -25,5 +27,7 @@ module.exports = {
   V3OperationalRevision,
   V3OperationalChange,
   ForecastModelArtifact,
-  ForecastModelRegistry
+  ForecastModelRegistry,
+  ForecastMlUpdateEvent,
+  ForecastMlUpdateState
 };

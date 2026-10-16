@@ -36,7 +36,15 @@ const { authenticate } = require('./middleware/auth');
 const app = express();
 
 // Connect to database
-connectDB().then(startPolling);
+connectDB().then(async () => {
+  const { ForecastMlUpdateEvent, ForecastMlUpdateState } = require('./models');
+  await Promise.all([ForecastMlUpdateEvent.init(), ForecastMlUpdateState.init()]);
+  startPolling();
+  // Calendar closure can advance without a sale. This only refreshes durable
+  // eligibility; no model fit or commercial operation runs on startup.
+  setImmediate(() => require('./services/forecastMlUpdateCoordinator').refreshWatermarks()
+    .catch(() => console.warn(JSON.stringify({ event: 'ML_UPDATE_REFRESH_FAILED' }))));
+});
 
 // Trust proxy (important for rate limiting and getting real IP addresses)
 app.set('trust proxy', 1);
