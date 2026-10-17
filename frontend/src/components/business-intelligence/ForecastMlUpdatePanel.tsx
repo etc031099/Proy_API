@@ -94,7 +94,7 @@ function completionMessage(status: ForecastMlUpdateStatus): string {
     return 'Evaluación completada. El candidato no cumplió los criterios y se conserva el modelo activo.';
   }
   if (status.horizons.every(row => row.lastResult === 'LAST_RESULT_NO_PENDING')) {
-    return 'Evaluación completada. No fue necesario cambiar el modelo.';
+    return 'Revisión completada: no había trabajo pendiente. El modelo activo no cambió.';
   }
   return reasonMessage(status) || 'Estado actualizado. Las versiones activas siguen disponibles.';
 }

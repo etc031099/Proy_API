@@ -141,7 +141,7 @@ describe('Forecast manual ML update panel', () => {
     await waitFor(() => expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(2));
     await vi.advanceTimersByTimeAsync(8_000);
     await waitFor(() => expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(4));
-    expect(await screen.findByText('Evaluación completada. No fue necesario cambiar el modelo.')).toBeTruthy();
+    expect(await screen.findByText('Revisión completada: no había trabajo pendiente. El modelo activo no cambió.')).toBeTruthy();
     await vi.advanceTimersByTimeAsync(24_000);
     expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(4);
   });
