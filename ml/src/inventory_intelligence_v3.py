@@ -106,18 +106,32 @@ def _xyz(weekly_units: list[float]) -> dict[str, Any]:
             "weeksObserved": len(weekly_units), "zeroSalesWeeks": zeros}
 
 
+def _ridge_lead_time_reason(days) -> str | None:
+    if days is None:
+        return "MISSING_LEAD_TIME"
+    if (isinstance(days, bool) or not isinstance(days, (int, float))
+            or not math.isfinite(days) or days <= 0):
+        return "INVALID_LEAD_TIME"
+    return "LEAD_TIME_BEYOND_APPROVED_HORIZON" if days > 14 else None
+
+
 def _forecast_demand_until(days: float, forecast: dict[str, float], *, ridge_live: bool = False) -> tuple[float | None, bool]:
-    """Return cumulative demand; LIVE Ridge uses only exact 7d/14d anchors."""
+    """LIVE uses the operational Ridge 7/14 mean rate, only for 0 < L <= 14.
+
+    This is a rate approximation for inventory policy, not an L-day ML forecast
+    or an interpolated daily curve. The historical forecast path is unchanged.
+    """
+    if ridge_live:
+        if _ridge_lead_time_reason(days) is not None:
+            return None, False
+        p7, p14 = forecast.get("expectedUnitsNext7d"), forecast.get("expectedUnitsNext14d")
+        if (any(isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or value < 0 for value in (p7, p14)) or p14 < p7):
+            return None, False
+        mu = (p7 / 7 + p14 / 14) / 2
+        return mu * days, False
     if days <= 0:
         return 0.0, False
-    if ridge_live:
-        horizon = int(days) if float(days).is_integer() else None
-        field = {7: "expectedUnitsNext7d", 14: "expectedUnitsNext14d"}.get(horizon)
-        value = forecast.get(field) if field else None
-        if (field is None or isinstance(value, bool) or not isinstance(value, (int, float))
-                or not math.isfinite(float(value)) or value < 0):
-            return None, False
-        return float(value), False
     p1 = float(forecast["expectedUnitsNext1d"])
     p7 = float(forecast["expectedUnitsNext7d"])
     p14 = float(forecast["expectedUnitsNext14d"])
@@ -205,9 +219,13 @@ def evaluate_sku(
     position = int(on_hand) + incoming_units
     cover = int(on_hand) / daily_forecast if daily_forecast > EPSILON else None
     effective_depletion_days = _days_to_depletion(on_hand, daily_forecast, incoming_orders, cutoff)
-    lead = max(0.0, float(lead_time_days))
+    lead_reason = _ridge_lead_time_reason(lead_time_days) if ridge_live else None
+    if ridge_live:
+        lead = float(lead_time_days) if lead_reason in (None, "LEAD_TIME_BEYOND_APPROVED_HORIZON") else 0.0
+    else:
+        lead = max(0.0, float(lead_time_days))
     review = float(REVIEW_DAYS)
-    horizon_days = lead if ridge_live else min(lead, 14.0)
+    horizon_days = lead_time_days if ridge_live else min(lead, 14.0)
     demand_during_lead, truncated_lead_forecast = _forecast_demand_until(horizon_days, forecast, ridge_live=ridge_live)
     lead_demand_available = demand_during_lead is not None
     reasons: list[str] = []
@@ -254,7 +272,8 @@ def evaluate_sku(
     else:
         safety_raw = safety_stock = reorder_raw = reorder_point = target_raw = target_stock = None
         should_reorder = recommended_qty = None
-        reasons.append("UNSUPPORTED_LEAD_TIME" if lead > 0 else "INSUFFICIENT_FORECAST_INPUTS")
+        reasons.append((lead_reason or "INSUFFICIENT_FORECAST_INPUTS") if ridge_live else
+                       "UNSUPPORTED_LEAD_TIME" if lead > 0 else "INSUFFICIENT_FORECAST_INPUTS")
 
     minimum = int(product.get("minStockInitial", 0))
     low_stock = int(on_hand) <= minimum
@@ -314,6 +333,9 @@ def evaluate_sku(
                    "rule": "mean(expectedUnitsNext7d/7, expectedUnitsNext14d/14)",
                    "sigmaDailyLast28Observable": sigma_demand, "observableDaysLast28": len(observable),
                    "exposureDaysLast28": exposure_days, "validLeadTimeDemand": lead_demand_raw,
+                   **({"leadTimeDemandRule": "expectedDaily * leadTimeDays; 0 < leadTimeDays <= 14",
+                       "leadTimeDemandInterpretation": "aproximación operacional derivada de los pronósticos Ridge 7d/14d"}
+                      if ridge_live else {}),
                    "leadTimeDemandClippedTo14d": lead_clipped},
         "supplier": {"preferredSupplierCode": product.get("preferredSupplierCode"), "preferredSupplier": configured_supplier_name,
                      "leadTimeDays": lead, "configuredLeadTimeDays": configured_lead_time_days,

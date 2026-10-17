@@ -425,6 +425,7 @@ class LiveInventorySupplierAdapter:
                 preferred = str(_get(definition, "preferredSupplierCode", ""))
                 supplier_samples = lead_supplier.get(preferred, [])
                 supplier_config = supplier_configs.get(preferred, {})
+                lead_n, lead_source = 0, "UNAVAILABLE"
                 if len(pair) >= m66.MIN_LEAD_RECEIPTS:
                     lead, lead_std, lead_n, lead_source = sum(pair) / len(pair), pstdev(pair), len(pair), "OBSERVED_PRODUCT_SUPPLIER"
                 elif len(supplier_samples) >= m66.MIN_LEAD_RECEIPTS:
@@ -437,8 +438,8 @@ class LiveInventorySupplierAdapter:
                         configured = (_get(supplier_config, "leadTime", {}) or {}).get("configuredMeanDays") if isinstance(supplier_config, dict) else None
                     if configured is not None:
                         configured_std = _get(supplier_config, "leadTimeStdDays")
-                        lead = float(configured)
-                        lead_std = float(configured_std) if configured_std is not None else None
+                        lead = configured
+                        lead_std = configured_std
                         lead_n = len(pair)
                         lead_source = ("PRODUCT_CONFIG_AND_SUPPLIER_DEMO_VARIABILITY"
                                        if lead_std is not None else "PRODUCT_CONFIG_LEAD_ONLY")
@@ -446,6 +447,14 @@ class LiveInventorySupplierAdapter:
                         lead = lead_std = None
                 observable_days = sum(float(item.get("availableHours") or 0) > 0 and int(item.get("onHandUsableAtOrigin") or 0) > 0
                                       for item in history[-28:])
+                lead_reason = m66._ridge_lead_time_reason(lead)
+                lead_supported = lead_reason is None
+                valid_lead_number = lead_reason in (None, "LEAD_TIME_BEYOND_APPROVED_HORIZON")
+                sigma_lead_available = (isinstance(lead_std, (int, float)) and not isinstance(lead_std, bool)
+                    and math.isfinite(lead_std) and lead_std >= 0)
+                configured_lead = _get(definition, "leadTimeDays")
+                if m66._ridge_lead_time_reason(configured_lead) not in (None, "LEAD_TIME_BEYOND_APPROVED_HORIZON"):
+                    configured_lead = lead if valid_lead_number else 0.0
                 if True:
                     offer_rows = offers_by_sku.get(sku, [])
                     preferred_offers = _get(product, "supplierOffers", ()) or offer_rows
@@ -463,9 +472,9 @@ class LiveInventorySupplierAdapter:
                         "cutoffDate": forecast_row.get("cutoffDate", cutoff.isoformat()), "status": "READY"}
                     evaluated = m66.evaluate_sku(product=definition, forecast=approved_forecast,
                         daily_rows=history, on_hand=stock, incoming_orders=incoming_orders, cutoff=cutoff,
-                        lead_time_days=lead if lead is not None else 0.0,
-                        configured_lead_time_days=float(_get(definition, "leadTimeDays", lead or 0) or lead or 0),
-                        lead_time_std_days=lead_std if lead_std is not None else 0.0,
+                        lead_time_days=lead,
+                        configured_lead_time_days=float(configured_lead),
+                        lead_time_std_days=lead_std if sigma_lead_available else 0.0,
                         lead_time_source=lead_source if lead is not None else "UNAVAILABLE", lead_time_sample_size=lead_n,
                         supplier=supplier_info, active_offers=active_offers,
                         pack_multiple=int(pack_multiples.get(f"{preferred}:{sku}", pack_multiples.get(preferred, 1))),
@@ -474,8 +483,7 @@ class LiveInventorySupplierAdapter:
                     if minimum is None:
                         row["risk"]["lowStock"] = None
                         row["classification"]["lowStock"] = None
-                    lead_supported = lead is not None and (float(lead).is_integer() and int(lead) in (7, 14))
-                    safety_available = lead is not None and lead_std is not None and observable_days >= 14
+                    safety_available = lead_supported and sigma_lead_available and observable_days >= 14
                     row["forecast"].update({"status": "AVAILABLE", "reasonCode": None,
                         "expected7d": float(ridge7), "expected14d": float(ridge14)})
                     row["coverage"].update({"status": "AVAILABLE", "reasonCode": None})
@@ -493,7 +501,7 @@ class LiveInventorySupplierAdapter:
                         row["inventoryPolicy"].update({"safetyStockRaw": None, "safetyStock": None,
                             "status": "PARTIAL", "reasonCode": "INSUFFICIENT_FORECAST_INPUTS"})
                     if not lead_supported or not safety_available:
-                        reason = "UNSUPPORTED_LEAD_TIME" if lead is not None and not lead_supported else "INSUFFICIENT_FORECAST_INPUTS"
+                        reason = lead_reason or "INSUFFICIENT_FORECAST_INPUTS"
                         row["recommendation"].update({"shouldReorder": None, "recommendedQty": None,
                             "targetStock": None, "status": "PARTIAL", "reasonCode": reason})
                         lead_demand_value = evaluated["demand"]["validLeadTimeDemand"] if lead is not None else None
@@ -504,7 +512,7 @@ class LiveInventorySupplierAdapter:
                         row["risk"].update({"level": None, "reason": None, "status": "PARTIAL", "reasonCode": reason})
                     row["recommendation"]["availabilityStatus"] = "AVAILABLE" if lead_supported and safety_available else "PARTIAL"
                     row["risk"]["availabilityStatus"] = "AVAILABLE" if lead_supported and safety_available else "PARTIAL"
-                    if lead is None:
+                    if not valid_lead_number:
                         row["supplier"].update({"leadTimeDays": None, "leadTimeSource": "UNAVAILABLE"})
                     if row["demand"].get("expectedDaily") is not None and row["inventoryPolicy"].get("safetyStock") is not None:
                         threshold, excess = m66._estimate_excess_units(
