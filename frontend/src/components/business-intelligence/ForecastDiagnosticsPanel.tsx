@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -10,7 +10,17 @@ import type { AuthenticatedDiagnosticResult, ForecastActiveModel, ForecastActive
 import { ForecastMlUpdatePanel } from './ForecastMlUpdatePanel';
 
 type Props = { onForecastModelsChange: (models: ForecastActiveModel[] | null) => void };
-type SectionState = 'loading' | 'ready' | 'error';
+type SectionState = 'loading' | 'retrying' | 'ready' | 'error';
+
+const DIAGNOSTIC_RETRY_DELAY_MS = 2500;
+const TRANSIENT_DIAGNOSTIC_CODES = new Set(['SERVICE_TEMPORARILY_UNAVAILABLE', 'HEALTH_DIAGNOSTIC_TIMEOUT']);
+const NON_TRANSIENT_DIAGNOSTIC_CODES = new Set([
+  'AUTH_REQUIRED', 'SESSION_UNAUTHORIZED',
+  'MODEL_NOT_APPROVED', 'PROMOTION_POLICY_FAILED', 'MODEL_UNAVAILABLE',
+  'FEATURE_CONTRACT_MISMATCH', 'ARTIFACT_HASH_MISMATCH', 'ARTIFACT_INTEGRITY_FAILED',
+  'ARTIFACT_INVALID', 'ARTIFACT_NOT_FOUND', 'ACTIVE_ARTIFACT_NOT_FOUND', 'ACTIVE_POINTER_MISSING',
+  'ML_ARTIFACT_LOAD_FAILED', 'MODEL_LOAD_FAILED', 'MODEL_INTEGRITY_FAILED', 'MODEL_SCHEMA_INVALID',
+]);
 
 const codeText = (value?: string | null) => typeof value === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(value) ? value : null;
 const safeText = (value?: string | null) => typeof value === 'string' && /^[A-Z0-9_-]{1,64}$/.test(value) ? value : null;
@@ -35,9 +45,35 @@ const dateLabel = (value?: string | null) => {
 
 function requestMessage<T>(result: AuthenticatedDiagnosticResult<T>): string | null {
   if (result.httpStatus === 401 || result.code === 'SESSION_UNAUTHORIZED') return 'Sesión no autorizada. Inicia sesión nuevamente.';
-  if (result.httpStatus === 503 || result.httpStatus === 0 || result.code === 'SERVICE_TEMPORARILY_UNAVAILABLE') return 'Servicio temporalmente no disponible.';
+  if ([0, 502, 503, 504].includes(result.httpStatus) || result.code === 'SERVICE_TEMPORARILY_UNAVAILABLE') return 'Servicio temporalmente no disponible.';
   if (!result.data) return 'No se pudo obtener el diagnóstico.';
   return null;
+}
+
+function isTransientDiagnosticFailure<T>(result: AuthenticatedDiagnosticResult<T>, section: 'forecast' | 'health'): boolean {
+  const diagnosticData = result.data as (HealthDiagnostic & { models?: ForecastActiveModel[] }) | undefined;
+  const codes = [
+    result.code,
+    diagnosticData && 'reasonCode' in diagnosticData ? diagnosticData.reasonCode : null,
+    ...(diagnosticData?.models || []).map(model => model.reasonCode),
+  ].filter((code): code is string => typeof code === 'string');
+
+  if (codes.some(code => NON_TRANSIENT_DIAGNOSTIC_CODES.has(code))) return false;
+  if (result.httpStatus >= 400 && result.httpStatus < 500) return false;
+  if (TRANSIENT_DIAGNOSTIC_CODES.has(result.code || '')) return true;
+  if (section === 'health' && (diagnosticData?.httpStatus === 504 || diagnosticData?.reasonCode === 'HEALTH_DIAGNOSTIC_TIMEOUT')) return true;
+  if (result.httpStatus === 0) return true;
+  return result.httpStatus === 502 || result.httpStatus === 503 || result.httpStatus === 504;
+}
+
+function waitForRetry(delay: number, timers: Map<ReturnType<typeof setTimeout>, () => void>): Promise<void> {
+  return new Promise(resolve => {
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      resolve();
+    }, delay);
+    timers.set(timer, resolve);
+  });
 }
 
 function HorizonStatus({ model }: { model?: ForecastActiveModel }) {
@@ -97,33 +133,91 @@ export function ForecastDiagnosticsPanel({ onForecastModelsChange }: Props) {
   const [forecastState, setForecastState] = useState<SectionState>('loading');
   const [healthState, setHealthState] = useState<SectionState>('loading');
   const [requestNumber, setRequestNumber] = useState(0);
+  const cycleRef = useRef<{
+    requestNumber: number;
+    forecast: Promise<AuthenticatedDiagnosticResult<ForecastActiveModels>>;
+    health: Promise<AuthenticatedDiagnosticResult<HealthDiagnostic>>;
+  } | null>(null);
 
-  const refresh = useCallback(async () => {
-    setForecastState('loading'); setHealthState('loading');
-    const forecastTask = apiClient.getForecastModelDiagnostics().then(forecastResult => {
-      setForecast(forecastResult);
-      onForecastModelsChange(forecastResult.httpStatus >= 200 && forecastResult.httpStatus < 300
-        ? forecastResult.data?.models || null : null);
+  useEffect(() => {
+    let active = true;
+    const timers = new Map<ReturnType<typeof setTimeout>, () => void>();
+    const currentCycle = cycleRef.current?.requestNumber === requestNumber
+      ? cycleRef.current
+      : {
+        requestNumber,
+        forecast: Promise.resolve().then(() => apiClient.getForecastModelDiagnostics()),
+        health: Promise.resolve().then(() => apiClient.getHealthDiagnostics()),
+      };
+    cycleRef.current = currentCycle;
+    setForecastState('loading');
+    setHealthState('loading');
+
+    const loadForecast = async () => {
+      let result: AuthenticatedDiagnosticResult<ForecastActiveModels> | null = null;
+      try { result = await currentCycle.forecast; } catch { /* Retry once below for a network/fetch failure. */ }
+      if (!active) return;
+      if (!result || isTransientDiagnosticFailure(result, 'forecast')) {
+        setForecastState('retrying');
+        await waitForRetry(DIAGNOSTIC_RETRY_DELAY_MS, timers);
+        if (!active) return;
+        try { result = await apiClient.getForecastModelDiagnostics(); } catch { result = null; }
+      }
+      if (!active) return;
+      if (!result) {
+        setForecast(null);
+        onForecastModelsChange(null);
+        setForecastState('error');
+        return;
+      }
+      setForecast(result);
+      onForecastModelsChange(result.httpStatus >= 200 && result.httpStatus < 300 ? result.data?.models || null : null);
       setForecastState('ready');
-    }).catch(() => {
-      setForecast(null); onForecastModelsChange(null); setForecastState('error');
-    });
-    const healthTask = apiClient.getHealthDiagnostics().then(healthResult => {
-      setHealth(healthResult); setHealthState('ready');
-    }).catch(() => { setHealth(null); setHealthState('error'); });
-    await Promise.all([forecastTask, healthTask]);
-  }, [onForecastModelsChange]);
+    };
 
-  useEffect(() => { void refresh(); }, [refresh, requestNumber]);
+    const loadHealth = async () => {
+      let result: AuthenticatedDiagnosticResult<HealthDiagnostic> | null = null;
+      try { result = await currentCycle.health; } catch { /* Retry once below for a network/fetch failure. */ }
+      if (!active) return;
+      if (!result || isTransientDiagnosticFailure(result, 'health')) {
+        setHealthState('retrying');
+        await waitForRetry(DIAGNOSTIC_RETRY_DELAY_MS, timers);
+        if (!active) return;
+        try { result = await apiClient.getHealthDiagnostics(); } catch { result = null; }
+      }
+      if (!active) return;
+      if (!result) {
+        setHealth(null);
+        setHealthState('error');
+        return;
+      }
+      setHealth(result);
+      setHealthState('ready');
+    };
+
+    void loadForecast();
+    void loadHealth();
+    return () => {
+      active = false;
+      for (const [timer, resolve] of timers) {
+        clearTimeout(timer);
+        resolve();
+      }
+      timers.clear();
+    };
+  }, [onForecastModelsChange, requestNumber]);
+
+  const isBusy = forecastState === 'loading' || forecastState === 'retrying' || healthState === 'loading' || healthState === 'retrying';
 
   return <Card aria-label="Estado del ML">
     <CardHeader><div className="flex flex-wrap items-start justify-between gap-3"><div><CardTitle>Estado del ML</CardTitle><CardDescription>Estado del pronóstico y solicitudes de evaluación bajo la política vigente.</CardDescription></div>
-      <Button type="button" size="sm" variant="outline" disabled={forecastState === 'loading' || healthState === 'loading'} onClick={() => setRequestNumber(value => value + 1)}><RefreshCw className="mr-2 h-4 w-4" />{forecastState === 'loading' || healthState === 'loading' ? 'Consultando…' : 'Actualizar estado'}</Button></div></CardHeader>
+      <Button type="button" size="sm" variant="outline" disabled={isBusy} onClick={() => setRequestNumber(value => value + 1)}><RefreshCw className="mr-2 h-4 w-4" />{isBusy ? 'Consultando…' : 'Actualizar estado'}</Button></div></CardHeader>
     <CardContent className="space-y-4"><ForecastMlUpdatePanel refreshToken={requestNumber} />
       {forecastState === 'loading' && <p role="status" className="text-sm text-muted-foreground">Cargando pronósticos…</p>}
+      {forecastState === 'retrying' && <p role="status" className="text-sm text-muted-foreground">Preparando servicio de pronósticos…</p>}
       {forecastState === 'error' && <p role="alert" className="text-sm text-muted-foreground">No se pudo consultar el diagnóstico de pronósticos. Puedes actualizar el estado e intentarlo nuevamente.</p>}
       {forecastState === 'ready' && forecast && <ForecastSection result={forecast} />}
-      {healthState === 'loading' && <section aria-label="Diagnóstico de salud" className="space-y-3 border-t pt-4"><h3 className="font-semibold">Health</h3><p role="status" className="text-sm text-muted-foreground">Cargando Health…</p></section>}
+      {(healthState === 'loading' || healthState === 'retrying') && <section aria-label="Diagnóstico de salud" className="space-y-3 border-t pt-4"><h3 className="font-semibold">Health</h3><p role="status" className="text-sm text-muted-foreground">{healthState === 'retrying' ? 'Preparando diagnóstico Health…' : 'Cargando Health…'}</p></section>}
       {healthState === 'error' && <section aria-label="Diagnóstico de salud" className="space-y-3 border-t pt-4"><h3 className="font-semibold">Health</h3><p role="alert" className="text-sm text-muted-foreground">No se pudo consultar Health. Puedes actualizar el estado e intentarlo nuevamente.</p></section>}
       {healthState === 'ready' && health && <HealthSection result={health} />}
     </CardContent>

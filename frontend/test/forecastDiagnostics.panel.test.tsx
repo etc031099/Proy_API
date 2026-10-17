@@ -34,7 +34,7 @@ describe('forecast serving diagnostics panel', () => {
       { horizonDays: 14, activeModelVersion: 1, trainedDataVersion: '83', pending: false, currentlyRunning: false, trigger: 'AUTO', lastRequestAt: null, lastAttemptAt: null, lastEvaluatedAt: null, lastResult: null, lastEvaluationReason: null, eligibility: 'NO_PENDING_WORK', nextEligibleAt: null, requestStatus: 'LAST_RESULT_NO_PENDING', dispatchStatus: null, availableOrigins: 0, requiredOrigins: 107 },
     ] }));
   });
-  afterEach(() => cleanup());
+  afterEach(() => { cleanup(); vi.useRealTimers(); });
 
   it('renders the 1-day policy status and reason', async () => {
     render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
@@ -98,20 +98,32 @@ describe('forecast serving diagnostics panel', () => {
 
   it('keeps Forecast visible when Health fails independently', async () => {
     vi.spyOn(apiClient, 'getForecastModelDiagnostics').mockResolvedValue(ok(forecast));
-    vi.spyOn(apiClient, 'getHealthDiagnostics').mockRejectedValue(new Error('Health unavailable'));
+    vi.useFakeTimers();
+    const healthGet = vi.spyOn(apiClient, 'getHealthDiagnostics')
+      .mockRejectedValueOnce(new Error('Health unavailable'))
+      .mockRejectedValueOnce(new Error('Health unavailable'));
     render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
 
-    expect(await screen.findByRole('region', { name: 'Diagnóstico de pronósticos' })).toBeTruthy();
-    expect(await screen.findByText(/No se pudo consultar Health/)).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByText('Preparando diagnóstico Health…')).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
+    expect(screen.getByRole('region', { name: 'Diagnóstico de pronósticos' })).toBeTruthy();
+    expect(screen.getByText(/No se pudo consultar Health/)).toBeTruthy();
+    expect(healthGet).toHaveBeenCalledTimes(2);
   });
 
   it('keeps Health visible when Forecast fails independently', async () => {
-    vi.spyOn(apiClient, 'getForecastModelDiagnostics').mockRejectedValue(new Error('Forecast unavailable'));
+    vi.useFakeTimers();
+    const forecastGet = vi.spyOn(apiClient, 'getForecastModelDiagnostics').mockRejectedValue(new Error('Forecast unavailable'));
     vi.spyOn(apiClient, 'getHealthDiagnostics').mockResolvedValue(ok(health));
     render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
 
-    expect(await screen.findByText('Ensamblado Health')).toBeTruthy();
-    expect(await screen.findByText(/No se pudo consultar el diagnóstico de pronósticos/)).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByText('Preparando servicio de pronósticos…')).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
+    expect(screen.getByText('Ensamblado Health')).toBeTruthy();
+    expect(screen.getByText(/No se pudo consultar el diagnóstico de pronósticos/)).toBeTruthy();
+    expect(forecastGet).toHaveBeenCalledTimes(2);
   });
 
   it('shows a safe session message for 401', async () => {
@@ -122,10 +134,17 @@ describe('forecast serving diagnostics panel', () => {
   });
 
   it('shows a temporary service message and reason for 503', async () => {
-    vi.mocked(apiClient.getForecastModelDiagnostics).mockResolvedValue({ httpStatus: 503, code: 'ML_SERVICE_UNAVAILABLE' });
+    vi.useFakeTimers();
+    const forecastGet = vi.mocked(apiClient.getForecastModelDiagnostics)
+      .mockResolvedValueOnce({ httpStatus: 503, code: 'ML_SERVICE_UNAVAILABLE' })
+      .mockResolvedValueOnce({ httpStatus: 503, code: 'ML_SERVICE_UNAVAILABLE' });
     render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
-    expect(await screen.findByText(/Servicio temporalmente no disponible/)).toBeTruthy();
-    expect(screen.getByRole('status').textContent).toContain('ML_SERVICE_UNAVAILABLE');
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByText('Preparando servicio de pronósticos…')).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
+    const message = screen.getByText(/Servicio temporalmente no disponible/);
+    expect(message.textContent).toContain('ML_SERVICE_UNAVAILABLE');
+    expect(forecastGet).toHaveBeenCalledTimes(2);
   });
 
   it('does not expose tenant IDs, hashes, artifact bytes or credentials', async () => {
@@ -155,5 +174,138 @@ describe('forecast serving diagnostics panel', () => {
     expect(onForecastModelsChange).toHaveBeenCalledWith(forecast.models);
     expect(vi.mocked(apiClient.getForecastModelDiagnostics)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(apiClient.getHealthDiagnostics)).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries transient Forecast failure once without reloading successful Health', async () => {
+    vi.useFakeTimers();
+    const forecastGet = vi.mocked(apiClient.getForecastModelDiagnostics)
+      .mockResolvedValueOnce({ httpStatus: 503, code: 'ML_SERVICE_UNAVAILABLE' })
+      .mockResolvedValueOnce(ok(forecast));
+    const healthGet = vi.mocked(apiClient.getHealthDiagnostics).mockResolvedValue(ok(health));
+    render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByText('Preparando servicio de pronósticos…')).toBeTruthy();
+    expect(screen.getByText('Ensamblado Health')).toBeTruthy();
+    expect(forecastGet).toHaveBeenCalledTimes(1);
+    expect(healthGet).toHaveBeenCalledTimes(1);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
+    expect(screen.getByText('ACTIVE_POINTER_MISSING')).toBeTruthy();
+    expect(forecastGet).toHaveBeenCalledTimes(2);
+    expect(healthGet).toHaveBeenCalledTimes(1);
+  });
+
+  it('recovers automatically from a temporary network/fetch rejection', async () => {
+    vi.useFakeTimers();
+    const forecastGet = vi.mocked(apiClient.getForecastModelDiagnostics)
+      .mockRejectedValueOnce(new Error('network failure'))
+      .mockResolvedValueOnce(ok(forecast));
+    render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByText('Preparando servicio de pronósticos…')).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
+    expect(screen.getByText('ACTIVE_POINTER_MISSING')).toBeTruthy();
+    expect(forecastGet).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a Health diagnostic timeout without reloading successful Forecast', async () => {
+    vi.useFakeTimers();
+    const forecastGet = vi.mocked(apiClient.getForecastModelDiagnostics).mockResolvedValue(ok(forecast));
+    const healthGet = vi.mocked(apiClient.getHealthDiagnostics)
+      .mockResolvedValueOnce({ httpStatus: 200, data: { ...health, httpStatus: 504, reasonCode: 'HEALTH_DIAGNOSTIC_TIMEOUT' } })
+      .mockResolvedValueOnce(ok(health));
+    render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByText('Preparando diagnóstico Health…')).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Diagnóstico de pronósticos' })).toBeTruthy();
+    expect(forecastGet).toHaveBeenCalledTimes(1);
+    expect(healthGet).toHaveBeenCalledTimes(1);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
+    expect(screen.getByText('Ensamblado Health')).toBeTruthy();
+    expect(healthGet).toHaveBeenCalledTimes(2);
+    expect(forecastGet).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['HTTP 504', { httpStatus: 504, code: 'HEALTH_DIAGNOSTIC_TIMEOUT' }],
+    ['HEALTH_DIAGNOSTIC_TIMEOUT code', { httpStatus: 200, data: { ...health, httpStatus: 504, reasonCode: 'HEALTH_DIAGNOSTIC_TIMEOUT' } }],
+    ['SERVICE_TEMPORARILY_UNAVAILABLE code', { httpStatus: 0, code: 'SERVICE_TEMPORARILY_UNAVAILABLE' }],
+  ])('automatically retries %s once', async (_label, firstFailure) => {
+    vi.useFakeTimers();
+    const healthGet = vi.mocked(apiClient.getHealthDiagnostics)
+      .mockResolvedValueOnce(firstFailure as AuthenticatedDiagnosticResult<HealthDiagnostic>)
+      .mockResolvedValueOnce(ok(health));
+    render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByText('Preparando diagnóstico Health…')).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
+    expect(screen.getByText('Ensamblado Health')).toBeTruthy();
+    expect(healthGet).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['1d no aprobado', ok(forecast)],
+    ['política de promoción fallida', { httpStatus: 400, code: 'PROMOTION_POLICY_FAILED' }],
+    ['respuesta 4xx', { httpStatus: 401, code: 'AUTH_REQUIRED' }],
+    ['modelo funcionalmente no disponible', { httpStatus: 503, code: 'MODEL_UNAVAILABLE' }],
+    ['contrato de features incompatible', { httpStatus: 503, code: 'FEATURE_CONTRACT_MISMATCH' }],
+    ['integridad del artefacto inválida', { httpStatus: 503, code: 'ARTIFACT_HASH_MISMATCH' }],
+  ])('does not retry non-transient Forecast result: %s', async (_label, firstResult) => {
+    const forecastGet = vi.mocked(apiClient.getForecastModelDiagnostics)
+      .mockResolvedValue(firstResult as AuthenticatedDiagnosticResult<ForecastActiveModels>);
+    render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
+    await screen.findByRole('region', { name: 'Diagnóstico de pronósticos' });
+    expect(forecastGet).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the ordinary service error after the one automatic retry also fails', async () => {
+    vi.useFakeTimers();
+    const forecastGet = vi.mocked(apiClient.getForecastModelDiagnostics)
+      .mockResolvedValueOnce({ httpStatus: 503, code: 'SERVICE_TEMPORARILY_UNAVAILABLE' })
+      .mockResolvedValueOnce({ httpStatus: 503, code: 'SERVICE_TEMPORARILY_UNAVAILABLE' });
+    render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByText('Preparando servicio de pronósticos…')).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
+    expect(screen.getByText(/Servicio temporalmente no disponible/)).toBeTruthy();
+    expect(forecastGet).toHaveBeenCalledTimes(2);
+  });
+
+  it('cleans a pending retry timer when the panel unmounts', async () => {
+    vi.useFakeTimers();
+    vi.mocked(apiClient.getHealthDiagnostics).mockResolvedValueOnce({ httpStatus: 504, code: 'HEALTH_DIAGNOSTIC_TIMEOUT' });
+    const { unmount } = render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByText('Preparando diagnóstico Health…')).toBeTruthy();
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(vi.mocked(apiClient.getHealthDiagnostics)).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts a fresh diagnostic cycle when manually refreshed after automatic recovery', async () => {
+    vi.useFakeTimers();
+    const forecastGet = vi.mocked(apiClient.getForecastModelDiagnostics)
+      .mockResolvedValueOnce({ httpStatus: 503, code: 'SERVICE_TEMPORARILY_UNAVAILABLE' })
+      .mockResolvedValueOnce(ok(forecast))
+      .mockResolvedValue(ok(forecast));
+    const healthGet = vi.mocked(apiClient.getHealthDiagnostics).mockResolvedValue(ok(health));
+    render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
+    expect(screen.getByText('ACTIVE_POINTER_MISSING')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Actualizar estado' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(forecastGet).toHaveBeenCalledTimes(3);
+    expect(healthGet).toHaveBeenCalledTimes(2);
   });
 });
