@@ -78,9 +78,16 @@ const makeDashboard = ({ fail, partial = false, productPresent = true, supplierN
           products: 80, critical: 2, high: 3, medium: 10, low: 65, shouldReorder: 5, lowStock: 8, overstock: 4,
           slowMoving: 6, deadStock: 0, incomingUnits: 10 }, abcCounts: { A: 40, B: 24, C: 16 },
           xyzCounts: { X: 55, Y: 22, Z: 3 }, abcXyzCounts: { AX: 20 } } }
-          : { status: 'READY', metadata, data: { total: 1, items: [{ sku: 'SKU-1', productName: 'Producto uno',
+          : metadata.dataMode === 'LIVE' && !invocation.trustedInventoryRidgeModels?.length
+            ? { status: 'PARTIAL', metadata, data: { availabilityStatus: 'PARTIAL', total: 1, items: [{ sku: 'SKU-1', productName: 'Producto uno',
+              stock: { onHand: 1, incoming: 2, inventoryPosition: 3 }, coverage: { daysCover: null, status: 'PARTIAL', reasonCode: 'FORECAST_UNAVAILABLE' },
+              demand: { expectedDaily: null, expectedUnitsNext1d: null, expectedUnitsNext7d: null, expectedUnitsNext14d: null },
+              inventoryPolicy: { safetyStock: null, reorderPoint: null, status: 'PARTIAL', reasonCode: 'FORECAST_UNAVAILABLE' },
+              recommendation: { shouldReorder: null, recommendedQty: null, status: 'PARTIAL', reasonCode: 'FORECAST_UNAVAILABLE' },
+              risk: { level: null, reasonCodes: [], status: 'PARTIAL', reasonCode: 'FORECAST_UNAVAILABLE' }, classification: { abc: 'A', xyz: 'X' } }] } }
+            : { status: 'READY', metadata, data: { total: 1, items: [{ sku: 'SKU-1', productName: 'Producto uno',
             stock: { onHand: 1, incoming: 2, inventoryPosition: 3 }, coverage: { daysCover: 1.5, status: 'AVAILABLE' },
-            demand: { expectedDaily: 2, expectedUnitsNext1d: 2, expectedUnitsNext7d: 14, expectedUnitsNext14d: 28 },
+            demand: { expectedDaily: 2, expectedUnitsNext1d: null, expectedUnitsNext7d: 14, expectedUnitsNext14d: 28 },
             inventoryPolicy: { safetyStock: 3, reorderPoint: 5 }, recommendation: { shouldReorder: true, recommendedQty: 4 },
             risk: { level: 'HIGH', reasonCodes: ['LOW_COVERAGE'] }, classification: { abc: 'A', xyz: 'X' } }] } };
         case 'get_supplier_intelligence': {
@@ -363,16 +370,43 @@ test('historical forecast remains MA28 and does not read the active Ridge regist
 });
 
 test('inventory detail exposes approved values without inventing preventive semantics', async () => {
-  const { service } = makeDashboard();
+  const { service, calls, registryCalls } = makeDashboard();
   const { data } = await service.productInventory(request({}, { sku: 'SKU-1' }));
   assert.equal(data.stock.onHand, 1);
   assert.equal(data.demand.expectedUnitsNext7d, 14);
+  assert.equal(data.demand.expectedUnitsNext14d, 28);
+  assert.equal(data.demand.expectedUnitsNext1d, null);
   assert.equal(data.recommendation.reorderNow, true);
   assert.equal(data.recommendation.recommendedQty, 4);
   assert.equal(data.recommendation.preventiveRecommendation, null);
   assert.equal(data.risk.level, 'HIGH');
   assert.equal(data.availability, 'READY');
   assert.equal(data.freshness.mode, 'LIVE');
+  const operation = calls.find(row => row.kind === 'get_inventory_intelligence');
+  assert.equal(operation.args.mode, 'detail');
+  assert.deepEqual(operation.trustedInventoryRidgeModels.map(model => model.metadata.horizonDays).sort((a, b) => a - b), [7, 14]);
+  assert.equal(registryCalls.filter(row => row.kind === 'artifact').length, 2);
+});
+
+test('LIVE inventory detail without ACTIVE Ridge models remains safely partial and never substitutes MA28', async () => {
+  const { service, calls, registryCalls } = makeDashboard({ activeModelMissing: true });
+  const { data } = await service.productInventory(request({}, { sku: 'SKU-1' }));
+  assert.equal(data.stock.onHand, 1);
+  assert.equal(data.stock.incoming, 2);
+  assert.equal(data.availability, 'PARTIAL');
+  assert.equal(data.demand.expectedDaily, null);
+  assert.equal(data.demand.expectedUnitsNext1d, null);
+  assert.equal(data.demand.expectedUnitsNext7d, null);
+  assert.equal(data.demand.expectedUnitsNext14d, null);
+  assert.equal(data.coverage.daysCover, null);
+  assert.equal(data.inventoryPolicy.safetyStock, null);
+  assert.equal(data.recommendation.recommendedQty, null);
+  assert.equal(data.recommendation.reorderNow, null);
+  assert.equal(data.risk.level, null);
+  const operation = calls.find(row => row.kind === 'get_inventory_intelligence');
+  assert.deepEqual(operation.trustedInventoryRidgeModels, []);
+  assert.equal(operation.args.horizonDays, undefined);
+  assert.equal(registryCalls.filter(row => row.kind === 'artifact').length, 2);
 });
 
 test('unknown product is rejected before calling ML and maps to a safe 404', async () => {

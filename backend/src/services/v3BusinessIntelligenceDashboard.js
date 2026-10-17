@@ -520,8 +520,10 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
       const args = type === 'forecast'
         ? { mode: 'detail', productRef: sku, horizonDays: horizon, includeObservedSeries: true }
         : { mode: 'detail', productRef: sku };
-      const result = await execute(context, type === 'forecast' ? 'get_product_forecast' : 'get_inventory_intelligence', args, 20,
-        isLiveRidge ? { trustedForecastModelEnvelope, useLiveRidge: true } : {});
+      const result = type === 'forecast'
+        ? await execute(context, 'get_product_forecast', args, 20,
+          isLiveRidge ? { trustedForecastModelEnvelope, useLiveRidge: true } : {})
+        : await executeInventoryHealth(context, 'get_inventory_intelligence', args, 20);
       if (result.status === 'NO_DATA' || !result.data?.items?.length) {
         if (isLiveRidge) return { data: emptyLiveRidgeResponse(context, productIdentityFor(catalogProduct, sku), horizon,
           result.metadata || {}) };
