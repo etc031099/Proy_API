@@ -58,7 +58,7 @@ function MetricCard({ title, value, hint, help }: { title: string; value: string
   return <Card><CardHeader className="pb-2"><div className="text-sm text-muted-foreground"><MetricLabel label={title} help={help} /></div><CardTitle className="text-2xl">{value}</CardTitle></CardHeader>{hint && <CardContent className="pt-0 text-xs text-muted-foreground">{hint}</CardContent>}</Card>;
 }
 function SkeletonGrid() {
-  return <div role="status" aria-label="Cargando inteligencia del negocio" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{Array.from({ length: 8 }, (_, index) => <div key={index} className="h-28 animate-pulse rounded-xl border bg-muted/40" />)}<span className="sr-only">Cargando resumen y ranking…</span></div>;
+  return <div role="status" aria-label="Cargando resumen general" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{Array.from({ length: 8 }, (_, index) => <div key={index} className="h-28 animate-pulse rounded-xl border bg-muted/40" />)}<span className="sr-only">Cargando resumen general…</span></div>;
 }
 function ErrorPanel({ retry, message = 'No se pudo cargar la inteligencia del negocio.' }: { retry: () => void; message?: string }) {
   return <Card role="alert" className="border-destructive/40"><CardContent className="flex flex-col items-start gap-3 p-5 sm:flex-row sm:items-center"><AlertTriangle aria-hidden="true" className="h-5 w-5 shrink-0 text-destructive" /><div className="flex-1"><p className="font-medium">{message}</p><p className="text-sm text-muted-foreground">La información no se reemplaza con datos de otro período. Puedes volver a intentarlo.</p></div><Button variant="outline" onClick={retry}><RefreshCw className="mr-2 h-4 w-4" />Reintentar</Button></CardContent></Card>;
@@ -103,8 +103,10 @@ export function BusinessIntelligenceDashboard() {
   const [tab, setTab] = useState<TabKey>('summary');
   const [summary, setSummary] = useState<BusinessSummary | null>(null);
   const [inventory, setInventory] = useState<InventorySummary | null>(null);
-  const [overviewState, setOverviewState] = useState<LoadState>('loading');
-  const [overviewError, setOverviewError] = useState(false);
+  const [summaryState, setSummaryState] = useState<LoadState>('loading');
+  const [inventoryState, setInventoryState] = useState<LoadState>('loading');
+  const [summaryError, setSummaryError] = useState(false);
+  const [inventoryError, setInventoryError] = useState(false);
   const [selected, setSelected] = useState<ProductOption | null>(null);
   const [horizon, setHorizon] = useState<Horizon>(7);
   const [forecastByHorizon, setForecastByHorizon] = useState<Partial<Record<RidgeHorizon, ForecastRead>>>({});
@@ -114,20 +116,36 @@ export function BusinessIntelligenceDashboard() {
   const [detailError, setDetailError] = useState(false);
   const [detailRetry, setDetailRetry] = useState(0);
   const detailsRequest = useRef(0);
-  const overviewRequest = useRef(0);
-  const loadOverview = useCallback(async () => {
-    const requestId = ++overviewRequest.current;
-    setOverviewState('loading'); setOverviewError(false); setSummary(null); setInventory(null);
+  const summaryRequest = useRef(0);
+  const inventoryRequest = useRef(0);
+  const loadSummary = useCallback(async (invalidate = false) => {
+    const requestId = ++summaryRequest.current;
+    if (invalidate) apiClient.invalidateIntelligenceReads();
+    setSummaryState('loading'); setSummaryError(false); setSummary(null);
     try {
-      const [summaryResponse, inventoryResponse] = await Promise.all([apiClient.getBusinessIntelligenceSummary(), apiClient.getInventoryAnalytics({ limit: 20 })]);
-      if (requestId !== overviewRequest.current) return;
-      if (!summaryResponse.success || !summaryResponse.data || !inventoryResponse.success || !inventoryResponse.data) throw new Error('Unavailable');
-      setSummary(summaryResponse.data); setInventory(inventoryResponse.data); setOverviewState('ready');
-    } catch { if (requestId === overviewRequest.current) { setSummary(null); setInventory(null); setOverviewError(true); setOverviewState('error'); } }
+      const response = await apiClient.getBusinessIntelligenceSummary();
+      if (requestId !== summaryRequest.current) return;
+      if (!response.success || !response.data) throw new Error('Unavailable');
+      setSummary(response.data); setSummaryState('ready');
+    } catch { if (requestId === summaryRequest.current) { setSummary(null); setSummaryError(true); setSummaryState('error'); } }
   }, []);
+  const loadInventory = useCallback(async (invalidate = false) => {
+    const requestId = ++inventoryRequest.current;
+    if (invalidate) apiClient.invalidateIntelligenceReads();
+    setInventoryState('loading'); setInventoryError(false); setInventory(null);
+    try {
+      const response = await apiClient.getInventoryAnalytics({ limit: 20 });
+      if (requestId !== inventoryRequest.current) return;
+      if (!response.success || !response.data) throw new Error('Unavailable');
+      setInventory(response.data); setInventoryState('ready');
+    } catch { if (requestId === inventoryRequest.current) { setInventory(null); setInventoryError(true); setInventoryState('error'); } }
+  }, []);
+  const loadOverview = useCallback(() => {
+    void loadSummary();
+    void loadInventory();
+  }, [loadInventory, loadSummary]);
   useEffect(() => { if (tab === 'summary' || tab === 'inventory') void loadOverview(); }, [tab, loadOverview]);
-  useEffect(() => () => { overviewRequest.current++; detailsRequest.current++; }, []);
-  const retryOverview = () => { apiClient.invalidateIntelligenceReads(); void loadOverview(); };
+  useEffect(() => () => { summaryRequest.current++; inventoryRequest.current++; detailsRequest.current++; }, []);
 
   useEffect(() => {
     const requestId = ++detailsRequest.current;
@@ -184,9 +202,9 @@ export function BusinessIntelligenceDashboard() {
       </div>
       <AnalyticsErrorBoundary key={tab} label={{ summary: 'resumen', forecast: 'predicción', inventory: 'inventario', sales: 'ventas', customers: 'clientes', suppliers: 'proveedores', related: 'productos relacionados', health: 'salud' }[tab]}>
       {tab === 'summary' && <section id="intelligence-panel-summary" role="tabpanel" aria-labelledby="intelligence-tab-summary" tabIndex={0} className="mt-4 space-y-6">
-        {overviewState === 'loading' && <SkeletonGrid />}
-        {overviewError && <ErrorPanel retry={retryOverview} />}
-        {overviewState === 'ready' && summary && inventory && <>
+        {summaryState === 'loading' && <SkeletonGrid />}
+        {summaryError && <ErrorPanel retry={() => void loadSummary(true)} />}
+        {summaryState === 'ready' && summary && <>
           <section aria-label="Indicadores de hoy" className="space-y-3"><h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Actividad comercial · hoy</h2><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <MetricCard title="Ventas de hoy" value={summary.salesToday ? money(summary.salesToday.value, summary.salesToday.currency) : 'No disponible'} />
             <MetricCard title="Unidades vendidas hoy" value={safeNumber(summary.unitsToday)} />
@@ -216,6 +234,10 @@ export function BusinessIntelligenceDashboard() {
             </div>
           </section>
           {summary.salesToday?.value === 0 && summary.unitsToday === 0 && summary.ticketsToday === 0 && <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">Hoy aún no hay ventas registradas. Los valores cero son válidos para el período.</p>}
+        </>}
+        {inventoryState === 'loading' && <LoadingDetail label="Cargando inventario y ranking…" />}
+        {inventoryError && <ErrorPanel message="No se pudo cargar el inventario." retry={() => void loadInventory(true)} />}
+        {inventoryState === 'ready' && inventory && <>
           <section className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,.9fr)]">
             <Card><CardHeader><CardTitle>Distribución de riesgo de inventario</CardTitle><CardDescription>{safeNumber(inventory.summary.totalProducts)} productos en el análisis del motor.</CardDescription></CardHeader><CardContent>{riskCountsComplete ? <div className="h-64 w-full" role="img" aria-label={`Distribución de riesgo: ${riskRows.map(row => `${row.label} ${safeNumber(row.value)}`).join(', ')}`}><ResponsiveContainer width="100%" height="100%"><BarChart data={riskRows} layout="vertical" margin={{ left: 6, right: 20, top: 4, bottom: 4 }}><CartesianGrid strokeDasharray="3 3" horizontal={false} /><XAxis type="number" allowDecimals={false} /><YAxis type="category" dataKey="label" width={65} /><Tooltip formatter={value => [safeNumber(typeof value === 'number' ? value : null), 'Productos']} /><Bar dataKey="value" name="Productos" radius={[0, 5, 5, 0]}>{riskRows.map(row => <Cell key={row.key} fill={riskColors[riskKeyLevels[row.key]]} />)}</Bar></BarChart></ResponsiveContainer></div> : <p role="status" className="rounded-lg border border-dashed p-5 text-sm text-muted-foreground">Distribución parcial: {safeNumber(unavailableRiskCount)} productos no tienen un nivel de riesgo calculable y no se cuentan como riesgo bajo.</p>}</CardContent></Card>
             <RankingTable rows={inventory.items} onSelect={selectFromRanking} />
@@ -237,8 +259,8 @@ export function BusinessIntelligenceDashboard() {
       {tab === 'inventory' && <section id="intelligence-panel-inventory" role="tabpanel" aria-labelledby="intelligence-tab-inventory" tabIndex={0} className="mt-4 space-y-6">
         <Card><CardContent className="p-5"><ProductPicker selected={selected} onSelect={chooseProduct} /></CardContent></Card>
         {!selected && <>
-          {overviewError && <ErrorPanel retry={retryOverview} />}
-          {overviewState === 'loading' && <LoadingDetail label="Cargando ranking de inventario…" />}
+          {inventoryError && <ErrorPanel message="No se pudo cargar el inventario." retry={() => void loadInventory(true)} />}
+          {inventoryState === 'loading' && <LoadingDetail label="Cargando ranking de inventario…" />}
             {inventory && <>
               <Card>
                 <CardHeader><CardTitle>Riesgo de inventario</CardTitle><CardDescription>Distribución del análisis de inventario.</CardDescription></CardHeader>

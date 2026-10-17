@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ForecastDiagnosticsPanel } from '@/components/business-intelligence/ForecastDiagnosticsPanel';
 import { apiClient } from '@/lib/api';
@@ -14,6 +14,12 @@ const forecast: ForecastActiveModels = {
 };
 const health: HealthDiagnostic = { httpStatus: 200, dependencyStatus: { inventory: 'PARTIAL', forecast: 'PARTIAL', supplier: 'READY', healthAssembly: 'PARTIAL' }, reasonCode: null, elapsedMs: 42 };
 const ok = <T,>(data: T): AuthenticatedDiagnosticResult<T> => ({ httpStatus: 200, data });
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => { resolve = resolvePromise; reject = rejectPromise; });
+  return { promise, resolve, reject };
+}
 
 describe('forecast serving diagnostics panel', () => {
   const onForecastModelsChange = vi.fn();
@@ -53,6 +59,59 @@ describe('forecast serving diagnostics panel', () => {
     expect(screen.getAllByText('Parcial').length).toBeGreaterThan(0);
     expect(screen.getByText('Proveedores')).toBeTruthy();
     expect(screen.getByText('Listo')).toBeTruthy();
+  });
+
+  it('renders Forecast as soon as it resolves while Health keeps its own loading state', async () => {
+    const forecastRead = deferred<AuthenticatedDiagnosticResult<ForecastActiveModels>>();
+    const healthRead = deferred<AuthenticatedDiagnosticResult<HealthDiagnostic>>();
+    const forecastGet = vi.spyOn(apiClient, 'getForecastModelDiagnostics').mockReturnValue(forecastRead.promise);
+    const healthGet = vi.spyOn(apiClient, 'getHealthDiagnostics').mockReturnValue(healthRead.promise);
+    render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
+
+    await act(async () => { forecastRead.resolve(ok(forecast)); await forecastRead.promise; });
+    expect(screen.getByRole('region', { name: 'Diagnóstico de pronósticos' })).toBeTruthy();
+    expect(screen.getByText('Cargando Health…')).toBeTruthy();
+    expect(forecastGet).toHaveBeenCalledTimes(1);
+    expect(healthGet).toHaveBeenCalledTimes(1);
+
+    await act(async () => { healthRead.resolve(ok(health)); await healthRead.promise; });
+    expect(await screen.findByText('Ensamblado Health')).toBeTruthy();
+    expect(screen.queryByText('Cargando Health…')).toBeNull();
+  });
+
+  it('renders Health as soon as it resolves while Forecast keeps its own loading state', async () => {
+    const forecastRead = deferred<AuthenticatedDiagnosticResult<ForecastActiveModels>>();
+    const healthRead = deferred<AuthenticatedDiagnosticResult<HealthDiagnostic>>();
+    vi.spyOn(apiClient, 'getForecastModelDiagnostics').mockReturnValue(forecastRead.promise);
+    vi.spyOn(apiClient, 'getHealthDiagnostics').mockReturnValue(healthRead.promise);
+    render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
+
+    await act(async () => { healthRead.resolve(ok(health)); await healthRead.promise; });
+    expect(await screen.findByText('Ensamblado Health')).toBeTruthy();
+    expect(screen.getByText('Cargando pronósticos…')).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Diagnóstico de pronósticos' })).toBeNull();
+
+    await act(async () => { forecastRead.resolve(ok(forecast)); await forecastRead.promise; });
+    expect(await screen.findByRole('region', { name: 'Diagnóstico de pronósticos' })).toBeTruthy();
+    expect(screen.queryByText('Cargando pronósticos…')).toBeNull();
+  });
+
+  it('keeps Forecast visible when Health fails independently', async () => {
+    vi.spyOn(apiClient, 'getForecastModelDiagnostics').mockResolvedValue(ok(forecast));
+    vi.spyOn(apiClient, 'getHealthDiagnostics').mockRejectedValue(new Error('Health unavailable'));
+    render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
+
+    expect(await screen.findByRole('region', { name: 'Diagnóstico de pronósticos' })).toBeTruthy();
+    expect(await screen.findByText(/No se pudo consultar Health/)).toBeTruthy();
+  });
+
+  it('keeps Health visible when Forecast fails independently', async () => {
+    vi.spyOn(apiClient, 'getForecastModelDiagnostics').mockRejectedValue(new Error('Forecast unavailable'));
+    vi.spyOn(apiClient, 'getHealthDiagnostics').mockResolvedValue(ok(health));
+    render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
+
+    expect(await screen.findByText('Ensamblado Health')).toBeTruthy();
+    expect(await screen.findByText(/No se pudo consultar el diagnóstico de pronósticos/)).toBeTruthy();
   });
 
   it('shows a safe session message for 401', async () => {

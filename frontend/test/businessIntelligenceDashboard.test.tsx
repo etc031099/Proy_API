@@ -49,6 +49,12 @@ const productInventoryFixture: ProductInventory = {
 };
 
 function success<T>(data: T) { return { success: true, data }; }
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => { resolve = resolvePromise; reject = rejectPromise; });
+  return { promise, resolve, reject };
+}
 function mockOverview() {
   vi.spyOn(apiClient, 'getBusinessIntelligenceSummary').mockResolvedValue(success(summaryFixture));
   vi.spyOn(apiClient, 'getInventoryAnalytics').mockResolvedValue(success(inventoryFixture));
@@ -92,6 +98,52 @@ describe('business intelligence dashboard', () => {
     expect(screen.getByText(/Hoy aún no hay ventas registradas/)).toBeTruthy();
     expect(screen.getByText('29')).toBeTruthy();
     expect(screen.getByText('No disponible')).toBeTruthy();
+  });
+
+  it('renders the summary while inventory is still loading, then removes only the inventory loading state', async () => {
+    const summaryRead = deferred<Awaited<ReturnType<typeof apiClient.getBusinessIntelligenceSummary>>>();
+    const inventoryRead = deferred<Awaited<ReturnType<typeof apiClient.getInventoryAnalytics>>>();
+    vi.spyOn(apiClient, 'getBusinessIntelligenceSummary').mockReturnValue(summaryRead.promise);
+    vi.spyOn(apiClient, 'getInventoryAnalytics').mockReturnValue(inventoryRead.promise);
+    render(<BusinessIntelligenceDashboard />);
+
+    await act(async () => { summaryRead.resolve(success(summaryFixture)); await summaryRead.promise; });
+    expect(await screen.findByText('Ventas de hoy')).toBeTruthy();
+    expect(screen.getByText('Cargando inventario y ranking…')).toBeTruthy();
+    expect(apiClient.getBusinessIntelligenceSummary).toHaveBeenCalledTimes(1);
+    expect(apiClient.getInventoryAnalytics).toHaveBeenCalledTimes(1);
+
+    await act(async () => { inventoryRead.resolve(success(inventoryFixture)); await inventoryRead.promise; });
+    expect(await screen.findByText('Distribución de riesgo de inventario')).toBeTruthy();
+    expect(screen.queryByText('Cargando inventario y ranking…')).toBeNull();
+  });
+
+  it('renders inventory charts while the general summary is still loading', async () => {
+    const summaryRead = deferred<Awaited<ReturnType<typeof apiClient.getBusinessIntelligenceSummary>>>();
+    const inventoryRead = deferred<Awaited<ReturnType<typeof apiClient.getInventoryAnalytics>>>();
+    vi.spyOn(apiClient, 'getBusinessIntelligenceSummary').mockReturnValue(summaryRead.promise);
+    vi.spyOn(apiClient, 'getInventoryAnalytics').mockReturnValue(inventoryRead.promise);
+    render(<BusinessIntelligenceDashboard />);
+
+    await act(async () => { inventoryRead.resolve(success(inventoryFixture)); await inventoryRead.promise; });
+    expect(await screen.findByText('Estabilidad de demanda (XYZ)')).toBeTruthy();
+    expect(screen.getByRole('status', { name: 'Cargando resumen general' })).toBeTruthy();
+    expect(screen.queryByText('Ventas de hoy')).toBeNull();
+
+    await act(async () => { summaryRead.resolve(success(summaryFixture)); await summaryRead.promise; });
+    expect(await screen.findByText('Ventas de hoy')).toBeTruthy();
+    expect(screen.queryByRole('status', { name: 'Cargando resumen general' })).toBeNull();
+  });
+
+  it('keeps summary visible when the independent inventory request fails', async () => {
+    vi.spyOn(apiClient, 'getBusinessIntelligenceSummary').mockResolvedValue(success(summaryFixture));
+    vi.spyOn(apiClient, 'getInventoryAnalytics').mockRejectedValue(new Error('Inventory unavailable'));
+    render(<BusinessIntelligenceDashboard />);
+
+    expect(await screen.findByText('Ventas de hoy')).toBeTruthy();
+    expect(await screen.findByText('No se pudo cargar el inventario.')).toBeTruthy();
+    expect(apiClient.getBusinessIntelligenceSummary).toHaveBeenCalledTimes(1);
+    expect(apiClient.getInventoryAnalytics).toHaveBeenCalledTimes(1);
   });
 
   it('summarizes four correctly classified techniques and navigates without adding a tab', async () => {
@@ -232,16 +284,15 @@ describe('business intelligence dashboard', () => {
     expect(inventoryRead).not.toHaveBeenCalled();
   });
 
-  it('hides the previous inventory while revalidating, and keeps it hidden on failure', async () => {
+  it('hides the previous inventory while revalidating, and shows its own error on failure', async () => {
     render(<BusinessIntelligenceDashboard />);
     await screen.findByText('Productos en riesgo');
-    let rejectRead!: (error: Error) => void;
-    vi.mocked(apiClient.getBusinessIntelligenceSummary).mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRead = reject; }));
+    vi.mocked(apiClient.getInventoryAnalytics).mockRejectedValueOnce(new Error('inventory unavailable'));
+    apiClient.invalidateIntelligenceReads();
     fireEvent.click(screen.getByRole('tab', { name: 'Inventario' }));
     await screen.findByText('Cargando ranking de inventario…');
     expect(screen.queryByText('Riesgo de inventario')).toBeNull();
-    await act(async () => { rejectRead(new Error('revision unavailable')); });
-    await screen.findByText('No se pudo cargar la inteligencia del negocio.');
+    await screen.findByText('No se pudo cargar el inventario.');
     expect(screen.queryByText('Riesgo de inventario')).toBeNull();
   });
 
