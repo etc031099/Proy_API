@@ -18,6 +18,8 @@ import { AnalyticsErrorBoundary } from './AnalyticsErrorBoundary';
 type TabKey = 'summary' | 'forecast' | 'inventory' | ExtendedTab;
 type LoadState = 'loading' | 'ready' | 'error';
 type Horizon = 1 | 7 | 14;
+type RidgeHorizon = 7 | 14;
+type ForecastRead = { state: LoadState; data: ForecastResponse | null };
 const horizons: Horizon[] = [1, 7, 14];
 const riskLabels: Record<RiskLevel, string> = { CRITICAL: 'Crítico', HIGH: 'Alto', MEDIUM: 'Medio', LOW: 'Bajo' };
 const riskColors: Record<RiskLevel, string> = { CRITICAL: '#dc2626', HIGH: '#f97316', MEDIUM: '#eab308', LOW: '#16a34a' };
@@ -104,7 +106,7 @@ export function BusinessIntelligenceDashboard() {
   const [overviewError, setOverviewError] = useState(false);
   const [selected, setSelected] = useState<ProductOption | null>(null);
   const [horizon, setHorizon] = useState<Horizon>(7);
-  const [forecast, setForecast] = useState<ForecastResponse | null>(null);
+  const [forecastByHorizon, setForecastByHorizon] = useState<Partial<Record<RidgeHorizon, ForecastRead>>>({});
   const [activeForecastModels, setActiveForecastModels] = useState<ForecastActiveModel[] | null>(null);
   const [productInventory, setProductInventory] = useState<ProductInventory | null>(null);
   const [detailState, setDetailState] = useState<LoadState>('loading');
@@ -128,18 +130,31 @@ export function BusinessIntelligenceDashboard() {
 
   useEffect(() => {
     const requestId = ++detailsRequest.current;
-    setForecast(null); setProductInventory(null); setDetailError(false);
+    setProductInventory(null); setDetailError(false);
     if (!selected || !['forecast', 'inventory'].includes(tab)) { setDetailState('ready'); return; }
+    if (tab === 'forecast') {
+      setDetailState('ready');
+      setForecastByHorizon({ 7: { state: 'loading', data: null }, 14: { state: 'loading', data: null } });
+      for (const days of [7, 14] as const) {
+        void apiClient.getBusinessIntelligenceForecast(selected.sku, days).then(response => {
+          if (requestId !== detailsRequest.current) return;
+          if (!response.success || !response.data) throw new Error('Unavailable');
+          setForecastByHorizon(current => ({ ...current, [days]: { state: 'ready', data: response.data as ForecastResponse } }));
+        }).catch(() => {
+          if (requestId === detailsRequest.current) setForecastByHorizon(current => ({ ...current, [days]: { state: 'error', data: null } }));
+        });
+      }
+      return;
+    }
+    setForecastByHorizon({});
     setDetailState('loading');
-    const request = tab === 'forecast' ? apiClient.getBusinessIntelligenceForecast(selected.sku, horizon) : apiClient.getBusinessIntelligenceProductInventory(selected.sku);
-    void request.then(response => {
+    void apiClient.getBusinessIntelligenceProductInventory(selected.sku).then(response => {
       if (requestId !== detailsRequest.current) return;
       if (!response.success || !response.data) throw new Error('Unavailable');
-      if (tab === 'forecast') setForecast(response.data as ForecastResponse);
-      else setProductInventory(response.data as ProductInventory);
+      setProductInventory(response.data as ProductInventory);
       setDetailState('ready');
     }).catch(() => { if (requestId === detailsRequest.current) { setDetailError(true); setDetailState('error'); } });
-  }, [selected, tab, horizon, detailRetry]);
+  }, [selected, tab, detailRetry]);
 
   const chooseProduct = (product: ProductOption) => { setSelected(product); };
   const selectFromRanking = (row: InventorySummary['items'][number]) => {
@@ -214,9 +229,7 @@ export function BusinessIntelligenceDashboard() {
         <ForecastDiagnosticsPanel onForecastModelsChange={setActiveForecastModels} />
         <Card><CardContent className="p-5"><ProductPicker selected={selected} onSelect={chooseProduct} /></CardContent></Card>
         {!selected && <EmptyProductState />}
-        {selected && detailState === 'loading' && <LoadingDetail label="Cargando predicción…" />}
-        {selected && detailError && <ErrorPanel retry={() => { apiClient.invalidateIntelligenceReads(); setDetailError(false); setDetailRetry(value => value + 1); }} />}
-        {selected && detailState === 'ready' && forecast && <ForecastPanel forecast={forecast} horizon={horizon} setHorizon={setHorizon} activeModels={activeForecastModels} />}
+        {selected && <ForecastPanel product={selected} forecasts={forecastByHorizon} horizon={horizon} setHorizon={setHorizon} activeModels={activeForecastModels} onRetry={() => { apiClient.invalidateIntelligenceReads(); setDetailRetry(value => value + 1); }} />}
         <ForecastEvaluationPanel />
       </section>}
       {tab === 'inventory' && <section id="intelligence-panel-inventory" role="tabpanel" aria-labelledby="intelligence-tab-inventory" tabIndex={0} className="mt-4 space-y-6">
@@ -245,24 +258,45 @@ function LoadingDetail({ label }: { label: string }) { return <Card role="status
 function RankingTable({ rows, onSelect }: { rows: InventorySummary['items']; onSelect: (row: InventorySummary['items'][number]) => void }) {
   return <Card><CardHeader><CardTitle>Productos que requieren atención</CardTitle><CardDescription>Ranking entregado por la analítica de inventario; selecciona un producto para ver su detalle.</CardDescription></CardHeader><CardContent>{rows.length ? <div className="overflow-x-auto"><table className="w-full min-w-[700px] text-sm"><caption className="sr-only">Ranking de riesgo y reposición</caption><thead><tr className="border-b text-left text-muted-foreground">{['Producto', 'Stock', 'Cobertura', 'Riesgo', 'Reposición', 'Cantidad sugerida'].map(label => <th key={label} scope="col" className="px-3 py-3 font-medium">{label}</th>)}</tr></thead><tbody>{rows.map(row => <tr key={row.sku} className="border-b last:border-0"><td className="px-3 py-3"><button type="button" onClick={() => onSelect(row)} className="text-left font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{row.productName}{row.presentation ? <span className="block text-xs font-normal text-muted-foreground">{row.presentation}</span> : null}<span className="block text-xs font-normal text-muted-foreground">{row.sku}</span></button></td><td className="px-3 py-3">{safeNumber(row.stock)}</td><td className="px-3 py-3">{row.coverageDays === null ? 'No disponible' : `${safeNumber(row.coverageDays, 1)} días`}</td><td className="px-3 py-3"><RiskBadge risk={row.risk} /></td><td className="px-3 py-3">{row.reorderNow === null ? 'No disponible' : row.reorderNow ? 'Sí' : 'No'}</td><td className="px-3 py-3">{row.recommendedQty === null ? 'No disponible' : `${safeNumber(row.recommendedQty)} unidades`}</td></tr>)}</tbody></table></div> : <p className="rounded-md border border-dashed p-5 text-center text-sm text-muted-foreground">El análisis no devolvió productos en el ranking.</p>}</CardContent></Card>;
 }
-function ForecastPanel({ forecast, horizon, setHorizon, activeModels }: { forecast: ForecastResponse; horizon: Horizon; setHorizon: (horizon: Horizon) => void; activeModels: ForecastActiveModel[] | null }) {
-  const selectedUnits = forecast.forecastPeriod?.selectedHorizonDays === horizon ? forecast.forecastPeriod.units : null;
-  const unsupported = forecast.status === 'MODEL_NOT_APPROVED' || horizon === 1 && forecast.mode === 'LIVE';
-  const unavailable = forecast.status === 'MODEL_UNAVAILABLE' || forecast.status === 'FEATURE_UNAVAILABLE';
-  const insufficient = forecast.status === 'INSUFFICIENT_HISTORY' || forecast.status === 'COLD_START' || forecast.status === 'NOT_AVAILABLE';
+function ForecastPanel({ product, forecasts, horizon, setHorizon, activeModels, onRetry }: { product: ProductOption; forecasts: Partial<Record<RidgeHorizon, ForecastRead>>; horizon: Horizon; setHorizon: (horizon: Horizon) => void; activeModels: ForecastActiveModel[] | null; onRetry: () => void }) {
+  const selectedRead = horizon === 1 ? null : forecasts[horizon];
+  const forecast = selectedRead?.data || forecasts[7]?.data || forecasts[14]?.data || null;
+  const selectedUnits = forecast?.forecastPeriod?.selectedHorizonDays === horizon
+    ? forecast.forecastPeriod.units
+    : forecast?.horizons[`${horizon}d` as '1d' | '7d' | '14d'] ?? forecast?.predictionUnits ?? null;
   const activeModel = activeModels?.find(model => model.horizonDays === horizon) || null;
-  const historical = forecast.mode === 'HISTORICAL';
-  const observed = forecast.observedSeries.map(point => ({ ...point,
+  const historical = forecast?.mode === 'HISTORICAL';
+  const selectedForecast = horizon === 1 && historical ? forecast : selectedRead?.data;
+  const unavailable = selectedForecast?.status === 'MODEL_UNAVAILABLE' || selectedForecast?.status === 'FEATURE_UNAVAILABLE';
+  const insufficient = selectedForecast?.status === 'INSUFFICIENT_HISTORY' || selectedForecast?.status === 'COLD_START' || selectedForecast?.status === 'NOT_AVAILABLE';
+  const observed = (forecast?.observedSeries || []).map(point => ({ ...point,
     observed: point.status === 'MISSING' || point.status === 'PARTIAL' ? null : point.units,
     partial: point.status === 'PARTIAL' ? point.units : null,
     statusLabel: seriesLabels[point.status] }));
-  return <div className="space-y-6"><div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-xl font-semibold">{forecast.product.name || forecast.product.sku}</h2><p className="text-sm text-muted-foreground">{forecast.product.presentation || 'Presentación no especificada'} · SKU: {forecast.product.sku}</p></div><p className="text-xs text-muted-foreground">{freshnessLine(forecast)}</p></div>
-    {unsupported || unavailable || insufficient ? <Card role="status"><CardContent className="p-5"><p className="font-medium">{unsupported ? 'Este horizonte de 1 día no tiene un modelo aprobado.' : insufficient ? 'Historial insuficiente para generar un pronóstico.' : 'El modelo LIVE no está disponible para este producto y horizonte.'}</p><p className="mt-1 text-sm text-muted-foreground">No se sustituye por el baseline ni por un pronóstico histórico.</p>{forecast.reasonCode && <p className="mt-2 text-xs text-muted-foreground">Estado: {forecast.reasonCode}</p>}</CardContent></Card> : forecast.status === 'READY' ? <>
+  return <div className="space-y-6"><div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-xl font-semibold">{product.name || product.sku}</h2><p className="text-sm text-muted-foreground">{product.presentation || 'Presentación no especificada'} · SKU: {product.sku}</p></div><p className="text-xs text-muted-foreground">{forecast ? freshnessLine(forecast) : 'Consultando horizontes Ridge…'}</p></div>
       <div className="grid gap-4 sm:grid-cols-3">{horizons.map(days => {
+        const entry = days === 1 ? null : forecasts[days];
+        const data = entry?.data;
         const model = activeModels?.find(candidate => candidate.horizonDays === days);
-        const value = historical ? forecast.horizons[`${days}d` as '1d' | '7d' | '14d'] : days === horizon ? selectedUnits : null;
-        return <button key={days} type="button" aria-pressed={horizon === days} onClick={() => setHorizon(days)} className={`rounded-xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${horizon === days ? 'border-primary bg-primary/5' : 'bg-card hover:bg-muted/50'}`}><span className="text-sm text-muted-foreground">Pronóstico {days} {days === 1 ? 'día' : 'días'}</span><span className="mt-1 block text-2xl font-semibold">{historical ? safeNumber(value, 2) : days === 1 ? 'No aprobado' : model?.status === 'MODEL_UNAVAILABLE' ? 'No disponible' : safeNumber(value, 2)}</span><span className="text-xs text-muted-foreground">{historical ? 'total histórico MA28' : days === 1 ? 'sin fallback estadístico' : days === horizon ? 'total Ridge del horizonte' : 'selecciona para consultar Ridge'}</span></button>;
+        const value = historical ? forecast?.horizons[`${days}d` as '1d' | '7d' | '14d'] : data?.forecastPeriod?.selectedHorizonDays === days ? data.forecastPeriod.units : data?.predictionUnits ?? data?.horizons[`${days}d` as '1d' | '7d' | '14d'];
+        const cardValue = days === 1 && !historical ? 'No aprobado'
+          : days !== 1 && entry?.state === 'loading' ? 'Cargando…'
+            : days !== 1 && entry?.state === 'error' ? 'Error'
+              : data?.status === 'MODEL_UNAVAILABLE' || data?.status === 'FEATURE_UNAVAILABLE' || model?.status === 'MODEL_UNAVAILABLE' ? 'No disponible'
+                : safeNumber(value, 2);
+        const cardHint = days === 1 && !historical ? 'sin fallback estadístico'
+          : entry?.state === 'loading' ? 'Consultando Ridge…'
+            : entry?.state === 'error' ? 'No se pudo consultar este horizonte'
+              : data?.status === 'MODEL_UNAVAILABLE' || data?.status === 'FEATURE_UNAVAILABLE' ? 'Modelo no disponible'
+                : days === horizon ? 'detalle seleccionado' : historical ? 'total histórico MA28' : 'total Ridge del horizonte';
+        return <button key={days} type="button" aria-pressed={horizon === days} onClick={() => setHorizon(days)} className={`rounded-xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${horizon === days ? 'border-primary bg-primary/5' : 'bg-card hover:bg-muted/50'}`}><span className="text-sm text-muted-foreground">Pronóstico {days} {days === 1 ? 'día' : 'días'}</span><span className="mt-1 block text-2xl font-semibold">{cardValue}</span><span className="text-xs text-muted-foreground">{cardHint}</span></button>;
       })}</div>
+    {horizon === 1 && !historical ? <Card role="status"><CardContent className="p-5"><p className="font-medium">Este horizonte de 1 día no tiene un modelo aprobado.</p><p className="mt-1 text-sm text-muted-foreground">No se sustituye por el baseline ni por un pronóstico histórico.</p><p className="mt-2 text-xs text-muted-foreground">Estado: {activeModel?.reasonCode || forecast?.reasonCode || 'PROMOTION_POLICY_FAILED'}</p></CardContent></Card>
+      : selectedRead?.state === 'loading' || !selectedRead && !(horizon === 1 && historical) ? <LoadingDetail label={`Cargando pronóstico de ${horizon} días…`} />
+        : selectedRead?.state === 'error' ? <ErrorPanel retry={onRetry} />
+          : unavailable || insufficient || selectedForecast?.status !== 'READY' ? <Card role="status"><CardContent className="p-5"><p className="font-medium">{insufficient ? 'Historial insuficiente para generar un pronóstico.' : 'El modelo LIVE no está disponible para este producto y horizonte.'}</p><p className="mt-1 text-sm text-muted-foreground">No se sustituye por el baseline ni por un pronóstico histórico.</p>{selectedForecast?.reasonCode && <p className="mt-2 text-xs text-muted-foreground">Estado: {selectedForecast.reasonCode}</p>}</CardContent></Card>
+            : forecast ? <>
+      <div className="flex flex-wrap items-center gap-2 text-sm"><strong>Método seleccionado:</strong><span>{historical ? 'Media móvil de 28 días (histórico)' : forecast.modelFamily === 'RIDGE_REGRESSION' ? 'Machine Learning Ridge' : 'No disponible'}</span><MetricLabel label="Información del método" help={historical ? 'En el período histórico se conserva el método aprobado MA28.' : 'Ridge es el modelo operativo promovido para horizontes de 7 y 14 días. La media móvil MA28 se conserva únicamente como baseline de comparación.'} /><span className="text-muted-foreground">· Datos observados hasta: {formatDate(forecast.observationCutoff)}</span></div>
       <div className="flex flex-wrap items-center gap-2 text-sm"><strong>Método seleccionado:</strong><span>{historical ? 'Media móvil de 28 días (histórico)' : forecast.modelFamily === 'RIDGE_REGRESSION' ? 'Machine Learning Ridge' : 'No disponible'}</span><MetricLabel label="Información del método" help={historical ? 'En el período histórico se conserva el método aprobado MA28.' : 'Ridge es el modelo operativo promovido para horizontes de 7 y 14 días. La media móvil MA28 se conserva únicamente como baseline de comparación.'} /><span className="text-muted-foreground">· Datos observados hasta: {formatDate(forecast.observationCutoff)}</span></div>
       {forecast.modelVersion != null && <div className="flex flex-wrap gap-2 text-xs text-muted-foreground"><span>Modelo v{forecast.modelVersion}</span>{forecast.featureVersion && <span>· Features {forecast.featureVersion}</span>}{forecast.promotionPolicyVersion && <span>· Política {forecast.promotionPolicyVersion}</span>}{forecast.dataCutoff && <span>· Corte {formatDate(forecast.dataCutoff)}</span>}</div>}
       {forecast.modelVersion != null && <p className="text-xs text-muted-foreground">Revisión del artefacto: {forecast.trainedDataVersion ?? 'No disponible'} · revisión del snapshot: {forecast.dataVersion ?? 'No disponible'}{forecast.isTrainingPending === true ? ' · El modelo está pendiente de actualizarse con datos posteriores.' : forecast.isTrainingPending === false ? ' · El modelo incluye la revisión operativa consultada.' : ''}</p>}

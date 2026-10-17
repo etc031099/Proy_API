@@ -59,6 +59,10 @@ async function openForecast() {
   await waitFor(() => expect(apiClient.searchBusinessIntelligenceProducts).toHaveBeenCalled());
   fireEvent.click(await screen.findByRole('button', { name: /Pan francés.*SKU: PAN-FRE-001/ }));
 }
+function forecastCardText(days: 1 | 7 | 14) {
+  const label = days === 1 ? 'Pronóstico 1 día' : `Pronóstico ${days} días`;
+  return screen.getByText(label, { exact: true }).closest('button')?.textContent || '';
+}
 
 describe('business intelligence dashboard', () => {
   beforeEach(() => { vi.restoreAllMocks(); mockOverview();
@@ -121,7 +125,7 @@ describe('business intelligence dashboard', () => {
     expect(screen.getByText('Pronóstico 7 días')).toBeTruthy();
     expect(screen.getByText('Pronóstico 14 días')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Pronóstico 28 días/ })).toBeNull();
-    expect(screen.getByText('Media móvil de 28 días (histórico)')).toBeTruthy();
+    expect(screen.getAllByText('Media móvil de 28 días (histórico)').length).toBeGreaterThan(0);
     expect(screen.getByText('Día cerrado sin ventas')).toBeTruthy();
     expect(screen.getByText('Dato faltante')).toBeTruthy();
     expect(screen.getByText('Día parcial')).toBeTruthy();
@@ -138,13 +142,51 @@ describe('business intelligence dashboard', () => {
         horizons: { '1d': null, '7d': days === 7 ? 16.25 : null, '14d': days === 14 ? 32.5 : null } }));
     render(<BusinessIntelligenceDashboard />);
     await openForecast();
-    expect(await screen.findByText('Machine Learning Ridge')).toBeTruthy();
+    expect((await screen.findAllByText('Machine Learning Ridge')).length).toBeGreaterThan(0);
     expect(screen.getByText('Modelo v1')).toBeTruthy();
     expect(await screen.findByText(/Baseline estadístico MA28/)).toBeTruthy();
+    expect(forecastCardText(1)).toContain('No aprobado');
+    expect(forecastCardText(7)).toContain('16.25');
+    expect(forecastCardText(14)).toContain('32.50');
+    expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenCalledTimes(2);
+    expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenNthCalledWith(1, 'PAN-FRE-001', 7);
+    expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenNthCalledWith(2, 'PAN-FRE-001', 14);
+
+    fireEvent.click(screen.getByRole('button', { name: /Pronóstico 14 días/ }));
+    expect(await screen.findByText(/Pronóstico total para 14 días:/)).toBeTruthy();
+    expect(forecastCardText(7)).toContain('16.25');
     fireEvent.click(screen.getByRole('button', { name: /Pronóstico 1 día/ }));
     expect(await screen.findByText('Este horizonte de 1 día no tiene un modelo aprobado.')).toBeTruthy();
     expect(screen.getByText(/No se sustituye por el baseline/)).toBeTruthy();
-    expect(screen.queryByText(/Baseline estadístico MA28/)).toBeNull();
+    expect(forecastCardText(1)).toContain('No aprobado');
+    expect(forecastCardText(7)).toContain('16.25');
+    expect(forecastCardText(14)).toContain('32.50');
+    fireEvent.click(screen.getByRole('button', { name: /Pronóstico 7 días/ }));
+    expect(await screen.findByText(/Pronóstico total para 7 días:/)).toBeTruthy();
+    expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears prior horizon values and loads both Ridge horizons when the selected product changes', async () => {
+    const secondProduct = { id: 'product-2', sku: 'SNA-PAP-002', name: 'Papel higiénico', presentation: 'Paquete' };
+    vi.spyOn(apiClient, 'searchBusinessIntelligenceProducts').mockImplementation(async query => success({ products: [query.includes('papel') ? secondProduct : productOption] }));
+    vi.spyOn(apiClient, 'getBusinessIntelligenceForecast').mockImplementation(async (sku, days) => success({
+      ...forecastFixture, mode: 'LIVE', status: 'READY', method: 'RIDGE_REGRESSION', modelFamily: 'RIDGE_REGRESSION',
+      product: sku === secondProduct.sku ? { sku, name: secondProduct.name, presentation: secondProduct.presentation } : forecastFixture.product,
+      horizonDays: days, predictionUnits: sku === secondProduct.sku ? days === 7 ? 4.99 : 10.43 : days === 7 ? 16.25 : 32.5,
+      horizons: { '1d': null, '7d': null, '14d': null },
+      forecastPeriod: { startDate: '2026-10-14', selectedHorizonDays: days, units: sku === secondProduct.sku ? days === 7 ? 4.99 : 10.43 : days === 7 ? 16.25 : 32.5 },
+    }));
+    render(<BusinessIntelligenceDashboard />);
+    await openForecast();
+    await waitFor(() => expect(forecastCardText(7)).toContain('16.25'));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Producto' }), { target: { value: 'papel' } });
+    fireEvent.click(await screen.findByRole('button', { name: /Papel higiénico.*SKU: SNA-PAP-002/ }));
+    await waitFor(() => expect(forecastCardText(7)).toContain('4.99'));
+    expect(forecastCardText(14)).toContain('10.43');
+    expect(forecastCardText(7)).not.toContain('16.25');
+    expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenCalledTimes(4);
+    expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenNthCalledWith(3, 'SNA-PAP-002', 7);
+    expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenNthCalledWith(4, 'SNA-PAP-002', 14);
   });
 
   it('renders cold start without forecast numbers or a fake forecast line', async () => {
@@ -153,7 +195,7 @@ describe('business intelligence dashboard', () => {
     render(<BusinessIntelligenceDashboard />);
     await openForecast();
     expect(await screen.findByText('Historial insuficiente para generar un pronóstico.')).toBeTruthy();
-    expect(screen.queryByText('Pronóstico 7 días')).toBeNull();
+    expect(screen.getByRole('button', { name: /Pronóstico 7 días/ })).toBeTruthy();
   });
 
   it('does not choose a product automatically', async () => {
@@ -214,7 +256,7 @@ describe('business intelligence dashboard', () => {
     render(<BusinessIntelligenceDashboard />);
     expect(await screen.findByRole('table', { name: 'Ranking de riesgo y reposición' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /Pan francés.*PAN-FRE-001/ }));
-    expect(await screen.findByText('Método seleccionado:')).toBeTruthy();
+    expect((await screen.findAllByText('Método seleccionado:')).length).toBeGreaterThan(0);
     expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenCalledWith('PAN-FRE-001', 7);
   });
 
