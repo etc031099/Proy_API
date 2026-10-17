@@ -612,9 +612,11 @@ class V3IntelligenceRuntime:
             for name in ("inventory", "customers", "suppliers", "marketBasket"):
                 freshness_key = {"customers": "customer", "suppliers": "supplier"}.get(name, name)
                 sections[name]["freshness"] = freshness[freshness_key]
+            # Unclassified ABC is optional information; keep its availability
+            # metadata in the payload without blocking overall Health readiness.
             inventory_partial = any(int(inventory["summary"].get(key) or 0) > 0 for key in (
                 "unavailableCount", "riskUnavailableCount", "recommendationUnavailableCount",
-                "abcUnavailableCount", "xyzUnavailableCount", "slowMovingUnavailableCount",
+                "xyzUnavailableCount", "slowMovingUnavailableCount",
                 "deadStockUnavailableCount"))
             partial = (business.get("availabilityStatus") == "PARTIAL"
                        or customer.get("availabilityStatus") == "PARTIAL"
