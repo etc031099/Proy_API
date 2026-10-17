@@ -20,6 +20,7 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from ml.service import v3_live_ridge as live_ridge
 from ml.service import v3_ridge_policy as policy
+from ml.service import v3_bootstrap_evidence as bootstrap_evidence
 from ml.src import v3_forecast
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,7 +28,7 @@ LIMA = ZoneInfo("America/Lima")
 HISTORICAL = v3_forecast.HISTORY_END
 FIRST_ORIGIN = v3_forecast.FIRST_ORIGIN
 BUSINESS_ID = "MINIMARKET-PASCO-V3"
-EVIDENCE = ROOT / "ml/.test-tmp/m610a22/final-results.json"
+EVIDENCE = bootstrap_evidence.EVIDENCE_PATH
 POLICY = policy.POLICY_PATH
 
 
@@ -171,22 +172,16 @@ def _live_row(dataset, catalog, closed_rows, *, business_id, horizon, sku, origi
                                          horizon_days=horizon)
 
 
-def _approved_evidence(horizon: int) -> dict:
+def _approved_evidence(horizon: int, expected_hash=bootstrap_evidence.EVIDENCE_HASH) -> dict:
     if not POLICY.is_file() or not EVIDENCE.is_file():
         raise TrainingError("BOOTSTRAP_EVIDENCE_UNAVAILABLE")
     if hashlib.sha256(POLICY.read_bytes()).hexdigest() != live_ridge.PROMOTION_POLICY_HASH:
         raise TrainingError("PROMOTION_POLICY_MISMATCH")
-    source = json.loads(EVIDENCE.read_text(encoding="utf-8"))
-    if source.get("policySha256") != live_ridge.PROMOTION_POLICY_HASH or not source.get("complete"):
-        raise TrainingError("BOOTSTRAP_EVIDENCE_INVALID")
-    selected = source.get("bestEligible", {}).get(str(horizon))
-    if not selected or selected.get("candidate") != live_ridge.RECIPE_ID:
-        raise TrainingError("BOOTSTRAP_EVIDENCE_INVALID")
-    matched = [row for row in source.get("decisions", []) if row.get("phase") == selected.get("phase")
-               and row.get("candidate") == live_ridge.RECIPE_ID and row.get("horizon") == horizon]
-    if len(matched) != 1 or not matched[0].get("eligible") or not matched[0].get("qualityPassed"):
-        raise TrainingError("BOOTSTRAP_EVIDENCE_INVALID")
-    return matched[0]
+    try:
+        return bootstrap_evidence.load_evidence(horizon, expected_hash)
+    except (ValueError, KeyError, OSError) as error:
+        code = str(error) if str(error).startswith("BOOTSTRAP_") else "BOOTSTRAP_EVIDENCE_INVALID"
+        raise TrainingError(code) from None
 
 
 def _artifact(model: Pipeline, *, business_id: str, horizon: int) -> dict:
@@ -321,7 +316,7 @@ def train(request: dict) -> dict:
            and (row.get("projection") or {}).get("transactionOrigin") == "HISTORICAL"
            for row in request["journal"]):
         raise TrainingError("BOOTSTRAP_EVIDENCE_NOT_APPLICABLE")
-    evidence = _approved_evidence(horizon) if bootstrap else None
+    evidence = _approved_evidence(horizon, request.get("expectedEvidenceHash", bootstrap_evidence.EVIDENCE_HASH)) if bootstrap else None
     rows, labels, origins = [], [], []
     sku_to_key = {value: key for key, value in product_keys.items()}
     def daily_units(sku, day):
@@ -354,6 +349,16 @@ def train(request: dict) -> dict:
                            "version": version, "closed": closed.isoformat(),
                            "horizon": horizon, "rows": rows, "labels": labels})
     frame = pd.DataFrame(rows, columns=live_ridge.FEATURE_ORDER)
+    if request.get("dryRun") is True:
+        if not bootstrap:
+            raise TrainingError("INVALID_DRY_RUN_MODE")
+        # The same complete dataset/features/labels as fit, but no estimator is constructed.
+        return {"status": "FEASIBLE", "horizonDays": horizon, "trainRows": len(rows),
+                "sourceDatasetHash": dataset_hash, "trainedDataVersion": version,
+                "observationsClosedThrough": closed.isoformat(),
+                "latestMatureOrigin": latest.isoformat(),
+                "evidenceHash": bootstrap_evidence.EVIDENCE_HASH,
+                "featureHash": live_ridge.FEATURE_HASH, "promotionPolicyHash": policy.POLICY_HASH}
     before_evaluation = time.perf_counter()
     evaluation = (None if bootstrap else evaluate_temporal(frame, labels, origins, horizon, protocol,
                                                            daily_units, revenue_history(request["journal"])))

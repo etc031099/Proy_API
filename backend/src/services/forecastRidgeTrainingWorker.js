@@ -58,7 +58,7 @@ function runPython(request, { executable = process.env.FORECAST_TRAINING_PYTHON 
 function createForecastRidgeTrainingWorker({ registry = createForecastModelRegistryService(),
   update = coordinator, runTraining = runPython, jobModel = Job,
   stateModel = State, pointerModel = Registry, revisionModel = Revision,
-  clock = () => new Date(), beforePromotion,
+  clock = () => new Date(), beforePromotion, bootstrapPrecondition,
   log = (event, fields) => console.info(JSON.stringify({ event, ...fields })) } = {}) {
   const { inBoundedTransaction } = require('./forecastModelRegistryService');
   const scope = (horizonDays, businessId = config.businessId, scenarioId = config.scenarioId) => {
@@ -126,11 +126,19 @@ function createForecastRidgeTrainingWorker({ registry = createForecastModelRegis
           || claim.latestMatureOrigin !== update.matureOrigin(observationsClosedThrough, horizonDays)))) {
       throw Object.assign(new Error('Invalid training boundary'), { code: 'DATASET_INVALID' });
     }
+    const bootstrapBoundary = async (phase, session, modelVersion = null) => {
+      if (mode === 'bootstrap' && bootstrapPrecondition) {
+        await bootstrapPrecondition({ ...key, inputDataVersion, observationsClosedThrough,
+          phase, session, modelVersion });
+      }
+    };
+    await bootstrapBoundary('initial');
     const matureOrigin = claim?.latestMatureOrigin
       || update.matureOrigin(observationsClosedThrough, horizonDays);
     const trainingKey = sha256(canonicalBytes({ ...key, inputDataVersion, matureOrigin,
       observationsClosedThrough, mode, recipe: 'RIDGE-CAUSAL27', featureHash: FEATURE_HASH,
-      policyHash: POLICY_HASH, historicalDatasetHash: config.sourceSha256 }));
+      policyHash: POLICY_HASH, historicalDatasetHash: config.sourceSha256,
+      ...(mode === 'bootstrap' ? { bootstrapEvidenceHash: require('./forecastCloudBootstrap').EVIDENCE_HASH } : {}) }));
     let job;
     const started = Date.now();
     const times = {};
@@ -138,6 +146,7 @@ function createForecastRidgeTrainingWorker({ registry = createForecastModelRegis
       const pointer = await pointerModel.findOne(key).lean();
       await inBoundedTransaction(async session => {
         await assertFence(claim, session);
+        await bootstrapBoundary('initial', session);
         job = await jobModel.findOneAndUpdate({ ...key, trainingKey }, {
           $setOnInsert: { ...key, trainingKey, inputDataVersion, matureOrigin,
             observationsClosedThrough, mode, expectedGeneration: pointer?.generation || 0,
@@ -158,6 +167,7 @@ function createForecastRidgeTrainingWorker({ registry = createForecastModelRegis
         await saveJob(job, claim, { status: 'TRAINING', failureCode: null });
         log('ML_RETRAIN_STARTED', { jobId: String(job._id), horizonDays, dataVersion: inputDataVersion });
         const journal = await exportJournal(inputDataVersion);
+        await bootstrapBoundary('training');
         result = await runTraining({ ...key, inputDataVersion, observationsClosedThrough, journal, mode });
         const validStatus = ['PASS', 'REJECTED', 'INSUFFICIENT_EVALUATION_HISTORY',
           'BOOTSTRAP_FROM_APPROVED_HISTORICAL_EVIDENCE'].includes(result.evaluationStatus);
@@ -198,6 +208,26 @@ function createForecastRidgeTrainingWorker({ registry = createForecastModelRegis
             globalBias: result.globalBias ?? null, parityMaxAbsoluteError: result.parityMaxAbsoluteError ?? null,
             performanceMs: result.performanceMs || {} } });
       }
+      // Also check recovered preparedCandidate jobs before any registry write.
+      if (mode === 'bootstrap' && bootstrapPrecondition
+          && (result.evaluationStatus !== 'BOOTSTRAP_FROM_APPROVED_HISTORICAL_EVIDENCE'
+            || result.featureHash !== FEATURE_HASH || result.featureVersion !== 'RIDGE_CAUSAL27_V1'
+            || result.promotionPolicyHash !== POLICY_HASH || result.promotionPolicyVersion !== 'M6.10A22-PROMOTION-v1'
+            || !/^[a-f0-9]{64}$/.test(result.sourceDatasetHash || '')
+            || result.lineage?.approvedEvidenceSha256 !== require('./forecastCloudBootstrap').EVIDENCE_HASH
+            || result.lineage?.historicalDatasetSha256 !== config.sourceSha256
+            || result.artifact?.recipeId !== 'RIDGE-CAUSAL27'
+            || result.artifact?.modelFamily !== 'RIDGE_REGRESSION'
+            || result.artifact?.schemaVersion !== 'ridge-causal27-json-v1'
+            || result.artifact?.featureVersion !== 'RIDGE_CAUSAL27_V1'
+            || result.artifact?.featureHash !== FEATURE_HASH
+            || result.artifact?.businessId !== businessId || result.artifact?.scenarioId !== scenarioId
+            || result.artifact?.horizonDays !== horizonDays || result.artifact?.modelVersion !== null
+            || result.trainedDataVersion !== inputDataVersion || result.dataCutoff !== observationsClosedThrough
+            || result.labelClosedThrough !== observationsClosedThrough
+            || !Number.isFinite(result.parityMaxAbsoluteError) || result.parityMaxAbsoluteError > 1e-10)) {
+        throw Object.assign(new Error('Bootstrap evidence mismatch'), { code: 'TRAINING_RESPONSE_INVALID' });
+      }
       if (result.evaluationStatus === 'INSUFFICIENT_EVALUATION_HISTORY') {
         await saveJob(job, claim, { status: 'REJECTED', outcome: 'NO_PROMOTION_INSUFFICIENT_HISTORY',
           finishedAt: clock(), failureCode: null });
@@ -219,7 +249,10 @@ function createForecastRidgeTrainingWorker({ registry = createForecastModelRegis
           globalMae: result.globalMae, globalBias: result.globalBias, checks: result.checks,
           lineage: result.lineage, triggerReason: mode === 'bootstrap'
             ? 'BOOTSTRAP_FROM_APPROVED_HISTORICAL_EVIDENCE' : claim.historicalCorrection ? 'HISTORICAL_CORRECTION' : 'MATURE_OPERATIONAL_UPDATE',
-          idempotencyKey: trainingKey, precondition: session => assertFence(claim, session),
+          idempotencyKey: trainingKey, precondition: async session => {
+            await assertFence(claim, session);
+            await bootstrapBoundary('candidate', session);
+          },
           artifactFactory: version => canonicalBytes({ ...result.artifact, modelVersion: version }),
           onCreated: async (session, metadata) => {
             await mutateJob(job, claim, { candidateModelVersion: metadata.modelVersion, status: 'PERSISTING' }, session);
@@ -237,7 +270,10 @@ function createForecastRidgeTrainingWorker({ registry = createForecastModelRegis
       if (pass) {
         if (beforePromotion) await beforePromotion({ job, claim, modelVersion });
         await registry.promoteCandidate({ ...key, modelVersion, expectedGeneration: job.expectedGeneration,
-          precondition: session => assertFence(claim, session),
+          precondition: async session => {
+            await assertFence(claim, session);
+            await bootstrapBoundary('promotion', session, modelVersion);
+          },
           onPromoted: session => mutateJob(job, claim, finalized, session) });
         times.promotion = Date.now() - begin;
         log('ML_MODEL_PROMOTED', { jobId: String(job._id), horizonDays, dataVersion: inputDataVersion,
