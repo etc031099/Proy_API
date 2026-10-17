@@ -16,7 +16,12 @@ const horizon = (horizonDays: 7 | 14, patch: Record<string, unknown> = {}) => ({
   horizonDays, activeModelVersion: 1, trainedDataVersion: '83', pending: false, currentlyRunning: false,
   trigger: 'AUTO' as const, lastRequestAt: null, lastAttemptAt: null, lastEvaluatedAt: null,
   lastResult: null, lastEvaluationReason: null, eligibility: 'NO_PENDING_WORK', nextEligibleAt: null,
-  requestStatus: 'LAST_RESULT_NO_PENDING', dispatchStatus: null, availableOrigins: 0, requiredOrigins: 107 as const, ...patch,
+  requestStatus: 'LAST_RESULT_NO_PENDING', dispatchStatus: null, availableOrigins: null, requiredOrigins: 107 as const,
+  readiness: { status: 'NO_CHANGES' as const, reasonCode: 'NO_PENDING_WORK', hasPendingSignals: false,
+    pendingSignalCount: 0, pendingSignalTypes: [], firstPendingSignalAt: null, lastPendingSignalAt: null,
+    pendingSince: null, lastDirtyAt: null, nextEligibleAt: null, eligibility: 'NO_PENDING_WORK',
+    latestMatureOrigin: null, lastTrainedMatureOrigin: null, processedRevision: '83', latestPendingRevision: null,
+    requiredOrigins: 107 as const, availableOriginsActual: null }, ...patch,
 });
 const initialStatus: ForecastMlUpdateStatus = { dataVersion: '83', closedThrough: '2026-10-16', horizons: [horizon(7), horizon(14)] };
 const ok = <T,>(data: T): AuthenticatedDiagnosticResult<T> => ({ httpStatus: 200, data });
@@ -37,14 +42,50 @@ describe('Forecast manual ML update panel', () => {
     expect((await screen.findAllByText('v1')).length).toBe(2);
     expect(screen.getByText('Actualización automática:')).toBeTruthy();
     expect(screen.getByText('ACTIVO')).toBeTruthy();
+    expect(screen.getByText('Preparación para próxima evaluación ML')).toBeTruthy();
+    expect(screen.getAllByText('Sin cambios nuevos para revisar.')).toHaveLength(2);
+    expect(screen.getAllByText(/107 orígenes maduros, no 107 ventas/)).toHaveLength(2);
+    expect(screen.getAllByText('Los orígenes disponibles se verifican durante la revisión del worker.')).toHaveLength(2);
     expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ['WAITING_MATURITY', 'Hay señales nuevas registradas. Aún están esperando madurez.'],
+    ['WAITING_DEBOUNCE', 'Hay señales registradas. Se agrupan antes de revisar el trabajo.'],
+    ['WAITING_COOLDOWN', 'Esperando el intervalo de seguridad antes de la próxima revisión.'],
+    ['READY_FOR_WORKER_REVIEW', 'Listo para que el worker revise la nueva evidencia; esto no implica aprobación de promoción.'],
+  ] as const)('explains %s without claiming current origins', async (readinessStatus, copy) => {
+    const status = { ...initialStatus, horizons: [horizon(7, { readiness: {
+      ...horizon(7).readiness, status: readinessStatus, hasPendingSignals: true,
+      pendingSignalCount: 2, pendingSignalTypes: ['SALE_COMPLETED'], firstPendingSignalAt: '2026-10-17T15:00:00.000Z',
+      lastPendingSignalAt: '2026-10-17T16:00:00.000Z', availableOriginsActual: null,
+    } }), horizon(14)] as [ReturnType<typeof horizon>, ReturnType<typeof horizon>] } satisfies ForecastMlUpdateStatus;
+    vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValue(ok(status));
+    render(<ForecastMlUpdatePanel />);
+    expect(await screen.findByText(copy)).toBeTruthy();
+    expect(screen.getByText('Venta completada')).toBeTruthy();
+    expect(screen.getByText('2')).toBeTruthy();
+    expect(screen.queryByText(/\/107/)).toBeNull();
+  });
+
+  it('shows an active worker review as distinct from pending signals or promotion', async () => {
+    const status = { ...initialStatus, horizons: [horizon(7, { currentlyRunning: true, readiness: {
+      ...horizon(7).readiness, status: 'WORKER_ACTIVE', reasonCode: 'LEASE_ACTIVE', eligibility: 'LEASE_ACTIVE',
+    } }), horizon(14)] as [ReturnType<typeof horizon>, ReturnType<typeof horizon>] } satisfies ForecastMlUpdateStatus;
+    vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValue(ok(status));
+    render(<ForecastMlUpdatePanel />);
+    expect(await screen.findByText('Hay una revisión en curso.')).toBeTruthy();
+    expect(screen.queryByText(/orígenes disponibles: \d+\/107/)).toBeNull();
+  });
+
   it('distinguishes operational status timestamps from a later scheduled durable execution', async () => {
-    const manualState = { ...initialStatus, horizons: [7, 14].map(days => horizon(days as 7 | 14, {
+    const manualState = { ...initialStatus, horizons: [horizon(7, {
       lastRequestAt: '2026-10-17T19:07:00.000Z', lastAttemptAt: '2026-10-17T07:05:00.000Z',
       lastEvaluatedAt: '2026-10-17T19:07:00.000Z', lastResult: 'LAST_RESULT_NO_PENDING',
-    })) } as ForecastMlUpdateStatus;
+    }), horizon(14, {
+      lastRequestAt: '2026-10-17T19:07:00.000Z', lastAttemptAt: '2026-10-17T07:05:00.000Z',
+      lastEvaluatedAt: '2026-10-17T19:07:00.000Z', lastResult: 'LAST_RESULT_NO_PENDING',
+    })] } satisfies ForecastMlUpdateStatus;
     const scheduled: ForecastMlUpdateExecution = {
       executionId: '11111111-1111-4111-8111-111111111111', triggerSource: 'SCHEDULED', requestSource: 'SCHEDULED',
       requestedAt: '2026-10-17T20:35:00.000Z', startedAt: '2026-10-17T20:35:00.000Z', finishedAt: '2026-10-17T20:35:15.000Z',

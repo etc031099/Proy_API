@@ -20,9 +20,20 @@ function fixture() {
   let snapshot = { dataVersion: '83', states: [], active: [7, 14].map(horizonDays => ({ horizonDays,
     modelVersion: 1, trainedDataVersion: '83', labelClosedThrough: '2026-10-16' })) };
   let lock = Promise.resolve(), now = new Date(NOW), dispatches = 0, dispatchStatus = 'DISPATCHED';
+  const events = [];
   const scopes = [];
   const repository = {
     read: async scope => { scopes.push(scope); return structuredClone(snapshot); },
+    readPendingSignals: async (scope, horizonDays, processedRevision) => {
+      scopes.push(scope);
+      const pending = events.filter(event => event.businessId === scope.businessId
+        && event.scenarioId === scope.scenarioId && event.horizonDays === horizonDays
+        && (processedRevision == null || BigInt(event.dataVersion) > BigInt(processedRevision)));
+      return { count: pending.length, types: [...new Set(pending.map(event => event.eventType))],
+        firstAt: pending.map(event => event.occurredAt).sort()[0] || null,
+        lastAt: pending.map(event => event.occurredAt).sort().at(-1) || null,
+        latestRevision: pending.length ? pending.map(event => BigInt(event.dataVersion)).reduce((a, b) => a > b ? a : b).toString() : null };
+    },
     transaction: (scope, fn) => {
       scopes.push(scope);
       const job = lock.then(async () => {
@@ -44,6 +55,7 @@ function fixture() {
   const service = createForecastManualUpdateService({ repository, clock: () => now,
     dispatch: async () => { dispatches += 1; return dispatchStatus; } });
   return { service, repository, scopes, get snapshot() { return snapshot; },
+    events,
     get dispatches() { return dispatches; }, setDispatch: value => { dispatchStatus = value; },
     advance: ms => { now = new Date(now.getTime() + ms); } };
 }
@@ -68,6 +80,56 @@ test('authenticated manual request durably marks only 7/14; status keeps ACTIVE 
   }
   assert.doesNotMatch(JSON.stringify(status), /artifact|manualRequestKey|_id|hash/i);
   assert.ok(f.scopes.every(scope => scope.businessId === config.businessId && scope.scenarioId === config.scenarioId));
+});
+
+test('status counts only unprocessed signals per authenticated scenario and horizon', async () => {
+  const f = fixture();
+  await f.service.request(request());
+  for (const row of f.snapshot.states) Object.assign(row, { lastProcessedDataVersion: 81n,
+    latestDataVersion: 84n, eventCount: 900, nextEligibleAt: new Date(NOW.getTime() + 60_000) });
+  f.events.push(
+    { businessId: config.businessId, scenarioId: config.scenarioId, horizonDays: 7,
+      eventType: 'SALE_COMPLETED', dataVersion: '81', occurredAt: '2026-10-17T15:00:00.000Z' },
+    { businessId: config.businessId, scenarioId: config.scenarioId, horizonDays: 7,
+      eventType: 'SALE_COMPLETED', dataVersion: '82', occurredAt: '2026-10-17T16:00:00.000Z' },
+    { businessId: config.businessId, scenarioId: config.scenarioId, horizonDays: 7,
+      eventType: 'PRODUCT_UPDATED', dataVersion: '84', occurredAt: '2026-10-17T16:30:00.000Z' },
+    { businessId: config.businessId, scenarioId: config.scenarioId, horizonDays: 14,
+      eventType: 'SALE_CANCELLED', dataVersion: '82', occurredAt: '2026-10-17T16:10:00.000Z' },
+    { businessId: 'foreign-business', scenarioId: config.scenarioId, horizonDays: 7,
+      eventType: 'SALE_COMPLETED', dataVersion: '99', occurredAt: '2026-10-17T16:20:00.000Z' },
+    { businessId: config.businessId, scenarioId: 'foreign-scenario', horizonDays: 14,
+      eventType: 'SALE_COMPLETED', dataVersion: '99', occurredAt: '2026-10-17T16:25:00.000Z' },
+  );
+  const result = await f.service.status(request());
+  const [seven, fourteen] = result.horizons;
+  assert.equal(seven.readiness.pendingSignalCount, 2);
+  assert.deepEqual(seven.readiness.pendingSignalTypes, ['PRODUCT_UPDATED', 'SALE_COMPLETED']);
+  assert.equal(seven.readiness.processedRevision, '81');
+  assert.equal(seven.readiness.latestPendingRevision, '84');
+  assert.equal(seven.readiness.firstPendingSignalAt, '2026-10-17T16:00:00.000Z');
+  assert.equal(seven.readiness.lastPendingSignalAt, '2026-10-17T16:30:00.000Z');
+  assert.equal(seven.readiness.status, 'WAITING_DEBOUNCE');
+  assert.equal(fourteen.readiness.pendingSignalCount, 1);
+  assert.deepEqual(fourteen.readiness.pendingSignalTypes, ['SALE_CANCELLED']);
+  assert.equal(fourteen.readiness.status, 'WAITING_DEBOUNCE');
+  assert.equal(seven.requiredOrigins, 107);
+  assert.equal(seven.availableOrigins, null);
+  assert.equal(seven.readiness.availableOriginsActual, null);
+  assert.equal(result.horizons.some(row => row.horizonDays === 1), false);
+  assert.ok(f.scopes.every(scope => scope.businessId === config.businessId && scope.scenarioId === config.scenarioId));
+});
+
+test('readiness codes remain distinct and eligibility does not imply promotion approval', async () => {
+  const { preparationStatus } = require('../src/services/forecastManualUpdateService');
+  const forEligibility = eligibility => ({ eligibility });
+  assert.equal(preparationStatus({ pending: forEligibility('NO_PENDING_WORK'), signalCount: 0 }), 'NO_CHANGES');
+  assert.equal(preparationStatus({ pending: forEligibility('NOT_MATURE'), signalCount: 1 }), 'WAITING_MATURITY');
+  assert.equal(preparationStatus({ pending: forEligibility('DEBOUNCE_NOT_ELAPSED'), signalCount: 1 }), 'WAITING_DEBOUNCE');
+  assert.equal(preparationStatus({ pending: forEligibility('COOLDOWN_ACTIVE'), signalCount: 1 }), 'WAITING_COOLDOWN');
+  assert.equal(preparationStatus({ pending: forEligibility('ELIGIBLE'), signalCount: 1 }), 'READY_FOR_WORKER_REVIEW');
+  assert.equal(preparationStatus({ pending: forEligibility('LEASE_ACTIVE'), signalCount: 0 }), 'WORKER_ACTIVE');
+  assert.equal(preparationStatus({ pending: forEligibility('PREVIOUS_FAILURE_NOT_RETRYABLE'), signalCount: 0 }), 'UNKNOWN');
 });
 
 test('10 concurrent clicks coalesce, including an in-flight RESERVED dispatch', async () => {

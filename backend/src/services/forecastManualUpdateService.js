@@ -35,7 +35,8 @@ function createWorkflowDispatcher({ env = process.env, fetchImpl = globalThis.fe
 function productionRepository() {
   const mongoose = require('mongoose');
   const { ForecastMlUpdateState: State, V3OperationalRevision: Revision,
-    ForecastModelRegistry: Registry, ForecastModelArtifact: Artifact } = require('../models');
+    ForecastModelRegistry: Registry, ForecastModelArtifact: Artifact,
+    ForecastMlUpdateEvent: Event } = require('../models');
   const executions = require('./forecastMlUpdateExecutionService').createForecastMlUpdateExecutionService();
   const read = async (scope, session) => {
     const query = modelQuery => session ? modelQuery.session(session) : modelQuery;
@@ -54,6 +55,22 @@ function productionRepository() {
   };
   return {
     read,
+    async readPendingSignals(scope, horizonDays, processedRevision) {
+      const filter = { ...scope, horizonDays };
+      if (processedRevision != null) filter.dataVersion = { $gt: BigInt(String(processedRevision)) };
+      const groups = await Event.aggregate([
+        { $match: filter },
+        { $group: { _id: '$eventType', count: { $sum: 1 }, firstAt: { $min: '$occurredAt' },
+          lastAt: { $max: '$occurredAt' }, latestRevision: { $max: '$dataVersion' } } },
+      ]).option({ maxTimeMS: 5000 });
+      if (!groups.length) return emptyPendingSignals();
+      return groups.reduce((summary, group) => ({ count: summary.count + group.count,
+        types: [...summary.types, group._id],
+        firstAt: !summary.firstAt || group.firstAt < summary.firstAt ? group.firstAt : summary.firstAt,
+        lastAt: !summary.lastAt || group.lastAt > summary.lastAt ? group.lastAt : summary.lastAt,
+        latestRevision: summary.latestRevision == null || BigInt(String(group.latestRevision)) > BigInt(summary.latestRevision)
+          ? String(group.latestRevision) : summary.latestRevision }), emptyPendingSignals());
+    },
     async transaction(scope, callback) {
       await require('./forecastExecutionIndexes').verifyExecutionIndexes();
       // Unique scope index plus snapshot transaction coalesce concurrent callers,
@@ -103,6 +120,33 @@ const RESULT_CODES = Object.freeze({ NO_PENDING_WORK: 'LAST_RESULT_NO_PENDING',
 const EVALUATION_CODES = new Set([...Object.keys(RESULT_CODES), 'DEBOUNCE_NOT_ELAPSED',
   'NOT_MATURE', 'COOLDOWN_ACTIVE', 'PREVIOUS_FAILURE_NOT_RETRYABLE']);
 const iso = value => value && Number.isFinite(new Date(value).getTime()) ? new Date(value).toISOString() : null;
+const SIGNAL_TYPES = new Set(['SALE_COMPLETED', 'SALE_CANCELLED', 'PRODUCT_UPDATED']);
+
+function preparationStatus({ pending, signalCount, manualPending = false }) {
+  if (pending.eligibility === 'LEASE_ACTIVE') return 'WORKER_ACTIVE';
+  if (pending.eligibility === 'ELIGIBLE') return 'READY_FOR_WORKER_REVIEW';
+  if (pending.eligibility === 'DEBOUNCE_NOT_ELAPSED') return 'WAITING_DEBOUNCE';
+  if (pending.eligibility === 'NOT_MATURE') return 'WAITING_MATURITY';
+  if (pending.eligibility === 'COOLDOWN_ACTIVE') return 'WAITING_COOLDOWN';
+  if (pending.eligibility === 'PREVIOUS_FAILURE_NOT_RETRYABLE') return 'UNKNOWN';
+  if (signalCount > 0) return 'SIGNALS_PENDING';
+  if (pending.eligibility === 'NO_PENDING_WORK' && !manualPending) return 'NO_CHANGES';
+  return 'UNKNOWN';
+}
+
+function emptyPendingSignals() {
+  return { count: 0, types: [], firstAt: null, lastAt: null, latestRevision: null };
+}
+
+function normalizePendingSignals(value) {
+  if (!value || !Number.isSafeInteger(value.count) || value.count < 0) {
+    throw Object.assign(new Error('ML_SIGNAL_READ_UNAVAILABLE'), { code: 'ML_SIGNAL_READ_UNAVAILABLE' });
+  }
+  return { count: value.count,
+    types: Array.isArray(value.types) ? [...new Set(value.types.filter(type => SIGNAL_TYPES.has(type)))].sort() : [],
+    firstAt: iso(value.firstAt), lastAt: iso(value.lastAt),
+    latestRevision: value.latestRevision == null ? null : String(value.latestRevision) };
+}
 
 function createForecastManualUpdateService({ repository, dispatch, history, clock = () => new Date() } = {}) {
   const repo = repository || productionRepository();
@@ -176,10 +220,12 @@ function createForecastManualUpdateService({ repository, dispatch, history, cloc
 
   async function status(req) {
     const scope = scopeFor(req), now = clock(), snapshot = await repo.read(scope);
-    return { dataVersion: snapshot.dataVersion, closedThrough: coordinator.watermark(now), horizons: HORIZONS.map(h => {
+    const horizons = await Promise.all(HORIZONS.map(async h => {
       const row = snapshot.states.find(item => item.horizonDays === h);
       const active = snapshot.active.find(item => item.horizonDays === h);
       const pending = describePending(row, h, coordinator, now);
+      const signals = normalizePendingSignals(await repo.readPendingSignals(scope, h,
+        row?.lastProcessedDataVersion ?? null));
       const running = pending.eligibility === 'LEASE_ACTIVE';
       const last = row?.lastManualEvaluatedAt && (!row.lastAttemptAt || row.lastManualEvaluatedAt >= row.lastAttemptAt)
         ? row.lastManualResult : row?.lastFailureAt && (!row.lastSuccessAt || row.lastFailureAt > row.lastSuccessAt)
@@ -196,11 +242,25 @@ function createForecastManualUpdateService({ repository, dispatch, history, cloc
           : pending.pending ? 'NOT_ELIGIBLE_YET' : RESULT_CODES[last] || 'LAST_RESULT_NO_PENDING',
         dispatchStatus: row?.manualDispatchStatus || null,
         // No Python/training in this API. Exact readiness remains worker-owned.
-        availableOrigins: null, requiredOrigins: 107 };
-    }) };
+        availableOrigins: null, requiredOrigins: 107,
+        readiness: { status: preparationStatus({ pending, signalCount: signals.count,
+          manualPending: pending.manualPending }),
+          reasonCode: pending.eligibility, hasPendingSignals: signals.count > 0,
+          pendingSignalCount: signals.count, pendingSignalTypes: signals.types,
+          firstPendingSignalAt: signals.firstAt, lastPendingSignalAt: signals.lastAt,
+          pendingSince: iso(row?.pendingSince), lastDirtyAt: iso(row?.lastDirtyAt),
+          nextEligibleAt: iso(row?.nextEligibleAt), eligibility: pending.eligibility,
+          latestMatureOrigin: pending.latestMatureOrigin || null,
+          lastTrainedMatureOrigin: row?.lastTrainedMatureOrigin || null,
+          processedRevision: pending.lastProcessedDataVersion == null ? null : String(pending.lastProcessedDataVersion),
+          latestPendingRevision: signals.latestRevision, requiredOrigins: 107,
+          availableOriginsActual: null } };
+    }));
+    return { dataVersion: snapshot.dataVersion, closedThrough: coordinator.watermark(now), horizons };
   }
   return { request, status };
 }
 
 module.exports = { createForecastManualUpdateService, createWorkflowDispatcher,
-  productionRepository, initialState, MANUAL_INTERVAL_MS };
+  productionRepository, initialState, MANUAL_INTERVAL_MS, preparationStatus,
+  normalizePendingSignals, emptyPendingSignals };

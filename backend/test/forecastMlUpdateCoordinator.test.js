@@ -38,6 +38,10 @@ test('only approved commercial changes mark Ridge27 dirty', () => {
   assert.equal(classify({ entityType: 'product', operation: 'UPDATE', projection: {
     before: { sku: 'A', priceCents: 100 }, after: { sku: 'A', priceCents: 200 }
   } }), null);
+  assert.equal(classify({ entityType: 'product', operation: 'UPDATE', projection: {
+    before: { sku: 'A', stock: 5, supplierId: 'supplier-1' },
+    after: { sku: 'A', stock: 2, supplierId: 'supplier-2' }
+  } }), null);
 });
 
 test('debounce, maturity, rate limit, and historical correction determine readiness', () => {

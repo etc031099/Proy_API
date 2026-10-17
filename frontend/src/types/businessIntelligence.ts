@@ -141,6 +141,27 @@ export type ForecastMlUpdateResult = 'LAST_RESULT_NO_PENDING' | 'LAST_RESULT_INS
 export type ForecastMlUpdateReason = 'NO_PENDING_WORK' | 'DEBOUNCE_NOT_ELAPSED' | 'NOT_MATURE'
   | 'COOLDOWN_ACTIVE' | 'PREVIOUS_FAILURE_NOT_RETRYABLE' | 'NO_PROMOTION_INSUFFICIENT_HISTORY'
   | 'REJECTED' | 'PROMOTED' | 'FAILED' | null;
+export type ForecastMlReadinessStatus = 'NO_CHANGES' | 'SIGNALS_PENDING' | 'WAITING_DEBOUNCE'
+  | 'WAITING_MATURITY' | 'WAITING_COOLDOWN' | 'READY_FOR_WORKER_REVIEW' | 'WORKER_ACTIVE' | 'UNKNOWN';
+export interface ForecastMlReadiness {
+  status: ForecastMlReadinessStatus;
+  reasonCode: string | null;
+  hasPendingSignals: boolean;
+  pendingSignalCount: number;
+  pendingSignalTypes: Array<'SALE_COMPLETED' | 'SALE_CANCELLED' | 'PRODUCT_UPDATED'>;
+  firstPendingSignalAt: string | null;
+  lastPendingSignalAt: string | null;
+  pendingSince: string | null;
+  lastDirtyAt: string | null;
+  nextEligibleAt: string | null;
+  eligibility: string;
+  latestMatureOrigin: string | null;
+  lastTrainedMatureOrigin: string | null;
+  processedRevision: string | null;
+  latestPendingRevision: string | null;
+  requiredOrigins: 107;
+  availableOriginsActual: number | null;
+}
 export interface ForecastMlUpdateHorizonStatus {
   horizonDays: 7 | 14;
   activeModelVersion: number | null;
@@ -159,6 +180,7 @@ export interface ForecastMlUpdateHorizonStatus {
   dispatchStatus: 'RESERVED' | 'DISPATCHED' | 'DEFERRED' | null;
   availableOrigins: number | null;
   requiredOrigins: 107;
+  readiness?: ForecastMlReadiness;
 }
 export interface ForecastMlUpdateStatus {
   dataVersion: string | number;

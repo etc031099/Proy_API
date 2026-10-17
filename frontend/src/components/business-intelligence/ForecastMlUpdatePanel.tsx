@@ -38,6 +38,27 @@ const formatClosedDay = (value: string | null | undefined) => {
   return Number.isNaN(date.getTime()) ? 'No disponible' : new Intl.DateTimeFormat('es-PE', { dateStyle: 'medium', timeZone: 'UTC' }).format(date);
 };
 const modelVersion = (row?: ForecastMlUpdateHorizonStatus) => row?.activeModelVersion == null ? 'No disponible' : `v${row.activeModelVersion}`;
+const signalLabels: Record<string, string> = { SALE_COMPLETED: 'Venta completada',
+  SALE_CANCELLED: 'Venta cancelada', PRODUCT_UPDATED: 'Cambio en datos del producto relevantes para Ridge' };
+
+export function readinessMessage(status: NonNullable<ForecastMlUpdateHorizonStatus['readiness']>['status'], pendingSignalCount = 0): string {
+  switch (status) {
+    case 'NO_CHANGES': return 'Sin cambios nuevos para revisar.';
+    case 'SIGNALS_PENDING': return 'Hay señales nuevas registradas que todavía no se reflejan en el estado del worker.';
+    case 'WAITING_DEBOUNCE': return pendingSignalCount > 0
+      ? 'Hay señales registradas. Se agrupan antes de revisar el trabajo.'
+      : 'El trabajo pendiente se agrupa antes de la próxima revisión.';
+    case 'WAITING_MATURITY': return pendingSignalCount > 0
+      ? 'Hay señales nuevas registradas. Aún están esperando madurez.'
+      : 'La evidencia del horizonte aún está esperando madurez.';
+    case 'WAITING_COOLDOWN': return 'Esperando el intervalo de seguridad antes de la próxima revisión.';
+    case 'READY_FOR_WORKER_REVIEW': return 'Listo para que el worker revise la nueva evidencia; esto no implica aprobación de promoción.';
+    case 'WORKER_ACTIVE': return 'Hay una revisión en curso.';
+    default: return 'Estado de preparación no disponible; consulta los detalles técnicos.';
+  }
+}
+
+const signalDate = (value: string | null) => value ? formatDate(value) : 'No registrada';
 
 function headline(status: ForecastMlUpdateStatus | null, failure: string | null): string {
   if (failure) return 'ERROR';
@@ -253,12 +274,36 @@ export function ForecastMlUpdatePanel({ refreshToken = 0 }: { refreshToken?: num
         <div><dt className="text-muted-foreground">Último intento elegible del worker</dt><dd>{formatDate(rows.map(row => row.lastAttemptAt).filter(Boolean).sort().at(-1))}</dd></div>
         <div><dt className="text-muted-foreground">Último resultado del estado operativo</dt><dd>{currentHeadline === 'SIN CAMBIOS' ? 'Sin cambios pendientes' : currentHeadline === 'NO ELEGIBLE' ? 'Aún no elegible' : currentHeadline === 'ERROR' ? 'Evaluación no completada' : rows.some(row => row.lastResult === 'LAST_RESULT_PROMOTED') ? 'Candidato promovido' : 'No hay un resultado nuevo'}</dd></div>
       </dl>
+      <section aria-label="Preparación para próxima evaluación ML" className="space-y-3 rounded-md border p-3">
+        <div><h4 className="font-medium">Preparación para próxima evaluación ML</h4>
+          <p className="mt-1 text-xs text-muted-foreground">Una venta nueva puede cambiar stock e inventario inmediatamente. El modelo Ridge solo se evalúa cuando la evidencia madura y se cumplen las condiciones de seguridad.</p>
+          <p className="text-xs text-muted-foreground">El contador de señales se muestra por horizonte; una misma señal puede aparecer en 7d y 14d.</p></div>
+        <div className="grid gap-3 md:grid-cols-2">
+          {rows.map(row => <article key={`readiness-${row.horizonDays}`} className="space-y-2 rounded-md bg-muted/30 p-3">
+            <h5 className="font-medium">Ridge {row.horizonDays} días</h5>
+            <p className="text-sm" role="status">{readinessMessage(row.readiness?.status || 'UNKNOWN', row.readiness?.pendingSignalCount || 0)}</p>
+            <dl className="grid gap-x-3 gap-y-1 text-xs sm:grid-cols-2">
+              <div><dt className="text-muted-foreground">Señales pendientes</dt><dd>{row.readiness?.pendingSignalCount ?? 'No disponible'}</dd></div>
+              <div><dt className="text-muted-foreground">Tipos</dt><dd>{row.readiness?.pendingSignalTypes?.length
+                ? row.readiness.pendingSignalTypes.map(type => signalLabels[type] || 'Otra señal').join(', ') : 'Ninguna registrada'}</dd></div>
+              <div><dt className="text-muted-foreground">Primera señal pendiente</dt><dd>{signalDate(row.readiness?.firstPendingSignalAt || null)}</dd></div>
+              <div><dt className="text-muted-foreground">Última señal pendiente</dt><dd>{signalDate(row.readiness?.lastPendingSignalAt || null)}</dd></div>
+            </dl>
+            <p className="text-xs text-muted-foreground">Criterio de evidencia: {row.readiness?.requiredOrigins ?? row.requiredOrigins} orígenes maduros, no 107 ventas.</p>
+            <p className="text-xs text-muted-foreground">Los orígenes disponibles se verifican durante la revisión del worker.</p>
+          </article>)}
+        </div>
+      </section>
       <p className="text-xs text-muted-foreground">Este resumen muestra solicitudes manuales y el último intento con trabajo elegible. Las revisiones automáticas que terminan sin trabajo pendiente también quedan registradas en el historial durable, que es la referencia para la fecha y el resultado de todas las ejecuciones.</p>
       <details className="rounded-md border p-3 text-sm"><summary className="cursor-pointer font-medium">Detalles técnicos</summary>
         <dl className="mt-2 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
           <div><dt>Cierre operativo vigente (día cerrado)</dt><dd>{formatClosedDay(status.closedThrough)}</dd></div>
+          {rows.map(row => <div key={`readiness-tech-${row.horizonDays}`}><dt>Horizonte {row.horizonDays}d · revisión técnica de preparación</dt><dd>{technicalValue(row.readiness?.status)} / elegibilidad {technicalValue(row.readiness?.eligibility)} / motivo {technicalValue(row.readiness?.reasonCode)}</dd></div>)}
+          {rows.map(row => <div key={`revision-tech-${row.horizonDays}`}><dt>Horizonte {row.horizonDays}d · revisiones procesada / señal pendiente</dt><dd>{technicalValue(row.readiness?.processedRevision)} / {technicalValue(row.readiness?.latestPendingRevision)}</dd></div>)}
+          {rows.map(row => <div key={`maturity-tech-${row.horizonDays}`}><dt>Horizonte {row.horizonDays}d · madurez última / ya entrenada</dt><dd>{technicalValue(row.readiness?.latestMatureOrigin)} / {technicalValue(row.readiness?.lastTrainedMatureOrigin)}</dd></div>)}
+          {rows.map(row => <div key={`pending-tech-${row.horizonDays}`}><dt>Horizonte {row.horizonDays}d · pendiente desde / último cambio / marca de debounce</dt><dd>{formatDate(row.readiness?.pendingSince)} / {formatDate(row.readiness?.lastDirtyAt)} / {formatDate(row.readiness?.nextEligibleAt)}</dd></div>)}
           {rows.map(row => <div key={row.horizonDays}><dt>Horizonte {row.horizonDays}d · trigger / elegibilidad / resultado</dt><dd>{technicalValue(row.trigger)} / {technicalValue(row.eligibility)} / {technicalValue(row.lastEvaluationReason || row.lastResult)}</dd></div>)}
-          {rows.map(row => <div key={`origins-${row.horizonDays}`}><dt>Horizonte {row.horizonDays}d · evidencia para promoción</dt><dd>{row.availableOrigins == null ? 'Se valida en la ejecución del worker' : `${row.availableOrigins}/${row.requiredOrigins}`}</dd></div>)}
+          {rows.map(row => <div key={`origins-${row.horizonDays}`}><dt>Horizonte {row.horizonDays}d · evidencia disponible ahora</dt><dd>{row.readiness?.availableOriginsActual == null ? 'No calculada en esta consulta; se valida durante la revisión del worker' : `${row.readiness.availableOriginsActual}/${row.requiredOrigins}`}</dd></div>)}
           {rows.map(row => <div key={`version-${row.horizonDays}`}><dt>trainedDataVersion {row.horizonDays}d</dt><dd>{technicalValue(row.trainedDataVersion)}</dd></div>)}
           {rows.map(row => <div key={`dispatch-${row.horizonDays}`}><dt>Dispatch {row.horizonDays}d</dt><dd>{technicalValue(row.dispatchStatus)}</dd></div>)}
           <div><dt>Política</dt><dd>Horizontes 7d/14d · 107 origins · 1d no aprobado</dd></div>
