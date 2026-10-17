@@ -37,7 +37,7 @@ function fixture() {
       if (index < 0) return null;
       const next = { ...structuredClone(rows[index]), writeVersion: version + 1 };
       for (const [key, value] of Object.entries(values)) {
-        if (key === 'github.runAttempt') next.github.runAttempt = value;
+        if (key.startsWith('github.')) { next.github ||= {}; next.github[key.slice(7)] = value; }
         else next[key] = structuredClone(value);
       }
       await new Model(next).validate();

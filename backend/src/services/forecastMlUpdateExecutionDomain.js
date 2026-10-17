@@ -39,6 +39,10 @@ const REASONS = Object.freeze({
   IMPACT_NOT_CAPTURED: 'No se capturó una comparación atribuible al modelo.',
   NO_MODEL_PROMOTION: 'No hubo promoción de modelo para comparar.',
   UNKNOWN_REASON: 'El detalle técnico no está disponible en el catálogo seguro.',
+  DISPATCH_DEFERRED: 'La solicitud está guardada; el disparo del worker quedó diferido.',
+  CLAIM_NOT_ACQUIRED: 'Otro worker adquirió el trabajo antes de este intento.',
+  PREFLIGHT_FAILED: 'El diagnóstico previo impidió continuar la ejecución.',
+  REUSED_TRAINING_RESULT: 'Se recuperó un resultado durable anterior; no hubo una nueva promoción en este intento.',
 });
 const MAX_ATTEMPTS = 20;
 const REQUIRED_ORIGINS = 107;

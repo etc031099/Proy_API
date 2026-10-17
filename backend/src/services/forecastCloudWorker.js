@@ -21,6 +21,8 @@ const SAFE_CODES = new Set([
   'POLICY_COMPUTATION_FAILED', 'STALE_FENCING_TOKEN', 'REGISTRY_CAS_CONFLICT',
   'ACK_PENDING', 'COMMIT_RESULT_UNKNOWN', 'TRANSACTION_RETRY_EXHAUSTED', 'MONGO_UNAVAILABLE',
   'WORKER_RESPONSE_INVALID', 'WORKER_CYCLE_TIMEOUT', 'WORKER_FAILED',
+  'ML_HISTORY_NOT_READY', 'INVALID_EXECUTION_IDENTITY', 'CLI_INVOCATION_KEY_REQUIRED',
+  'MANUAL_CORRELATION_INVALID', 'EXECUTION_CONFLICT', 'PROMOTION_HISTORY_MISSING',
 ]);
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 const safeCode = error => SAFE_CODES.has(error?.code) ? error.code
@@ -107,17 +109,27 @@ function describePending(row, horizonDays, update, now) {
 }
 
 function createCloudWorker({ preflight, readState, runEligible, completeManualEvaluation,
-  update, clock = () => new Date() }) {
-  async function run(mode) {
+  update, executionHistory, clock = () => new Date() }) {
+  async function cycle(mode) {
     if (!['CHECK', 'STATUS', 'RUN'].includes(mode)) fail('INVALID_CLOUD_ARGUMENTS');
     const started = clock().getTime();
+    if (mode === 'RUN' && executionHistory) {
+      const audit = await executionHistory.begin();
+      if (audit.duplicate) return { status: 'OK', mode, executionId: audit.executionId,
+        result: 'EXECUTION_ALREADY_RECORDED', horizons: [], writesPerformed: null, writesMayHaveOccurred: true };
+    }
     const inspected = await preflight();
+    if (mode === 'RUN' && executionHistory) await executionHistory.preflight(inspected);
     const report = { status: 'OK', mode, businessId: 'MINI…V3', scenarioId: config.scenarioId,
       dataVersion: version(inspected.dataVersion), closedThrough: update.watermark(clock()),
       preflight: { status: 'PASS', python: 'PASS', activeModels: 'PASS', indexes: 'PASS' },
       limits: { maxJobsPerHorizon: 1, maxJobsPerCycle: 2, trainingTimeoutMs: TRAINING_TIMEOUT_MS,
         cycleTimeoutMs: CYCLE_TIMEOUT_MS }, horizons: [], writesPerformed: 0, writesMayHaveOccurred: false };
     const owner = `cloud-${randomUUID()}`;
+    if (mode === 'RUN' && executionHistory) {
+      report.executionId = executionHistory.executionId;
+      report.writesPerformed = null; report.writesMayHaveOccurred = true;
+    }
     for (const horizonDays of HORIZONS) {
       const active = inspected.activeModels.find(row => row.horizonDays === horizonDays);
       const readiness = inspected.promotionReadiness[String(horizonDays)];
@@ -154,7 +166,8 @@ function createCloudWorker({ preflight, readState, runEligible, completeManualEv
         report.writesPerformed = null;
         report.writesMayHaveOccurred = true;
         const result = await runEligible({ horizonDays, businessId: config.businessId,
-          scenarioId: config.scenarioId, leaseOwner: owner });
+          scenarioId: config.scenarioId, leaseOwner: owner,
+          ...(executionHistory?.executionId ? { executionId: executionHistory.executionId } : {}) });
         if (result == null) {
           Object.assign(item, await describe());
           item.result = item.eligibility === 'ELIGIBLE' ? 'CLAIM_NOT_ACQUIRED' : item.eligibility;
@@ -169,9 +182,19 @@ function createCloudWorker({ preflight, readState, runEligible, completeManualEv
         item.idempotent = result.idempotent === true;
       } catch (error) {
         item.result = 'FAILED'; item.code = safeCode(error); report.status = 'FAILED';
+      } finally {
+        if (mode === 'RUN' && executionHistory) await executionHistory.horizon(item);
       }
     }
+    if (mode === 'RUN' && executionHistory) await executionHistory.finish();
     return report;
+  }
+  async function run(mode) {
+    try { return await cycle(mode); }
+    catch (error) {
+      if (mode === 'RUN' && executionHistory) await executionHistory.fail(error);
+      throw error;
+    }
   }
   return Object.freeze({ run });
 }

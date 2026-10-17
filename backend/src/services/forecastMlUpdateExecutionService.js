@@ -20,13 +20,15 @@ const unknownFields = (input, allowed) => {
   if (!input || Object.keys(input).some(key => !allowed.includes(key))) D.fail('INVALID_EXECUTION_FIELDS');
 };
 
-function productionRepository(model = Model) {
+function productionRepository(model = Model, session) {
+  const query = value => session ? value.session(session) : value;
   return {
-    find: filter => model.findOne(filter).select('-_id -createdAt -updatedAt').lean().exec(),
-    async insert(row) { return (await model.create(row)).toObject(); },
-    replace: (scope, executionId, writeVersion, values) => model.findOneAndUpdate(
+    withSession: next => productionRepository(model, next),
+    find: filter => query(model.findOne(filter)).select('-_id -createdAt -updatedAt').lean().exec(),
+    async insert(row) { return session ? (await model.create([row], { session }))[0].toObject() : (await model.create(row)).toObject(); },
+    replace: (scope, executionId, writeVersion, values) => query(model.findOneAndUpdate(
       { ...scope, executionId, writeVersion }, { $set: values, $inc: { writeVersion: 1 } },
-      { new: true, runValidators: true }).select('-_id -createdAt -updatedAt').lean().exec(),
+      { new: true, runValidators: true })).select('-_id -createdAt -updatedAt').lean().exec(),
   };
 }
 
@@ -65,6 +67,8 @@ function createForecastMlUpdateExecutionService({ repository = productionReposit
   const getExecution = async input => view(await repository.find({ ...scopeOf(input), executionId: requireKey(input.executionId) }));
   const findExecutionByManualRequest = async input => view(await repository.find({ ...scopeOf(input),
     manualRequestKey: requireKey(input.manualRequestKey) }));
+  const findExecutionByCliInvocation = async input => view(await repository.find({ ...scopeOf(input),
+    cliInvocationKey: requireKey(input.cliInvocationKey) }));
   const findExecutionByGithubRun = async input => {
     const { identity } = identityOf({ ...scopeOf(input), triggerSource: 'SCHEDULED', github: {
       repository: input.repository, runId: input.runId, runAttempt: 1 } });
@@ -82,9 +86,9 @@ function createForecastMlUpdateExecutionService({ repository = productionReposit
     mutate(row, dateOf(clock()));
     const next = await validate(row);
     const values = Object.fromEntries(Object.entries(next).filter(([key]) => ![
-      'executionId', 'businessId', 'scenarioId', 'triggerSource', 'manualRequestKey', 'cliInvocationKey', 'writeVersion', 'github',
+      'executionId', 'businessId', 'scenarioId', 'requestSource', 'manualRequestKey', 'writeVersion', 'github',
     ].includes(key)));
-    if (next.github) values['github.runAttempt'] = next.github.runAttempt;
+    if (next.github) for (const key of ['repository', 'runId', 'runAttempt']) values[`github.${key}`] = next.github[key];
     const changed = await repository.replace(scope, row.executionId, input.expectedVersion, values);
     if (!changed) D.fail('EXECUTION_CONFLICT');
     return view(changed);
@@ -103,10 +107,10 @@ function createForecastMlUpdateExecutionService({ repository = productionReposit
       if (!rows.length) return null;
       const row = view(rows[0]);
       if (rows.some(other => other.executionId !== row.executionId)
-          || row.triggerSource !== input.triggerSource
-          || ['manualRequestKey', 'cliInvocationKey'].some(key => (row[key] || null) !== (identity[key] || null))
-          || JSON.stringify(row.github ? [row.github.repository, row.github.runId] : null)
-            !== JSON.stringify(identity.github ? [identity.github.repository, identity.github.runId] : null)) {
+          || (row.requestSource || row.triggerSource) !== input.triggerSource
+          || ['manualRequestKey', 'cliInvocationKey'].some(key => identity[key] && row[key] !== identity[key])
+          || (identity.github && JSON.stringify(row.github ? [row.github.repository, row.github.runId] : null)
+            !== JSON.stringify([identity.github.repository, identity.github.runId]))) {
         D.fail('EXECUTION_IDENTITY_CONFLICT');
       }
       if (identity.github && identity.github.runAttempt > row.github.runAttempt) {
@@ -125,13 +129,14 @@ function createForecastMlUpdateExecutionService({ repository = productionReposit
     const found = await existing();
     if (found) return found;
     const reasonCode = D.safeReason(input.reasonCode || 'ML_UPDATE_REQUESTED');
-    const row = await validate({ ...scope, ...identity, triggerSource: input.triggerSource, executionId: randomUUID(),
+    const row = await validate({ ...scope, ...identity, triggerSource: input.triggerSource, requestSource: input.triggerSource, executionId: randomUUID(),
       requestedAt: dateOf(input.requestedAt ?? clock()), status: 'REQUESTED', stage: 'REQUEST',
       reasonCode, message: D.safeMessage(reasonCode),
       dataVersionBefore: input.dataVersionBefore ?? null, pendingBefore: input.pendingBefore ?? null,
       signalTypes: [...new Set(input.signalTypes || [])], perHorizon: emptyPair(),
       impact: { status: 'NOT_APPLICABLE', reasonCode: null }, writeVersion: 0,
-      attempts: identity.github ? [{ runAttempt: identity.github.runAttempt, status: 'REQUESTED' }] : [] });
+      attempts: identity.github || identity.cliInvocationKey
+        ? [{ runAttempt: identity.github?.runAttempt || 1, status: 'REQUESTED' }] : [] });
     try { return view(await repository.insert(row)); }
     catch (error) {
       if (error.code !== 11000) throw error;
@@ -146,7 +151,8 @@ function createForecastMlUpdateExecutionService({ repository = productionReposit
     const result = input.result;
     unknownFields(result, ['horizonDays', 'activeVersionBefore', 'activeVersionAfter', 'candidateVersion',
       'candidateStatus', 'trainingJobReference', 'trainedDataVersion', 'promotionDecision', 'promotionReason',
-      'policyVersion', 'resultStatus', 'availableOrigins', 'requiredOrigins', 'eligibility']);
+      'policyVersion', 'resultStatus', 'availableOrigins', 'requiredOrigins', 'eligibility', 'activeChangeSource',
+      'dataVersionEvaluated', 'observationsClosedThrough']);
     if (![7, 14].includes(result.horizonDays)) D.fail('INVALID_EXECUTION_HORIZON');
     const index = row.perHorizon.findIndex(item => item.horizonDays === result.horizonDays);
     const previous = row.perHorizon[index];
@@ -170,7 +176,8 @@ function createForecastMlUpdateExecutionService({ repository = productionReposit
     }
     if (['NOT_ELIGIBLE', 'EVALUATED_NO_PROMOTION', 'NO_PENDING_WORK'].includes(next.resultStatus)
         && (next.promotionDecision === 'PROMOTED' || (next.activeVersionBefore != null
-          && next.activeVersionAfter != null && next.activeVersionAfter !== next.activeVersionBefore))) {
+          && next.activeVersionAfter != null && next.activeVersionAfter !== next.activeVersionBefore
+          && next.activeChangeSource !== 'EXTERNAL'))) {
       D.fail('INVALID_NO_PROMOTION_RESULT');
     }
     row.perHorizon[index] = next;
@@ -238,7 +245,54 @@ function createForecastMlUpdateExecutionService({ repository = productionReposit
     if (row.attempts.length && D.TERMINAL.includes(row.status)) row.attempts.at(-1).impact = clone(row.impact);
   });
   const mark = status => input => transitionExecution({ ...input, status });
-  return Object.freeze({ createExecution, getExecution, findExecutionByManualRequest, findExecutionByGithubRun,
+  const updateRunningMetadata = input => update(input, row => {
+    if (row.status !== 'RUNNING') D.fail('INVALID_EXECUTION_TRANSITION');
+    unknownFields(input.data || {}, ['dataVersionBefore', 'dataVersionEvaluated', 'observationsClosedThrough',
+      'pendingBefore', 'pendingAfter', 'availableOrigins', 'requiredOrigins', 'eligibility']);
+    Object.assign(row, input.data || {});
+    if (input.data?.eligibility) row.eligibility = D.safeReason(input.data.eligibility);
+    row.stage = input.stage || row.stage;
+  });
+  const bindExecutionRun = input => update(input, row => {
+    if (!['REQUESTED', 'PENDING', 'DEFERRED'].includes(row.status)) D.fail('INVALID_EXECUTION_TRANSITION');
+    const { identity } = identityOf({ ...scopeOf(input), ...(input.github
+      ? { triggerSource: 'SCHEDULED', github: input.github } : { triggerSource: 'CLI', cliInvocationKey: input.cliInvocationKey }) });
+    if ((row.github && (!identity.github || row.github.repository !== identity.github.repository || row.github.runId !== identity.github.runId))
+        || (row.cliInvocationKey && identity.cliInvocationKey && row.cliInvocationKey !== identity.cliInvocationKey)) {
+      D.fail('EXECUTION_IDENTITY_CONFLICT');
+    }
+    if (!['MANUAL', 'SCHEDULED', 'CLI'].includes(input.triggerSource)) D.fail('INVALID_EXECUTION_TRIGGER');
+    row.requestSource ||= row.triggerSource;
+    row.triggerSource = input.triggerSource;
+    if (identity.github) row.github = identity.github;
+    else row.cliInvocationKey = identity.cliInvocationKey;
+    if (input.cliInvocationKey) {
+      const key = requireKey(input.cliInvocationKey);
+      if (row.cliInvocationKey && row.cliInvocationKey !== key) D.fail('EXECUTION_IDENTITY_CONFLICT');
+      row.cliInvocationKey = key;
+    }
+    const attempt = identity.github?.runAttempt || 1;
+    if (!row.attempts.length) row.attempts.push({ runAttempt: attempt, status: row.status });
+    else if (row.attempts.at(-1).runAttempt !== attempt) D.fail('INVALID_EXECUTION_ATTEMPT');
+  });
+  const resumeInterruptedExecution = input => update(input, row => {
+    if (row.github || row.triggerSource !== 'CLI' || row.status !== 'INTERRUPTED') D.fail('INVALID_EXECUTION_TRANSITION');
+    if (row.attempts.length >= D.MAX_ATTEMPTS) D.fail('EXECUTION_ATTEMPT_LIMIT');
+    row.attempts.push({ runAttempt: (row.attempts.at(-1)?.runAttempt || 0) + 1, status: 'REQUESTED' });
+    row.status = 'REQUESTED'; row.stage = 'REQUEST'; row.startedAt = null; row.finishedAt = null;
+    row.reasonCode = null; row.message = null; row.perHorizon = emptyPair();
+    row.dataVersionBefore = null; row.dataVersionEvaluated = null; row.observationsClosedThrough = null;
+    row.pendingBefore = null; row.pendingAfter = null; row.availableOrigins = null; row.eligibility = null;
+    row.impact = { status: 'NOT_APPLICABLE', reasonCode: null };
+  });
+  return Object.freeze({ createExecution, getExecution, findExecutionByManualRequest, findExecutionByGithubRun, findExecutionByCliInvocation,
+    resumeInterruptedExecution,
+    bindExecutionRun,
+    updateRunningMetadata,
+    withSession: session => {
+      if (!repository.withSession) D.fail('EXECUTION_SESSION_UNSUPPORTED');
+      return createForecastMlUpdateExecutionService({ repository: repository.withSession(session), clock });
+    },
     transitionExecution, startExecution: mark('RUNNING'), markPending: mark('PENDING'),
     markDeferred: mark('DEFERRED'), markNotEligible: mark('NOT_ELIGIBLE'), markNoPendingWork: mark('NO_PENDING_WORK'),
     markPromoted: mark('PROMOTED'), markNoPromotion: mark('EVALUATED_NO_PROMOTION'), markPartial: mark('PARTIAL'),

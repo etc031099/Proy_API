@@ -11,7 +11,9 @@ const fail = (code, httpStatus) => { throw Object.assign(new Error(code), { code
 // Fixed GitHub host/workflow/ref: neither the client nor a database row supplies
 // a URL, branch, token or arbitrary workflow input. No raw response/error logging.
 function createWorkflowDispatcher({ env = process.env, fetchImpl = globalThis.fetch } = {}) {
-  return async () => {
+  return async ({ manualRequestKey } = {}) => {
+    if (manualRequestKey && (typeof manualRequestKey !== 'string'
+        || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/.test(manualRequestKey))) return 'DEFERRED';
     const token = env.FORECAST_GITHUB_ACTIONS_TOKEN;
     const repository = env.FORECAST_GITHUB_REPOSITORY;
     if (!token || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository || '')) return 'DEFERRED';
@@ -20,7 +22,8 @@ function createWorkflowDispatcher({ env = process.env, fetchImpl = globalThis.fe
         method: 'POST', redirect: 'error', signal: AbortSignal.timeout(4000),
         headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json', 'X-GitHub-Api-Version': '2026-03-10' },
-        body: JSON.stringify({ ref: 'main', inputs: { mode: 'run' } }),
+        body: JSON.stringify({ ref: 'main', inputs: { mode: 'run',
+          ...(manualRequestKey ? { manualRequestKey } : {}) } }),
       });
       // Current API returns 200; 204 supports the previous API behavior.
       await response.body?.cancel();
@@ -33,6 +36,7 @@ function productionRepository() {
   const mongoose = require('mongoose');
   const { ForecastMlUpdateState: State, V3OperationalRevision: Revision,
     ForecastModelRegistry: Registry, ForecastModelArtifact: Artifact } = require('../models');
+  const executions = require('./forecastMlUpdateExecutionService').createForecastMlUpdateExecutionService();
   const read = async (scope, session) => {
     const query = modelQuery => session ? modelQuery.session(session) : modelQuery;
     const revision = await query(Revision.findById(scope.businessId)).setOptions({ useBigInt64: true }).lean();
@@ -51,6 +55,7 @@ function productionRepository() {
   return {
     read,
     async transaction(scope, callback) {
+      await require('./forecastExecutionIndexes').verifyExecutionIndexes();
       // Unique scope index plus snapshot transaction coalesce concurrent callers,
       // including separate backend replicas. Retry a racing first-row insert.
       for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -58,6 +63,7 @@ function productionRepository() {
         try {
           return await session.withTransaction(async () => callback({
             ...await read(scope, session),
+            history: executions.withSession(session),
             put: async row => {
               const { _id, createdAt, updatedAt, ...fields } = row;
               await State.updateOne({ ...scope, horizonDays: row.horizonDays }, { $set: fields },
@@ -73,6 +79,7 @@ function productionRepository() {
       await State.updateMany({ ...scope, manualRequestKey: requestKey },
         { $set: { manualDispatchStatus: status } }, { runValidators: true });
     },
+    history: executions,
   };
 }
 
@@ -97,7 +104,7 @@ const EVALUATION_CODES = new Set([...Object.keys(RESULT_CODES), 'DEBOUNCE_NOT_EL
   'NOT_MATURE', 'COOLDOWN_ACTIVE', 'PREVIOUS_FAILURE_NOT_RETRYABLE']);
 const iso = value => value && Number.isFinite(new Date(value).getTime()) ? new Date(value).toISOString() : null;
 
-function createForecastManualUpdateService({ repository, dispatch, clock = () => new Date() } = {}) {
+function createForecastManualUpdateService({ repository, dispatch, history, clock = () => new Date() } = {}) {
   const repo = repository || productionRepository();
   const dispatchWorkflow = dispatch || createWorkflowDispatcher();
   const scopeFor = req => {
@@ -137,17 +144,30 @@ function createForecastManualUpdateService({ repository, dispatch, clock = () =>
         row.manualDispatchStatus = 'RESERVED';
         await snapshot.put(row);
       }
+      const audit = snapshot.history || history;
+      if (audit) await audit.createExecution({ ...scope, triggerSource: 'MANUAL', manualRequestKey: requestKey,
+        requestedAt: existing?.lastManualRequestAt || now, dataVersionBefore: snapshot.dataVersion, pendingBefore: true });
       return { requestStatus: existing ? 'ALREADY_PENDING' : 'REQUEST_ACCEPTED',
         dispatch: send ? 'RESERVED' : existing.manualDispatchStatus || 'DEFERRED', requestKey, send };
     });
     let dispatchStatus = result.dispatch;
     if (result.send) {
-      try { dispatchStatus = await dispatchWorkflow(); } catch { dispatchStatus = 'DEFERRED'; }
+      try { dispatchStatus = await dispatchWorkflow({ manualRequestKey: result.requestKey }); } catch { dispatchStatus = 'DEFERRED'; }
       if (!['DISPATCHED', 'DEFERRED'].includes(dispatchStatus)) dispatchStatus = 'DEFERRED';
       // The durable request was committed BEFORE the network call. A metadata
       // write failure must not turn acceptance into an ambiguous POST failure.
       try { await repo.recordDispatch(scope, result.requestKey, dispatchStatus); }
       catch { dispatchStatus = 'DEFERRED'; }
+    }
+    if (dispatchStatus === 'DEFERRED' && result.requestKey) {
+      const audit = history || repo.history;
+      if (audit) {
+        try {
+          const row = await audit.findExecutionByManualRequest({ ...scope, manualRequestKey: result.requestKey });
+          if (row && ['REQUESTED', 'PENDING'].includes(row.status)) await audit.markDeferred({ ...scope,
+            executionId: row.executionId, expectedVersion: row.writeVersion, reasonCode: 'DISPATCH_DEFERRED' });
+        } catch { /* Acceptance is already committed; keep its existing audit row. */ }
+      }
     }
     return { requestStatus: result.requestStatus, trigger: 'MANUAL',
       pending: true, horizons: HORIZONS, dispatchStatus,

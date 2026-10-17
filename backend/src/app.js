@@ -40,6 +40,7 @@ const app = express();
 connectDB().then(async () => {
   const { ForecastMlUpdateEvent, ForecastMlUpdateState } = require('./models');
   await Promise.all([ForecastMlUpdateEvent.init(), ForecastMlUpdateState.init()]);
+  await require('./services/forecastExecutionIndexes').provisionExecutionIndexes();
   startPolling();
   // Calendar closure can advance without a sale. This only refreshes durable
   // eligibility; no model fit or commercial operation runs on startup.

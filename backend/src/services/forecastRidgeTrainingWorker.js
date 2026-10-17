@@ -58,7 +58,7 @@ function runPython(request, { executable = process.env.FORECAST_TRAINING_PYTHON 
 function createForecastRidgeTrainingWorker({ registry = createForecastModelRegistryService(),
   update = coordinator, runTraining = runPython, jobModel = Job,
   stateModel = State, pointerModel = Registry, revisionModel = Revision,
-  clock = () => new Date(), beforePromotion, bootstrapPrecondition,
+  clock = () => new Date(), beforePromotion, bootstrapPrecondition, executionHistory,
   log = (event, fields) => console.info(JSON.stringify({ event, ...fields })) } = {}) {
   const { inBoundedTransaction } = require('./forecastModelRegistryService');
   const scope = (horizonDays, businessId = config.businessId, scenarioId = config.scenarioId) => {
@@ -87,10 +87,11 @@ function createForecastRidgeTrainingWorker({ registry = createForecastModelRegis
     { session, runValidators: true }).exec();
     if (result.matchedCount !== 1) throw Object.assign(new Error('Job ownership changed'), { code: 'STALE_FENCING_TOKEN' });
   }
-  async function saveJob(job, claim, values) {
+  async function saveJob(job, claim, values, onSaved) {
     await inBoundedTransaction(async session => {
       await assertFence(claim, session);
       await mutateJob(job, claim, values, session);
+      if (onSaved) await onSaved({ ...job, ...values }, session);
     });
     Object.assign(job, values);
   }
@@ -115,8 +116,22 @@ function createForecastRidgeTrainingWorker({ registry = createForecastModelRegis
     return Date.now() - begin;
   }
   async function process({ horizonDays, businessId = config.businessId, scenarioId = config.scenarioId,
-    inputDataVersion, observationsClosedThrough, claim = null, mode = 'automatic' }) {
+    inputDataVersion, observationsClosedThrough, claim = null, mode = 'automatic', executionId = null }) {
     const key = scope(horizonDays, businessId, scenarioId);
+    if (executionId && (!executionHistory || !/^[a-f0-9-]{36}$/.test(executionId))) {
+      throw Object.assign(new Error('Invalid audit execution'), { code: 'INVALID_EXECUTION_IDENTITY' });
+    }
+    const audit = async (currentJob, status, session, replayed = false) => {
+      if (!executionId) return;
+      const pointer = await pointerModel.findOne(key).session(session).lean();
+      await require('./forecastExecutionHistory').recordTrainingExecution(executionHistory, executionId,
+        replayed ? { ...currentJob, activeVersionBefore: pointer?.activeModelVersion ?? null } : currentJob,
+        replayed ? 'EVALUATED_NO_PROMOTION' : status, session, { activeVersionAfter: pointer?.activeModelVersion ?? null,
+          ...(replayed ? { candidateStatus: currentJob.candidateModelVersion
+            ? pointer?.activeModelVersion === currentJob.candidateModelVersion ? 'ACTIVE' : 'SUPERSEDED' : null,
+          reasonCode: 'REUSED_TRAINING_RESULT' } : status === 'FAILED' && currentJob.candidateModelVersion
+            ? { candidateStatus: currentJob.retryable ? 'CANDIDATE' : 'FAILED' } : {}) });
+    };
     if (!['automatic', 'bootstrap'].includes(mode) || (mode === 'automatic' && !claim)
         || (mode === 'bootstrap' && claim) || typeof inputDataVersion !== 'string'
         || !/^(0|[1-9]\d*)$/.test(inputDataVersion) || !/^\d{4}-\d{2}-\d{2}$/.test(observationsClosedThrough)
@@ -149,11 +164,14 @@ function createForecastRidgeTrainingWorker({ registry = createForecastModelRegis
         await bootstrapBoundary('initial', session);
         job = await jobModel.findOneAndUpdate({ ...key, trainingKey }, {
           $setOnInsert: { ...key, trainingKey, inputDataVersion, matureOrigin,
+            activeVersionBefore: pointer?.activeModelVersion ?? null,
             observationsClosedThrough, mode, expectedGeneration: pointer?.generation || 0,
             status: 'CLAIMED', startedAt: clock() },
           $set: { fencingToken: claim?.fencingToken || null }
         }, { upsert: true, new: true, session, setDefaultsOnInsert: true, runValidators: true })
           .select('+preparedCandidate').lean();
+        await audit(job, job.outcome === 'PROMOTED' ? 'PROMOTED'
+          : job.outcome ? 'EVALUATED_NO_PROMOTION' : 'RUNNING', session, Boolean(job.outcome));
       });
       if (job.outcome) {
         times.ack = await acknowledge(job, claim);
@@ -164,7 +182,8 @@ function createForecastRidgeTrainingWorker({ registry = createForecastModelRegis
       }
       let result = job.preparedCandidate;
       if (!result) {
-        await saveJob(job, claim, { status: 'TRAINING', failureCode: null });
+        await saveJob(job, claim, { status: 'TRAINING', failureCode: null },
+          (currentJob, session) => audit(currentJob, 'RUNNING', session));
         log('ML_RETRAIN_STARTED', { jobId: String(job._id), horizonDays, dataVersion: inputDataVersion });
         const journal = await exportJournal(inputDataVersion);
         await bootstrapBoundary('training');
@@ -206,7 +225,7 @@ function createForecastRidgeTrainingWorker({ registry = createForecastModelRegis
           sourceDatasetHash: result.sourceDatasetHash, evaluation: result.checks,
           metricsSummary: { globalWape: result.globalWape ?? null, globalMae: result.globalMae ?? null,
             globalBias: result.globalBias ?? null, parityMaxAbsoluteError: result.parityMaxAbsoluteError ?? null,
-            performanceMs: result.performanceMs || {} } });
+            performanceMs: result.performanceMs || {} } }, (currentJob, session) => audit(currentJob, 'RUNNING', session));
       }
       // Also check recovered preparedCandidate jobs before any registry write.
       if (mode === 'bootstrap' && bootstrapPrecondition
@@ -230,7 +249,7 @@ function createForecastRidgeTrainingWorker({ registry = createForecastModelRegis
       }
       if (result.evaluationStatus === 'INSUFFICIENT_EVALUATION_HISTORY') {
         await saveJob(job, claim, { status: 'REJECTED', outcome: 'NO_PROMOTION_INSUFFICIENT_HISTORY',
-          finishedAt: clock(), failureCode: null });
+          finishedAt: clock(), failureCode: null }, (currentJob, session) => audit(currentJob, 'EVALUATED_NO_PROMOTION', session));
         times.ack = await acknowledge(job, claim);
         log('ML_CANDIDATE_REJECTED', { jobId: String(job._id), horizonDays, dataVersion: inputDataVersion,
           outcome: job.outcome });
@@ -256,6 +275,7 @@ function createForecastRidgeTrainingWorker({ registry = createForecastModelRegis
           artifactFactory: version => canonicalBytes({ ...result.artifact, modelVersion: version }),
           onCreated: async (session, metadata) => {
             await mutateJob(job, claim, { candidateModelVersion: metadata.modelVersion, status: 'PERSISTING' }, session);
+            await audit({ ...job, status: 'PERSISTING', candidateModelVersion: metadata.modelVersion }, 'RUNNING', session);
           } });
         modelVersion = candidate.modelVersion;
         job.candidateModelVersion = modelVersion;
@@ -274,13 +294,19 @@ function createForecastRidgeTrainingWorker({ registry = createForecastModelRegis
             await assertFence(claim, session);
             await bootstrapBoundary('promotion', session, modelVersion);
           },
-          onPromoted: session => mutateJob(job, claim, finalized, session) });
+          onPromoted: async session => {
+            await mutateJob(job, claim, finalized, session);
+            await audit({ ...job, ...finalized }, 'PROMOTED', session);
+          } });
         times.promotion = Date.now() - begin;
         log('ML_MODEL_PROMOTED', { jobId: String(job._id), horizonDays, dataVersion: inputDataVersion,
           modelVersion, policyOutcome: result.evaluationStatus, durationMs: Date.now() - started });
       } else {
         await registry.rejectCandidate({ ...key, modelVersion, precondition: session => assertFence(claim, session),
-          onTransition: session => mutateJob(job, claim, finalized, session) });
+          onTransition: async session => {
+            await mutateJob(job, claim, finalized, session);
+            await audit({ ...job, ...finalized }, 'EVALUATED_NO_PROMOTION', session);
+          } });
         times.rejection = Date.now() - begin;
         log('ML_CANDIDATE_REJECTED', { jobId: String(job._id), horizonDays,
           dataVersion: inputDataVersion, modelVersion, policyOutcome: result.evaluationStatus });
@@ -306,8 +332,11 @@ function createForecastRidgeTrainingWorker({ registry = createForecastModelRegis
             if (version && !canRetry) {
               await registry.markCandidateFailed({ ...key, modelVersion: version, failureCode: code,
                 precondition: session => assertFence(claim, session),
-                onTransition: session => mutateJob(job, claim, failed, session) });
-            } else await saveJob(job, claim, failed);
+                onTransition: async session => {
+                  await mutateJob(job, claim, failed, session);
+                  await audit({ ...job, ...failed }, 'FAILED', session);
+                } });
+            } else await saveJob(job, claim, failed, (currentJob, session) => audit(currentJob, 'FAILED', session));
           } catch (recordError) {
             if (codeOf(recordError) === 'STALE_FENCING_TOKEN') code = 'STALE_FENCING_TOKEN';
           }
@@ -320,12 +349,12 @@ function createForecastRidgeTrainingWorker({ registry = createForecastModelRegis
       throw Object.assign(error, { code });
     }
   }
-  async function runEligible({ horizonDays, leaseOwner, businessId = config.businessId, scenarioId = config.scenarioId }) {
+  async function runEligible({ horizonDays, leaseOwner, businessId = config.businessId, scenarioId = config.scenarioId, executionId = null }) {
     const key = scope(horizonDays, businessId, scenarioId);
     const claim = await update.claimEligibleUpdate({ ...key, leaseOwner, now: clock() });
     if (!claim) return null;
     return process({ ...key, inputDataVersion: claim.inputDataVersion,
-      observationsClosedThrough: claim.observationsClosedThrough, claim });
+      observationsClosedThrough: claim.observationsClosedThrough, claim, executionId });
   }
   async function bootstrapLocal({ horizonDays, observationsClosedThrough }) {
     const key = scope(horizonDays);

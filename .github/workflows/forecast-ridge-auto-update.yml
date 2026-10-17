@@ -13,6 +13,10 @@ on:
         options:
           - check
           - run
+      manualRequestKey:
+        description: 'Correlación opaca de solicitud durable; no autoriza tenant ni promoción'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -63,6 +67,7 @@ jobs:
         if: github.event_name == 'schedule' || inputs.mode == 'run'
         timeout-minutes: 10
         env:
+          FORECAST_MANUAL_REQUEST_KEY: ${{ inputs.manualRequestKey }}
           FORECAST_CLOUD_MONGO_URI: ${{ secrets.FORECAST_CLOUD_MONGO_URI }}
           FORECAST_CLOUD_EXPECTED_DATABASE: ${{ secrets.FORECAST_CLOUD_EXPECTED_DATABASE }}
           FORECAST_CLOUD_EXPECTED_BUSINESS_ID: ${{ secrets.FORECAST_CLOUD_EXPECTED_BUSINESS_ID }}

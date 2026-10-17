@@ -13,6 +13,9 @@ const workflow = fs.readFileSync(path.join(root, '.github/workflows/forecast-rid
 test('workflow preserves schedule, manual check/run, concurrency and existing CLI', () => {
   assert.match(workflow, /cron: '17 \*\/6 \* \* \*'/);
   assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /manualRequestKey:/);
+  assert.match(workflow, /FORECAST_MANUAL_REQUEST_KEY: \$\{\{ inputs.manualRequestKey \}\}/);
+  assert.doesNotMatch(workflow, /run:.*inputs\.manualRequestKey/);
   assert.match(workflow, /default: check/);
   assert.match(workflow, /group: forecast-ridge-production-minimarket-pasco-v3/);
   assert.match(workflow, /cancel-in-progress: false/);

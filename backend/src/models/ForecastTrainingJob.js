@@ -12,6 +12,7 @@ const schema = new mongoose.Schema({
   sourceDatasetHash: { type: String, default: null, match: /^[a-f0-9]{64}$/ },
   observationsClosedThrough: { type: String, default: null },
   expectedGeneration: { type: Number, default: 0 },
+  activeVersionBefore: { type: Number, default: null, min: 1, validate: value => value == null || Number.isSafeInteger(value) },
   mode: { type: String, enum: ['bootstrap', 'automatic'], default: 'automatic' },
   fencingToken: { type: Number, default: null },
   status: { type: String, required: true, enum: ['CLAIMED', 'TRAINING', 'EVALUATING', 'PERSISTING', 'PROMOTED', 'REJECTED', 'FAILED'] },

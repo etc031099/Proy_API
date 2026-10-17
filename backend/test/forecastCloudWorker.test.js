@@ -19,6 +19,7 @@ const environment = () => ({
   FORECAST_CLOUD_EXPECTED_BUSINESS_ID: config.businessId,
   FORECAST_CLOUD_EXPECTED_SCENARIO_ID: config.scenarioId,
   FORECAST_TRAINING_PYTHON: 'configured-python',
+  FORECAST_WORKER_INVOCATION_KEY: 'offline-invocation',
 });
 function state(horizonDays = 7) {
   return { businessId: config.businessId, scenarioId: config.scenarioId, horizonDays,
@@ -55,7 +56,7 @@ function fixture({ outcome = 'PROMOTED', rows = [state(7), state(14)], error = n
 
 test('cloud configuration is explicit, bound to scope and never falls back to a local URI', () => {
   assert.equal(validateEnvironment(environment()).database, 'worker_test');
-  for (const name of Object.keys(environment())) {
+  for (const name of Object.keys(environment()).filter(key => key !== 'FORECAST_WORKER_INVOCATION_KEY')) {
     const env = environment(); delete env[name]; env.MONGODB_URI = 'mongodb://localhost/local';
     assert.throws(() => validateEnvironment(env), { code: 'CLOUD_ENV_REQUIRED' });
   }
@@ -267,7 +268,7 @@ function productionFixture() {
   const query = value => ({ setOptions() { return this; }, lean() { return this; },
     maxTimeMS: async () => value });
   const modelNames = ['V3OperationalRevision', 'V3OperationalChange', 'ForecastMlUpdateEvent',
-    'ForecastMlUpdateState', 'ForecastTrainingJob', 'ForecastModelRegistry', 'ForecastModelArtifact'];
+    'ForecastMlUpdateState', 'ForecastTrainingJob', 'ForecastModelRegistry', 'ForecastModelArtifact', 'ForecastMlUpdateExecution'];
   const models = Object.fromEntries(modelNames.map(name => [name, {
     schema: realModels[name].schema,
     collection: { indexes: async () => { calls.push(`indexes:${name}`); return [
@@ -293,6 +294,8 @@ function productionFixture() {
       } }) } },
   };
   const overrides = { models, mongoose, update,
+    executionHistory: { begin: async () => ({ duplicate: false }), preflight: async () => {},
+      horizon: async () => {}, finish: async () => {}, fail: async () => {} },
     registry: { getActiveModelArtifact: async scope => {
       calls.push({ activeRead: scope });
       if (control.activeMissing) return null;
@@ -328,7 +331,7 @@ test('actual preflight adapter disables implicit writes, validates every collect
     const deps = productionDependencies(harness.settings, harness.overrides);
     const result = await createCloudWorker({ ...deps, clock: () => new Date(NOW) }).run(mode);
     assert.equal(result.writesPerformed, 0);
-    assert.equal(harness.calls.filter(value => typeof value === 'string' && value.startsWith('indexes:')).length, 7);
+    assert.equal(harness.calls.filter(value => typeof value === 'string' && value.startsWith('indexes:')).length, 8);
     assert.deepEqual(harness.calls.slice(0, 2), [{ option: 'autoCreate', value: false }, { option: 'autoIndex', value: false }]);
     const connection = harness.calls.find(value => value.connectionOptions)?.connectionOptions;
     assert.equal(connection.dbName, 'worker_test'); assert.equal(connection.autoCreate, false); assert.equal(connection.autoIndex, false);

@@ -98,17 +98,36 @@ function productionDependencies(settings, overrides = {}) {
   const registry = overrides.registry || require('../src/services/forecastModelRegistryService').createForecastModelRegistryService();
   const pythonCheck = overrides.checkPython || checkPython;
   let worker;
+  const connect = async () => {
+    if (mongoose.connection.readyState === 1) return;
+    await mongoose.connect(settings.uri, { dbName: settings.database, autoCreate: false, autoIndex: false,
+      serverSelectionTimeoutMS: 10000, connectTimeoutMS: 10000, socketTimeoutMS: 15000,
+      maxPoolSize: 3, readPreference: 'primary' });
+  };
+  const readState = horizonDays => models.ForecastMlUpdateState.findOne({ businessId: settings.businessId,
+    scenarioId: settings.scenarioId, horizonDays }).setOptions({ useBigInt64: true }).lean().maxTimeMS(5000);
+  const historyService = require('../src/services/forecastMlUpdateExecutionService').createForecastMlUpdateExecutionService({
+    repository: require('../src/services/forecastMlUpdateExecutionService').productionRepository(models.ForecastMlUpdateExecution) });
+  const executionHistory = overrides.executionHistory || require('../src/services/forecastExecutionHistory').createExecutionHistory({
+    service: historyService, scope: { businessId: settings.businessId, scenarioId: settings.scenarioId },
+    identity: settings.executionIdentity, readState, registry, update,
+    prepare: async () => {
+      await connect();
+      if (mongoose.connection.db.databaseName !== settings.database) fail('CLOUD_DATABASE_MISMATCH');
+      const hello = await mongoose.connection.db.admin().command({ hello: 1 });
+      if (!hello.setName || !hello.isWritablePrimary) fail('CLOUD_REPLICA_SET_REQUIRED');
+      await require('../src/services/forecastExecutionIndexes').verifyExecutionIndexes(models.ForecastMlUpdateExecution);
+    } });
   const preflight = async () => {
     try {
-      await mongoose.connect(settings.uri, { dbName: settings.database, autoCreate: false, autoIndex: false,
-        serverSelectionTimeoutMS: 10000, connectTimeoutMS: 10000, socketTimeoutMS: 15000,
-        maxPoolSize: 3, readPreference: 'primary' });
+      await connect();
     } catch { fail('CLOUD_CONNECTION_FAILED'); }
     if (mongoose.connection.db.databaseName !== settings.database) fail('CLOUD_DATABASE_MISMATCH');
     const hello = await mongoose.connection.db.admin().command({ hello: 1 });
     if (!hello.setName || !hello.isWritablePrimary) fail('CLOUD_REPLICA_SET_REQUIRED');
     await assertIndexes([models.V3OperationalRevision, models.V3OperationalChange, models.ForecastMlUpdateEvent,
-      models.ForecastMlUpdateState, models.ForecastTrainingJob, models.ForecastModelRegistry, models.ForecastModelArtifact]);
+      models.ForecastMlUpdateState, models.ForecastTrainingJob, models.ForecastModelRegistry, models.ForecastModelArtifact,
+      models.ForecastMlUpdateExecution]);
     const revision = await models.V3OperationalRevision.findById(settings.businessId)
       .setOptions({ useBigInt64: true }).lean().maxTimeMS(5000);
     if (!revision || revision._id !== settings.businessId || revision.bootstrapStatus !== 'VERIFIED'
@@ -134,15 +153,14 @@ function productionDependencies(settings, overrides = {}) {
     return { dataVersion: String(revision.revision), activeModels, promotionReadiness: python.promotionReadiness };
   };
   return {
-    update, preflight,
+    update, preflight, executionHistory,
     completeManualEvaluation: input => update.completeManualEvaluation({ ...input,
       businessId: settings.businessId, scenarioId: settings.scenarioId }),
-    readState: horizonDays => models.ForecastMlUpdateState.findOne({ businessId: settings.businessId,
-      scenarioId: settings.scenarioId, horizonDays }).setOptions({ useBigInt64: true }).lean().maxTimeMS(5000),
+    readState,
     runEligible: input => {
       if (!worker) {
         const implementation = overrides.workerImplementation || require('../src/services/forecastRidgeTrainingWorker');
-        worker = implementation.createForecastRidgeTrainingWorker({ registry,
+        worker = implementation.createForecastRidgeTrainingWorker({ registry, executionHistory: historyService,
           runTraining: request => implementation.runPython(request, { executable: settings.python, timeoutMs: TRAINING_TIMEOUT_MS }),
           log: () => {} });
       }
@@ -154,17 +172,33 @@ function productionDependencies(settings, overrides = {}) {
 
 async function main(argv = process.argv.slice(2), env = process.env, createDependencies = productionDependencies) {
   let dependencies, mode, report, watchdog, writesMayHaveOccurred = false;
+  const signalHandlers = [];
   try {
     mode = parseMode(argv);
-    const settings = validateEnvironment(env);
+    const settings = { ...validateEnvironment(env), ...(mode === 'RUN' ? {
+      executionIdentity: require('../src/services/forecastExecutionHistory').executionIdentityFromEnv(env) } : {}) };
     // Final process bound. Python itself is limited to 120s/job; on a hard
     // process stop the durable claim expires and is recovered using fencing.
-    watchdog = setTimeout(() => {
+    watchdog = setTimeout(async () => {
+      const forcedExit = setTimeout(() => process.exit(1), 2000);
+      try { await dependencies?.executionHistory?.interrupt(); } catch { /* Hard kill recovery is explicit on a later attempt. */ }
       process.stdout.write(`${JSON.stringify({ status: 'FAILED', mode, code: 'WORKER_CYCLE_TIMEOUT',
         writesPerformed: mode === 'RUN' ? null : 0, writesMayHaveOccurred: mode === 'RUN' })}\n`);
+      clearTimeout(forcedExit);
       process.exit(1);
     }, CYCLE_TIMEOUT_MS);
     dependencies = createDependencies(settings);
+    if (mode === 'RUN' && dependencies.executionHistory) {
+      for (const signal of ['SIGTERM', 'SIGINT']) {
+        const handler = async () => {
+          const deadline = setTimeout(() => process.exit(1), 2000);
+          try { await dependencies.executionHistory.interrupt(); } catch { /* Later attempt recovery remains explicit. */ }
+          clearTimeout(deadline); process.exit(1);
+        };
+        process.once(signal, handler); signalHandlers.push([signal, handler]);
+      }
+    }
+    if (mode === 'RUN' && dependencies.executionHistory) writesMayHaveOccurred = true;
     report = await createCloudWorker({ ...dependencies,
       completeManualEvaluation: async input => {
         writesMayHaveOccurred = true;
@@ -182,6 +216,7 @@ async function main(argv = process.argv.slice(2), env = process.env, createDepen
       catch { report.status = 'FAILED'; report.code = 'CLOUD_CONNECTION_FAILED'; }
     }
     clearTimeout(watchdog);
+    for (const [signal, handler] of signalHandlers) process.removeListener(signal, handler);
   }
   return report;
 }
