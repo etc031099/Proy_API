@@ -327,11 +327,85 @@ test('dispatcher sends opaque correlation without tenant or commercial payload',
   assert.deepEqual(body.inputs, { mode: 'run', manualRequestKey: 'opaque-1' });
 });
 
-test('index provisioning is additive; verification alone never creates or drops', async () => {
-  const Model = require('../src/models/ForecastMlUpdateExecution'), calls = [];
-  const model = { schema: Model.schema, collection: { indexes: async () => Model.schema.indexes().map(([key, options]) => ({ key, ...options })) },
-    createCollection: async () => calls.push('collection'), createIndexes: async () => calls.push('indexes') };
-  await verifyExecutionIndexes(model); assert.deepEqual(calls, []);
-  await provisionExecutionIndexes(model); assert.deepEqual(calls, ['collection', 'indexes']);
-  await assert.rejects(verifyExecutionIndexes({ ...model, collection: { indexes: async () => [] } }), { code: 'ML_HISTORY_NOT_READY' });
+function executionIndexMock(initialIndexes) {
+  const Model = require('../src/models/ForecastMlUpdateExecution');
+  const calls = [], indexes = structuredClone(initialIndexes);
+  const model = { schema: Model.schema, collection: {
+    indexes: async () => structuredClone(indexes),
+    createIndex: async (key, options) => {
+      calls.push({ op: 'createIndex', key, options });
+      indexes.push({ key: structuredClone(key), name: options.name, unique: options.unique,
+        partialFilterExpression: options.partialFilterExpression });
+      return options.name;
+    },
+  }, createCollection: async () => calls.push({ op: 'createCollection' }) };
+  return { model, calls, indexes };
+}
+function declaredExecutionIndexes(Model = require('../src/models/ForecastMlUpdateExecution')) {
+  return Model.schema.indexes().map(([key, options]) => ({ key, name: options.name, unique: options.unique,
+    partialFilterExpression: options.partialFilterExpression }));
+}
+
+test('execution history index verification passes when all declared indexes exist', async () => {
+  const Model = require('../src/models/ForecastMlUpdateExecution');
+  const { model } = executionIndexMock([{ name: '_id_', key: { _id: 1 } }, ...declaredExecutionIndexes(Model)]);
+  assert.deepEqual(await verifyExecutionIndexes(model), { status: 'READY', verifiedCount: 5 });
+  assert.equal(Model.schema.options.autoIndex, false);
+  assert.equal(Model.schema.options.autoCreate, false);
+});
+
+test('missing critical execution index fails with a safe actionable code', async () => {
+  const { model } = executionIndexMock([{ name: '_id_', key: { _id: 1 } }]);
+  await assert.rejects(verifyExecutionIndexes(model), { code: 'ML_HISTORY_INDEX_MISSING' });
+});
+
+test('a semantically compatible index with another name is accepted and not duplicated', async () => {
+  const Model = require('../src/models/ForecastMlUpdateExecution');
+  const declared = declaredExecutionIndexes(Model);
+  const indexes = [{ name: '_id_', key: { _id: 1 } }, ...declared];
+  indexes[1].name = 'existing_equivalent_public_id';
+  const { model, calls } = executionIndexMock(indexes);
+  await verifyExecutionIndexes(model);
+  assert.equal((await provisionExecutionIndexes(model)).provisionedCount, 0);
+  assert.deepEqual(calls, [{ op: 'createCollection' }]);
+});
+
+test('incompatible index fails explicitly and provisioning never drops or replaces it', async () => {
+  const Model = require('../src/models/ForecastMlUpdateExecution');
+  const declared = declaredExecutionIndexes(Model);
+  const incompatible = structuredClone(declared);
+  incompatible[1].partialFilterExpression = { manualRequestKey: { $type: 'object' } };
+  const { model, calls, indexes } = executionIndexMock([{ name: '_id_', key: { _id: 1 } }, ...incompatible]);
+  const before = structuredClone(indexes);
+  await assert.rejects(verifyExecutionIndexes(model), { code: 'ML_HISTORY_INDEX_INCOMPATIBLE' });
+  await assert.rejects(provisionExecutionIndexes(model), { code: 'ML_HISTORY_INDEX_INCOMPATIBLE' });
+  assert.deepEqual(indexes, before);
+  assert.deepEqual(calls, [{ op: 'createCollection' }]);
+});
+
+test('provisioning adds only missing indexes and preserves tenant-scoped unique constraints', async () => {
+  const Model = require('../src/models/ForecastMlUpdateExecution');
+  const declared = declaredExecutionIndexes(Model);
+  const existing = [declared[0], declared[1], declared[3], declared[4]];
+  const { model, calls } = executionIndexMock([{ name: '_id_', key: { _id: 1 } }, ...existing]);
+  const result = await provisionExecutionIndexes(model);
+  assert.equal(result.provisionedCount, 1);
+  assert.equal(result.verifiedCount, 5);
+  assert.deepEqual(calls.filter(call => call.op === 'createIndex').map(call => call.options.name),
+    ['forecast_ml_execution_github_uq']);
+  const indexes = declaredExecutionIndexes(Model);
+  assert.deepEqual(Object.keys(indexes[1].key), ['businessId', 'scenarioId', 'manualRequestKey']);
+  assert.deepEqual(Object.keys(indexes[2].key), ['businessId', 'scenarioId', 'github.repository', 'github.runId']);
+  assert.deepEqual(Object.keys(indexes[3].key), ['businessId', 'scenarioId', 'cliInvocationKey']);
+  assert.ok(indexes.slice(1, 4).every(index => index.unique && index.partialFilterExpression));
+  assert.ok(!calls.some(call => /drop|sync/i.test(call.op)));
+});
+
+test('cloud worker does not start training when preflight index gate fails', async () => {
+  let trainingCalls = 0;
+  const worker = createCloudWorker({ preflight: async () => { throw Object.assign(new Error(),
+    { code: 'ML_HISTORY_INDEX_MISSING' }); }, runEligible: async () => { trainingCalls += 1; },
+    readState: async () => null, update: coordinator });
+  await assert.rejects(worker.run('RUN'), { code: 'ML_HISTORY_INDEX_MISSING' });
+  assert.equal(trainingCalls, 0);
 });

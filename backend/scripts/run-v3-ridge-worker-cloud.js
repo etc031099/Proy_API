@@ -126,8 +126,8 @@ function productionDependencies(settings, overrides = {}) {
     const hello = await mongoose.connection.db.admin().command({ hello: 1 });
     if (!hello.setName || !hello.isWritablePrimary) fail('CLOUD_REPLICA_SET_REQUIRED');
     await assertIndexes([models.V3OperationalRevision, models.V3OperationalChange, models.ForecastMlUpdateEvent,
-      models.ForecastMlUpdateState, models.ForecastTrainingJob, models.ForecastModelRegistry, models.ForecastModelArtifact,
-      models.ForecastMlUpdateExecution]);
+      models.ForecastMlUpdateState, models.ForecastTrainingJob, models.ForecastModelRegistry, models.ForecastModelArtifact]);
+    await require('../src/services/forecastExecutionIndexes').verifyExecutionIndexes(models.ForecastMlUpdateExecution);
     const revision = await models.V3OperationalRevision.findById(settings.businessId)
       .setOptions({ useBigInt64: true }).lean().maxTimeMS(5000);
     if (!revision || revision._id !== settings.businessId || revision.bootstrapStatus !== 'VERIFIED'

@@ -263,6 +263,7 @@ function productionFixture() {
   const realModels = require('../src/models');
   const calls = [], settings = validateEnvironment(environment());
   const control = { database: settings.database, primary: true, activeMissing: false,
+    executionIndexMissing: false,
     revision: { _id: config.businessId, revision: 84n, bootstrapStatus: 'VERIFIED',
       historicalDatasetVersion: config.datasetVersion, historicalDatasetSha256: config.sourceSha256 } };
   const query = value => ({ setOptions() { return this; }, lean() { return this; },
@@ -271,8 +272,10 @@ function productionFixture() {
     'ForecastMlUpdateState', 'ForecastTrainingJob', 'ForecastModelRegistry', 'ForecastModelArtifact', 'ForecastMlUpdateExecution'];
   const models = Object.fromEntries(modelNames.map(name => [name, {
     schema: realModels[name].schema,
-    collection: { indexes: async () => { calls.push(`indexes:${name}`); return [
-      { name: '_id_', key: { _id: 1 } }, ...realModels[name].schema.indexes().map(([key, spec]) => ({ key, ...spec }))]; } },
+    collection: { indexes: async () => { calls.push(`indexes:${name}`);
+      const declared = realModels[name].schema.indexes().map(([key, spec]) => ({ key, ...spec }));
+      return [{ name: '_id_', key: { _id: 1 } }, ...(name === 'ForecastMlUpdateExecution' && control.executionIndexMissing
+        ? declared.slice(0, -1) : declared)]; } },
     init: () => assert.fail('implicit init is forbidden'),
     create: () => assert.fail('preflight must not create'),
     updateOne: () => assert.fail('preflight must not update'),
@@ -364,6 +367,15 @@ test('database, primary, revision lineage and existing ACTIVE are mandatory pref
     assert.equal(harness.calls.includes('createWorker'), false);
     await deps.close();
   }
+});
+
+test('missing execution-history index fails preflight before Python or worker construction', async () => {
+  const harness = productionFixture(); harness.control.executionIndexMissing = true;
+  const deps = productionDependencies(harness.settings, harness.overrides);
+  await assert.rejects(deps.preflight(), { code: 'ML_HISTORY_INDEX_MISSING' });
+  assert.equal(harness.calls.includes('python'), false);
+  assert.equal(harness.calls.includes('createWorker'), false);
+  await deps.close();
 });
 
 test('offline Python preflight imports the real trainer and verifies synthetic JSON artifacts without fit',

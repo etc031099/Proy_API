@@ -74,7 +74,10 @@ const schema = new mongoose.Schema({
   attempts: { type: [attemptSchema], default: [], validate: rows => rows.length <= domain.MAX_ATTEMPTS
     && new Set(rows.map(row => row.runAttempt)).size === rows.length },
   writeVersion: { ...integer, required: true, min: 0, default: 0 },
-}, { strict: 'throw', versionKey: false, timestamps: true, minimize: false });
+}, { strict: 'throw', versionKey: false, timestamps: true, minimize: false,
+  // This collection is provisioned explicitly after backend startup checks;
+  // do not let Mongoose create it or build indexes implicitly on connect.
+  autoCreate: false, autoIndex: false });
 
 schema.pre('validate', function validateIdentity(next) {
   if ((this.triggerSource === 'MANUAL' && !this.manualRequestKey)
