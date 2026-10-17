@@ -165,6 +165,12 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
     for (const field of ['mode', 'metric', 'offset', 'risk', 'abc', 'xyz', 'flag', 'segment', 'entityType', 'categoryCode', 'subcategoryCode', 'horizonDays', 'includeObservedSeries']) {
       if (args[field] !== undefined) request[field] = args[field];
     }
+    // Internal dashboard projection; never accepted from assistant skill arguments.
+    if (invocation.includeInventorySummary !== undefined) {
+      if (invocation.includeInventorySummary !== true || domain !== 'inventory'
+          || !['rank', 'summary'].includes(request.mode)) throw new AgentError('AGENT_INVALID_SKILL_ARGS');
+      request.includeSummary = true;
+    }
     if (supplierOrder) {
       // Fetch the complete bounded (10-supplier) aggregate set before ordering
       // approved computed metrics. No supplier formula or score is reimplemented.

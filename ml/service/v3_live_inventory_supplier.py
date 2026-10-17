@@ -145,10 +145,24 @@ class LiveInventorySupplierAdapter:
             data = {"total": len(values), "analyzedCount": len(values), "unavailableCount": unavailable,
                     "items": [self._public_inventory(row) for row in page]}
         else:
-            data = {"summary": rows["summary"], "abcCounts": rows["abcCounts"],
-                    "xyzCounts": rows["xyzCounts"], "abcXyzCounts": rows["abcXyzCounts"],
-                    "analyzedCount": rows["summary"]["analyzedCount"],
-                    "unavailableCount": rows["summary"]["unavailableCount"]}
+            data = self._inventory_summary(rows)
+        data = self._inventory_availability(data, rows, unavailable, live)
+        if getattr(request, "includeSummary", False) and (request.mode == "rank" or (request.mode == "summary" and
+                (request.skus or request.flag or request.risk or request.abc or request.xyz))):
+            # Both views use the exact same evaluated rows and model/snapshot lineage.
+            # Global unavailable counts must not inherit exclusions from the ranking/filter.
+            data["inventorySummary"] = self._inventory_availability(
+                self._inventory_summary(rows), rows, 0, live)
+        return data, live.as_of_date
+
+    @staticmethod
+    def _inventory_summary(rows):
+        return {"summary": rows["summary"], "abcCounts": rows["abcCounts"],
+                "xyzCounts": rows["xyzCounts"], "abcXyzCounts": rows["abcXyzCounts"],
+                "analyzedCount": rows["summary"]["analyzedCount"],
+                "unavailableCount": rows["summary"]["unavailableCount"]}
+
+    def _inventory_availability(self, data, rows, unavailable, live):
         # A partial status reflects evidence unavailable for at least one SKU,
         # not a missing adapter. Forecast-dependent policies remain explicit nulls.
         dependent_partial = any(rows["summary"].get(key, 0) for key in (
@@ -171,7 +185,7 @@ class LiveInventorySupplierAdapter:
             "slowMoving": "PARTIAL" if rows["summary"]["slowMovingUnavailableCount"] else "AVAILABLE",
             "deadStock": "PARTIAL" if rows["summary"]["deadStockUnavailableCount"] else "AVAILABLE"}
         data["freshness"] = {**dict(live.freshness("inventory")), "engineVersion": self.ENGINE_VERSION}
-        return data, live.as_of_date
+        return data
 
     def _inventory_rows(self, live: LiveV3Context, forecast_rows=None):
         cutoff = live.as_of_date

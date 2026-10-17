@@ -691,13 +691,14 @@ class V3IntelligenceRuntime:
         if request.mode == "detail" and not request.skus:
             raise V3FunctionalError("AMBIGUOUS_ENTITY", 409, "A resolved product SKU is required for inventory detail.")
         has_filters = bool(request.skus or request.risk or request.abc or request.xyz or request.flag)
+        summary_view = {"summary": snapshot["summary"], "abcCounts": snapshot["abcCounts"],
+                        "xyzCounts": snapshot["xyzCounts"], "abcXyzCounts": snapshot["abcXyzCounts"]}
         if request.mode == "detail" or (request.mode == "summary" and has_filters):
             total = len(rows)
             page = rows[request.offset:request.offset + request.limit]
             data = {"total": total, "items": [self._public_inventory_row(row) for row in page]}
         elif request.mode == "summary":
-            data = {"summary": snapshot["summary"], "abcCounts": snapshot["abcCounts"],
-                    "xyzCounts": snapshot["xyzCounts"], "abcXyzCounts": snapshot["abcXyzCounts"]}
+            data = summary_view
         else:
             metric = request.metric
             ordered_skus = snapshot["rankings"].get(metric, [])
@@ -705,6 +706,8 @@ class V3IntelligenceRuntime:
             ranked = sorted(rows, key=lambda row: (order.get(row["sku"], len(order)), row["sku"]))
             data = {"metric": metric, "total": len(ranked),
                     "items": [self._public_inventory_row(row) for row in ranked[request.offset:request.offset + request.limit]]}
+        if getattr(request, "includeSummary", False) and (request.mode == "rank" or (request.mode == "summary" and has_filters)):
+            data["inventorySummary"] = summary_view
         return data, cutoff
 
     @staticmethod

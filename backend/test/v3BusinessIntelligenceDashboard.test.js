@@ -74,11 +74,13 @@ const makeDashboard = ({ fail, partial = false, productPresent = true, supplierN
             : { kpis: { revenueCents: 0, unitsSold: 0, ticketCount: 0, averageTicket: 0, grossMarginCents: null, grossMarginPct: null },
               previousPeriod: { startDate: '2026-10-07', endDate: '2026-10-13' },
               trends: { revenue: { percentChange: null, absoluteChange: null }, units: { percentChange: 5 } } } };
-        case 'get_inventory_intelligence': return invocation.args.mode === 'summary' ? { status: 'READY', metadata, data: { summary: {
+        case 'get_inventory_intelligence': {
+          const inventorySummary = { summary: {
           products: 80, critical: 2, high: 3, medium: 10, low: 65, shouldReorder: 5, lowStock: 8, overstock: 4,
           slowMoving: 6, deadStock: 0, incomingUnits: 10 }, abcCounts: { A: 40, B: 24, C: 16 },
-          xyzCounts: { X: 55, Y: 22, Z: 3 }, abcXyzCounts: { AX: 20 } } }
-          : metadata.dataMode === 'LIVE' && !invocation.trustedInventoryRidgeModels?.length
+          xyzCounts: { X: 55, Y: 22, Z: 3 }, abcXyzCounts: { AX: 20 } };
+          if (invocation.args.mode === 'summary' && !invocation.args.flag) return { status: 'READY', metadata, data: inventorySummary };
+          const result = metadata.dataMode === 'LIVE' && !invocation.trustedInventoryRidgeModels?.length
             ? { status: 'PARTIAL', metadata, data: { availabilityStatus: 'PARTIAL', total: 1, items: [{ sku: 'SKU-1', productName: 'Producto uno',
               stock: { onHand: 1, incoming: 2, inventoryPosition: 3 }, coverage: { daysCover: null, status: 'PARTIAL', reasonCode: 'FORECAST_UNAVAILABLE' },
               demand: { expectedDaily: null, expectedUnitsNext1d: null, expectedUnitsNext7d: null, expectedUnitsNext14d: null },
@@ -90,6 +92,8 @@ const makeDashboard = ({ fail, partial = false, productPresent = true, supplierN
             demand: { expectedDaily: 2, expectedUnitsNext1d: null, expectedUnitsNext7d: 14, expectedUnitsNext14d: 28 },
             inventoryPolicy: { safetyStock: 3, reorderPoint: 5 }, recommendation: { shouldReorder: true, recommendedQty: 4 },
             risk: { level: 'HIGH', reasonCodes: ['LOW_COVERAGE'] }, classification: { abc: 'A', xyz: 'X' } }] } };
+          return { ...result, data: { ...result.data, inventorySummary } };
+        }
         case 'get_supplier_intelligence': {
           const row = { supplierCode: invocation.args.supplierRef || 'SUP-05', displayName: 'Proveedor cinco', purchaseOrderCount: 22,
             receivedOrderCount: 18, pendingOrderCount: 4, receivedSpendCents: 67890, exclusiveOfferedSkuCount: 2, offeredSkuCount: 16,
@@ -438,7 +442,7 @@ test('LIVE inventory and health receive only tenant-scoped ACTIVE Ridge 7/14 art
   await service.inventory(request());
   await service.health(request({ period: 'LAST_30_DAYS' }));
   const operations = calls.filter(row => ['get_inventory_intelligence', 'get_business_health'].includes(row.kind));
-  assert.ok(operations.length >= 3);
+  assert.equal(operations.length, 2);
   for (const operation of operations) {
     const models = operation.trustedInventoryRidgeModels;
     assert.equal(models.length, 2);

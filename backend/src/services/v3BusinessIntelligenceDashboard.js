@@ -3,6 +3,7 @@
 const { createHash, randomUUID } = require('node:crypto');
 const { V3, createV3IntelligenceService } = require('./v3IntelligenceService');
 const { artifactBytes } = require('./forecastModelRegistryService');
+const { isPlainObject } = require('../agents/contracts');
 
 const RIDGE_RECIPE_ID = 'RIDGE-CAUSAL27';
 const RIDGE_FEATURE_VERSION = 'RIDGE_CAUSAL27_V1';
@@ -89,10 +90,11 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
       return null;
     }
   }));
-  const executeInventoryHealth = async (context, skillId, args = {}, maxRecords = 20) => {
-    if (context.asOf <= V3.historicalCutoff) return execute(context, skillId, args, maxRecords);
+  const executeInventoryHealth = async (context, skillId, args = {}, maxRecords = 20, trusted = {}) => {
+    if (context.asOf <= V3.historicalCutoff) return execute(context, skillId, args, maxRecords, trusted);
     const envelopes = await liveRidgeModelsFor(context);
     return execute(context, skillId, args, maxRecords, {
+      ...trusted,
       trustedInventoryRidgeModels: envelopes.filter(Boolean),
     });
   };
@@ -400,11 +402,18 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
     const flag = req.query?.flag ? String(req.query.flag) : null;
     if (flag && !allowedFlags.includes(flag)) return { error: invalidRequestError() };
     try {
-      const [summaryResult, rowsResult] = await Promise.all([
-        executeInventoryHealth(context, 'get_inventory_intelligence', { mode: 'summary' }),
-        flag ? executeInventoryHealth(context, 'get_inventory_intelligence', { mode: 'summary', flag, limit })
-          : executeInventoryHealth(context, 'get_inventory_intelligence', { mode: 'rank', metric: 'stockout_risk', limit }),
-      ]);
+      const rowsResult = await executeInventoryHealth(context, 'get_inventory_intelligence',
+        flag ? { mode: 'summary', flag, limit } : { mode: 'rank', metric: 'stockout_risk', limit },
+        20, { includeInventorySummary: true });
+      // The runtime projects global summary + requested rows from one canonical
+      // evaluation. Never fill a missing projection from a second revision/read.
+      const summaryData = rowsResult.data?.inventorySummary;
+      if (!isPlainObject(summaryData) || !isPlainObject(summaryData.summary) || !Array.isArray(rowsResult.data?.items)) {
+        const error = new Error('Combined inventory projection unavailable');
+        error.functionalCode = 'INVENTORY_RESPONSE_INVALID';
+        throw error;
+      }
+      const summaryResult = { data: summaryData, status: summaryData.availabilityStatus === 'PARTIAL' ? 'PARTIAL' : 'READY' };
       const summary = summaryResult.data?.summary || {};
       const rankedItems = rowsResult.data?.items || [];
       const catalog = await loadCatalogProducts(context.authenticated.businessId, rankedItems.map(row => row.sku), 'name presentation');

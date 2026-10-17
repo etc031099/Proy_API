@@ -276,6 +276,7 @@ class BusinessRequest(V3Request, PageRequest):
 
 class InventoryRequest(V3Request, PageRequest):
     mode: Literal["summary", "detail", "rank", "recommendations"] = "summary"
+    includeSummary: StrictBool = False
     skus: list[str] = Field(default_factory=list, max_length=MAX_ENTITY_BATCH)
     risk: Literal["CRITICAL", "HIGH", "MEDIUM", "LOW"] | None = None
     abc: Literal["A", "B", "C"] | None = None
