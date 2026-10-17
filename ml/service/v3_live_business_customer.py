@@ -188,6 +188,12 @@ class LiveBusinessCustomerAdapter:
                 "reasonCode": None if unknown == 0 else "COST_NOT_AVAILABLE",
                 "unsupportedCurrency": unsupported_currency}
 
+    @staticmethod
+    def _coverage_diagnostic(coverage_by_customer, reason_code):
+        affected = [value for value in coverage_by_customer.values() if value["unknownSaleLines"] > 0]
+        return {"code": reason_code, "affectedCustomerCount": len(affected),
+                "unknownSaleLineCount": sum(value["unknownSaleLines"] for value in affected)}
+
     def business_data(self, request, live: LiveV3Context):
         cutoff = live.as_of_date
         business, _, views = self._view(live, cutoff)
@@ -338,12 +344,17 @@ class LiveBusinessCustomerAdapter:
                 customer_code=row["customerCode"], products=customer_engine.products)
                  for row in page}
         partial = any(value["unknownSaleLines"] for value in costs.values())
+        availability_diagnostics = []
+        history_diagnostic = self._coverage_diagnostic(costs, "CUSTOMER_HISTORICAL_COST_COVERAGE_INCOMPLETE")
+        if history_diagnostic["affectedCustomerCount"]:
+            availability_diagnostics.append(history_diagnostic)
         if any(value["unsupportedCurrency"] for value in costs.values()):
             raise LiveDomainError("DATA_NOT_AVAILABLE", 422, "LIVE monetary analytics currently support PEN only.")
         if margin_rank_unavailable:
             return {"metric": "grossMarginContributionCents", "available": False,
                     "reasonCode": "COST_NOT_AVAILABLE", "total": len(rows), "items": [],
                     "costCoverage": {"status": "NOT_AVAILABLE"},
+                    "availabilityDiagnostics": availability_diagnostics,
                     "availabilityStatus": "PARTIAL",
                     "freshness": {**dict(live.freshness("customer")), "engineVersion": self.ENGINE_VERSION}}, cutoff
         public = []
@@ -357,6 +368,7 @@ class LiveBusinessCustomerAdapter:
         data = {"total": len(rows), "items": public,
                 "consumerFinalIncludedInIndividualRfm": False,
                 "availabilityStatus": "PARTIAL" if partial else "AVAILABLE",
+                "availabilityDiagnostics": availability_diagnostics,
                 "freshness": {**dict(live.freshness("customer")), "engineVersion": self.ENGINE_VERSION}}
         if period is not None:
             start, end = period["startDate"], period["endDate"]
@@ -368,6 +380,9 @@ class LiveBusinessCustomerAdapter:
             period_costs = {code: self._coverage(views["sales"], views["linesBySale"], period, cutoff,
                 customer_code=code, products=customer_engine.products) for code in selected_codes}
             partial = partial or any(value["unknownSaleLines"] for value in period_costs.values())
+            period_diagnostic = self._coverage_diagnostic(period_costs, "CUSTOMER_PERIOD_COST_COVERAGE_INCOMPLETE")
+            if period_diagnostic["affectedCustomerCount"]:
+                availability_diagnostics.append(period_diagnostic)
             if any(value["unsupportedCurrency"] for value in period_costs.values()):
                 raise LiveDomainError("DATA_NOT_AVAILABLE", 422, "LIVE monetary analytics currently support PEN only.")
             for code, value in metrics.items():

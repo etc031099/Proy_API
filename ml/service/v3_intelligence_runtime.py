@@ -651,7 +651,9 @@ class V3IntelligenceRuntime:
                 "interpretation": "LIVE and frozen domain indicators with documented rule-based insights; no composite score.",
                 "availabilityStatus": "PARTIAL" if partial else "AVAILABLE",
                 "healthCompletenessPolicyVersion": HEALTH_COMPLETENESS_POLICY_VERSION,
-                "blockingReasons": blocking_reasons, "freshness": freshness}, live.as_of_date
+                "blockingReasons": blocking_reasons,
+                "customerDiagnostics": customer.get("availabilityDiagnostics", []),
+                "freshness": freshness}, live.as_of_date
         except LiveDomainError as error:
             raise V3FunctionalError(error.code, error.status_code, error.message) from None
         except Exception as error:

@@ -277,6 +277,7 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
       return { data: { ...responseMeta(result, context, 'health'), status: data.availabilityStatus || result.status,
         healthCompletenessPolicyVersion: data.healthCompletenessPolicyVersion || null,
         blockingReasons: Array.isArray(data.blockingReasons) ? data.blockingReasons : [],
+        customerDiagnostics: Array.isArray(data.customerDiagnostics) ? data.customerDiagnostics : [],
         period: data.period || period, domains: Object.fromEntries(['sales', 'margin', 'customers', 'inventory', 'suppliers', 'forecast', 'marketBasket']
           .map(name => [name, sections[name] ? { status: domainStatus(sections[name]), freshness: sections[name].freshness || null, metrics: stripAlerts(sections[name]),
             insights: sections[name].alerts || [] } : { status: 'UNAVAILABLE', freshness: null, metrics: null, insights: [] }])),
@@ -309,6 +310,7 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
         supplier: statusOf('suppliers'), healthAssembly: result.data.status === 'PARTIAL' ? 'PARTIAL' : 'READY' },
       healthCompletenessPolicyVersion: result.data.healthCompletenessPolicyVersion || null,
       blockingReasons: Array.isArray(result.data.blockingReasons) ? result.data.blockingReasons : [],
+      customerDiagnostics: Array.isArray(result.data.customerDiagnostics) ? result.data.customerDiagnostics : [],
       reasonCode: null, elapsedMs } };
     } catch (error) {
       return { data: { httpStatus: 503, dependencyStatus: { inventory: 'UNKNOWN', forecast: 'UNKNOWN',
