@@ -324,6 +324,14 @@ def _sha256(data: bytes) -> str:
 def load_verified_ridge_artifact(envelope: Mapping[str, Any], *, business_id: str,
                                  scenario_id: str, horizon_days: int) -> dict[str, Any]:
     """Verify exact registry metadata, bytes, schema, dimensions and finite parameters."""
+    return _load_verified_ridge_artifact(envelope, business_id=business_id,
+        scenario_id=scenario_id, horizon_days=horizon_days, allowed_statuses=("ACTIVE",))
+
+
+def _load_verified_ridge_artifact(envelope: Mapping[str, Any], *, business_id: str,
+                                  scenario_id: str, horizon_days: int,
+                                  allowed_statuses: tuple[str, ...]) -> dict[str, Any]:
+    """Common validation; public serving always supplies ACTIVE only."""
     if not isinstance(envelope, Mapping):
         raise LiveRidgeError("ARTIFACT_INVALID", "The registry response is not a valid artifact envelope.")
     metadata = envelope.get("metadata")
@@ -335,12 +343,14 @@ def load_verified_ridge_artifact(envelope: Mapping[str, Any], *, business_id: st
         raise LiveRidgeError("ARTIFACT_INVALID", "The artifact size is outside the supported bound.")
     expected_metadata = {
         "businessId": business_id, "scenarioId": scenario_id, "horizonDays": horizon_days,
-        "status": "ACTIVE", "modelFamily": MODEL_FAMILY, "recipeId": RECIPE_ID,
+        "modelFamily": MODEL_FAMILY, "recipeId": RECIPE_ID,
         "featureVersion": FEATURE_VERSION, "featureHash": FEATURE_HASH,
         "promotionPolicyVersion": PROMOTION_POLICY_VERSION,
         "promotionPolicyHash": PROMOTION_POLICY_HASH,
     }
-    if any(metadata.get(key) != value for key, value in expected_metadata.items()):
+    if (horizon_days not in (7, 14) or isinstance(horizon_days, bool)
+            or metadata.get("status") not in allowed_statuses
+            or any(metadata.get(key) != value for key, value in expected_metadata.items())):
         raise LiveRidgeError("ARTIFACT_INVALID", "The ACTIVE registry metadata does not match tenant, scenario, horizon, or feature contract.")
     if metadata.get("artifactBytes") != len(raw) or metadata.get("artifactHash") != _sha256(raw):
         raise LiveRidgeError("ARTIFACT_INVALID", "The artifact bytes do not match their recorded size and SHA256.")
