@@ -267,6 +267,27 @@ function createForecastMlUpdateExecutionService({ repository = productionReposit
     outcome.prediction.finalizedAt = now;
     P.checkSize(outcome.prediction);
     row.impact = outcome;
+    if (input.includeInventory === true) {
+      row.impact.predictionStatus = outcome.status;
+      row.impact.inventory = { kind: 'MODEL_ATTRIBUTED_INVENTORY_IMPACT', status: 'PENDING', reasonCode: null };
+      row.impact.status = 'PENDING';
+    }
+    if (row.attempts.length) row.attempts.at(-1).impact = clone(row.impact);
+  });
+  const finalizeInventoryImpact = input => update(input, (row, now) => {
+    const P = require('./forecastPredictionImpactDomain');
+    const I = require('./forecastInventoryImpactDomain');
+    if (row.impact.inventory?.completedAt) D.fail('IMPACT_ALREADY_FINALIZED');
+    if (!D.TERMINAL.includes(row.status) || !P.promoted(row) || !row.impact.prediction?.finalizedAt) {
+      D.fail('IMPACT_REQUIRES_PROMOTION');
+    }
+    const inventory = I.buildInventory(row, input.result, input.reasonCode);
+    inventory.completedAt = now;
+    I.checkSize(inventory);
+    row.impact.predictionStatus = I.predictionStatus(row);
+    row.impact.inventory = inventory;
+    row.impact.status = I.globalStatus(row.impact.predictionStatus, inventory.status);
+    row.impact.reasonCode = inventory.reasonCode || row.impact.reasonCode;
     if (row.attempts.length) row.attempts.at(-1).impact = clone(row.impact);
   });
   const mark = status => input => transitionExecution({ ...input, status });
@@ -311,7 +332,7 @@ function createForecastMlUpdateExecutionService({ repository = productionReposit
     row.impact = { status: 'NOT_APPLICABLE', reasonCode: null };
   });
   return Object.freeze({ createExecution, getExecution, findExecutionByManualRequest, findExecutionByGithubRun, findExecutionByCliInvocation,
-    resumeInterruptedExecution, pinPredictionSnapshot, finalizePredictionImpact,
+    resumeInterruptedExecution, pinPredictionSnapshot, finalizePredictionImpact, finalizeInventoryImpact,
     bindExecutionRun,
     updateRunningMetadata,
     withSession: session => {

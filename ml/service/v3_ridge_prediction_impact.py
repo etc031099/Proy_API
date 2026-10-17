@@ -12,9 +12,9 @@ from ml.src.v3_forecast import load_validated_dataset
 from ml.src.business_customer_supplier_v3 import load_local_sources
 
 
-def evaluate(payload):
-    snapshot = V3OperationalSnapshot.model_validate(payload["snapshot"])
-    identity = payload["audit"]
+def load_audit_context(snapshot_payload, identity, request_body_bytes):
+    """Shared validated reconstruction of the pinned context; never reads Mongo."""
+    snapshot = V3OperationalSnapshot.model_validate(snapshot_payload)
     meta = snapshot.metadata
     root = Path(__file__).resolve().parents[2]
     dataset = load_validated_dataset(root)
@@ -23,7 +23,14 @@ def evaluate(payload):
         request_business_id=identity["businessId"], request_scenario_id=identity["scenarioId"],
         request_dataset_version=DATASET_VERSION, request_dataset_sha256=DATASET_SHA256,
         request_timezone=TIMEZONE, request_as_of_date=meta.asOfDate,
-        request_body_bytes=len(json.dumps(payload).encode()))
+        request_body_bytes=request_body_bytes)
+    return root, dataset, records, live
+
+
+def evaluate(payload):
+    identity = payload["audit"]
+    root, dataset, records, live = load_audit_context(payload["snapshot"], identity,
+        len(json.dumps(payload).encode()))
     skus = [p["sku"] for p in payload["products"]]
     horizons = []
     errors = []

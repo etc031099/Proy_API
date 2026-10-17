@@ -3,12 +3,13 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const ROOT = path.resolve(__dirname, '../../..');
 const fail = code => Object.assign(new Error(code), { code });
-function scorePredictionImpact(payload, { executable, spawnProcess = spawn, timeoutMs = 45000 } = {}) {
+function runImpact(payload, { executable, spawnProcess = spawn, timeoutMs = 45000 } = {}, inventory = false) {
   return new Promise((resolve, reject) => {
     if (typeof executable !== 'string' || !executable) return reject(fail('IMPACT_SCORING_FAILED'));
     const input = JSON.stringify(payload);
     if (Buffer.byteLength(input) > 32 * 1024 * 1024) return reject(fail('IMPACT_SIZE_LIMIT'));
-    const child = spawnProcess(executable, ['-B', '-m', 'ml.service.v3_ridge_prediction_impact'],
+    const child = spawnProcess(executable, ['-B', '-m', inventory
+      ? 'ml.service.v3_inventory_model_impact' : 'ml.service.v3_ridge_prediction_impact'],
       { cwd: ROOT, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     let output = '', invalid = false;
     const timer = setTimeout(() => { invalid = true; child.kill(); }, timeoutMs);
@@ -24,11 +25,15 @@ function scorePredictionImpact(payload, { executable, spawnProcess = spawn, time
       if (invalid || code !== 0) return reject(fail('IMPACT_SCORING_FAILED'));
       try {
         const envelope = JSON.parse(output);
-        if (envelope.ok !== true || !Array.isArray(envelope.result?.horizons)) throw new Error();
+        if (envelope.ok !== true || (inventory
+          ? !Array.isArray(envelope.result?.before) || !Array.isArray(envelope.result?.after)
+          : !Array.isArray(envelope.result?.horizons))) throw new Error();
         resolve(envelope.result);
       } catch { reject(fail('IMPACT_SCORING_INVALID')); }
     });
     child.stdin.end(input);
   });
 }
-module.exports = { scorePredictionImpact };
+const scorePredictionImpact = (payload, options) => runImpact(payload, options);
+const scoreInventoryImpact = (payload, options) => runImpact(payload, options, true);
+module.exports = { scorePredictionImpact, scoreInventoryImpact };

@@ -160,8 +160,12 @@ function productionDependencies(settings, overrides = {}) {
     auditModels: require('../src/services/forecastRidgeAuditModels').createForecastRidgeAuditModels({
       executionModel: models.ForecastMlUpdateExecution, artifactModel: models.ForecastModelArtifact }),
     score: payload => require('../src/services/forecastPredictionImpactPython').scorePredictionImpact(payload, { executable: settings.python }),
+    inventoryScore: payload => require('../src/services/forecastPredictionImpactPython').scoreInventoryImpact(payload, { executable: settings.python }),
     pendingReader: async () => (await models.ForecastMlUpdateExecution.find({ businessId: settings.businessId,
-      scenarioId: settings.scenarioId, status: { $in: ['PROMOTED', 'PARTIAL'] }, 'impact.status': 'PENDING' })
+      scenarioId: settings.scenarioId, status: { $in: ['PROMOTED', 'PARTIAL'] }, $or: [
+        { 'impact.status': 'PENDING' },
+        { 'impact.prediction.finalizedAt': { $exists: true }, 'impact.inventory': { $exists: false } },
+      ] })
       .select('executionId').sort({ requestedAt: 1 }).limit(1).lean().maxTimeMS(5000)).map(row => row.executionId),
   });
   return {

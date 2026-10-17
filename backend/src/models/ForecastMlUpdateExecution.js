@@ -30,7 +30,9 @@ const horizonSchema = new mongoose.Schema({
 const pair = { type: [horizonSchema], default: () => [7, 14].map(horizonDays => ({ horizonDays, resultStatus: 'REQUESTED' })),
   validate: rows => rows.length === 2 && new Set(rows.map(row => row.horizonDays)).size === 2 };
 const impactSchema = new mongoose.Schema({ status: { type: String, required: true, enum: domain.IMPACT_STATUSES },
-  reasonCode: reason, prediction: { type: require('./forecastPredictionImpactSchema'), default: undefined } }, options);
+  reasonCode: reason, prediction: { type: require('./forecastPredictionImpactSchema'), default: undefined },
+  predictionStatus: { type: String, enum: ['COMPLETE', 'PARTIAL', 'NOT_CAPTURED'], default: undefined },
+  inventory: { type: require('./forecastInventoryImpactSchema'), default: undefined } }, options);
 const attemptSchema = new mongoose.Schema({
   runAttempt: { ...integer, required: true, min: 1 },
   startedAt: { type: Date, default: null }, finishedAt: { type: Date, default: null },

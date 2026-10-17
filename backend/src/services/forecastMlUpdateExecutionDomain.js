@@ -53,6 +53,9 @@ const REASONS = Object.freeze({
   IMPACT_SIZE_LIMIT: 'El impacto excede el límite explícito de almacenamiento.',
   IMPACT_SCORING_FAILED: 'El scorer interno no pudo completar la comparación.',
   IMPACT_SCORING_INVALID: 'La respuesta del scorer no cumple el contrato de auditoría.',
+  INVENTORY_IMPACT_NOT_CAPTURED: 'No se pudo capturar el impacto atribuible en inventario.',
+  INVENTORY_IMPACT_INVALID: 'La comparación de inventario no cumple el contrato interno.',
+  INVENTORY_PARTIAL_COMPARISON: 'Parte de los campos o del ranking de inventario no es comparable.',
 });
 const MAX_ATTEMPTS = 20;
 const REQUIRED_ORIGINS = 107;

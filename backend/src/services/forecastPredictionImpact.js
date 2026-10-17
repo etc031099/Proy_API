@@ -35,10 +35,38 @@ function productionProducts(snapshot) {
 }
 
 function createForecastPredictionImpact({ service, scope, snapshotBuilder, readRevision,
-  products = productionProducts, auditModels, score, clock = () => new Date(), pendingReader } = {}) {
+  products = productionProducts, auditModels, score, inventoryScore, clock = () => new Date(), pendingReader } = {}) {
   let memory = new Map();
   const get = executionId => service.getExecution({ ...scope, executionId });
   const args = row => ({ ...scope, executionId: row.executionId, expectedVersion: row.writeVersion });
+  async function resolveSnapshot(row) {
+    const pin = row.impact.prediction?.snapshot;
+    if (!pin) fail('SNAPSHOT_NOT_AVAILABLE');
+    P.validatePin(pin, scope);
+    const cached = memory.get(row.executionId);
+    if (cached?.pinHash === P.digest(pin)) return cached.snapshot;
+    let revision;
+    try { revision = await readRevision(scope.businessId); } catch { fail('SNAPSHOT_NOT_AVAILABLE'); }
+    if (revision !== pin.dataVersion) fail('SNAPSHOT_MISMATCH');
+    let rebuilt;
+    try { rebuilt = await snapshotBuilder({ businessId: scope.businessId, asOfDate: pin.asOf,
+      now: new Date(pin.capturedAtUtc), minimumDataVersion: pin.dataVersion }); }
+    catch { fail('SNAPSHOT_NOT_AVAILABLE'); }
+    const checked = pinFromSnapshot(rebuilt, await products(rebuilt.snapshot), scope);
+    if (P.digest(checked) !== P.digest(pin)) fail('SNAPSHOT_MISMATCH');
+    const snapshot = freeze(structuredClone(rebuilt.snapshot));
+    memory.set(row.executionId, { pinHash: P.digest(pin), snapshot });
+    return snapshot;
+  }
+  const inventory = inventoryScore ? require('./forecastInventoryImpact').createForecastInventoryImpact({
+    service, scope, resolveSnapshot, score: inventoryScore }) : null;
+  async function finishInventory(executionId, fallback) {
+    if (!inventory) return fallback;
+    if (!(await get(executionId))?.impact.prediction?.finalizedAt) return fallback;
+    const result = await inventory.calculate({ executionId });
+    if ((await get(executionId))?.impact.inventory?.completedAt) memory.delete(executionId);
+    return result;
+  }
   async function capture({ executionId, minimumDataVersion }) {
     try {
       let row = await get(executionId);
@@ -67,8 +95,8 @@ function createForecastPredictionImpact({ service, scope, snapshotBuilder, readR
     for (let attempt = 0; attempt < 2; attempt++) {
       if (row.impact.prediction?.finalizedAt) return { status: row.impact.status, reasonCode: 'IMPACT_ALREADY_FINALIZED' };
       try {
-        const final = await service.finalizePredictionImpact({ ...args(row), results, reasonCode });
-        memory.delete(row.executionId);
+        const final = await service.finalizePredictionImpact({ ...args(row), results, reasonCode, includeInventory: !!inventory });
+        if (!inventory) memory.delete(row.executionId);
         return { status: final.impact.status, reasonCode: final.impact.reasonCode };
       } catch (error) {
         if (error.code === 'IMPACT_ALREADY_FINALIZED') return { status: (await get(row.executionId)).impact.status,
@@ -85,25 +113,14 @@ function createForecastPredictionImpact({ service, scope, snapshotBuilder, readR
       const row = await get(executionId);
       if (!row || !P.promoted(row)) return { status: 'NOT_APPLICABLE', reasonCode: 'NO_MODEL_PROMOTION' };
       if (!D.TERMINAL.includes(row.status)) return { status: 'PENDING', reasonCode: null };
-      if (row.impact.prediction?.finalizedAt) return { status: row.impact.status, reasonCode: 'IMPACT_ALREADY_FINALIZED' };
+      if (row.impact.prediction?.finalizedAt) return await finishInventory(executionId,
+        { status: row.impact.status, reasonCode: 'IMPACT_ALREADY_FINALIZED' });
       const pin = row.impact.prediction?.snapshot;
-      if (!pin) return await finish(row, [], row.impact.prediction?.captureReason || 'SNAPSHOT_NOT_AVAILABLE');
+      if (!pin) return await finishInventory(executionId,
+        await finish(row, [], row.impact.prediction?.captureReason || 'SNAPSHOT_NOT_AVAILABLE'));
       let results = [], reasonCode = null;
       try {
-        P.validatePin(pin, scope);
-        let snapshot = memory.get(executionId)?.pinHash === P.digest(pin) ? memory.get(executionId).snapshot : null;
-        if (!snapshot) {
-          let revision;
-          try { revision = await readRevision(scope.businessId); } catch { fail('SNAPSHOT_NOT_AVAILABLE'); }
-          if (revision !== pin.dataVersion) fail('SNAPSHOT_MISMATCH');
-          let rebuilt;
-          try { rebuilt = await snapshotBuilder({ businessId: scope.businessId, asOfDate: pin.asOf,
-            now: new Date(pin.capturedAtUtc), minimumDataVersion: pin.dataVersion }); }
-          catch { fail('SNAPSHOT_NOT_AVAILABLE'); }
-          const checked = pinFromSnapshot(rebuilt, await products(rebuilt.snapshot), scope);
-          if (P.digest(checked) !== P.digest(pin)) fail('SNAPSHOT_MISMATCH');
-          snapshot = freeze(structuredClone(rebuilt.snapshot));
-        }
+        const snapshot = await resolveSnapshot(row);
         const models = await auditModels.loadForExecution({ ...scope, executionId, tolerateUnavailable: true });
         const output = models.horizons.some(h => h.comparable)
           ? await score({ snapshot, audit: models, products: pin.products }) : { horizons: [] };
@@ -112,7 +129,7 @@ function createForecastPredictionImpact({ service, scope, snapshotBuilder, readR
         reasonCode = output.errors?.[0]?.reasonCode || models.horizons.find(h => !h.comparable)?.reasonCode || null;
         if (!Object.hasOwn(D.REASONS, reasonCode)) reasonCode = reasonCode ? 'PARTIAL_HORIZON_COMPARISON' : null;
       } catch (error) { reasonCode = safeReason(error); }
-      return await finish(row, results, reasonCode);
+      return await finishInventory(executionId, await finish(row, results, reasonCode));
     } catch { return { status: 'PENDING', reasonCode: 'IMPACT_SCORING_FAILED' }; }
   }
   async function recoverPending() {
