@@ -113,6 +113,7 @@ const makeDashboard = ({ fail, partial = false, productPresent = true, supplierN
             rulesCount: 66, qualityRulesCount: 67, crossSellCount: 33 } }
           : { available: true, sourceSku: 'SKU-1', total: crossSellItems.length, items: crossSellItems } };
         case 'get_business_health': return { status: 'READY', metadata, data: { availabilityStatus: 'PARTIAL', healthScore: null,
+          healthCompletenessPolicyVersion: 'm6.10a36113-abc-informational-v1', blockingReasons: ['MARKET_BASKET_UNAVAILABLE'],
           businessHealth: { sales: { kpis: {}, freshness: { status: 'LIVE' }, alerts: [] }, inventory: { critical: 2, freshness: { status: 'LIVE' }, alerts: [] },
             customers: { atRiskCount: 4, freshness: { status: 'LIVE' }, alerts: [] }, suppliers: { pending: 4, freshness: { status: 'LIVE' }, alerts: [] },
             forecast: { knownCount: 80, freshness: { status: 'LIVE' }, alerts: [] }, marketBasket: { available: true,
@@ -336,7 +337,12 @@ test('health diagnostic reports dependencies and sanitizes failures and timeout'
   const partial = await makeDashboard().service.healthDiagnostic(request({ period: 'TODAY' }));
   assert.equal(partial.data.httpStatus, 200);
   assert.equal(partial.data.dependencyStatus.inventory, 'READY');
+  assert.equal(partial.data.dependencyStatus.forecast, 'READY');
+  assert.equal(partial.data.dependencyStatus.supplier, 'READY');
   assert.equal(partial.data.dependencyStatus.healthAssembly, 'PARTIAL');
+  assert.equal(partial.data.healthCompletenessPolicyVersion, 'm6.10a36113-abc-informational-v1');
+  assert.deepEqual(partial.data.blockingReasons, ['MARKET_BASKET_UNAVAILABLE']);
+  assert.equal(partial.data.reasonCode, null);
   const failed = await makeDashboard({ fail: 'PRIVATE_MONGO_URI' }).service.healthDiagnostic(request());
   assert.equal(failed.data.httpStatus, 503);
   assert.equal(failed.data.dependencyStatus.healthAssembly, 'FAILED');

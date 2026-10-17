@@ -63,6 +63,8 @@ class HealthCompletenessTests(unittest.TestCase):
         self.assertFalse(inventory["abcAvailable"])
         self.assertEqual(inventory["abcUnavailableCount"], 80)
         self.assertTrue(all(row["classification"]["abc"] is None for row in fixture.inventory["products"]))
+        self.assertEqual(data["blockingReasons"], [])
+        self.assertEqual(data["healthCompletenessPolicyVersion"], "m6.10a36113-abc-informational-v1")
 
     def test_classified_abc_remains_available(self):
         fixture = health_fixture(classified_abc=True)
@@ -79,10 +81,14 @@ class HealthCompletenessTests(unittest.TestCase):
                 fixture = health_fixture()
                 fixture.forecasts[0][f"horizon{horizon}Status"] = "MODEL_UNAVAILABLE"
                 fixture.forecasts[0][f"expectedUnitsNext{horizon}d"] = None
-                self.assertEqual(assemble(fixture)["availabilityStatus"], "PARTIAL")
+                data = assemble(fixture)
+                self.assertEqual(data["availabilityStatus"], "PARTIAL")
+                self.assertIn(f"FORECAST_{horizon}D_INCOMPLETE", data["blockingReasons"])
         fixture = health_fixture()
         fixture.inventory["summary"]["forecastAvailability"] = "PARTIAL"
-        self.assertEqual(assemble(fixture)["availabilityStatus"], "PARTIAL")
+        data = assemble(fixture)
+        self.assertEqual(data["availabilityStatus"], "PARTIAL")
+        self.assertIn("INVENTORY_FORECAST_AVAILABILITY_PARTIAL", data["blockingReasons"])
 
     def test_missing_required_inventory_evidence_stays_partial(self):
         for key in ("unavailableCount", "riskUnavailableCount", "recommendationUnavailableCount",
@@ -90,12 +96,23 @@ class HealthCompletenessTests(unittest.TestCase):
             with self.subTest(key=key):
                 fixture = health_fixture()
                 fixture.inventory["summary"][key] = 1
-                self.assertEqual(assemble(fixture)["availabilityStatus"], "PARTIAL")
+                data = assemble(fixture)
+                self.assertEqual(data["availabilityStatus"], "PARTIAL")
+                reason = {
+                    "unavailableCount": "INVENTORY_UNAVAILABLE_COUNT",
+                    "riskUnavailableCount": "INVENTORY_RISK_UNAVAILABLE",
+                    "recommendationUnavailableCount": "INVENTORY_RECOMMENDATION_UNAVAILABLE",
+                    "slowMovingUnavailableCount": "INVENTORY_SLOW_MOVING_UNAVAILABLE",
+                    "deadStockUnavailableCount": "INVENTORY_DEAD_STOCK_UNAVAILABLE",
+                }[key]
+                self.assertIn(reason, data["blockingReasons"])
 
     def test_partial_suppliers_stay_blocking(self):
         fixture = health_fixture()
         fixture.supplier["availabilityStatus"] = "PARTIAL"
-        self.assertEqual(assemble(fixture)["availabilityStatus"], "PARTIAL")
+        data = assemble(fixture)
+        self.assertEqual(data["availabilityStatus"], "PARTIAL")
+        self.assertIn("SUPPLIER_ANALYTICS_PARTIAL", data["blockingReasons"])
 
     def test_xyz_distribution_and_completeness_policy_are_unchanged(self):
         fixture = health_fixture()
@@ -105,7 +122,9 @@ class HealthCompletenessTests(unittest.TestCase):
         self.assertTrue(data["businessHealth"]["inventory"]["xyzAvailable"])
         self.assertEqual(data["businessHealth"]["inventory"]["xyzUnavailableCount"], 0)
         fixture.inventory["summary"]["xyzUnavailableCount"] = 1
-        self.assertEqual(assemble(fixture)["availabilityStatus"], "PARTIAL")
+        data = assemble(fixture)
+        self.assertEqual(data["availabilityStatus"], "PARTIAL")
+        self.assertIn("INVENTORY_XYZ_UNAVAILABLE", data["blockingReasons"])
 
     def test_other_existing_required_domains_remain_blocking(self):
         for domain in ("business", "customer", "marketBasket"):
@@ -115,7 +134,11 @@ class HealthCompletenessTests(unittest.TestCase):
                     fixture.runtime.basket = None
                 else:
                     getattr(fixture, domain)["availabilityStatus"] = "PARTIAL"
-                self.assertEqual(assemble(fixture)["availabilityStatus"], "PARTIAL")
+                data = assemble(fixture)
+                self.assertEqual(data["availabilityStatus"], "PARTIAL")
+                expected = {"business": "BUSINESS_ANALYTICS_PARTIAL", "customer": "CUSTOMER_ANALYTICS_PARTIAL",
+                            "marketBasket": "MARKET_BASKET_UNAVAILABLE"}[domain]
+                self.assertIn(expected, data["blockingReasons"])
 
     def test_technical_evaluation_error_is_not_treated_as_unclassified_abc(self):
         fixture = health_fixture()

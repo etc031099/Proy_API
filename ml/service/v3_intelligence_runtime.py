@@ -27,6 +27,7 @@ from ml.src import v3_baseline_bundle, v3_forecast
 from ml.src.inventory_intelligence_v3 import INVENTORY_VERSION, InventoryIntelligenceV3
 
 CONTRACT_VERSION = "m6.9b-v3-intelligence-v1"
+HEALTH_COMPLETENESS_POLICY_VERSION = "m6.10a36113-abc-informational-v1"
 BASKET_REPRODUCIBILITY_SHA256 = "5836aa9b5bc7d1729c0218c7336292d4985c0b997224fc64e1f8ab3ae726c086"
 BASKET_ANALYSIS_VERSION = "MINIMARKET-PASCO-V3-MBA-v1"
 BASKET_CUTOFF = date(2026, 10, 12)
@@ -614,24 +615,43 @@ class V3IntelligenceRuntime:
                 sections[name]["freshness"] = freshness[freshness_key]
             # Unclassified ABC is optional information; keep its availability
             # metadata in the payload without blocking overall Health readiness.
-            inventory_partial = any(int(inventory["summary"].get(key) or 0) > 0 for key in (
-                "unavailableCount", "riskUnavailableCount", "recommendationUnavailableCount",
-                "xyzUnavailableCount", "slowMovingUnavailableCount",
-                "deadStockUnavailableCount"))
-            partial = (business.get("availabilityStatus") == "PARTIAL"
-                       or customer.get("availabilityStatus") == "PARTIAL"
-                       or inventory["summary"].get("forecastAvailability") != "AVAILABLE"
-                       or inventory_partial
-                       or len(ready7) != len(forecasts) or len(ready14) != len(forecasts)
-                       or supplier.get("availabilityStatus") == "PARTIAL"
-                       or not basket.get("available"))
+            summary = inventory["summary"]
+            blocking_reasons = []
+            if business.get("availabilityStatus") == "PARTIAL":
+                blocking_reasons.append("BUSINESS_ANALYTICS_PARTIAL")
+            if customer.get("availabilityStatus") == "PARTIAL":
+                blocking_reasons.append("CUSTOMER_ANALYTICS_PARTIAL")
+            if summary.get("forecastAvailability") != "AVAILABLE":
+                blocking_reasons.append("INVENTORY_FORECAST_AVAILABILITY_PARTIAL")
+            inventory_blockers = (
+                ("unavailableCount", "INVENTORY_UNAVAILABLE_COUNT"),
+                ("riskUnavailableCount", "INVENTORY_RISK_UNAVAILABLE"),
+                ("recommendationUnavailableCount", "INVENTORY_RECOMMENDATION_UNAVAILABLE"),
+                ("xyzUnavailableCount", "INVENTORY_XYZ_UNAVAILABLE"),
+                ("slowMovingUnavailableCount", "INVENTORY_SLOW_MOVING_UNAVAILABLE"),
+                ("deadStockUnavailableCount", "INVENTORY_DEAD_STOCK_UNAVAILABLE"),
+            )
+            for key, reason in inventory_blockers:
+                if int(summary.get(key) or 0) > 0:
+                    blocking_reasons.append(reason)
+            if len(ready7) != len(forecasts):
+                blocking_reasons.append("FORECAST_7D_INCOMPLETE")
+            if len(ready14) != len(forecasts):
+                blocking_reasons.append("FORECAST_14D_INCOMPLETE")
+            if supplier.get("availabilityStatus") == "PARTIAL":
+                blocking_reasons.append("SUPPLIER_ANALYTICS_PARTIAL")
+            if not basket.get("available"):
+                blocking_reasons.append("MARKET_BASKET_UNAVAILABLE")
+            partial = bool(blocking_reasons)
             return {"contractVersion": m68.HEALTH_VERSION, "scenarioId": SCENARIO_ID,
                 "datasetVersion": DATASET_VERSION, "datasetSha256": DATASET_SHA256,
                 "asOfDate": live.as_of_date.isoformat(), "timezone": TIMEZONE,
                 "period": business.get("period"), "businessHealth": sections,
                 "alerts": alerts, "healthScore": None,
                 "interpretation": "LIVE and frozen domain indicators with documented rule-based insights; no composite score.",
-                "availabilityStatus": "PARTIAL" if partial else "AVAILABLE", "freshness": freshness}, live.as_of_date
+                "availabilityStatus": "PARTIAL" if partial else "AVAILABLE",
+                "healthCompletenessPolicyVersion": HEALTH_COMPLETENESS_POLICY_VERSION,
+                "blockingReasons": blocking_reasons, "freshness": freshness}, live.as_of_date
         except LiveDomainError as error:
             raise V3FunctionalError(error.code, error.status_code, error.message) from None
         except Exception as error:

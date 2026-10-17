@@ -275,6 +275,8 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
       const result = await executeInventoryHealth(context, 'get_business_health', { ...periodArgs(period), limit }, 5);
       const data = result.data || {}, sections = data.businessHealth || {};
       return { data: { ...responseMeta(result, context, 'health'), status: data.availabilityStatus || result.status,
+        healthCompletenessPolicyVersion: data.healthCompletenessPolicyVersion || null,
+        blockingReasons: Array.isArray(data.blockingReasons) ? data.blockingReasons : [],
         period: data.period || period, domains: Object.fromEntries(['sales', 'margin', 'customers', 'inventory', 'suppliers', 'forecast', 'marketBasket']
           .map(name => [name, sections[name] ? { status: domainStatus(sections[name]), freshness: sections[name].freshness || null, metrics: stripAlerts(sections[name]),
             insights: sections[name].alerts || [] } : { status: 'UNAVAILABLE', freshness: null, metrics: null, insights: [] }])),
@@ -305,6 +307,8 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
       };
       return { data: { httpStatus: 200, dependencyStatus: { inventory: statusOf('inventory'), forecast: statusOf('forecast'),
         supplier: statusOf('suppliers'), healthAssembly: result.data.status === 'PARTIAL' ? 'PARTIAL' : 'READY' },
+      healthCompletenessPolicyVersion: result.data.healthCompletenessPolicyVersion || null,
+      blockingReasons: Array.isArray(result.data.blockingReasons) ? result.data.blockingReasons : [],
       reasonCode: null, elapsedMs } };
     } catch (error) {
       return { data: { httpStatus: 503, dependencyStatus: { inventory: 'UNKNOWN', forecast: 'UNKNOWN',
