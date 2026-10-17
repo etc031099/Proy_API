@@ -8,7 +8,6 @@ import time
 import base64
 import binascii
 from collections import OrderedDict, deque
-from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from threading import RLock
@@ -506,26 +505,13 @@ class V3IntelligenceRuntime:
     def _live_health_dependencies(self, request, live, common):
         from types import SimpleNamespace
 
-        # The immutable LIVE context and request-pinned Ridge pair are shared.
-        # Business/customer share an adapter/view, so retain their original order.
-        def business_customer():
-            business, _ = self.live_adapter.business_data(SimpleNamespace(**{**common, "mode": "compare"}), live)
-            customer, _ = self.live_adapter.customer_data(SimpleNamespace(**common), live)
-            return business, customer
-
-        def forecast_inventory():
-            forecasts = self._live_inventory_ridge_forecasts(request, live)
-            return forecasts, self.live_inventory_supplier._inventory_rows(live, forecasts)
-
-        with ThreadPoolExecutor(max_workers=3, thread_name_prefix="v3-health") as pool:
-            analytics = pool.submit(business_customer)
-            inventory_work = pool.submit(forecast_inventory)
-            supplier_work = pool.submit(self.live_inventory_supplier.supplier_data, SimpleNamespace(**common), live)
-            # Consume results in the original failure-precedence order. Assembly
-            # starts only once every prerequisite has resolved successfully.
-            business, customer = analytics.result()
-            forecasts, inventory = inventory_work.result()
-            supplier, _ = supplier_work.result()
+        # Restore the canonical sequential order without changing the immutable
+        # LIVE context, request-pinned Ridge pair, or downstream Health assembly.
+        business, _ = self.live_adapter.business_data(SimpleNamespace(**{**common, "mode": "compare"}), live)
+        customer, _ = self.live_adapter.customer_data(SimpleNamespace(**common), live)
+        forecasts = self._live_inventory_ridge_forecasts(request, live)
+        inventory = self.live_inventory_supplier._inventory_rows(live, forecasts)
+        supplier, _ = self.live_inventory_supplier.supplier_data(SimpleNamespace(**common), live)
         return business, customer, forecasts, inventory, supplier
 
     def live_health_data(self, request, live):
