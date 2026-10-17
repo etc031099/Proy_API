@@ -110,17 +110,27 @@ function describePending(row, horizonDays, update, now) {
 }
 
 function createCloudWorker({ preflight, readState, runEligible, completeManualEvaluation,
-  update, executionHistory, clock = () => new Date() }) {
-  async function cycle(mode) {
+  update, executionHistory, predictionImpact, clock = () => new Date() }) {
+  const impact = async (method, input) => {
+    try { return await predictionImpact?.[method]?.(input); }
+    catch { return { status: 'PENDING', reasonCode: 'IMPACT_SCORING_FAILED' }; }
+  };
+  async function cycle(mode, context) {
     if (!['CHECK', 'STATUS', 'RUN'].includes(mode)) fail('INVALID_CLOUD_ARGUMENTS');
     const started = clock().getTime();
     if (mode === 'RUN' && executionHistory) {
       const audit = await executionHistory.begin();
-      if (audit.duplicate) return { status: 'OK', mode, executionId: audit.executionId,
-        result: 'EXECUTION_ALREADY_RECORDED', horizons: [], writesPerformed: null, writesMayHaveOccurred: true };
+      context.executionId = audit.executionId;
+      if (audit.duplicate) {
+        const recoveredImpact = await impact('calculate', { executionId: audit.executionId });
+        return { status: 'OK', mode, executionId: audit.executionId,
+          result: 'EXECUTION_ALREADY_RECORDED', horizons: [], writesPerformed: null, writesMayHaveOccurred: true,
+          ...(recoveredImpact ? { predictionImpact: recoveredImpact } : {}) };
+      }
     }
     const inspected = await preflight();
     if (mode === 'RUN' && executionHistory) await executionHistory.preflight(inspected);
+    if (mode === 'RUN') await impact('recoverPending');
     const report = { status: 'OK', mode, businessId: 'MINI…V3', scenarioId: config.scenarioId,
       dataVersion: version(inspected.dataVersion), closedThrough: update.watermark(clock()),
       preflight: { status: 'PASS', python: 'PASS', activeModels: 'PASS', indexes: 'PASS' },
@@ -162,6 +172,8 @@ function createCloudWorker({ preflight, readState, runEligible, completeManualEv
           continue;
         }
         if (clock().getTime() - started >= CYCLE_TIMEOUT_MS) fail('WORKER_CYCLE_TIMEOUT');
+        if (context.executionId) await impact('capture', { executionId: context.executionId,
+          minimumDataVersion: inspected.dataVersion });
         // runEligible may write refreshed watermarks even if a concurrent claim
         // wins. Do not invent a count for the coordinator's internal writes.
         report.writesPerformed = null;
@@ -188,12 +200,18 @@ function createCloudWorker({ preflight, readState, runEligible, completeManualEv
       }
     }
     if (mode === 'RUN' && executionHistory) await executionHistory.finish();
+    if (mode === 'RUN' && context.executionId) {
+      const calculated = await impact('calculate', { executionId: context.executionId });
+      if (calculated) report.predictionImpact = calculated;
+    }
     return report;
   }
   async function run(mode) {
-    try { return await cycle(mode); }
+    const context = {};
+    try { return await cycle(mode, context); }
     catch (error) {
       if (mode === 'RUN' && executionHistory) await executionHistory.fail(error);
+      if (mode === 'RUN' && context.executionId) await impact('calculate', { executionId: context.executionId });
       throw error;
     }
   }

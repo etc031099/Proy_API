@@ -37,7 +37,7 @@ function createForecastRidgeAuditModels({ executionModel, artifactModel } = {}) 
       artifactBase64: Buffer.from(artifactBytes(row.artifactData)).toString('base64') };
   }
 
-  async function loadForExecution({ businessId, scenarioId, executionId }) {
+  async function loadForExecution({ businessId, scenarioId, executionId, tolerateUnavailable = false }) {
     if (typeof businessId !== 'string' || !businessId || businessId.length > 160
         || scenarioId !== config.scenarioId || typeof executionId !== 'string'
         || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(executionId)) {
@@ -76,11 +76,19 @@ function createForecastRidgeAuditModels({ executionModel, artifactModel } = {}) 
         horizons.push({ ...base, comparable: false, reasonCode: 'EXACT_MODEL_VERSIONS_MISSING' }); continue;
       }
       const scope = { businessId, scenarioId, horizonDays };
-      const before = await exactArtifact(scope, base.beforeVersion);
-      const after = unchanged ? before : await exactArtifact(scope, base.afterVersion);
-      if (promoted && (!validRevision(item.trainedDataVersion)
-          || after.metadata.trainedDataVersion !== item.trainedDataVersion)) fail('AUDIT_ARTIFACT_PROVENANCE_INVALID');
-      horizons.push({ ...base, promoted, comparable: true, reasonCode: null, before, after });
+      let side = 'BEFORE';
+      try {
+        const before = await exactArtifact(scope, base.beforeVersion);
+        side = 'AFTER';
+        const after = unchanged ? before : await exactArtifact(scope, base.afterVersion);
+        if (promoted && (!validRevision(item.trainedDataVersion)
+            || after.metadata.trainedDataVersion !== item.trainedDataVersion)) fail('AUDIT_ARTIFACT_PROVENANCE_INVALID');
+        horizons.push({ ...base, promoted, comparable: true, reasonCode: null, before, after });
+      } catch (error) {
+        if (!tolerateUnavailable) throw error;
+        horizons.push({ ...base, promoted, comparable: false,
+          reasonCode: error.code === 'AUDIT_ARTIFACT_NOT_FOUND' ? `${side}_MODEL_NOT_AVAILABLE` : 'ARTIFACT_INTEGRITY_FAILED' });
+      }
     }
     return { executionId, businessId, scenarioId, horizons };
   }

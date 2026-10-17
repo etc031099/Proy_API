@@ -91,3 +91,11 @@ test('unconfirmed/no promotion is never audited and has no artifact reads', asyn
   await assert.rejects(f.api.loadForExecution(scope), { code: 'AUDIT_EXECUTION_NOT_FINAL' });
   assert.equal(f.calls.filter(row => row.artifact).length, 0);
 });
+for (const [version, expected] of [[2, 'BEFORE_MODEL_NOT_AVAILABLE'], [4, 'AFTER_MODEL_NOT_AVAILABLE']]) {
+  test(`partial mode isolates missing exact ${version} and retains the other horizon`, async () => {
+    const f = fixture(); f.rows.splice(f.rows.findIndex(r => r.horizonDays === 7 && r.modelVersion === version), 1);
+    const result = await f.api.loadForExecution({ ...scope, tolerateUnavailable: true });
+    assert.equal(result.horizons[0].reasonCode, expected); assert.equal(result.horizons[0].comparable, false);
+    assert.equal(result.horizons[1].comparable, true);
+  });
+}

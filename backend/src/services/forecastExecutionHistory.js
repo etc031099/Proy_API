@@ -25,7 +25,7 @@ function executionIdentityFromEnv(env) {
 // All execution mutations remain in the domain service; this adapter maps real
 // coordinator/Registry evidence, never trains or selects a model by max(version).
 function createExecutionHistory({ service, scope, identity, prepare = async () => {}, readState,
-  registry, update, clock = () => new Date() }) {
+  registry, update, recoverImpact, clock = () => new Date() }) {
   let executionId, owned = false, ownedAttempt = null, inspected;
   const args = row => ({ ...scope, executionId: row.executionId, expectedVersion: row.writeVersion });
   const current = async (api = service) => {
@@ -70,6 +70,17 @@ function createExecutionHistory({ service, scope, identity, prepare = async () =
       } else row = await service.createExecution({ ...scope, ...identity });
     }
     executionId = row.executionId;
+    if (recoverImpact && D.TERMINAL.includes(row.status) && row.perHorizon.some(h => h.resultStatus === 'PROMOTED')) {
+      // Includes older promoted executions without a pin: retain their version
+      // set and record NOT_CAPTURED rather than starting over with today's data.
+      try { await recoverImpact({ executionId }); } catch { /* promotion remains authoritative */ }
+      return { duplicate: true, executionId };
+    }
+    // A promoted execution with pinned impact belongs to its original version
+    // set. A retry recovers that report instead of erasing it for another fit.
+    if (D.TERMINAL.includes(row.status) && row.impact.prediction && row.perHorizon.some(h => h.resultStatus === 'PROMOTED')) {
+      return { duplicate: true, executionId };
+    }
     if (!identity.github && row.status === 'INTERRUPTED') row = await service.resumeInterruptedExecution(args(row));
     if (identity.github && identity.github.runAttempt > row.github.runAttempt) {
       if (!D.TERMINAL.includes(row.status)) {
@@ -78,6 +89,13 @@ function createExecutionHistory({ service, scope, identity, prepare = async () =
         row = row.perHorizon.some(h => h.resultStatus === 'PROMOTED')
           ? await service.markPartial({ ...args(row), reasonCode: 'EXECUTION_INTERRUPTED' })
           : await service.markInterrupted({ ...args(row), reasonCode: 'EXECUTION_INTERRUPTED' });
+      }
+      if (row.impact.prediction && row.perHorizon.some(h => h.resultStatus === 'PROMOTED')) {
+        return { duplicate: true, executionId };
+      }
+      if (recoverImpact && row.perHorizon.some(h => h.resultStatus === 'PROMOTED')) {
+        try { await recoverImpact({ executionId }); } catch { /* retry recovery later */ }
+        return { duplicate: true, executionId };
       }
       row = await service.registerGithubAttempt({ ...args(row), runAttempt: identity.github.runAttempt });
     }

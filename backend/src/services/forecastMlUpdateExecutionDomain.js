@@ -43,6 +43,16 @@ const REASONS = Object.freeze({
   CLAIM_NOT_ACQUIRED: 'Otro worker adquirió el trabajo antes de este intento.',
   PREFLIGHT_FAILED: 'El diagnóstico previo impidió continuar la ejecución.',
   REUSED_TRAINING_RESULT: 'Se recuperó un resultado durable anterior; no hubo una nueva promoción en este intento.',
+  SNAPSHOT_NOT_AVAILABLE: 'No se fijó un snapshot operativo antes de la promoción.',
+  SNAPSHOT_MISMATCH: 'La evidencia operativa original no pudo verificarse exactamente.',
+  BEFORE_MODEL_NOT_AVAILABLE: 'La versión anterior exacta no está disponible.',
+  AFTER_MODEL_NOT_AVAILABLE: 'La versión posterior exacta no está disponible.',
+  ARTIFACT_INTEGRITY_FAILED: 'El artifact no superó la validación de auditoría.',
+  PARTIAL_HORIZON_COMPARISON: 'Solo parte de las predicciones es comparable.',
+  IMPACT_ALREADY_FINALIZED: 'El impacto ya tiene un resultado durable final.',
+  IMPACT_SIZE_LIMIT: 'El impacto excede el límite explícito de almacenamiento.',
+  IMPACT_SCORING_FAILED: 'El scorer interno no pudo completar la comparación.',
+  IMPACT_SCORING_INVALID: 'La respuesta del scorer no cumple el contrato de auditoría.',
 });
 const MAX_ATTEMPTS = 20;
 const REQUIRED_ORIGINS = 107;

@@ -97,7 +97,7 @@ function productionDependencies(settings, overrides = {}) {
   const update = overrides.update || require('../src/services/forecastMlUpdateCoordinator');
   const registry = overrides.registry || require('../src/services/forecastModelRegistryService').createForecastModelRegistryService();
   const pythonCheck = overrides.checkPython || checkPython;
-  let worker;
+  let worker, predictionImpact;
   const connect = async () => {
     if (mongoose.connection.readyState === 1) return;
     await mongoose.connect(settings.uri, { dbName: settings.database, autoCreate: false, autoIndex: false,
@@ -111,6 +111,7 @@ function productionDependencies(settings, overrides = {}) {
   const executionHistory = overrides.executionHistory || require('../src/services/forecastExecutionHistory').createExecutionHistory({
     service: historyService, scope: { businessId: settings.businessId, scenarioId: settings.scenarioId },
     identity: settings.executionIdentity, readState, registry, update,
+    recoverImpact: input => predictionImpact.calculate(input),
     prepare: async () => {
       await connect();
       if (mongoose.connection.db.databaseName !== settings.database) fail('CLOUD_DATABASE_MISMATCH');
@@ -152,8 +153,19 @@ function productionDependencies(settings, overrides = {}) {
       closedThrough: update.watermark(new Date()), models: envelopes });
     return { dataVersion: String(revision.revision), activeModels, promotionReadiness: python.promotionReadiness };
   };
+  predictionImpact = overrides.predictionImpact || require('../src/services/forecastPredictionImpact').createForecastPredictionImpact({
+    service: historyService, scope: { businessId: settings.businessId, scenarioId: settings.scenarioId },
+    snapshotBuilder: options => require('../src/services/v3OperationalSnapshotService').buildV3OperationalSnapshot(options),
+    readRevision: businessId => require('../src/services/v3OperationalSnapshotService').getDataVersion(businessId, { majority: true }),
+    auditModels: require('../src/services/forecastRidgeAuditModels').createForecastRidgeAuditModels({
+      executionModel: models.ForecastMlUpdateExecution, artifactModel: models.ForecastModelArtifact }),
+    score: payload => require('../src/services/forecastPredictionImpactPython').scorePredictionImpact(payload, { executable: settings.python }),
+    pendingReader: async () => (await models.ForecastMlUpdateExecution.find({ businessId: settings.businessId,
+      scenarioId: settings.scenarioId, status: { $in: ['PROMOTED', 'PARTIAL'] }, 'impact.status': 'PENDING' })
+      .select('executionId').sort({ requestedAt: 1 }).limit(1).lean().maxTimeMS(5000)).map(row => row.executionId),
+  });
   return {
-    update, preflight, executionHistory,
+    update, preflight, executionHistory, predictionImpact,
     completeManualEvaluation: input => update.completeManualEvaluation({ ...input,
       businessId: settings.businessId, scenarioId: settings.scenarioId }),
     readState,

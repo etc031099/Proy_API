@@ -221,6 +221,8 @@ function createForecastMlUpdateExecutionService({ repository = productionReposit
   });
 
   const registerGithubAttempt = input => update(input, row => {
+    if (row.impact.prediction?.finalizedAt) D.fail('IMPACT_ALREADY_FINALIZED');
+    if (row.impact.prediction && require('./forecastPredictionImpactDomain').promoted(row)) D.fail('IMPACT_RECOVERY_REQUIRED');
     if (!row.github || !Number.isSafeInteger(input.runAttempt) || input.runAttempt <= row.github.runAttempt) {
       D.fail('INVALID_EXECUTION_ATTEMPT');
     }
@@ -238,11 +240,34 @@ function createForecastMlUpdateExecutionService({ repository = productionReposit
     row.impact = { status: 'NOT_APPLICABLE', reasonCode: null };
   });
   const setImpactStatus = input => update(input, row => {
+    if (row.impact.prediction?.finalizedAt) D.fail('IMPACT_ALREADY_FINALIZED');
+    if (row.impact.prediction && require('./forecastPredictionImpactDomain').FINAL.includes(input.status)) {
+      D.fail('PREDICTION_IMPACT_FINALIZER_REQUIRED');
+    }
     if (!D.IMPACT_STATUSES.includes(input.status)) D.fail('INVALID_IMPACT_STATUS');
     if (['PENDING', 'COMPLETE', 'PARTIAL'].includes(input.status)
         && !row.perHorizon.some(h => h.resultStatus === 'PROMOTED')) D.fail('IMPACT_REQUIRES_PROMOTION');
-    row.impact = { status: input.status, reasonCode: D.safeReason(input.reasonCode) };
+    row.impact = { ...row.impact, status: input.status, reasonCode: D.safeReason(input.reasonCode) };
     if (row.attempts.length && D.TERMINAL.includes(row.status)) row.attempts.at(-1).impact = clone(row.impact);
+  });
+  const pinPredictionSnapshot = input => update(input, row => {
+    const P = require('./forecastPredictionImpactDomain');
+    if (row.impact.prediction) D.fail('SNAPSHOT_ALREADY_PINNED');
+    if (row.status !== 'RUNNING' || P.promoted(row)) D.fail('SNAPSHOT_NOT_AVAILABLE');
+    if (input.snapshot) P.validatePin(input.snapshot, row);
+    row.impact.prediction = { kind: 'MODEL_ATTRIBUTED_IMPACT', snapshot: input.snapshot ? clone(input.snapshot) : null,
+      captureReason: input.snapshot ? null : D.safeReason(input.reasonCode || 'SNAPSHOT_NOT_AVAILABLE') };
+  });
+  const finalizePredictionImpact = input => update(input, (row, now) => {
+    const P = require('./forecastPredictionImpactDomain');
+    if (row.impact.prediction?.finalizedAt) D.fail('IMPACT_ALREADY_FINALIZED');
+    if (!D.TERMINAL.includes(row.status) || !P.promoted(row)) D.fail('IMPACT_REQUIRES_PROMOTION');
+    const outcome = P.buildPrediction(row, input.results || [],
+      D.safeReason(input.reasonCode || row.impact.prediction?.captureReason));
+    outcome.prediction.finalizedAt = now;
+    P.checkSize(outcome.prediction);
+    row.impact = outcome;
+    if (row.attempts.length) row.attempts.at(-1).impact = clone(row.impact);
   });
   const mark = status => input => transitionExecution({ ...input, status });
   const updateRunningMetadata = input => update(input, row => {
@@ -286,7 +311,7 @@ function createForecastMlUpdateExecutionService({ repository = productionReposit
     row.impact = { status: 'NOT_APPLICABLE', reasonCode: null };
   });
   return Object.freeze({ createExecution, getExecution, findExecutionByManualRequest, findExecutionByGithubRun, findExecutionByCliInvocation,
-    resumeInterruptedExecution,
+    resumeInterruptedExecution, pinPredictionSnapshot, finalizePredictionImpact,
     bindExecutionRun,
     updateRunningMetadata,
     withSession: session => {
