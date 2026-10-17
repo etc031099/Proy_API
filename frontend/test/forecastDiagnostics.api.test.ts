@@ -21,6 +21,28 @@ describe('authenticated forecast diagnostics API', () => {
     expect(get).toHaveBeenCalledWith('/intelligence/health/diagnostics', expect.objectContaining({ timeout: 15_000 }));
   });
 
+  it('reads the manual update status through the authenticated client', async () => {
+    const instance = (apiClient as unknown as { instance: { get: (path: string, config?: unknown) => Promise<unknown> } }).instance;
+    const get = vi.spyOn(instance, 'get').mockResolvedValue({ status: 200,
+      data: { success: true, data: { dataVersion: '83', closedThrough: '2026-10-16', horizons: [] } } });
+    await expect(apiClient.getForecastMlUpdateStatus()).resolves.toMatchObject({ httpStatus: 200,
+      data: { dataVersion: '83' } });
+    expect(get).toHaveBeenCalledWith('/intelligence/forecast/ml-update/status', expect.objectContaining({ timeout: 15_000 }));
+  });
+
+  it('posts exactly an empty body and sanitizes API failures', async () => {
+    const instance = (apiClient as unknown as { instance: { post: (path: string, body: unknown, config?: unknown) => Promise<unknown> } }).instance;
+    const post = vi.spyOn(instance, 'post').mockResolvedValueOnce({ status: 202,
+      data: { success: true, data: { requestStatus: 'REQUEST_ACCEPTED', dispatchStatus: 'DISPATCHED' } } })
+      .mockResolvedValueOnce({ status: 429, data: { success: false, code: 'ML_UPDATE_RATE_LIMITED', message: 'private' } });
+    await expect(apiClient.requestForecastMlUpdate()).resolves.toMatchObject({ httpStatus: 202,
+      data: { requestStatus: 'REQUEST_ACCEPTED' } });
+    expect(post).toHaveBeenNthCalledWith(1, '/intelligence/forecast/ml-update/request', {},
+      expect.objectContaining({ timeout: 90_000, validateStatus: expect.any(Function) }));
+    await expect(apiClient.requestForecastMlUpdate()).resolves.toMatchObject({ httpStatus: 429, code: 'ML_UPDATE_RATE_LIMITED' });
+    expect(post.mock.calls[0][1]).toEqual({});
+  });
+
   it('normalizes 401, 503 and network failures without exposing error internals', async () => {
     const instance = (apiClient as unknown as { instance: { get: (path: string, config?: unknown) => Promise<unknown> } }).instance;
     const get = vi.spyOn(instance, 'get');

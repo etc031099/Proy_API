@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BusinessIntelligenceDashboard } from '@/components/business-intelligence/BusinessIntelligenceDashboard';
 import { apiClient } from '@/lib/api';
@@ -69,6 +69,12 @@ describe('business intelligence dashboard', () => {
     vi.spyOn(apiClient, 'getForecastModelDiagnostics').mockResolvedValue({ httpStatus: 200, data: activeForecastFixture });
     vi.spyOn(apiClient, 'getHealthDiagnostics').mockResolvedValue({ httpStatus: 200, data: { httpStatus: 200,
       dependencyStatus: { inventory: 'READY', forecast: 'READY', supplier: 'READY', healthAssembly: 'READY' }, reasonCode: null, elapsedMs: 12 } });
+    const mlHorizon = (horizonDays: 7 | 14) => ({
+      horizonDays, activeModelVersion: 1, trainedDataVersion: '83', pending: false, currentlyRunning: false, trigger: 'AUTO' as const,
+      lastRequestAt: null, lastAttemptAt: null, lastEvaluatedAt: null, lastResult: null, lastEvaluationReason: null, eligibility: 'NO_PENDING_WORK', nextEligibleAt: null,
+      requestStatus: 'LAST_RESULT_NO_PENDING', dispatchStatus: null, availableOrigins: 0, requiredOrigins: 107 as const,
+    });
+    vi.spyOn(apiClient, 'getForecastMlUpdateStatus').mockResolvedValue({ httpStatus: 200, data: { dataVersion: '83', closedThrough: '2026-10-16', horizons: [mlHorizon(7), mlHorizon(14)] } });
     vi.spyOn(apiClient, 'getForecastModelEvaluation').mockRejectedValue(new Error('Evaluation not part of these LIVE fixtures'));
   });
 
@@ -315,6 +321,7 @@ describe('business intelligence dashboard', () => {
     expect(screen.queryByText('Importancia económica (ABC)')).toBeNull();
     fireEvent.click(screen.getByRole('tab', { name: 'Inventario' }));
     expect(await screen.findByText('Estabilidad de demanda (XYZ)')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: /Estabilidad de demanda \(XYZ\)/ }).textContent).toBe('Estabilidad de demanda (XYZ)');
     expect(screen.queryByText('Importancia económica (ABC)')).toBeNull();
     expect(screen.queryByText(/ABC/)).toBeNull();
     expect(screen.getByText('Riesgo de inventario')).toBeTruthy();
@@ -331,6 +338,18 @@ describe('business intelligence dashboard', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Inventario' }));
     expect(await screen.findByText('Importancia económica (ABC)')).toBeTruthy();
     expect(screen.getByText('Estabilidad de demanda (XYZ)')).toBeTruthy();
+  });
+
+  it('shows Health as partial independently when its displayed Forecast, Inventory and Suppliers dependencies are ready', async () => {
+    vi.spyOn(apiClient, 'getHealthDiagnostics').mockResolvedValue({ httpStatus: 200, data: { httpStatus: 200,
+      dependencyStatus: { inventory: 'READY', forecast: 'READY', supplier: 'READY', healthAssembly: 'PARTIAL' }, reasonCode: null, elapsedMs: 12 } });
+    render(<BusinessIntelligenceDashboard />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Predicción' }));
+    const diagnosticPanel = screen.getByLabelText('Estado del ML');
+    await waitFor(() => expect(within(diagnosticPanel).getByText('Ensamblado Health').nextElementSibling?.textContent).toBe('Parcial'));
+    expect(within(diagnosticPanel).getByText('Forecast').nextElementSibling?.textContent).toBe('Listo');
+    expect(within(diagnosticPanel).getByText('Inventario').nextElementSibling?.textContent).toBe('Listo');
+    expect(within(diagnosticPanel).getByText('Proveedores').nextElementSibling?.textContent).toBe('Listo');
   });
 
   it('does not render unavailable LIVE risk counts as zero or as LOW', async () => {

@@ -127,6 +127,44 @@ export interface AuthenticatedDiagnosticResult<T> {
   data?: T;
   code?: string;
 }
+export type ForecastMlUpdateRequestStatus = 'REQUEST_ACCEPTED' | 'ALREADY_PENDING' | 'RUNNING';
+export interface ForecastMlUpdateRequestResult {
+  requestStatus: ForecastMlUpdateRequestStatus;
+  trigger: 'MANUAL';
+  pending: boolean;
+  horizons: Array<7 | 14>;
+  dispatchStatus: 'DISPATCHED' | 'DEFERRED' | 'RESERVED' | 'NOT_REQUESTED';
+  messageCode: string;
+}
+export type ForecastMlUpdateResult = 'LAST_RESULT_NO_PENDING' | 'LAST_RESULT_INSUFFICIENT_HISTORY'
+  | 'LAST_RESULT_REJECTED' | 'LAST_RESULT_PROMOTED' | 'LAST_RESULT_FAILED' | 'NOT_ELIGIBLE_YET' | null;
+export type ForecastMlUpdateReason = 'NO_PENDING_WORK' | 'DEBOUNCE_NOT_ELAPSED' | 'NOT_MATURE'
+  | 'COOLDOWN_ACTIVE' | 'PREVIOUS_FAILURE_NOT_RETRYABLE' | 'NO_PROMOTION_INSUFFICIENT_HISTORY'
+  | 'REJECTED' | 'PROMOTED' | 'FAILED' | null;
+export interface ForecastMlUpdateHorizonStatus {
+  horizonDays: 7 | 14;
+  activeModelVersion: number | null;
+  trainedDataVersion: string | number | null;
+  pending: boolean;
+  currentlyRunning: boolean;
+  trigger: 'AUTO' | 'MANUAL';
+  lastRequestAt: string | null;
+  lastAttemptAt: string | null;
+  lastEvaluatedAt: string | null;
+  lastResult: ForecastMlUpdateResult;
+  lastEvaluationReason: ForecastMlUpdateReason;
+  eligibility: string;
+  nextEligibleAt: string | null;
+  requestStatus: string;
+  dispatchStatus: 'RESERVED' | 'DISPATCHED' | 'DEFERRED' | null;
+  availableOrigins: number | null;
+  requiredOrigins: 107;
+}
+export interface ForecastMlUpdateStatus {
+  dataVersion: string | number;
+  closedThrough: string;
+  horizons: [ForecastMlUpdateHorizonStatus, ForecastMlUpdateHorizonStatus];
+}
 export interface ProductInventory {
   asOf: string;
   timezone: string;

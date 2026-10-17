@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { apiClient } from '@/lib/api';
 import type { AuthenticatedDiagnosticResult, ForecastActiveModel, ForecastActiveModels, HealthDiagnostic } from '@/types/businessIntelligence';
+import { ForecastMlUpdatePanel } from './ForecastMlUpdatePanel';
 
 type Props = { onForecastModelsChange: (models: ForecastActiveModel[] | null) => void };
 type PanelState = 'loading' | 'ready';
@@ -110,9 +111,9 @@ export function ForecastDiagnosticsPanel({ onForecastModelsChange }: Props) {
   useEffect(() => { void refresh(); }, [refresh, requestNumber]);
 
   return <Card aria-label="Estado del ML">
-    <CardHeader><div className="flex flex-wrap items-start justify-between gap-3"><div><CardTitle>Estado del ML</CardTitle><CardDescription>Diagnóstico autenticado de solo lectura. No entrena ni modifica datos.</CardDescription></div>
+    <CardHeader><div className="flex flex-wrap items-start justify-between gap-3"><div><CardTitle>Estado del ML</CardTitle><CardDescription>Estado del pronóstico y solicitudes de evaluación bajo la política vigente.</CardDescription></div>
       <Button type="button" size="sm" variant="outline" disabled={state === 'loading'} onClick={() => setRequestNumber(value => value + 1)}><RefreshCw className="mr-2 h-4 w-4" />{state === 'loading' ? 'Consultando…' : 'Actualizar estado'}</Button></div></CardHeader>
-    <CardContent className="space-y-4">{state === 'loading' ? <p role="status" className="text-sm text-muted-foreground">Consultando estado del servicio…</p> : <>
+    <CardContent className="space-y-4"><ForecastMlUpdatePanel />{state === 'loading' ? <p role="status" className="text-sm text-muted-foreground">Consultando estado del servicio…</p> : <>
       {forecast && <ForecastSection result={forecast} />}
       {health && <HealthSection result={health} />}
       {!forecast && !health && <p role="status" className="text-sm text-muted-foreground">Servicio temporalmente no disponible.</p>}

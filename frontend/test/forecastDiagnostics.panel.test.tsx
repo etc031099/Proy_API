@@ -23,6 +23,10 @@ describe('forecast serving diagnostics panel', () => {
     onForecastModelsChange.mockReset();
     vi.spyOn(apiClient, 'getForecastModelDiagnostics').mockResolvedValue(ok(forecast));
     vi.spyOn(apiClient, 'getHealthDiagnostics').mockResolvedValue(ok(health));
+    vi.spyOn(apiClient, 'getForecastMlUpdateStatus').mockResolvedValue(ok({ dataVersion: '83', closedThrough: '2026-10-16', horizons: [
+      { horizonDays: 7, activeModelVersion: 1, trainedDataVersion: '83', pending: false, currentlyRunning: false, trigger: 'AUTO', lastRequestAt: null, lastAttemptAt: null, lastEvaluatedAt: null, lastResult: null, lastEvaluationReason: null, eligibility: 'NO_PENDING_WORK', nextEligibleAt: null, requestStatus: 'LAST_RESULT_NO_PENDING', dispatchStatus: null, availableOrigins: 0, requiredOrigins: 107 },
+      { horizonDays: 14, activeModelVersion: 1, trainedDataVersion: '83', pending: false, currentlyRunning: false, trigger: 'AUTO', lastRequestAt: null, lastAttemptAt: null, lastEvaluatedAt: null, lastResult: null, lastEvaluationReason: null, eligibility: 'NO_PENDING_WORK', nextEligibleAt: null, requestStatus: 'LAST_RESULT_NO_PENDING', dispatchStatus: null, availableOrigins: 0, requiredOrigins: 107 },
+    ] }));
   });
   afterEach(() => cleanup());
 
@@ -88,7 +92,7 @@ describe('forecast serving diagnostics panel', () => {
   it('uses only the read-only diagnostics and keeps active models for forecast detail', async () => {
     render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
     await screen.findByText('ACTIVE_POINTER_MISSING');
-    expect(screen.getByText(/No entrena ni modifica datos/)).toBeTruthy();
+    expect(screen.getByText(/no garantiza una nueva versión/)).toBeTruthy();
     expect(onForecastModelsChange).toHaveBeenCalledWith(forecast.models);
     expect(vi.mocked(apiClient.getForecastModelDiagnostics)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(apiClient.getHealthDiagnostics)).toHaveBeenCalledTimes(1);

@@ -29,6 +29,8 @@ export default defineConfig({
       'test/businessIntelligenceExtended.api.test.ts',
       'test/forecastDiagnostics.api.test.ts',
       'test/forecastDiagnostics.panel.test.tsx',
+      'test/forecastMlUpdate.api.test.ts',
+      'test/forecastMlUpdate.panel.test.tsx',
       'test/intelligenceReadCache.test.ts',
       'test/businessIntelligenceExtended.component.test.tsx',
     ],
