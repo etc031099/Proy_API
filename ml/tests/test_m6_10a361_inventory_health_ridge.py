@@ -76,36 +76,45 @@ class RidgeInventoryContractTests(unittest.TestCase):
 
 
 class LiveInventoryRealLeadTimeTests(unittest.TestCase):
-    def _fixture(self, *, lead=6.28, sigma_lead=1.0, history_days=28, p7=17.5, p14=42.25):
+    def _fixture(self, *, lead=6.28, sigma_lead=1.0, history_days=28, p7=17.5, p14=42.25,
+                 unit_cost=50, product_count=1):
         cutoff = date(2026, 10, 12)
-        history = [{"localDate": (cutoff - timedelta(days=i)).isoformat(), "unitsSold": 1 + i % 3,
-                    "availableHours": 15, "onHandUsableAtOrigin": 10,
-                    "effectiveUnitCostAtSale": 50} for i in range(history_days)]
-        product = {"sku": "SKU-1", "productKey": "P1", "name": "Fixture", "categoryCode": "CAT",
-                   "minStockInitial": 2, "preferredSupplierCode": "S1", "supplierOffers": []}
-        if lead is not None:
-            product['leadTimeDays'] = lead
+        skus = [f"SKU-{index + 1}" for index in range(product_count)]
+        products = []
+        daily_by_sku = {}
+        for index, sku in enumerate(skus):
+            history = [{"localDate": (cutoff - timedelta(days=i)).isoformat(), "unitsSold": 1 + i % 3,
+                        "availableHours": 15, "onHandUsableAtOrigin": 10,
+                        "effectiveUnitCostAtSale": unit_cost} for i in range(history_days)]
+            product = {"sku": sku, "productKey": f"P{index + 1}", "name": "Fixture", "categoryCode": "CAT",
+                       "minStockInitial": 2, "preferredSupplierCode": "S1", "supplierOffers": []}
+            if lead is not None:
+                product['leadTimeDays'] = lead
+            products.append(product)
+            daily_by_sku[sku] = history
         supplier = {"supplierCode": "S1", "displayName": "Fixture supplier"}
         if sigma_lead is not None:
             supplier['leadTimeStdDays'] = sigma_lead
         adapter = LiveInventorySupplierAdapter(
-            {"products": [{"sku": "SKU-1", "productKey": "P1"}], "purchases": [],
+            {"products": [{"sku": item["sku"], "productKey": item["productKey"]} for item in products], "purchases": [],
              "purchaseLines": [], "sales": [], "saleItems": []},
-            {"products": [product], "suppliers": [supplier], "offers": {}},
-            SimpleNamespace(dataset=SimpleNamespace(daily_by_sku={"SKU-1": history})),
+            {"products": products, "suppliers": [supplier], "offers": {}},
+            SimpleNamespace(dataset=SimpleNamespace(daily_by_sku=daily_by_sku)),
             SimpleNamespace(_offers=lambda _cutoff: {}))
         live = SimpleNamespace(as_of_date=cutoff, data_version='fixture', context_hash='fixture',
             snapshot=SimpleNamespace(metadata=SimpleNamespace(businessId='B', scenarioId='V3'),
                 purchases=[], transactionChanges=[], closedSalesDays=[], sales=[]),
-            products_by_key={'P1': product}, products_by_sku={'SKU-1': product},
+            products_by_key={item["productKey"]: item for item in products},
+            products_by_sku={item["sku"]: item for item in products},
             stock_for=lambda **_kwargs: 4, cancelled_transaction_keys=frozenset(), received_by_purchase_line={},
             freshness=lambda domain: {'mode': 'LIVE'})
-        request = SimpleNamespace(mode='detail', skus=['SKU-1'], limit=5, offset=0,
+        request = SimpleNamespace(mode='detail', skus=skus, limit=max(5, product_count), offset=0,
             risk=None, abc=None, xyz=None, flag=None, metric='reorder')
-        forecasts = [{'sku': 'SKU-1', 'horizon7Status': 'READY', 'horizon14Status': 'READY',
+        forecasts = [{'sku': sku, 'horizon7Status': 'READY', 'horizon14Status': 'READY',
             'expectedUnitsNext1d': None, 'expectedUnitsNext7d': p7, 'expectedUnitsNext14d': p14,
-            'modelVersion7': 1, 'modelVersion14': 1, 'cutoffDate': cutoff.isoformat(), 'status': 'READY'}]
-        return adapter, live, request, forecasts, history
+            'modelVersion7': 1, 'modelVersion14': 1, 'cutoffDate': cutoff.isoformat(), 'status': 'READY'}
+            for sku in skus]
+        return adapter, live, request, forecasts, daily_by_sku[skus[0]]
 
     def _read(self, **kwargs):
         adapter, live, request, forecasts, history = self._fixture(**kwargs)
@@ -210,6 +219,24 @@ class LiveInventoryRealLeadTimeTests(unittest.TestCase):
                 self.assertIsNone(row['recommendation']['recommendedQty'])
                 self.assertEqual(row['risk']['reasonCode'], 'INSUFFICIENT_FORECAST_INPUTS')
                 self.assertEqual(row['coverage']['availabilityStatus'], 'AVAILABLE')
+
+    def test_zero_abc_value_counts_all_80_as_unclassified_and_preserves_xyz_and_inventory(self):
+        adapter, live, request, forecasts, _ = self._fixture(unit_cost=0, product_count=80)
+        request.mode = 'summary'
+        request.skus = []
+        aggregate, _ = adapter.inventory_data(request, live, forecasts)
+        self.assertEqual(aggregate['summary']['products'], 80)
+        self.assertEqual(aggregate['abcCounts'], {"A": 0, "B": 0, "C": 0, "UNCLASSIFIED": 80})
+        self.assertEqual(sum(aggregate['abcCounts'].values()), 80)
+        self.assertEqual(sum(aggregate['xyzCounts'].values()), 80)
+
+        live_detail = self._read(unit_cost=0)[1]
+        baseline = self._read(unit_cost=50)[1]
+        self.assertEqual(live_detail['classification']['abc'], 'UNCLASSIFIED')
+        self.assertEqual(live_detail['classification']['abcXyz'], 'UNCLASSIFIED')
+        self.assertEqual(live_detail['classification']['xyz'], baseline['classification']['xyz'])
+        self.assertEqual(live_detail['risk'], baseline['risk'])
+        self.assertEqual(live_detail['recommendation'], baseline['recommendation'])
 
 
 if __name__ == "__main__":

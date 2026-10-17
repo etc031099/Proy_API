@@ -555,7 +555,7 @@ class LiveInventorySupplierAdapter:
             rows.append(row)
         known = sum(row["stock"]["onHand"] is not None for row in rows)
         abc_counts = {key: sum(row["classification"]["abc"] == key for row in rows) for key in ("A", "B", "C")}
-        abc_counts["UNCLASSIFIED"] = sum(row["classification"]["abc"] is None for row in rows)
+        abc_counts["UNCLASSIFIED"] = sum(row["classification"]["abc"] not in {"A", "B", "C"} for row in rows)
         xyz_counts = {key: sum(row["classification"]["xyz"] == key for row in rows) for key in ("X", "Y", "Z")}
         xyz_counts["UNCLASSIFIED"] = sum(row["classification"]["xyz"] is None for row in rows)
         matrix = {f"{a}-{x}": 0 for a in "ABC" for x in "XYZ"}
