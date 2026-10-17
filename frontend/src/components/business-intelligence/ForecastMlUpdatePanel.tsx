@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, RefreshCw } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -8,7 +8,9 @@ import { apiClient } from '@/lib/api';
 import type { AuthenticatedDiagnosticResult, ForecastMlUpdateHorizonStatus, ForecastMlUpdateStatus } from '@/types/businessIntelligence';
 
 const POLL_INTERVAL_MS = 8_000;
-const POLL_WINDOW_MS = 2 * 60_000;
+const SLOW_POLL_INTERVAL_MS = 15_000;
+const FAST_POLL_WINDOW_MS = 2 * 60_000;
+const POLL_WINDOW_MS = 8 * 60_000;
 const safeCode = (value: unknown) => typeof value === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(value) ? value : null;
 
 export function nextAutomaticReview(now = new Date()): string {
@@ -81,25 +83,52 @@ function reasonMessage(status: ForecastMlUpdateStatus | null) {
   return null;
 }
 
+function completionMessage(status: ForecastMlUpdateStatus): string {
+  if (status.horizons.some(row => row.lastResult === 'LAST_RESULT_FAILED')) {
+    return 'No se pudo completar la evaluación. El modelo activo se conserva; puedes consultar el estado nuevamente.';
+  }
+  if (status.horizons.some(row => row.lastResult === 'LAST_RESULT_PROMOTED')) {
+    return 'Evaluación completada. Se activó una nueva versión.';
+  }
+  if (status.horizons.some(row => row.lastResult === 'LAST_RESULT_REJECTED')) {
+    return 'Evaluación completada. El candidato no cumplió los criterios y se conserva el modelo activo.';
+  }
+  if (status.horizons.every(row => row.lastResult === 'LAST_RESULT_NO_PENDING')) {
+    return 'Evaluación completada. No fue necesario cambiar el modelo.';
+  }
+  return reasonMessage(status) || 'Estado actualizado. Las versiones activas siguen disponibles.';
+}
+
+const isSettled = (status: ForecastMlUpdateStatus) => status.horizons.length === 2
+  && status.horizons.every(row => !row.pending && !row.currentlyRunning);
+
 function technicalValue(value: unknown) {
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   return safeCode(value) || (typeof value === 'string' && /^\d{1,20}$/.test(value) ? value : 'No disponible');
 }
 
-export function ForecastMlUpdatePanel() {
+export function ForecastMlUpdatePanel({ refreshToken = 0 }: { refreshToken?: number }) {
   const [status, setStatus] = useState<ForecastMlUpdateStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [requestActive, setRequestActive] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const requestLock = useRef(false);
+  const requestActiveRef = useRef(false);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelPollWait = useRef<(() => void) | null>(null);
   const alive = useRef(true);
   const refreshStatus = useCallback(async () => {
     const result = await apiClient.getForecastMlUpdateStatus();
     if (!alive.current) return result;
     if (result.httpStatus >= 200 && result.httpStatus < 300 && result.data) {
       setStatus(result.data); setStatusError(null);
+      if (requestActiveRef.current && isSettled(result.data)) {
+        requestActiveRef.current = false;
+        setRequestActive(false);
+        setMessage(completionMessage(result.data));
+      }
     } else {
       setStatusError(result.httpStatus === 401 ? 'Sesión no autorizada. Inicia sesión nuevamente.'
         : 'No se pudo consultar el estado del ML. Puedes reintentar.');
@@ -115,29 +144,60 @@ export function ForecastMlUpdatePanel() {
       alive.current = false;
       if (pollTimer.current) clearTimeout(pollTimer.current);
       pollTimer.current = null;
+      cancelPollWait.current?.();
+      cancelPollWait.current = null;
     };
   }, [refreshStatus]);
 
+  useEffect(() => {
+    if (refreshToken > 0) void refreshStatus();
+  }, [refreshStatus, refreshToken]);
+
+  const rows = useMemo(() => status?.horizons || [], [status]);
+
   const pollAfterRequest = useCallback(async () => {
-    const expiresAt = Date.now() + POLL_WINDOW_MS;
+    const startedAt = Date.now();
+    const expiresAt = startedAt + POLL_WINDOW_MS;
     while (alive.current && Date.now() < expiresAt) {
       await new Promise<void>(resolve => {
-        pollTimer.current = setTimeout(() => { pollTimer.current = null; resolve(); }, POLL_INTERVAL_MS);
+        const elapsed = Date.now() - startedAt;
+        const interval = elapsed < FAST_POLL_WINDOW_MS ? POLL_INTERVAL_MS : SLOW_POLL_INTERVAL_MS;
+        const delay = Math.min(interval, Math.max(0, expiresAt - Date.now()));
+        const finish = () => { pollTimer.current = null; cancelPollWait.current = null; resolve(); };
+        cancelPollWait.current = finish;
+        pollTimer.current = setTimeout(finish, delay);
       });
       if (!alive.current) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') continue;
       const result = await apiClient.getForecastMlUpdateStatus();
       if (!alive.current) return;
       if (result.httpStatus >= 200 && result.httpStatus < 300 && result.data) {
         setStatus(result.data); setStatusError(null);
-        if (result.data.horizons.every(row => !row.pending && !row.currentlyRunning)) return;
+        if (isSettled(result.data)) {
+          // One final read prevents stale intermediate status from ending the follow-up.
+          const finalResult = await apiClient.getForecastMlUpdateStatus();
+          if (!alive.current) return;
+          if (finalResult.httpStatus >= 200 && finalResult.httpStatus < 300 && finalResult.data) {
+            setStatus(finalResult.data); setStatusError(null);
+            if (isSettled(finalResult.data)) {
+              requestActiveRef.current = false;
+              setRequestActive(false);
+              setMessage(completionMessage(finalResult.data));
+              return;
+            }
+          }
+        }
       } else if (result.httpStatus === 401) {
         setStatusError('Sesión no autorizada. Inicia sesión nuevamente.'); return;
       }
     }
+    if (alive.current && requestActiveRef.current) {
+      setMessage('La evaluación continúa en segundo plano. Puedes actualizar el estado manualmente más tarde.');
+    }
   }, []);
 
   const submit = useCallback(async () => {
-    if (requestLock.current) return;
+    if (requestLock.current || requestActiveRef.current || rows.some(row => row.pending || row.currentlyRunning)) return;
     requestLock.current = true; setSending(true); setMessage('Solicitando actualización…');
     try {
       const result = await apiClient.requestForecastMlUpdate();
@@ -149,8 +209,13 @@ export function ForecastMlUpdatePanel() {
       }
       setMessage(requestMessage(result));
       const latest = await refreshStatus();
-      if (result.data.pending && latest?.data?.horizons.some(row => row.pending || row.currentlyRunning)) {
+      const hasWork = Boolean(result.data.pending || latest?.data?.horizons.some(row => row.pending || row.currentlyRunning));
+      if (hasWork) {
+        requestActiveRef.current = true;
+        setRequestActive(true);
         void pollAfterRequest();
+      } else if (latest?.data) {
+        setMessage(completionMessage(latest.data));
       }
     } catch {
       if (alive.current) setMessage('No se pudo confirmar la solicitud. Revisa el estado antes de volver a intentar.');
@@ -158,9 +223,8 @@ export function ForecastMlUpdatePanel() {
       requestLock.current = false;
       if (alive.current) setSending(false);
     }
-  }, [pollAfterRequest, refreshStatus]);
+  }, [pollAfterRequest, refreshStatus, rows]);
 
-  const rows = status?.horizons || [];
   const byHorizon = (horizon: 7 | 14) => rows.find(row => row.horizonDays === horizon);
   const currentHeadline = headline(status, statusError);
   const explanation = reasonMessage(status);
@@ -169,7 +233,7 @@ export function ForecastMlUpdatePanel() {
   return <section aria-label="Actualización del ML" className="space-y-3 border-b pb-4">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div><h3 className="font-semibold">Actualización del ML</h3><p className="mt-1 text-sm text-muted-foreground">La solicitud utiliza el mismo proceso automático y no garantiza una nueva versión.</p></div>
-      <Button type="button" onClick={() => { void submit(); }} disabled={sending}>
+      <Button type="button" onClick={() => { void submit(); }} disabled={sending || requestActive || rows.some(row => row.pending || row.currentlyRunning)}>
         {sending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />}
         {sending ? 'Solicitando actualización…' : 'Actualizar ML ahora'}
       </Button>

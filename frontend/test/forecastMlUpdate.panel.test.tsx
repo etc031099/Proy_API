@@ -79,31 +79,59 @@ describe('Forecast manual ML update panel', () => {
     expect(screen.getByText(/NO_PROMOTION_INSUFFICIENT_HISTORY/)).toBeTruthy();
   });
 
-  it('polls each eight seconds and stops after both horizons settle', async () => {
+  it('polls each eight seconds, confirms completion with one final read and announces it', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date('2026-10-17T06:00:00Z'));
     const pending = { ...initialStatus, horizons: [horizon(7, { pending: true, trigger: 'MANUAL' }), horizon(14, { pending: true, trigger: 'MANUAL' })] } as ForecastMlUpdateStatus;
+    const settled = { ...initialStatus, horizons: [horizon(7, { lastResult: 'LAST_RESULT_NO_PENDING' }), horizon(14, { lastResult: 'LAST_RESULT_NO_PENDING' })] } as ForecastMlUpdateStatus;
     vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValueOnce(ok(initialStatus))
-      .mockResolvedValueOnce(ok(pending)).mockResolvedValueOnce(ok(initialStatus));
+      .mockResolvedValueOnce(ok(pending)).mockResolvedValueOnce(ok(settled)).mockResolvedValueOnce(ok(settled));
     render(<ForecastMlUpdatePanel />);
     await waitFor(() => expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole('button', { name: 'Actualizar ML ahora' }));
     await waitFor(() => expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(2));
     await vi.advanceTimersByTimeAsync(8_000);
-    await waitFor(() => expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(4));
+    expect(await screen.findByText('Evaluación completada. No fue necesario cambiar el modelo.')).toBeTruthy();
     await vi.advanceTimersByTimeAsync(24_000);
-    expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(3);
+    expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(4);
   });
 
-  it('limits a polling attempt to its bounded two-minute window', async () => {
+  it('keeps polling while a horizon is running even when it is no longer pending', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const running = { ...initialStatus, horizons: [horizon(7, { pending: false, currentlyRunning: true }), horizon(14)] } as ForecastMlUpdateStatus;
+    const settled = { ...initialStatus, horizons: [horizon(7, { lastResult: 'LAST_RESULT_PROMOTED' }), horizon(14)] } as ForecastMlUpdateStatus;
+    vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValueOnce(ok(initialStatus))
+      .mockResolvedValueOnce(ok(running)).mockResolvedValueOnce(ok(settled)).mockResolvedValueOnce(ok(settled));
+    render(<ForecastMlUpdatePanel />);
+    await waitFor(() => expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Actualizar ML ahora' }));
+    await waitFor(() => expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(2));
+    await vi.advanceTimersByTimeAsync(8_000);
+    await waitFor(() => expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(4));
+    expect(await screen.findByText('Evaluación completada. Se activó una nueva versión.')).toBeTruthy();
+  });
+
+  it('switches to slower polling after two minutes and stops after an eight-minute window', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const pending = { ...initialStatus, horizons: [horizon(7, { pending: true }), horizon(14, { pending: true })] } as ForecastMlUpdateStatus;
-    vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValue(ok(pending));
+    vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValueOnce(ok(initialStatus)).mockResolvedValue(ok(pending));
     render(<ForecastMlUpdatePanel />); await waitFor(() => expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole('button', { name: 'Actualizar ML ahora' }));
     await waitFor(() => expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(2));
     await vi.advanceTimersByTimeAsync(120_000);
-    expect(vi.mocked(apiClient.getForecastMlUpdateStatus).mock.calls.length).toBeLessThanOrEqual(17);
+    expect(vi.mocked(apiClient.getForecastMlUpdateStatus).mock.calls.length).toBe(17);
+    await vi.advanceTimersToNextTimerAsync();
+    expect(vi.mocked(apiClient.getForecastMlUpdateStatus).mock.calls.length).toBe(18);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(vi.mocked(apiClient.getForecastMlUpdateStatus).mock.calls.length).toBe(18);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(vi.mocked(apiClient.getForecastMlUpdateStatus).mock.calls.length).toBe(19);
+    await vi.advanceTimersByTimeAsync(400_000);
+    expect(vi.mocked(apiClient.getForecastMlUpdateStatus).mock.calls.length).toBeLessThanOrEqual(44);
+    expect(await screen.findByText('La evaluación continúa en segundo plano. Puedes actualizar el estado manualmente más tarde.')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Actualizar ML ahora' }).hasAttribute('disabled')).toBe(true);
   });
 
   it('prevents double clicks and shows a recoverable API error', async () => {
@@ -124,6 +152,13 @@ describe('Forecast manual ML update panel', () => {
     expect(screen.getByText('14 días')).toBeTruthy();
     expect(screen.getByText('1 día')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Actualizar ML ahora' })).toBeTruthy();
+  });
+
+  it('refreshes worker status when the existing diagnostics refresh button is used', async () => {
+    render(<ForecastDiagnosticsPanel onForecastModelsChange={vi.fn()} />);
+    await waitFor(() => expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Actualizar estado' }));
+    await waitFor(() => expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(2));
   });
 
   it('computes the next scheduled UTC cron minute as Peru local time', () => {

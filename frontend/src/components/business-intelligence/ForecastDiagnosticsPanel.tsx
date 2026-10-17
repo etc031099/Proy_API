@@ -113,7 +113,7 @@ export function ForecastDiagnosticsPanel({ onForecastModelsChange }: Props) {
   return <Card aria-label="Estado del ML">
     <CardHeader><div className="flex flex-wrap items-start justify-between gap-3"><div><CardTitle>Estado del ML</CardTitle><CardDescription>Estado del pronóstico y solicitudes de evaluación bajo la política vigente.</CardDescription></div>
       <Button type="button" size="sm" variant="outline" disabled={state === 'loading'} onClick={() => setRequestNumber(value => value + 1)}><RefreshCw className="mr-2 h-4 w-4" />{state === 'loading' ? 'Consultando…' : 'Actualizar estado'}</Button></div></CardHeader>
-    <CardContent className="space-y-4"><ForecastMlUpdatePanel />{state === 'loading' ? <p role="status" className="text-sm text-muted-foreground">Consultando estado del servicio…</p> : <>
+    <CardContent className="space-y-4"><ForecastMlUpdatePanel refreshToken={requestNumber} />{state === 'loading' ? <p role="status" className="text-sm text-muted-foreground">Consultando estado del servicio…</p> : <>
       {forecast && <ForecastSection result={forecast} />}
       {health && <HealthSection result={health} />}
       {!forecast && !health && <p role="status" className="text-sm text-muted-foreground">Servicio temporalmente no disponible.</p>}
