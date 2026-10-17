@@ -2,7 +2,7 @@ import axios, { AxiosInstance, AxiosError } from 'axios';
 import type { ForecastEvaluation } from '@/types/forecastEvaluation';
 import { ApiResponse, DemandForecastResponse, DemoV2RegisterData, DemoV3RegisterData } from '@/types';
 import type { AgentMessageRequest, AgentResponse, AgentConversationList, AgentConversationDetail } from '@/types/agent';
-import type { AnalyticsEnvelope, AssociationsAnalytics, AuthenticatedDiagnosticResult, BusinessHealthAnalytics, BusinessSummary, CustomerAnalyticsDetail, CustomersAnalytics, ForecastActiveModels, ForecastMlUpdateRequestResult, ForecastMlUpdateStatus, ForecastResponse, HealthDiagnostic, InventorySummary, ProductInventory, ProductOption, RelatedProductAnalytics, SalesAnalytics, SalesPeriod, SupplierAnalyticsDetail, SuppliersAnalytics } from '@/types/businessIntelligence';
+import type { AnalyticsEnvelope, AssociationsAnalytics, AuthenticatedDiagnosticResult, BusinessHealthAnalytics, BusinessSummary, CustomerAnalyticsDetail, CustomersAnalytics, ForecastActiveModels, ForecastMlUpdateExecutionDetail, ForecastMlUpdateHistoryPage, ForecastMlUpdateProductsPage, ForecastMlUpdateRequestResult, ForecastMlUpdateStatus, ForecastResponse, HealthDiagnostic, InventorySummary, ProductInventory, ProductOption, RelatedProductAnalytics, SalesAnalytics, SalesPeriod, SupplierAnalyticsDetail, SuppliersAnalytics } from '@/types/businessIntelligence';
 import type { CustomerClustering } from '@/types/customerClustering';
 import type { SalesAnomalies } from '@/types/salesAnomalies';
 import { IntelligenceReadCache, type IntelligenceRevision } from './intelligenceReadCache';
@@ -59,11 +59,11 @@ class ApiClient {
     const normalized = Object.entries(params || {}).filter(([, value]) => value !== undefined).sort(([a], [b]) => a.localeCompare(b));
     return this.intelligenceCache.read(JSON.stringify([path, normalized]), load, versioned);
   }
-  private async diagnosticRead<T>(path: string): Promise<AuthenticatedDiagnosticResult<T>> {
+  private async diagnosticRead<T>(path: string, params?: object): Promise<AuthenticatedDiagnosticResult<T>> {
     try {
       // Same Axios instance/interceptors as all dashboard requests; validateStatus
       // keeps 401 visible to this panel rather than triggering the global redirect.
-      const response = await this.instance.get(path, { timeout: 15_000, validateStatus: () => true });
+      const response = await this.instance.get(path, { ...(params ? { params } : {}), timeout: 15_000, validateStatus: () => true });
       const body = response.data as { success?: unknown; data?: T; code?: unknown } | undefined;
       const code = typeof body?.code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(body.code) ? body.code : undefined;
       return { httpStatus: response.status,
@@ -76,6 +76,15 @@ class ApiClient {
   }
   async getForecastMlUpdateStatus(): Promise<AuthenticatedDiagnosticResult<ForecastMlUpdateStatus>> {
     return this.diagnosticRead('/intelligence/forecast/ml-update/status');
+  }
+  async getForecastMlUpdateHistory(params: { limit?: number; cursor?: string } = {}): Promise<AuthenticatedDiagnosticResult<ForecastMlUpdateHistoryPage>> {
+    return this.diagnosticRead('/intelligence/forecast/ml-update/history', params);
+  }
+  async getForecastMlUpdateExecution(executionId: string): Promise<AuthenticatedDiagnosticResult<ForecastMlUpdateExecutionDetail>> {
+    return this.diagnosticRead(`/intelligence/forecast/ml-update/history/${encodeURIComponent(executionId)}`);
+  }
+  async getForecastMlUpdateProducts(executionId: string, params: { limit?: number; cursor?: string } = {}): Promise<AuthenticatedDiagnosticResult<ForecastMlUpdateProductsPage>> {
+    return this.diagnosticRead(`/intelligence/forecast/ml-update/history/${encodeURIComponent(executionId)}/products`, params);
   }
   async requestForecastMlUpdate(): Promise<AuthenticatedDiagnosticResult<ForecastMlUpdateRequestResult>> {
     try {

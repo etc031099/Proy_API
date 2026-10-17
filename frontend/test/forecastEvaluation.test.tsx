@@ -4,6 +4,7 @@ import { ForecastEvaluationPanel } from '@/components/business-intelligence/Fore
 import { BusinessIntelligenceDashboard } from '@/components/business-intelligence/BusinessIntelligenceDashboard';
 import { apiClient } from '@/lib/api';
 import type { ForecastEvaluation, ModelEvaluation } from '@/types/forecastEvaluation';
+import type { ForecastMlUpdateStatus } from '@/types/businessIntelligence';
 
 vi.mock('recharts', () => ({
   ResponsiveContainer: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -43,6 +44,7 @@ describe('forecast ML evidence and operative method', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.spyOn(apiClient, 'getForecastModelEvaluation').mockResolvedValue({ success: true, data: structuredClone(fixture) });
+    vi.spyOn(apiClient, 'getForecastMlUpdateHistory').mockResolvedValue({ httpStatus: 200, data: { items: [], page: { limit: 20, nextCursor: null } } });
   });
 
   it('renders API metrics and keeps evaluated/rejected HGB separate from statistical operation', async () => {
@@ -93,6 +95,34 @@ describe('forecast ML evidence and operative method', () => {
     expect(await screen.findByText('Baseline estadístico de referencia')).toBeTruthy();
     expect(forecast).not.toHaveBeenCalled();
     expect(screen.getAllByRole('tab')).toHaveLength(8);
+  });
+
+  it('keeps historical evidence collapsed and a history failure independent from ML status and Health', async () => {
+    vi.spyOn(apiClient, 'getForecastMlUpdateHistory').mockRejectedValue(new Error('private history error'));
+    vi.spyOn(apiClient, 'getForecastModelDiagnostics').mockResolvedValue({ httpStatus: 200, data: {
+      models: [{ horizonDays: 7, status: 'ACTIVE', activeModelStatus: 'ACTIVE', modelFamily: 'RIDGE_REGRESSION', recipeId: 'RIDGE' },
+        { horizonDays: 14, status: 'ACTIVE', activeModelStatus: 'ACTIVE', modelFamily: 'RIDGE_REGRESSION', recipeId: 'RIDGE' }],
+    } });
+    vi.spyOn(apiClient, 'getHealthDiagnostics').mockResolvedValue({ httpStatus: 200, data: {
+      httpStatus: 200, dependencyStatus: { inventory: 'READY', forecast: 'READY', supplier: 'READY', healthAssembly: 'READY' },
+      reasonCode: null, elapsedMs: 12,
+    } });
+    const horizonStatus = (horizonDays: 7 | 14) => ({ horizonDays, activeModelVersion: 1, trainedDataVersion: '83', pending: false,
+      currentlyRunning: false, trigger: 'AUTO' as const, lastRequestAt: null, lastAttemptAt: null, lastEvaluatedAt: null,
+      lastResult: null, lastEvaluationReason: null, eligibility: 'NO_PENDING_WORK', nextEligibleAt: null,
+      requestStatus: 'LAST_RESULT_NO_PENDING', dispatchStatus: null, availableOrigins: null, requiredOrigins: 107 as const });
+    vi.spyOn(apiClient, 'getForecastMlUpdateStatus').mockResolvedValue({ httpStatus: 200, data: {
+      dataVersion: '83', closedThrough: '2026-10-16', horizons: [horizonStatus(7), horizonStatus(14)],
+    } satisfies ForecastMlUpdateStatus });
+    render(<BusinessIntelligenceDashboard />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Predicción' }));
+    const historyError = await screen.findByRole('alert');
+    expect(historyError.textContent).toMatch(/pronósticos siguen disponibles/);
+    expect(await screen.findByText('Ensamblado Health')).toBeTruthy();
+    expect(screen.getByText('Modelo operacional actual: Ridge Regression para horizontes acumulados de 7 y 14 días. MA28 es un baseline estadístico de referencia. HGB es histórico/experimental y no se utiliza para serving LIVE.')).toBeTruthy();
+    const historical = screen.getByText('Evidencia histórica y comparación de modelos').closest('details');
+    expect(historical?.open).toBe(false);
+    expect(screen.getByText(/No corresponde al modelo LIVE utilizado actualmente/)).toBeTruthy();
   });
 
   it('uses the existing authenticated API client endpoint', async () => {

@@ -81,6 +81,7 @@ describe('business intelligence dashboard', () => {
       requestStatus: 'LAST_RESULT_NO_PENDING', dispatchStatus: null, availableOrigins: 0, requiredOrigins: 107 as const,
     });
     vi.spyOn(apiClient, 'getForecastMlUpdateStatus').mockResolvedValue({ httpStatus: 200, data: { dataVersion: '83', closedThrough: '2026-10-16', horizons: [mlHorizon(7), mlHorizon(14)] } });
+    vi.spyOn(apiClient, 'getForecastMlUpdateHistory').mockResolvedValue({ httpStatus: 200, data: { items: [], page: { limit: 20, nextCursor: null } } });
     vi.spyOn(apiClient, 'getForecastModelEvaluation').mockRejectedValue(new Error('Evaluation not part of these LIVE fixtures'));
   });
 

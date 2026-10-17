@@ -165,6 +165,83 @@ export interface ForecastMlUpdateStatus {
   closedThrough: string;
   horizons: [ForecastMlUpdateHorizonStatus, ForecastMlUpdateHorizonStatus];
 }
+export type ForecastMlExecutionStatus = 'REQUESTED' | 'PENDING' | 'RUNNING' | 'DEFERRED' | 'NOT_ELIGIBLE'
+  | 'EVALUATED_NO_PROMOTION' | 'PROMOTED' | 'PARTIAL' | 'FAILED' | 'INTERRUPTED' | 'NO_PENDING_WORK' | 'UNKNOWN';
+export interface ForecastMlImpactSummary {
+  status: 'NOT_APPLICABLE' | 'PENDING' | 'COMPLETE' | 'PARTIAL' | 'NOT_CAPTURED';
+  reasonCode: string | null;
+  summary: Record<string, number | Record<string, number> | null> | null;
+}
+export interface ForecastMlExecutionHorizon {
+  horizonDays: 7 | 14;
+  activeVersionBefore: number | null;
+  activeVersionAfter: number | null;
+  candidateVersion: number | null;
+  resultStatus: ForecastMlExecutionStatus;
+  promotionDecision: 'PROMOTED' | 'NOT_PROMOTED' | 'NOT_EVALUATED' | null;
+  promotionReason: string | null;
+  availableOrigins: number | null;
+  requiredOrigins: number | null;
+  trainingJobReference: string | null;
+}
+export interface ForecastMlUpdateExecution {
+  executionId: string;
+  triggerSource: 'MANUAL' | 'SCHEDULED' | 'CLI' | 'UNKNOWN';
+  requestSource: 'MANUAL' | 'SCHEDULED' | 'CLI' | null;
+  requestedAt: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  status: ForecastMlExecutionStatus;
+  reasonCode: string | null;
+  dataVersionEvaluated: string | null;
+  observationsClosedThrough: string | null;
+  availableOrigins: number | null;
+  requiredOrigins: number | null;
+  pendingBefore: boolean | null;
+  pendingAfter: boolean | null;
+  horizons: ForecastMlExecutionHorizon[];
+  impact: {
+    status: ForecastMlImpactSummary['status'];
+    reasonCode: string | null;
+    prediction: ForecastMlImpactSummary;
+    inventory: ForecastMlImpactSummary;
+  };
+}
+export interface ForecastMlUpdateHistoryPage {
+  items: ForecastMlUpdateExecution[];
+  page: { limit: number; nextCursor: string | null };
+}
+export interface ForecastMlUpdateExecutionDetail extends ForecastMlUpdateExecution {
+  stage: string;
+  eligibility: string | null;
+  signalTypes: string[];
+  attempts: Array<{ runAttempt: number | null; status: ForecastMlExecutionStatus; reasonCode: string | null;
+    startedAt: string | null; finishedAt: string | null; horizons: ForecastMlExecutionHorizon[] }>;
+  dataVersionBefore: string | null;
+  message: string | null;
+  impact: ForecastMlUpdateExecution['impact'] & { prediction: ForecastMlImpactSummary & {
+    versions: Array<{ horizonDays: 7 | 14; beforeVersion: number | null; afterVersion: number | null }>;
+  } };
+}
+export interface ForecastMlProductImpact {
+  sku: string;
+  productName: string | null;
+  prediction: { p7: { old: number | null; new: number | null; delta: number | null; deltaPct: number | null; direction: string } | null;
+    p14: { old: number | null; new: number | null; delta: number | null; deltaPct: number | null; direction: string } | null };
+  inventory: { risk?: { before: string | null; after: string | null; changed: boolean | null };
+    shouldReorder?: { before: boolean | null; after: boolean | null; changed: boolean | null };
+    recommendedQty?: { before: number | null; after: number | null; delta: number | null };
+    reorderPoint?: { before: number | null; after: number | null; delta: number | null };
+    coverage?: { daysCoverBefore: number | null; daysCoverAfter: number | null; delta: number | null };
+    ranking?: { positionBefore: number | null; positionAfter: number | null; delta: number | null; status: string };
+    availability?: { before: string; after: string; reasonCodesBefore: string[]; reasonCodesAfter: string[] };
+    status?: 'NOT_CAPTURED' };
+}
+export interface ForecastMlUpdateProductsPage {
+  executionId: string;
+  items: ForecastMlProductImpact[];
+  page: { limit: number; nextCursor: string | null };
+}
 export interface ProductInventory {
   asOf: string;
   timezone: string;

@@ -13,6 +13,7 @@ import { ExtendedAnalyticsPanel, type ExtendedTab } from './ExtendedAnalyticsPan
 import { ChartCard, MetricInfo, MetricLabel } from './MetricInfo';
 import { ForecastEvaluationPanel } from './ForecastEvaluationPanel';
 import { ForecastDiagnosticsPanel } from './ForecastDiagnosticsPanel';
+import { ForecastMlUpdateHistoryPanel } from './ForecastMlUpdateHistoryPanel';
 import { AnalyticsErrorBoundary } from './AnalyticsErrorBoundary';
 
 type TabKey = 'summary' | 'forecast' | 'inventory' | ExtendedTab;
@@ -249,12 +250,19 @@ export function BusinessIntelligenceDashboard() {
         </>}
       </section>}
       {tab === 'forecast' && <section id="intelligence-panel-forecast" role="tabpanel" aria-labelledby="intelligence-tab-forecast" tabIndex={0} className="mt-4 space-y-6">
-        <div><h2 className="text-xl font-semibold">Pronóstico operativo</h2><p className="text-sm text-muted-foreground">Machine Learning Ridge para 7 y 14 días; MA28 se conserva como baseline estadístico.</p></div>
+        <div><h2 className="text-xl font-semibold">Pronóstico operativo</h2><p className="text-sm text-muted-foreground">Modelo operacional actual: Ridge Regression para horizontes acumulados de 7 y 14 días. MA28 es un baseline estadístico de referencia. HGB es histórico/experimental y no se utiliza para serving LIVE.</p></div>
         <ForecastDiagnosticsPanel onForecastModelsChange={setActiveForecastModels} />
+        <ForecastMlUpdateHistoryPanel />
         <Card><CardContent className="p-5"><ProductPicker selected={selected} onSelect={chooseProduct} /></CardContent></Card>
         {!selected && <EmptyProductState />}
         {selected && <ForecastPanel product={selected} forecasts={forecastByHorizon} horizon={horizon} setHorizon={setHorizon} activeModels={activeForecastModels} onRetry={() => { apiClient.invalidateIntelligenceReads(); setDetailRetry(value => value + 1); }} />}
-        <ForecastEvaluationPanel />
+        <details className="rounded-xl border p-4">
+          <summary className="cursor-pointer font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Evidencia histórica y comparación de modelos</summary>
+          <div className="mt-4 space-y-3"><p className="text-sm text-muted-foreground">Esta sección contiene experimentos y evaluaciones históricas. No corresponde al modelo LIVE utilizado actualmente para predicciones operativas.</p>
+            <p className="text-sm text-muted-foreground">MA28 es un baseline estadístico de referencia. HistGradientBoosting (HGB) es un modelo histórico/experimental, no usado para serving LIVE.</p>
+            <ForecastEvaluationPanel />
+          </div>
+        </details>
       </section>}
       {tab === 'inventory' && <section id="intelligence-panel-inventory" role="tabpanel" aria-labelledby="intelligence-tab-inventory" tabIndex={0} className="mt-4 space-y-6">
         <Card><CardContent className="p-5"><ProductPicker selected={selected} onSelect={chooseProduct} /></CardContent></Card>
