@@ -68,7 +68,7 @@ describe('forecast ML update history panel', () => {
     expect(screen.getAllByText('v1 → v2')).toHaveLength(4);
     expect(apiClient.getForecastMlUpdateExecution).not.toHaveBeenCalled();
     fireEvent.click(screen.getAllByRole('button', { name: 'Ver detalle' })[0]);
-    expect(await screen.findByText(/Datos cerrados hasta:/)).toBeTruthy();
+    expect(await screen.findByText(/Observaciones cerradas para esta ejecución:/)).toBeTruthy();
     expect(apiClient.getForecastMlUpdateExecution).toHaveBeenCalledWith(executionId);
   });
 

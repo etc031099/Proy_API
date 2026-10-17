@@ -249,13 +249,14 @@ export function ForecastMlUpdatePanel({ refreshToken = 0 }: { refreshToken?: num
         <div><dt className="text-muted-foreground">Modelo activo 14d</dt><dd>{modelVersion(byHorizon(14))}</dd></div>
         <div><dt className="text-muted-foreground">Revisión de datos</dt><dd>{technicalValue(status.dataVersion)}</dd></div>
         <div><dt className="text-muted-foreground">Datos pendientes</dt><dd>{rows.some(row => row.pending) ? 'Sí' : 'No'}</dd></div>
-        <div><dt className="text-muted-foreground">Última solicitud</dt><dd>{formatDate(rows.map(row => row.lastRequestAt).filter(Boolean).sort().at(-1))}</dd></div>
-        <div><dt className="text-muted-foreground">Última ejecución</dt><dd>{formatDate(rows.map(row => row.lastAttemptAt).filter(Boolean).sort().at(-1))}</dd></div>
-        <div><dt className="text-muted-foreground">Último resultado</dt><dd>{currentHeadline === 'SIN CAMBIOS' ? 'Sin cambios pendientes' : currentHeadline === 'NO ELEGIBLE' ? 'Aún no elegible' : currentHeadline === 'ERROR' ? 'Evaluación no completada' : rows.some(row => row.lastResult === 'LAST_RESULT_PROMOTED') ? 'Candidato promovido' : 'No hay un resultado nuevo'}</dd></div>
+        <div><dt className="text-muted-foreground">Última solicitud manual</dt><dd>{formatDate(rows.map(row => row.lastRequestAt).filter(Boolean).sort().at(-1))}</dd></div>
+        <div><dt className="text-muted-foreground">Último intento elegible del worker</dt><dd>{formatDate(rows.map(row => row.lastAttemptAt).filter(Boolean).sort().at(-1))}</dd></div>
+        <div><dt className="text-muted-foreground">Último resultado del estado operativo</dt><dd>{currentHeadline === 'SIN CAMBIOS' ? 'Sin cambios pendientes' : currentHeadline === 'NO ELEGIBLE' ? 'Aún no elegible' : currentHeadline === 'ERROR' ? 'Evaluación no completada' : rows.some(row => row.lastResult === 'LAST_RESULT_PROMOTED') ? 'Candidato promovido' : 'No hay un resultado nuevo'}</dd></div>
       </dl>
+      <p className="text-xs text-muted-foreground">Este resumen muestra solicitudes manuales y el último intento con trabajo elegible. Las revisiones automáticas que terminan sin trabajo pendiente también quedan registradas en el historial durable, que es la referencia para la fecha y el resultado de todas las ejecuciones.</p>
       <details className="rounded-md border p-3 text-sm"><summary className="cursor-pointer font-medium">Detalles técnicos</summary>
         <dl className="mt-2 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
-          <div><dt>Datos cerrados hasta</dt><dd>{formatClosedDay(status.closedThrough)}</dd></div>
+          <div><dt>Cierre operativo vigente (día cerrado)</dt><dd>{formatClosedDay(status.closedThrough)}</dd></div>
           {rows.map(row => <div key={row.horizonDays}><dt>Horizonte {row.horizonDays}d · trigger / elegibilidad / resultado</dt><dd>{technicalValue(row.trigger)} / {technicalValue(row.eligibility)} / {technicalValue(row.lastEvaluationReason || row.lastResult)}</dd></div>)}
           {rows.map(row => <div key={`origins-${row.horizonDays}`}><dt>Horizonte {row.horizonDays}d · evidencia para promoción</dt><dd>{row.availableOrigins == null ? 'Se valida en la ejecución del worker' : `${row.availableOrigins}/${row.requiredOrigins}`}</dd></div>)}
           {rows.map(row => <div key={`version-${row.horizonDays}`}><dt>trainedDataVersion {row.horizonDays}d</dt><dd>{technicalValue(row.trainedDataVersion)}</dd></div>)}

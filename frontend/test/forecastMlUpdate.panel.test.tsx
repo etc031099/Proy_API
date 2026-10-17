@@ -1,9 +1,10 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ForecastMlUpdatePanel, nextAutomaticReview } from '@/components/business-intelligence/ForecastMlUpdatePanel';
+import { ForecastMlUpdateHistoryPanel } from '@/components/business-intelligence/ForecastMlUpdateHistoryPanel';
 import { ForecastDiagnosticsPanel } from '@/components/business-intelligence/ForecastDiagnosticsPanel';
 import { apiClient } from '@/lib/api';
-import type { AuthenticatedDiagnosticResult, ForecastActiveModels, ForecastMlUpdateStatus, HealthDiagnostic } from '@/types/businessIntelligence';
+import type { AuthenticatedDiagnosticResult, ForecastActiveModels, ForecastMlUpdateExecution, ForecastMlUpdateExecutionDetail, ForecastMlUpdateStatus, HealthDiagnostic } from '@/types/businessIntelligence';
 
 const models: ForecastActiveModels = { models: [
   { horizonDays: 1, status: 'MODEL_NOT_APPROVED', activeModelStatus: 'NOT_APPROVED', modelFamily: 'RIDGE', recipeId: null },
@@ -37,6 +38,54 @@ describe('Forecast manual ML update panel', () => {
     expect(screen.getByText('Actualización automática:')).toBeTruthy();
     expect(screen.getByText('ACTIVO')).toBeTruthy();
     expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('distinguishes operational status timestamps from a later scheduled durable execution', async () => {
+    const manualState = { ...initialStatus, horizons: [7, 14].map(days => horizon(days as 7 | 14, {
+      lastRequestAt: '2026-10-17T19:07:00.000Z', lastAttemptAt: '2026-10-17T07:05:00.000Z',
+      lastEvaluatedAt: '2026-10-17T19:07:00.000Z', lastResult: 'LAST_RESULT_NO_PENDING',
+    })) } as ForecastMlUpdateStatus;
+    const scheduled: ForecastMlUpdateExecution = {
+      executionId: '11111111-1111-4111-8111-111111111111', triggerSource: 'SCHEDULED', requestSource: 'SCHEDULED',
+      requestedAt: '2026-10-17T20:35:00.000Z', startedAt: '2026-10-17T20:35:00.000Z', finishedAt: '2026-10-17T20:35:15.000Z',
+      status: 'NO_PENDING_WORK', reasonCode: 'NO_PENDING_WORK', dataVersionEvaluated: '83', observationsClosedThrough: '2026-10-15',
+      availableOrigins: null, requiredOrigins: 107, pendingBefore: false, pendingAfter: false,
+      horizons: [7, 14].map(horizonDays => ({ horizonDays: horizonDays as 7 | 14, activeVersionBefore: 1,
+        activeVersionAfter: 1, candidateVersion: null, resultStatus: 'NO_PENDING_WORK' as const,
+        promotionDecision: 'NOT_EVALUATED' as const, promotionReason: 'NO_PENDING_WORK', availableOrigins: null,
+        requiredOrigins: 107 as const, trainingJobReference: null })),
+      impact: { status: 'NOT_APPLICABLE', reasonCode: 'NO_MODEL_PROMOTION',
+        prediction: { status: 'NOT_CAPTURED', reasonCode: 'NO_MODEL_PROMOTION', summary: null },
+        inventory: { status: 'NOT_CAPTURED', reasonCode: 'NO_MODEL_PROMOTION', summary: null } },
+    };
+    vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValue(ok(manualState));
+    vi.spyOn(apiClient, 'getForecastMlUpdateHistory').mockResolvedValue(ok({
+      items: [scheduled], page: { limit: 20, nextCursor: null },
+    }));
+    const scheduledDetail: ForecastMlUpdateExecutionDetail = {
+      ...scheduled, stage: 'FINISHED', eligibility: 'NO_PENDING_WORK', signalTypes: [], attempts: [],
+      dataVersionBefore: '83', message: 'NO_PENDING_WORK',
+      impact: { ...scheduled.impact, prediction: { ...scheduled.impact.prediction, versions: [] } },
+    };
+    vi.spyOn(apiClient, 'getForecastMlUpdateExecution').mockResolvedValue(ok(scheduledDetail));
+
+    render(<><ForecastMlUpdatePanel /><ForecastMlUpdateHistoryPanel /></>);
+
+    const requestLabel = await screen.findByText('Última solicitud manual');
+    const workerLabel = screen.getByText('Último intento elegible del worker');
+    expect(requestLabel.parentElement?.textContent).toContain('2:07');
+    expect(workerLabel.parentElement?.textContent).toContain('2:05');
+    expect(screen.queryByText('Última ejecución')).toBeNull();
+    expect(screen.getByText(/historial durable, que es la referencia para la fecha y el resultado de todas las ejecuciones/)).toBeTruthy();
+    fireEvent.click(screen.getByText('Detalles técnicos'));
+    expect(screen.getByText('Cierre operativo vigente (día cerrado)').parentElement?.textContent).toMatch(/16 oct/);
+
+    const automaticLabel = await screen.findByText('Automático');
+    expect(automaticLabel.closest('article')?.textContent).toContain('3:35');
+    expect(automaticLabel.closest('article')?.textContent).toContain('Sin trabajo pendiente');
+    fireEvent.click(within(automaticLabel.closest('article')!).getByRole('button', { name: 'Ver detalle' }));
+    const capturedClosedThrough = await within(automaticLabel.closest('article')!).findByText(/Observaciones cerradas para esta ejecución:/);
+    expect(capturedClosedThrough.parentElement?.textContent).toMatch(/15 oct/);
   });
 
   it('submits one empty-body request and shows accepted copy', async () => {

@@ -136,11 +136,12 @@ test('filters accept only enumerated source/status/date/promotedOnly and reject 
   const f = setup(rows);
   let response = await call(f, '/history', { query: { triggerSource: 'SCHEDULED', status: 'FAILED', from: '2026-10-16', to: '2026-10-16' } });
   assert.equal(response.statusCode, 200); assert.deepEqual(response.body.data.items, []);
+  assert.equal(f.model.reads.at(-1).filter.scenarioId, config.scenarioId);
   response = await call(f, '/history', { query: { status: 'NO_PENDING_WORK' } });
   assert.equal(response.body.data.items[0].status, 'NO_PENDING_WORK');
   response = await call(f, '/history', { query: { promotedOnly: 'true' } });
   assert.ok(response.body.data.items.every(x => x.status === 'PROMOTED'));
-  for (const query of ['businessId=other', 'status=MADE_UP', 'triggerSource=MONGO', 'limit=51', 'limit=0',
+  for (const query of ['businessId=other', 'scenarioId=other', 'status=MADE_UP', 'triggerSource=MONGO', 'limit=51', 'limit=0',
     'from=2026-10-17&to=2026-10-16', 'promotedOnly=yes', 'unknown=x']) {
     const [key, value] = query.split('='); const q = Object.fromEntries(query.split('&').map(pair => pair.split('=')));
     assert.equal((await call(f, '/history', { query: q })).statusCode, 400, query);

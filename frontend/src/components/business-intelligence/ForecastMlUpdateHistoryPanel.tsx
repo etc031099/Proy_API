@@ -35,8 +35,9 @@ const safeVersion = (value: number | null | undefined) => Number.isSafeInteger(v
 const localDate = (value: string | null | undefined, withTime = true) => {
   if (!value) return 'No capturado';
   const parsed = new Date(value);
+  const calendarDay = !withTime && /^\d{4}-\d{2}-\d{2}$/.test(value);
   return Number.isNaN(parsed.getTime()) ? 'No capturado' : new Intl.DateTimeFormat('es-PE', {
-    dateStyle: 'medium', ...(withTime ? { timeStyle: 'short' as const } : {}), timeZone: 'America/Lima',
+    dateStyle: 'medium', ...(withTime ? { timeStyle: 'short' as const } : {}), timeZone: calendarDay ? 'UTC' : 'America/Lima',
   }).format(parsed);
 };
 const pendingLabel = (value: boolean | null | undefined) => value === true ? 'Sí' : value === false ? 'No' : 'No capturado';
@@ -164,7 +165,7 @@ function ExecutionDetail({ detail }: { detail: ForecastMlUpdateExecutionDetail }
         <p>Ejecución: <span className="font-mono text-xs">{detail.executionId}</span></p><p>Origen: {triggerLabel(detail.triggerSource)}</p>
         <p>Solicitada: {localDate(detail.requestedAt)}</p><p>Inicio: {localDate(detail.startedAt)}</p><p>Fin: {localDate(detail.finishedAt)}</p>
         <p>Revisión anterior: {safeText(detail.dataVersionBefore)}</p><p>Revisión evaluada: {safeText(detail.dataVersionEvaluated)}</p>
-        <p>Datos cerrados hasta: {localDate(detail.observationsClosedThrough, false)}</p>
+        <p>Observaciones cerradas para esta ejecución: {localDate(detail.observationsClosedThrough, false)}</p>
         <p>Trabajo pendiente antes/después: {pendingLabel(detail.pendingBefore)} / {pendingLabel(detail.pendingAfter)}</p>
       </div>
       {detail.availableOrigins == null || detail.requiredOrigins == null ? <p className="text-sm text-muted-foreground">Orígenes maduros: No capturado.</p>
