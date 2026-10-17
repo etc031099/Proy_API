@@ -2,6 +2,7 @@
 
 const { createHash, randomUUID } = require('node:crypto');
 const { V3, createV3IntelligenceService } = require('./v3IntelligenceService');
+const { artifactBytes } = require('./forecastModelRegistryService');
 
 const RIDGE_RECIPE_ID = 'RIDGE-CAUSAL27';
 const RIDGE_FEATURE_VERSION = 'RIDGE_CAUSAL27_V1';
@@ -653,8 +654,7 @@ async function inspectActiveForecastModel(models, scope) {
     base.trainedDataVersion = artifact.trainedDataVersion || null; base.dataCutoff = artifact.dataCutoff || null;
     base.featureVersion = artifact.featureVersion || null; base.promotionPolicyVersion = artifact.promotionPolicyVersion || null;
     base.metrics = { wape: finiteOrNull(artifact.globalWape), mae: finiteOrNull(artifact.globalMae), bias: finiteOrNull(artifact.globalBias) };
-    const bytes = Buffer.isBuffer(artifact.artifactData) ? artifact.artifactData
-      : artifact.artifactData instanceof Uint8Array ? Buffer.from(artifact.artifactData) : null;
+    const bytes = artifactBytes(artifact.artifactData);
     base.artifactHashValid = Boolean(bytes && bytes.length === artifact.artifactBytes
       && createHash('sha256').update(bytes).digest('hex') === artifact.artifactHash);
     if (artifact.status !== 'ACTIVE') return { ...base, reasonCode: 'ACTIVE_ARTIFACT_NOT_ACTIVE' };

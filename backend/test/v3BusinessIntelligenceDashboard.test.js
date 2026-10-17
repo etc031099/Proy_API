@@ -293,6 +293,38 @@ test('valid ACTIVE forecast diagnostics execute a READ serving check and return 
   assert.equal(JSON.stringify(data).includes('secret'), false);
 });
 
+test('ACTIVE 7d/14d diagnostics verify persisted Buffer, Uint8Array and BSON Binary bytes', async t => {
+  const { Binary } = require('mongoose').mongo;
+  const bytes = Buffer.from('ridge-fixture');
+  const representations = {
+    Buffer: () => Buffer.from(bytes),
+    Uint8Array: () => new Uint8Array(bytes),
+    'BSON Binary': () => new Binary(Buffer.from(bytes)),
+  };
+  for (const [name, represent] of Object.entries(representations)) {
+    for (const integrity of ['valid', 'wrong hash', 'wrong byte count']) {
+      await t.test(`${name}: ${integrity}`, async () => {
+        const { service, models } = makeDashboard();
+        models.ForecastModelArtifact.findOne = filter => {
+          const horizonDays = Number(String(filter._id).split('-').at(-1));
+          return diagnosticRead({ ...modelMetadata(horizonDays), artifactData: represent(),
+            artifactHash: integrity === 'wrong hash' ? '0'.repeat(64)
+              : require('node:crypto').createHash('sha256').update(bytes).digest('hex'),
+            artifactBytes: bytes.length + (integrity === 'wrong byte count' ? 1 : 0) });
+        };
+        const { data } = await service.activeForecastModels(request());
+        for (const horizonDays of [7, 14]) {
+          const row = data.models.find(model => model.horizonDays === horizonDays);
+          assert.equal(row.artifactHashValid, integrity === 'valid');
+          assert.equal(row.reasonCode, integrity === 'valid' ? 'MODEL_READY' : 'ARTIFACT_HASH_MISMATCH');
+          assert.equal(row.mlLoadStatus, integrity === 'valid' ? 'READY' : 'NOT_CHECKED');
+        }
+        assert.equal(JSON.stringify(data).includes('ridge-fixture'), false);
+      });
+    }
+  }
+});
+
 test('health diagnostic reports dependencies and sanitizes failures and timeout', async () => {
   const partial = await makeDashboard().service.healthDiagnostic(request({ period: 'TODAY' }));
   assert.equal(partial.data.httpStatus, 200);

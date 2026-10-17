@@ -438,6 +438,7 @@ module.exports = {
   PROMOTION_POLICY_VERSION,
   PROMOTION_POLICY_HASH,
   MAX_ARTIFACT_BYTES,
+  artifactBytes,
   verifyArtifact,
   _default: createForecastModelRegistryService()
 };
