@@ -278,6 +278,34 @@ describe('business intelligence dashboard', () => {
     expect(screen.getByText('X: 55')).toBeTruthy();
   });
 
+  it('hides ABC when every product is unclassified while keeping XYZ and other inventory visible', async () => {
+    const unclassifiedInventory: InventorySummary = { ...inventoryFixture, summary: {
+      ...inventoryFixture.summary, abcCounts: { A: 0, B: 0, C: 0, UNCLASSIFIED: 80 },
+      xyzCounts: { X: 55, Y: 22, Z: 3, UNCLASSIFIED: 0 },
+    } };
+    vi.spyOn(apiClient, 'getInventoryAnalytics').mockResolvedValue(success(unclassifiedInventory));
+    render(<BusinessIntelligenceDashboard />);
+    expect(await screen.findByText('Estabilidad de demanda (XYZ)')).toBeTruthy();
+    expect(screen.queryByText('Importancia económica (ABC)')).toBeNull();
+    fireEvent.click(screen.getByRole('tab', { name: 'Inventario' }));
+    expect(await screen.findByText('Estabilidad de demanda (XYZ)')).toBeTruthy();
+    expect(screen.queryByText('Importancia económica (ABC)')).toBeNull();
+    expect(screen.getByText('Riesgo de inventario')).toBeTruthy();
+    expect(screen.getByText('Reposición recomendada')).toBeTruthy();
+    expect(screen.getByText('X: 55')).toBeTruthy();
+  });
+
+  it('shows ABC when any classified group has products, even if A and C are empty', async () => {
+    const bClassifiedInventory: InventorySummary = { ...inventoryFixture, summary: {
+      ...inventoryFixture.summary, abcCounts: { A: 0, B: 4, C: 0, UNCLASSIFIED: 76 },
+    } };
+    vi.spyOn(apiClient, 'getInventoryAnalytics').mockResolvedValue(success(bClassifiedInventory));
+    render(<BusinessIntelligenceDashboard />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Inventario' }));
+    expect(await screen.findByText('Importancia económica (ABC)')).toBeTruthy();
+    expect(screen.getByText('Estabilidad de demanda (XYZ)')).toBeTruthy();
+  });
+
   it('does not render unavailable LIVE risk counts as zero or as LOW', async () => {
     const partialSummary: InventorySummary = { ...inventoryFixture, availabilityStatus: 'PARTIAL', summary: {
       ...inventoryFixture.summary, riskCounts: { critical: null, high: null, medium: null, low: null },
