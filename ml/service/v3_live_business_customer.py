@@ -4,6 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 from collections import OrderedDict
 from datetime import date
+from math import isfinite
 from threading import RLock
 from typing import Any
 
@@ -194,6 +195,22 @@ class LiveBusinessCustomerAdapter:
         return {"code": reason_code, "affectedCustomerCount": len(affected),
                 "unknownSaleLineCount": sum(value["unknownSaleLines"] for value in affected)}
 
+    @staticmethod
+    def _customer_general_complete(row):
+        def nonnegative(value):
+            return isinstance(value, (int, float)) and not isinstance(value, bool) and isfinite(value) and value >= 0
+        return (all(nonnegative(row.get(key)) for key in ("ticketCount", "units", "totalSpentCents"))
+                and bool(row.get("segment"))
+                and (row.get("ticketCount") == 0 or nonnegative(row.get("recencyDays"))))
+
+    @staticmethod
+    def _aggregate_cost_coverage(coverage_by_customer):
+        unknown = sum(value["unknownSaleLines"] for value in coverage_by_customer.values())
+        return {"status": "PARTIAL" if unknown else "AVAILABLE",
+                "knownSaleLines": sum(value["knownSaleLines"] for value in coverage_by_customer.values()),
+                "unknownSaleLines": unknown,
+                "affectedCustomerCount": sum(value["unknownSaleLines"] > 0 for value in coverage_by_customer.values())}
+
     def business_data(self, request, live: LiveV3Context):
         cutoff = live.as_of_date
         business, _, views = self._view(live, cutoff)
@@ -330,11 +347,12 @@ class LiveBusinessCustomerAdapter:
                 raise LiveDomainError("CUSTOMER_NOT_FOUND", 404, "Customer code was not found.")
         if request.segment:
             rows = [row for row in rows if row["segment"] == request.segment]
-        margin_rank_unavailable = False
+        incomplete_general = sum(not self._customer_general_complete(row) for row in rows)
+        general_status = "PARTIAL" if incomplete_general else "AVAILABLE"
+        margin_rank_costs = None
         if request.mode == "rank" and request.metric == "gross_margin":
-            margin_rank_unavailable = any(self._coverage(views["sales"], views["linesBySale"], "HISTORY", cutoff,
-                customer_code=row["customerCode"], products=customer_engine.products)["unknownSaleLines"]
-                for row in rows)
+            margin_rank_costs = {row["customerCode"]: self._coverage(views["sales"], views["linesBySale"], "HISTORY", cutoff,
+                customer_code=row["customerCode"], products=customer_engine.products) for row in rows}
         if request.mode == "rank":
             field = {"spend": "totalSpentCents", "tickets": "ticketCount", "recency": "recencyDays",
                      "gross_margin": "grossMarginContributionCents"}[request.metric]
@@ -343,17 +361,23 @@ class LiveBusinessCustomerAdapter:
         costs = {row["customerCode"]: self._coverage(views["sales"], views["linesBySale"], "HISTORY", cutoff,
                 customer_code=row["customerCode"], products=customer_engine.products)
                  for row in page}
-        partial = any(value["unknownSaleLines"] for value in costs.values())
+        historical_coverage = margin_rank_costs if margin_rank_costs is not None else costs
+        cost_coverage = {"historical": self._aggregate_cost_coverage(historical_coverage), "period": None}
+        margin_partial = cost_coverage["historical"]["status"] == "PARTIAL"
         availability_diagnostics = []
-        history_diagnostic = self._coverage_diagnostic(costs, "CUSTOMER_HISTORICAL_COST_COVERAGE_INCOMPLETE")
+        if incomplete_general:
+            availability_diagnostics.append({"code": "CUSTOMER_GENERAL_METRICS_INCOMPLETE",
+                                             "affectedCustomerCount": incomplete_general})
+        history_diagnostic = self._coverage_diagnostic(historical_coverage, "CUSTOMER_HISTORICAL_COST_COVERAGE_INCOMPLETE")
         if history_diagnostic["affectedCustomerCount"]:
             availability_diagnostics.append(history_diagnostic)
-        if any(value["unsupportedCurrency"] for value in costs.values()):
+        if any(value["unsupportedCurrency"] for value in historical_coverage.values()):
             raise LiveDomainError("DATA_NOT_AVAILABLE", 422, "LIVE monetary analytics currently support PEN only.")
-        if margin_rank_unavailable:
+        if margin_rank_costs is not None and margin_partial:
             return {"metric": "grossMarginContributionCents", "available": False,
                     "reasonCode": "COST_NOT_AVAILABLE", "total": len(rows), "items": [],
-                    "costCoverage": {"status": "NOT_AVAILABLE"},
+                    "costCoverage": {"status": "NOT_AVAILABLE", **cost_coverage},
+                    "marginAvailabilityStatus": "PARTIAL", "generalAvailabilityStatus": general_status,
                     "availabilityDiagnostics": availability_diagnostics,
                     "availabilityStatus": "PARTIAL",
                     "freshness": {**dict(live.freshness("customer")), "engineVersion": self.ENGINE_VERSION}}, cutoff
@@ -367,7 +391,9 @@ class LiveBusinessCustomerAdapter:
             public.append(item)
         data = {"total": len(rows), "items": public,
                 "consumerFinalIncludedInIndividualRfm": False,
-                "availabilityStatus": "PARTIAL" if partial else "AVAILABLE",
+                "availabilityStatus": general_status, "generalAvailabilityStatus": general_status,
+                "marginAvailabilityStatus": "PARTIAL" if margin_partial else "AVAILABLE",
+                "costCoverage": cost_coverage,
                 "availabilityDiagnostics": availability_diagnostics,
                 "freshness": {**dict(live.freshness("customer")), "engineVersion": self.ENGINE_VERSION}}
         if period is not None:
@@ -379,7 +405,8 @@ class LiveBusinessCustomerAdapter:
                 selected_codes, allow_live=True)
             period_costs = {code: self._coverage(views["sales"], views["linesBySale"], period, cutoff,
                 customer_code=code, products=customer_engine.products) for code in selected_codes}
-            partial = partial or any(value["unknownSaleLines"] for value in period_costs.values())
+            cost_coverage["period"] = self._aggregate_cost_coverage(period_costs)
+            margin_partial = margin_partial or cost_coverage["period"]["status"] == "PARTIAL"
             period_diagnostic = self._coverage_diagnostic(period_costs, "CUSTOMER_PERIOD_COST_COVERAGE_INCOMPLETE")
             if period_diagnostic["affectedCustomerCount"]:
                 availability_diagnostics.append(period_diagnostic)
@@ -391,7 +418,7 @@ class LiveBusinessCustomerAdapter:
                     value["cogsCents"] = None
             data["periodMetrics"] = metrics
             data["periodCostCoverage"] = period_costs
-            data["availabilityStatus"] = "PARTIAL" if partial else "AVAILABLE"
+            data["marginAvailabilityStatus"] = "PARTIAL" if margin_partial else "AVAILABLE"
         if request.mode == "summary":
             data["segmentDistribution"] = result["segmentDistribution"]
         return data, cutoff

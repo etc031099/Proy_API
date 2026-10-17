@@ -580,6 +580,9 @@ class V3IntelligenceRuntime:
             sections["sales"].update({"kpis": business.get("kpis"), "trends": business.get("trends"), "customerMix": business.get("customerMix")})
             sections["margin"].update(business.get("marginIntelligence", {}))
             sections["customers"].update({"segmentDistribution": customer_summary["segmentDistribution"],
+                "status": customer.get("generalAvailabilityStatus", customer.get("availabilityStatus", "PARTIAL")),
+                "marginAvailabilityStatus": customer.get("marginAvailabilityStatus"),
+                "costCoverage": customer.get("costCoverage"),
                 "atRiskCount": customer_summary["segmentDistribution"].get("AT_RISK", 0),
                 "inactiveCount": customer_summary["segmentDistribution"].get("INACTIVE", 0),
                 "newCount": customer_summary["segmentDistribution"].get("NEW", 0)})
@@ -619,7 +622,7 @@ class V3IntelligenceRuntime:
             blocking_reasons = []
             if business.get("availabilityStatus") == "PARTIAL":
                 blocking_reasons.append("BUSINESS_ANALYTICS_PARTIAL")
-            if customer.get("availabilityStatus") == "PARTIAL":
+            if customer.get("generalAvailabilityStatus", customer.get("availabilityStatus")) == "PARTIAL":
                 blocking_reasons.append("CUSTOMER_ANALYTICS_PARTIAL")
             if summary.get("forecastAvailability") != "AVAILABLE":
                 blocking_reasons.append("INVENTORY_FORECAST_AVAILABILITY_PARTIAL")

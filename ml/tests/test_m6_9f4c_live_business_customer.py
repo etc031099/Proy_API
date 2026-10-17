@@ -149,6 +149,20 @@ class M69F4CLiveBusinessCustomerTests(unittest.TestCase):
         self.assertIsNone(item["trends30d"]["previous"]["grossMarginContributionCents"])
         self.assertEqual(item["costCoverage"]["reasonCode"], "COST_NOT_AVAILABLE")
 
+    def test_customer_partial_diagnostic_reports_aggregate_cost_gaps_without_identity(self):
+        data, _ = _adapter().customer_data(_request(mode="summary", limit=100), _live_context(sale=True))
+        diagnostics = data["availabilityDiagnostics"]
+        self.assertEqual(data["availabilityStatus"], "AVAILABLE")
+        self.assertEqual(data["marginAvailabilityStatus"], "PARTIAL")
+        self.assertEqual(diagnostics, [
+            {"code": "CUSTOMER_HISTORICAL_COST_COVERAGE_INCOMPLETE", "affectedCustomerCount": 1,
+             "unknownSaleLineCount": 1},
+            {"code": "CUSTOMER_PERIOD_COST_COVERAGE_INCOMPLETE", "affectedCustomerCount": 1,
+             "unknownSaleLineCount": 1},
+        ])
+        self.assertNotIn("C1", repr(diagnostics))
+        self.assertNotIn("Cliente", repr(diagnostics))
+
     def test_customer_live_sale_updates_rfm_and_new_customer_cohort(self):
         adapter = _adapter()
         data, _ = adapter.customer_data(_request(mode="summary"),
@@ -179,6 +193,8 @@ class M69F4CLiveBusinessCustomerTests(unittest.TestCase):
         self.assertEqual(new_customer["historyStatus"], "INSUFFICIENT_HISTORY")
         self.assertEqual(new_customer["segment"], "INSUFFICIENT_HISTORY")
         self.assertEqual(new_customer["rfm90d"]["score"], {"R": None, "F": None, "M": None})
+        self.assertEqual(data["availabilityStatus"], "AVAILABLE")
+        self.assertEqual(data["availabilityDiagnostics"], [])
         filtered, _ = adapter.customer_data(_request(mode="summary", segment="INSUFFICIENT_HISTORY"),
             _live_context(new_customer=True, sale=False, version="next"))
         self.assertEqual([row["customerCode"] for row in filtered["items"]], ["C2"])
