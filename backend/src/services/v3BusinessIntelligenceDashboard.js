@@ -343,9 +343,7 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
     try { return { context: await contextFor(req, options), error: null }; }
     catch (error) { return { context: null, error: safeError(error) }; }
   };
-  const revision = async req => {
-    const prepared = await run(req); if (prepared.error) return { error: prepared.error };
-    const { context } = prepared;
+  const readRevision = async context => {
     try {
       const row = await getModels().V3OperationalRevision.findById(context.authenticated.businessId)
         .select('revision bootstrapStatus historicalDatasetVersion historicalDatasetSha256')
@@ -357,6 +355,10 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
       return { data: { businessId: context.authenticated.businessId, scenarioId: V3.scenarioId,
         datasetVersion: V3.datasetVersion, asOf: context.binding.operationalDate, dataVersion: String(row.revision) } };
     } catch (error) { return { error: safeError(error) }; }
+  };
+  const revision = async req => {
+    const prepared = await run(req); if (prepared.error) return { error: prepared.error };
+    return readRevision(prepared.context);
   };
   const summary = async req => {
     const prepared = await run(req); if (prepared.error) return { error: prepared.error };
@@ -456,7 +458,7 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
     const { context } = prepared;
     try {
       const businessId = context.authenticated.businessId, scenarioId = context.binding.scenarioId || V3.scenarioId;
-      const revisionResult = await revision(req);
+      const revisionResult = await readRevision(context);
       const serving = { businessId, scenarioId, asOf: context.asOf, dataVersion: revisionResult.data?.dataVersion || null,
         observationsClosedThrough: null,
         snapshotStatus: revisionResult.data ? 'AVAILABLE' : 'UNAVAILABLE',
@@ -467,32 +469,60 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
         horizonMatches: null, recipeMatches: null, featureHashMatches: null, artifactHashValid: null,
         trainedDataVersion: null, dataCutoff: null, mlLoadStatus: 'NOT_CHECKED', mlLoadReasonCode: 'MODEL_NOT_APPROVED' }];
       serving.horizons['1'] = { status: 'MODEL_NOT_APPROVED', reasonCode: 'PROMOTION_POLICY_FAILED' };
+      // Pin each exact pointer/artifact once before starting serving checks.
+      // These bytes remain request-local even if a promotion happens meanwhile.
+      const activeArtifacts = new Map();
+      const diagnostics = [];
       for (const horizonDays of [7, 14]) {
-        const diagnostic = await inspectActiveForecastModel(getModels(), { businessId, scenarioId, horizonDays });
+        diagnostics.push(await inspectActiveForecastModel(getModels(), { businessId, scenarioId, horizonDays }, activeArtifacts));
+      }
+      const productRow = diagnostics.some(model => model.status === 'ACTIVE')
+        ? await getModels().Product.findOne({ businessId, scenarioId, isActive: true })
+          .select('sku').sort({ sku: 1 }).lean().maxTimeMS(3000) : null;
+      const checked = await Promise.all(diagnostics.map(async diagnostic => {
+        const horizonDays = diagnostic.horizonDays;
+        let lineage = null;
         if (diagnostic.status === 'ACTIVE') {
-          const productRow = await getModels().Product.findOne({ businessId, scenarioId, isActive: true })
-            .select('sku').sort({ sku: 1 }).lean().maxTimeMS(3000);
           if (!productRow?.sku) {
             diagnostic.mlLoadStatus = 'NOT_CHECKED'; diagnostic.mlLoadReasonCode = 'DIAGNOSTIC_PRODUCT_UNAVAILABLE';
           } else {
             try {
-              const forecastResult = await product({ user: req.user, businessId: req.user?.businessId,
-                query: { horizonDays: String(horizonDays) }, params: { sku: productRow.sku } }, 'forecast');
-              const data = forecastResult.data;
+              const forecastResult = await execute(context, 'get_product_forecast', {
+                mode: 'detail', productRef: productRow.sku, horizonDays, includeObservedSeries: true,
+              }, 20, { useLiveRidge: true, trustedForecastModelEnvelope: trustedForecastEnvelope(
+                activeArtifacts.get(horizonDays), { businessId, scenarioId, horizonDays }) });
+              const data = forecastResult.data?.items?.[0];
               diagnostic.mlLoadStatus = data?.status === 'READY' ? 'READY' : 'FAILED';
-              diagnostic.mlLoadReasonCode = data?.reasonCode || forecastResult.error?.diagnosticReasonCode
-                || (forecastResult.error?.code ? 'ML_ARTIFACT_LOAD_FAILED' : null);
-              serving.dataVersion = data?.dataVersion || serving.dataVersion;
-              serving.observationsClosedThrough = data?.observationsThrough || serving.observationsClosedThrough;
+              diagnostic.mlLoadReasonCode = data?.reasonCode || null;
+              lineage = { dataVersion: data?.dataVersion || forecastResult.metadata?.dataVersion || null,
+                snapshotHash: data?.snapshotHash || forecastResult.metadata?.snapshotHash || null,
+                observationsClosedThrough: data?.observationsThrough || forecastResult.metadata?.observationsClosedThrough || null };
               if (diagnostic.mlLoadStatus !== 'READY') {
                 diagnostic.status = 'MODEL_UNAVAILABLE';
                 diagnostic.reasonCode = mapServingDiagnosticCode(diagnostic.mlLoadReasonCode);
               } else diagnostic.reasonCode = 'MODEL_READY';
-            } catch (_) {
+            } catch (error) {
+              const mapped = safeError(error);
               diagnostic.status = 'MODEL_UNAVAILABLE'; diagnostic.mlLoadStatus = 'FAILED';
-              diagnostic.mlLoadReasonCode = 'ML_ARTIFACT_LOAD_FAILED'; diagnostic.reasonCode = 'ML_ARTIFACT_LOAD_FAILED';
+              diagnostic.mlLoadReasonCode = mapped.diagnosticReasonCode;
+              diagnostic.reasonCode = mapServingDiagnosticCode(mapped.diagnosticReasonCode);
             }
           }
+        }
+        return { diagnostic, lineage };
+      }));
+      let acceptedLineage = null;
+      for (const { diagnostic, lineage } of checked) {
+        const horizonDays = diagnostic.horizonDays;
+        if (lineage && acceptedLineage && Object.keys(lineage).some(key => lineage[key] != null
+            && acceptedLineage[key] != null && lineage[key] !== acceptedLineage[key])) {
+          diagnostic.status = 'MODEL_UNAVAILABLE'; diagnostic.reasonCode = 'SNAPSHOT_UNAVAILABLE';
+          diagnostic.mlLoadStatus = 'FAILED'; diagnostic.mlLoadReasonCode = 'LIVE_SNAPSHOT_UNAVAILABLE';
+          serving.snapshotStatus = 'UNAVAILABLE'; serving.snapshotReasonCode = 'LIVE_SNAPSHOT_UNAVAILABLE';
+        } else if (lineage) {
+          acceptedLineage = { ...acceptedLineage, ...Object.fromEntries(Object.entries(lineage).filter(([, value]) => value != null)) };
+          serving.dataVersion = lineage.dataVersion || serving.dataVersion;
+          serving.observationsClosedThrough = lineage.observationsClosedThrough || serving.observationsClosedThrough;
         }
         serving.horizons[String(horizonDays)] = { status: diagnostic.status, reasonCode: diagnostic.reasonCode,
           mlLoadStatus: diagnostic.mlLoadStatus, mlLoadReasonCode: diagnostic.mlLoadReasonCode };
@@ -640,7 +670,7 @@ function productIdentityFor(catalogProduct, sku, row = {}) {
     presentation: catalogProduct.presentation || null, brand: catalogProduct.brand || null,
     size: catalogProduct.sizeValue == null ? null : { value: catalogProduct.sizeValue, unit: catalogProduct.sizeUnit || null } };
 }
-async function inspectActiveForecastModel(models, scope) {
+async function inspectActiveForecastModel(models, scope, activeArtifacts) {
   const base = { horizonDays: scope.horizonDays, status: 'MODEL_UNAVAILABLE', activeModelStatus: 'NONE',
     reasonCode: null, modelFamily: null, recipeId: null, modelVersion: null, trainedAt: null,
     trainedDataVersion: null, dataCutoff: null, featureVersion: null, promotionPolicyVersion: null,
@@ -656,7 +686,7 @@ async function inspectActiveForecastModel(models, scope) {
     base.activePointerFound = true; base.modelVersion = registry.activeModelVersion;
     const artifact = await boundedRead(models.ForecastModelArtifact.findOne({ businessId: scope.businessId,
       scenarioId: scope.scenarioId, _id: registry.activeArtifactId, modelVersion: registry.activeModelVersion }),
-    'businessId scenarioId horizonDays modelFamily recipeId modelVersion status trainedAt trainedDataVersion dataCutoff featureVersion featureHash promotionPolicyVersion artifactHash artifactBytes +artifactData');
+    'businessId scenarioId horizonDays modelFamily recipeId modelVersion status trainedAt trainedDataVersion dataCutoff featureVersion featureHash promotionPolicyVersion promotionPolicyHash artifactHash artifactBytes +artifactData');
     if (!artifact) return { ...base, reasonCode: 'ACTIVE_ARTIFACT_NOT_FOUND' };
     base.artifactFound = true; base.artifactStatus = artifact.status || null;
     base.activeModelStatus = artifact.status || 'NONE';
@@ -679,6 +709,7 @@ async function inspectActiveForecastModel(models, scope) {
     if (!base.recipeMatches) return { ...base, reasonCode: 'RECIPE_MISMATCH' };
     if (!base.featureHashMatches) return { ...base, reasonCode: 'FEATURE_CONTRACT_MISMATCH' };
     if (!base.artifactHashValid) return { ...base, reasonCode: 'ARTIFACT_HASH_MISMATCH' };
+    if (activeArtifacts) activeArtifacts.set(scope.horizonDays, { metadata: artifact, artifactData: Buffer.from(bytes) });
     base.status = 'ACTIVE'; base.activeModelStatus = 'ACTIVE'; base.reasonCode = 'MODEL_READY';
     return base;
   } catch (_) { return { ...base, reasonCode: 'REGISTRY_READ_FAILED' }; }

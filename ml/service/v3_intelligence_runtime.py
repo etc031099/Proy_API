@@ -8,6 +8,7 @@ import time
 import base64
 import binascii
 from collections import OrderedDict, deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from threading import RLock
@@ -502,11 +503,35 @@ class V3IntelligenceRuntime:
         return {"mode": "detail", "horizonDays": request.horizonDays, "total": 1,
                 "items": [ridge], "availabilityStatus": ridge["status"]}
 
+    def _live_health_dependencies(self, request, live, common):
+        from types import SimpleNamespace
+
+        # The immutable LIVE context and request-pinned Ridge pair are shared.
+        # Business/customer share an adapter/view, so retain their original order.
+        def business_customer():
+            business, _ = self.live_adapter.business_data(SimpleNamespace(**{**common, "mode": "compare"}), live)
+            customer, _ = self.live_adapter.customer_data(SimpleNamespace(**common), live)
+            return business, customer
+
+        def forecast_inventory():
+            forecasts = self._live_inventory_ridge_forecasts(request, live)
+            return forecasts, self.live_inventory_supplier._inventory_rows(live, forecasts)
+
+        with ThreadPoolExecutor(max_workers=3, thread_name_prefix="v3-health") as pool:
+            analytics = pool.submit(business_customer)
+            inventory_work = pool.submit(forecast_inventory)
+            supplier_work = pool.submit(self.live_inventory_supplier.supplier_data, SimpleNamespace(**common), live)
+            # Consume results in the original failure-precedence order. Assembly
+            # starts only once every prerequisite has resolved successfully.
+            business, customer = analytics.result()
+            forecasts, inventory = inventory_work.result()
+            supplier, _ = supplier_work.result()
+        return business, customer, forecasts, inventory, supplier
+
     def live_health_data(self, request, live):
         if (getattr(self, "live_adapter", None) is None
                 or getattr(self, "live_inventory_supplier", None) is None or self.health is None):
             raise V3FunctionalError("LIVE_ANALYTICS_NOT_READY", 501, "LIVE Business Health is not enabled.")
-        from types import SimpleNamespace
         try:
             common = {"period": request.period, "offset": 0, "limit": 100,
                       "mode": "summary", "metric": "revenue", "categoryCode": None,
@@ -514,11 +539,7 @@ class V3IntelligenceRuntime:
                       "customerCode": None, "segment": None, "supplierCode": None,
                       "productSkus": [], "skus": [], "horizonDays": 7,
                       "risk": None, "abc": None, "xyz": None, "flag": None}
-            business, _ = self.live_adapter.business_data(SimpleNamespace(**{**common, "mode": "compare"}), live)
-            customer, _ = self.live_adapter.customer_data(SimpleNamespace(**common), live)
-            forecasts = self._live_inventory_ridge_forecasts(request, live)
-            inventory = self.live_inventory_supplier._inventory_rows(live, forecasts)
-            supplier, _ = self.live_inventory_supplier.supplier_data(SimpleNamespace(**common), live)
+            business, customer, forecasts, inventory, supplier = self._live_health_dependencies(request, live, common)
 
             basket_artifact = self.basket if self.basket and live.as_of_date >= BASKET_CUTOFF else None
             basket = ({"available": True, "analysisVersion": basket_artifact["analysisVersion"],
