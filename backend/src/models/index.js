@@ -14,6 +14,7 @@ const ForecastModelRegistry = require('./ForecastModelRegistry');
 const ForecastMlUpdateEvent = require('./ForecastMlUpdateEvent');
 const ForecastMlUpdateState = require('./ForecastMlUpdateState');
 const ForecastTrainingJob = require('./ForecastTrainingJob');
+const ForecastMlUpdateExecution = require('./ForecastMlUpdateExecution');
 
 module.exports = {
   User,
@@ -31,5 +32,6 @@ module.exports = {
   ForecastModelRegistry,
   ForecastMlUpdateEvent,
   ForecastMlUpdateState,
-  ForecastTrainingJob
+  ForecastTrainingJob,
+  ForecastMlUpdateExecution
 };
