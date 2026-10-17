@@ -107,6 +107,7 @@ async function recordCommittedChange({ businessId, scenarioId, dataVersion, chan
       old.lastDirtyAt = new Date(Math.max(old.lastDirtyAt.getTime(), now.getTime()));
       old.nextEligibleAt = new Date(old.lastDirtyAt.getTime() + DEBOUNCE_MS);
       old.triggerReason = event.eventType;
+      old.lastTriggerSource = 'AUTO';
       if (closedThrough > old.observationsClosedThrough) {
         old.observationsClosedThrough = closedThrough;
         old.latestMatureOrigin = origin;
@@ -187,6 +188,7 @@ async function claimEligibleUpdate({ businessId = config.businessId, scenarioId 
       leaseUntil: new Date(now.getTime() + LEASE_MS), lastAttemptAt: now,
       latestDataVersion: inputVersion, claimedDataVersion: inputVersion, claimedMatureOrigin: row.latestMatureOrigin,
       claimedObservationsClosedThrough: row.observationsClosedThrough,
+      claimedManualRequestKey: row.manualPending ? row.manualRequestKey : null,
       claimedCorrectionVersion: row.historicalCorrectionVersion }, $inc: { fencingToken: 1 } },
     { new: true }).setOptions({ useBigInt64: true }).lean();
     if (claimed) {
@@ -235,6 +237,13 @@ async function finishUpdate({ businessId, scenarioId, horizonDays, leaseOwner, f
       }
       const newerEvent = version(row.latestDataVersion) > claimedVersion;
       const newerMatureOrigin = row.latestMatureOrigin > row.claimedMatureOrigin;
+      // Consume only the manual request captured by this fenced attempt.
+      if (row.manualPending && row.claimedManualRequestKey
+          && row.manualRequestKey === row.claimedManualRequestKey) {
+        row.manualPending = false;
+        row.lastManualEvaluatedAt = now;
+        row.lastManualResult = success ? outcome : 'FAILED';
+      }
       if (success) {
         row.lastProcessedDataVersion = claimedVersion;
         row.lastTrainedMatureOrigin = row.claimedMatureOrigin;
@@ -266,6 +275,7 @@ async function finishUpdate({ businessId, scenarioId, horizonDays, leaseOwner, f
       row.claimedMatureOrigin = null;
       row.claimedObservationsClosedThrough = null;
       row.claimedCorrectionVersion = null;
+      row.claimedManualRequestKey = null;
       if (newerEvent && row.nextEligibleAt < new Date(row.lastDirtyAt.getTime() + DEBOUNCE_MS)) {
         row.nextEligibleAt = new Date(row.lastDirtyAt.getTime() + DEBOUNCE_MS);
       }
@@ -299,6 +309,19 @@ async function finishUpdate({ businessId, scenarioId, horizonDays, leaseOwner, f
 
 const ackUpdate = input => finishUpdate({ ...input, success: true });
 const failUpdate = input => finishUpdate({ ...input, success: false });
+
+// A request asks for evaluation, not forced training. Safe non-eligible decisions
+// close that request without changing operational watermarks, debounce or cooldown.
+async function completeManualEvaluation({ businessId, scenarioId, horizonDays,
+  manualRequestKey, result, now = new Date() }) {
+  if (!['NO_PENDING_WORK', 'DEBOUNCE_NOT_ELAPSED', 'NOT_MATURE', 'COOLDOWN_ACTIVE',
+    'PREVIOUS_FAILURE_NOT_RETRYABLE'].includes(result)) throw new Error('Invalid manual evaluation result');
+  const updated = await State.updateOne({ ...scope({ businessId, scenarioId, horizonDays }),
+    manualPending: true, manualRequestKey, status: { $ne: 'CLAIMED' } }, { $set: {
+    manualPending: false, lastManualEvaluatedAt: now, lastManualResult: result
+  } });
+  return updated.modifiedCount > 0;
+}
 
 // Version-pinned, keyset-paginated journal export. The A.3.4 worker combines
 // these pages with its immutable historical bundle; it must discard all pages
@@ -340,4 +363,4 @@ async function exportOperationalChanges({ businessId = config.businessId, scenar
 module.exports = { HORIZONS, DEBOUNCE_MS, RATE_LIMIT_MS, LEASE_MS, RIDGE_CATALOG_FIELDS,
   watermark, matureOrigin, relevantProductDiff, classifyChange, eligible,
   recordCommittedChange, refreshWatermarks, claimEligibleUpdate, ackUpdate, failUpdate,
-  exportOperationalChanges };
+  exportOperationalChanges, completeManualEvaluation };

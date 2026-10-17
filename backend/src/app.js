@@ -27,6 +27,7 @@ const telegramRoutes = require('./routes/telegram');
 const creditPaymentRoutes = require('./routes/creditPayments');
 const mlRoutes = require('./routes/ml');
 const { createBusinessIntelligenceDashboardRoutes } = require('./routes/businessIntelligenceDashboard');
+const { createForecastMlUpdateRoutes } = require('./routes/forecastMlUpdate');
 const createAgentRoutes = require('./routes/agent');
 const { startPolling } = require('./services/telegramService');
 
@@ -130,6 +131,7 @@ app.use('/api/products', productRoutes);
 app.use('/api/contacts', contactRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/api/intelligence/forecast/ml-update', createForecastMlUpdateRoutes());
 app.use('/api/intelligence', createBusinessIntelligenceDashboardRoutes());
 app.use('/api/external', externalRoutes);
 app.use('/api/telegram', telegramRoutes);

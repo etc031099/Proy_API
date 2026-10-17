@@ -99,13 +99,15 @@ function describePending(row, horizonDays, update, now) {
   else if (row.nextEligibleAt > now) eligibility = 'DEBOUNCE_NOT_ELAPSED';
   else if (!newOrigin && !correction) eligibility = 'NOT_MATURE';
   else eligibility = 'COOLDOWN_ACTIVE';
-  return { ...base, pending: pending || eligibility === 'LEASE_ACTIVE', eligibility,
+  return { ...base, pending: pending || row.manualPending === true || eligibility === 'LEASE_ACTIVE', eligibility,
+    manualPending: row.manualPending === true,
     state: row.status, latestDataVersion, lastProcessedDataVersion,
     latestMatureOrigin: projected.latestMatureOrigin, historicalCorrection: correction,
     nextEligibleAt: row.nextEligibleAt.toISOString(), expiredLease };
 }
 
-function createCloudWorker({ preflight, readState, runEligible, update, clock = () => new Date() }) {
+function createCloudWorker({ preflight, readState, runEligible, completeManualEvaluation,
+  update, clock = () => new Date() }) {
   async function run(mode) {
     if (!['CHECK', 'STATUS', 'RUN'].includes(mode)) fail('INVALID_CLOUD_ARGUMENTS');
     const started = clock().getTime();
@@ -128,11 +130,24 @@ function createCloudWorker({ preflight, readState, runEligible, update, clock = 
         activeTrainedDataVersionAtPreflight: version(active.trainedDataVersion), promotionReadiness };
       report.horizons.push(item);
       if (mode === 'CHECK') { item.result = 'PREFLIGHT_PASS'; continue; }
-      const describe = async () => describePending(await readState(horizonDays), horizonDays, update, clock());
+      let state;
+      const describe = async () => {
+        state = await readState(horizonDays);
+        return describePending(state, horizonDays, update, clock());
+      };
       try {
         Object.assign(item, await describe());
         item.result = item.eligibility;
-        if (mode !== 'RUN' || item.eligibility !== 'ELIGIBLE') continue;
+        if (mode !== 'RUN') continue;
+        if (item.eligibility !== 'ELIGIBLE') {
+          if (state?.manualPending && item.eligibility !== 'LEASE_ACTIVE' && completeManualEvaluation) {
+            report.writesPerformed = null;
+            report.writesMayHaveOccurred = true;
+            await completeManualEvaluation({ horizonDays, manualRequestKey: state.manualRequestKey,
+              result: item.eligibility });
+          }
+          continue;
+        }
         if (clock().getTime() - started >= CYCLE_TIMEOUT_MS) fail('WORKER_CYCLE_TIMEOUT');
         // runEligible may write refreshed watermarks even if a concurrent claim
         // wins. Do not invent a count for the coordinator's internal writes.

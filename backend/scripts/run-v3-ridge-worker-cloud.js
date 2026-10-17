@@ -135,6 +135,8 @@ function productionDependencies(settings, overrides = {}) {
   };
   return {
     update, preflight,
+    completeManualEvaluation: input => update.completeManualEvaluation({ ...input,
+      businessId: settings.businessId, scenarioId: settings.scenarioId }),
     readState: horizonDays => models.ForecastMlUpdateState.findOne({ businessId: settings.businessId,
       scenarioId: settings.scenarioId, horizonDays }).setOptions({ useBigInt64: true }).lean().maxTimeMS(5000),
     runEligible: input => {
@@ -163,7 +165,11 @@ async function main(argv = process.argv.slice(2), env = process.env, createDepen
       process.exit(1);
     }, CYCLE_TIMEOUT_MS);
     dependencies = createDependencies(settings);
-    report = await createCloudWorker({ ...dependencies, runEligible: input => {
+    report = await createCloudWorker({ ...dependencies,
+      completeManualEvaluation: async input => {
+        writesMayHaveOccurred = true;
+        return dependencies.completeManualEvaluation(input);
+      }, runEligible: input => {
       writesMayHaveOccurred = true;
       return dependencies.runEligible(input);
     } }).run(mode);
