@@ -138,11 +138,16 @@ describe('business intelligence dashboard', () => {
         horizonDays: 1, predictionUnits: null, horizons: { '1d': null, '7d': null, '14d': null }, forecastPeriod: { startDate: null, selectedHorizonDays: 1, units: null } }
       : { ...forecastFixture, mode: 'LIVE', status: 'READY', method: 'RIDGE_REGRESSION', modelFamily: 'RIDGE_REGRESSION',
         horizonDays: days, modelVersion: 1, featureVersion: 'RIDGE_CAUSAL27_V1', promotionPolicyVersion: 'M6.10A22-PROMOTION-v1',
+        observationsThrough: '2026-10-15', observationCutoff: '2026-10-15', dataCutoff: '2026-10-14',
+        observedSeries: [...forecastFixture.observedSeries, { date: '2026-10-15', units: 3, status: 'CLOSED' as const }],
         predictionUnits: days === 7 ? 16.25 : 32.5, baselineUnits: 14, forecastPeriod: { startDate: '2026-10-14', selectedHorizonDays: days, units: days === 7 ? 16.25 : 32.5 },
         horizons: { '1d': null, '7d': days === 7 ? 16.25 : null, '14d': days === 14 ? 32.5 : null } }));
     render(<BusinessIntelligenceDashboard />);
     await openForecast();
-    expect((await screen.findAllByText('Machine Learning Ridge')).length).toBeGreaterThan(0);
+    expect(await screen.findByText('Machine Learning Ridge')).toBeTruthy();
+    expect(screen.getAllByText('Método seleccionado:')).toHaveLength(1);
+    expect(screen.getByText(/Datos observados hasta: 15 oct/i)).toBeTruthy();
+    expect(screen.getByText(/Corte de entrenamiento 14 oct/i)).toBeTruthy();
     expect(screen.getByText('Modelo v1')).toBeTruthy();
     expect(await screen.findByText(/Baseline estadístico MA28/)).toBeTruthy();
     expect(forecastCardText(1)).toContain('No aprobado');
@@ -250,6 +255,27 @@ describe('business intelligence dashboard', () => {
     expect(screen.getByText('12 unidades')).toBeTruthy();
   });
 
+  it('hides unclassified ABC in product detail and clarifies preventive quantity when reorder is not immediate', async () => {
+    const unclassifiedDetail: ProductInventory = { ...productInventoryFixture,
+      recommendation: { ...productInventoryFixture.recommendation, reorderNow: false, recommendedQty: 12 },
+      classification: { abc: 'UNCLASSIFIED', xyz: 'X' },
+    };
+    vi.spyOn(apiClient, 'searchBusinessIntelligenceProducts').mockResolvedValue(success({ products: [productOption] }));
+    vi.spyOn(apiClient, 'getBusinessIntelligenceProductInventory').mockResolvedValue(success(unclassifiedDetail));
+    render(<BusinessIntelligenceDashboard />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Inventario' }));
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Producto' }), { target: { value: 'pan' } });
+    await waitFor(() => expect(apiClient.searchBusinessIntelligenceProducts).toHaveBeenCalled());
+    fireEvent.click(await screen.findByRole('button', { name: /Pan francés.*SKU: PAN-FRE-001/ }));
+    expect(await screen.findByText('XYZ: X')).toBeTruthy();
+    expect(screen.queryByText(/ABC|UNCLASSIFIED/)).toBeNull();
+    expect(screen.getByText('Cantidad para el nivel objetivo')).toBeTruthy();
+    expect(screen.getByText(/No se recomienda reposición inmediata; la cantidad mostrada es una referencia/)).toBeTruthy();
+    expect(screen.getByText('Reposición inmediata:')).toBeTruthy();
+    expect(screen.getByText('Reposición inmediata:').parentElement?.textContent).toBe('Reposición inmediata: No');
+    expect(screen.getByText(/Cantidad para el nivel objetivo: 12 unidades/)).toBeTruthy();
+  });
+
   it('renders ranking table and selecting a row opens its product forecast', async () => {
     vi.spyOn(apiClient, 'searchBusinessIntelligenceProducts').mockResolvedValue(success({ products: [productOption] }));
     vi.spyOn(apiClient, 'getBusinessIntelligenceForecast').mockResolvedValue(success(forecastFixture));
@@ -290,6 +316,7 @@ describe('business intelligence dashboard', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Inventario' }));
     expect(await screen.findByText('Estabilidad de demanda (XYZ)')).toBeTruthy();
     expect(screen.queryByText('Importancia económica (ABC)')).toBeNull();
+    expect(screen.queryByText(/ABC/)).toBeNull();
     expect(screen.getByText('Riesgo de inventario')).toBeTruthy();
     expect(screen.getByText('Reposición recomendada')).toBeTruthy();
     expect(screen.getByText('X: 55')).toBeTruthy();
