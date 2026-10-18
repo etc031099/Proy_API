@@ -1,0 +1,12 @@
+'use strict';
+const mongoose = require('mongoose');
+const schema = new mongoose.Schema({
+  businessId: { type: String, required: true, immutable: true },
+  activeCheckpointId: { type: String, default: null },
+  testCycleId: { type: String, default: null },
+  state: { type: String, required: true, enum: ['NO_TEST', 'CHECKPOINT_CREATING', 'TEST_ACTIVE', 'RESTORING', 'FAILED'] },
+  resetEpoch: { type: mongoose.Schema.Types.BigInt, required: true, min: 0n },
+  failureCode: { type: String, default: null }
+}, { collection: 'mltestcontrols', timestamps: true, strict: 'throw', autoCreate: false, autoIndex: false });
+schema.index({ businessId: 1 }, { unique: true, name: 'ml_test_control_business_uq' });
+module.exports = mongoose.models.MlTestControl || mongoose.model('MlTestControl', schema);
