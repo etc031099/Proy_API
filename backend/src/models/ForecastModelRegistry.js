@@ -24,5 +24,6 @@ schema.pre('validate', function validateActivePointer(next) {
   next();
 });
 
+schema.plugin(require('../services/mlTestFence').modelPlugin);
 module.exports = mongoose.models.ForecastModelRegistry
   || mongoose.model('ForecastModelRegistry', schema);

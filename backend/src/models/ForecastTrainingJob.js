@@ -31,4 +31,5 @@ const schema = new mongoose.Schema({
 schema.index({ businessId: 1, scenarioId: 1, horizonDays: 1, trainingKey: 1 },
   { unique: true, name: 'forecast_training_job_key_uq' });
 
+schema.plugin(require('../services/mlTestFence').modelPlugin);
 module.exports = mongoose.models.ForecastTrainingJob || mongoose.model('ForecastTrainingJob', schema);

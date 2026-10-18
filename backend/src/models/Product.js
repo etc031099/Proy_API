@@ -150,4 +150,5 @@ productSchema.statics.findLowStock = function(businessId) {
   ]);
 };
 
+productSchema.plugin(require('../services/mlTestFence').modelPlugin);
 module.exports = mongoose.model('Product', productSchema);

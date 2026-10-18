@@ -20,4 +20,5 @@ schema.index({ businessId: 1, scenarioId: 1, horizonDays: 1, eventKey: 1 },
 schema.index({ businessId: 1, scenarioId: 1, horizonDays: 1, dataVersion: 1 },
   { name: 'forecast_ml_update_event_revision' });
 
+schema.plugin(require('../services/mlTestFence').modelPlugin);
 module.exports = mongoose.models.ForecastMlUpdateEvent || mongoose.model('ForecastMlUpdateEvent', schema);

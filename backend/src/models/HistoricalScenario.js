@@ -15,4 +15,5 @@ historicalScenarioSchema.index(
   { unique: true, name: 'businessId_1_scenarioId_1' }
 );
 
+historicalScenarioSchema.plugin(require('../services/mlTestFence').modelPlugin);
 module.exports = mongoose.model('HistoricalScenario', historicalScenarioSchema);

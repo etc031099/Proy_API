@@ -55,4 +55,5 @@ schema.index({ businessId: 1, scenarioId: 1, horizonDays: 1 },
   { unique: true, name: 'forecast_ml_update_scope_uq' });
 schema.index({ status: 1, nextEligibleAt: 1, leaseUntil: 1 }, { name: 'forecast_ml_update_claim' });
 
+schema.plugin(require('../services/mlTestFence').modelPlugin);
 module.exports = mongoose.models.ForecastMlUpdateState || mongoose.model('ForecastMlUpdateState', schema);

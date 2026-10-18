@@ -367,7 +367,8 @@ function createForecastRidgeTrainingWorker({ registry = createForecastModelRegis
     }
     return process({ horizonDays, inputDataVersion: String(revision.revision), observationsClosedThrough, mode: 'bootstrap' });
   }
-  return Object.freeze({ runEligible, bootstrapLocal, process });
+  return Object.freeze({ runEligible: input => require('./mlTestFence').runCycle(() => runEligible(input)),
+    bootstrapLocal, process: input => require('./mlTestFence').runCycle(() => process(input), input.claim?.testEpoch) });
 }
 
 module.exports = { createForecastRidgeTrainingWorker, runPython, canonicalBytes };

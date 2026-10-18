@@ -66,5 +66,6 @@ schema.pre('validate', function validateArtifactBytes() {
   }
 });
 
+schema.plugin(require('../services/mlTestFence').modelPlugin);
 module.exports = mongoose.models.ForecastModelArtifact
   || mongoose.model('ForecastModelArtifact', schema);

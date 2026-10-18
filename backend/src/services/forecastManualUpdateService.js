@@ -12,6 +12,7 @@ const fail = (code, httpStatus) => { throw Object.assign(new Error(code), { code
 // a URL, branch, token or arbitrary workflow input. No raw response/error logging.
 function createWorkflowDispatcher({ env = process.env, fetchImpl = globalThis.fetch } = {}) {
   return async ({ manualRequestKey } = {}) => {
+    if (!await require('./mlTestFence').externalAllowed()) return 'DEFERRED';
     if (manualRequestKey && (typeof manualRequestKey !== 'string'
         || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/.test(manualRequestKey))) return 'DEFERRED';
     const token = env.FORECAST_GITHUB_ACTIONS_TOKEN;
@@ -93,8 +94,8 @@ function productionRepository() {
       }
     },
     async recordDispatch(scope, requestKey, status) {
-      await State.updateMany({ ...scope, manualRequestKey: requestKey },
-        { $set: { manualDispatchStatus: status } }, { runValidators: true });
+      await require('./mlTestFence').mutationTransaction(() => State.updateMany({ ...scope, manualRequestKey: requestKey },
+        { $set: { manualDispatchStatus: status } }, { runValidators: true }));
     },
     history: executions,
   };
@@ -258,7 +259,7 @@ function createForecastManualUpdateService({ repository, dispatch, history, cloc
     }));
     return { dataVersion: snapshot.dataVersion, closedThrough: coordinator.watermark(now), horizons };
   }
-  return { request, status };
+  return { request: req => require('./mlTestFence').runCycle(() => request(req)), status };
 }
 
 module.exports = { createForecastManualUpdateService, createWorkflowDispatcher,

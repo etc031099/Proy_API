@@ -11,4 +11,5 @@ const schema = new mongoose.Schema({
 schema.index({ businessId: 1, productId: 1, operator: 1, threshold: 1 },
   { unique: true, partialFilterExpression: { enabled: true } });
 schema.index({ businessId: 1, productId: 1, enabled: 1 });
+schema.plugin(require('../services/mlTestFence').modelPlugin);
 module.exports = mongoose.model('StockAlertRule', schema);

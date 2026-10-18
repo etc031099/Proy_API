@@ -7,4 +7,5 @@ const schema = new mongoose.Schema({
   entityId: { type: String, required: true }, status: { type: String, enum: ['PENDING'], default: 'PENDING' }
 }, { timestamps: true, strict: 'throw' });
 schema.index({ businessId: 1, actionId: 1, type: 1 }, { unique: true });
+schema.plugin(require('../services/mlTestFence').modelPlugin);
 module.exports = mongoose.model('ActionDomainEvent', schema);

@@ -15,4 +15,5 @@ const schema = new mongoose.Schema({
 schema.index({ businessId: 1, scenarioId: 1, recordType: 1, stableKey: 1 }, { unique: true, name: 'v3_record_stable_key' });
 schema.index({ businessId: 1, scenarioId: 1, localDate: 1 });
 
+schema.plugin(require('../services/mlTestFence').modelPlugin);
 module.exports = mongoose.model('MinimarketV3Record', schema);

@@ -169,4 +169,5 @@ contactSchema.methods.updateBalance = function(amount) {
   return this.save();
 };
 
+contactSchema.plugin(require('../services/mlTestFence').modelPlugin);
 module.exports = mongoose.model('Contact', contactSchema);

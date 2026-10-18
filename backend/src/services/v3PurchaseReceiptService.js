@@ -237,4 +237,4 @@ async function receiveV3Purchase({ businessId, purchaseId, receiptKey, receivedA
   }
 }
 
-module.exports = { receiveV3Purchase, historicalPurchaseIdentity };
+module.exports = { receiveV3Purchase: input => require('./mlTestFence').runCycle(() => receiveV3Purchase(input)), historicalPurchaseIdentity };

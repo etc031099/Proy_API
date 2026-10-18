@@ -24,4 +24,5 @@ schema.pre('validate', function validateRuleEvidence(next) {
   }
   next();
 });
+schema.plugin(require('../services/mlTestFence').modelPlugin);
 module.exports = mongoose.model('InventoryAlert', schema);

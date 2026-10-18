@@ -99,10 +99,10 @@ function productionDependencies(settings, overrides = {}) {
   const pythonCheck = overrides.checkPython || checkPython;
   let worker, predictionImpact;
   const connect = async () => {
-    if (mongoose.connection.readyState === 1) return;
-    await mongoose.connect(settings.uri, { dbName: settings.database, autoCreate: false, autoIndex: false,
+    if (mongoose.connection.readyState !== 1) await mongoose.connect(settings.uri, { dbName: settings.database, autoCreate: false, autoIndex: false,
       serverSelectionTimeoutMS: 10000, connectTimeoutMS: 10000, socketTimeoutMS: 15000,
       maxPoolSize: 3, readPreference: 'primary' });
+    if (!await require('../src/services/mlTestFence').externalAllowed()) fail('TEST_CLOUD_WORKER_DISABLED');
   };
   const readState = horizonDays => models.ForecastMlUpdateState.findOne({ businessId: settings.businessId,
     scenarioId: settings.scenarioId, horizonDays }).setOptions({ useBigInt64: true }).lean().maxTimeMS(5000);

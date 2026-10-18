@@ -10,5 +10,6 @@ const schema = new mongoose.Schema({
   historicalDatasetSha256: { type: String, default: null }
 }, { versionKey: false, timestamps: true });
 
+schema.plugin(require('../services/mlTestFence').modelPlugin);
 module.exports = mongoose.models.V3OperationalRevision
   || mongoose.model('V3OperationalRevision', schema);

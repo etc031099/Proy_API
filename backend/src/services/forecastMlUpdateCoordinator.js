@@ -199,7 +199,9 @@ async function claimEligibleUpdate({ businessId = config.businessId, scenarioId 
         observationsClosedThrough: claimed.claimedObservationsClosedThrough,
         historicalCorrection: claimed.claimedCorrectionVersion != null,
         affectedLocalDate: claimed.affectedLocalDate,
-        leaseOwner, fencingToken: claimed.fencingToken, leaseUntil: claimed.leaseUntil };
+        leaseOwner, fencingToken: claimed.fencingToken, leaseUntil: claimed.leaseUntil,
+        ...(require('./mlTestFence').current() ? { testEpoch: Object.fromEntries(
+          ['resetEpoch', 'testCycleId', 'present'].map(key => [key, require('./mlTestFence').current()[key]])) } : {}) };
     }
   }
   return null;
@@ -362,5 +364,10 @@ async function exportOperationalChanges({ businessId = config.businessId, scenar
 
 module.exports = { HORIZONS, DEBOUNCE_MS, RATE_LIMIT_MS, LEASE_MS, RIDGE_CATALOG_FIELDS,
   watermark, matureOrigin, relevantProductDiff, classifyChange, eligible,
-  recordCommittedChange, refreshWatermarks, claimEligibleUpdate, ackUpdate, failUpdate,
-  exportOperationalChanges, completeManualEvaluation };
+  recordCommittedChange,
+  refreshWatermarks: input => require('./mlTestFence').mutationTransaction(() => refreshWatermarks(input)),
+  claimEligibleUpdate: input => require('./mlTestFence').mutationTransaction(() => claimEligibleUpdate(input)),
+  ackUpdate: input => require('./mlTestFence').runCycle(() => ackUpdate(input), input.testEpoch),
+  failUpdate: input => require('./mlTestFence').runCycle(() => failUpdate(input), input.testEpoch),
+  exportOperationalChanges,
+  completeManualEvaluation: input => require('./mlTestFence').mutationTransaction(() => completeManualEvaluation(input)) };

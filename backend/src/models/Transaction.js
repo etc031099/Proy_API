@@ -287,4 +287,5 @@ transactionSchema.statics.getExpenses = function(businessId, startDate, endDate)
   ]);
 };
 
+transactionSchema.plugin(require('../services/mlTestFence').modelPlugin);
 module.exports = mongoose.model('Transaction', transactionSchema);

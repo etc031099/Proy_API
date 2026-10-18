@@ -26,8 +26,13 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
   const operationalClock = createOperationalClock({ clock, timeZone: V3.timezone });
   const buildSnapshot = snapshotBuilder || (options => require('./v3OperationalSnapshotService').buildV3OperationalSnapshot(options));
   const contexts = new Map(), entities = new Map(), turnContexts = new Map(), liveSnapshots = new Map();
+  let cacheEpoch = null;
   const resolveContext = async context => {
     if (context.businessId !== V3.businessId) return null;
+    const epoch = await require('./mlTestFence').cacheIdentity();
+    if (cacheEpoch !== epoch) {
+      contexts.clear(); entities.clear(); turnContexts.clear(); liveSnapshots.clear(); cacheEpoch = epoch;
+    }
     if (!contexts.has(context.businessId)) contexts.set(context.businessId, Promise.resolve().then(async () => {
       const row = await getModels().HistoricalScenario.findOne({ businessId: context.businessId, scenarioId: V3.scenarioId })
         .select('businessId scenarioId status sourceSha256 metadata').lean().maxTimeMS(5000);
@@ -44,7 +49,8 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
     if (!cachedTurn || cachedTurn.expiresAt <= Date.now()) {
       const instant = operationalClock.now();
       const date = operationalDate(instant, V3.timezone);
-      const binding = Object.freeze({ ...verified, operationalDate: date, asOfDate: date, clockInstant: instant.toISOString() });
+      const binding = Object.freeze({ ...verified, operationalDate: date, asOfDate: date,
+        clockInstant: instant.toISOString(), testCacheIdentity: epoch });
       turnContexts.set(turnKey, { binding, expiresAt: Date.now() + 5 * 60 * 1000 });
       while (turnContexts.size > 512) turnContexts.delete(turnContexts.keys().next().value);
     }
@@ -71,7 +77,7 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
     // Reuse one immutable snapshot only inside a single assistant request (e.g. a
     // bounded multi-intent). A new requestId always reads a fresh revision.
     if (!requestId) return build();
-    const key = `${binding.businessId}:${binding.scenarioId}:${binding.datasetVersion}:${requestId}:${asOfDate}`;
+    const key = `${binding.testCacheIdentity}:${binding.businessId}:${binding.scenarioId}:${binding.datasetVersion}:${requestId}:${asOfDate}`;
     if (!liveSnapshots.has(key)) {
       liveSnapshots.set(key, Promise.resolve().then(build));
       while (liveSnapshots.size > 32) liveSnapshots.delete(liveSnapshots.keys().next().value);

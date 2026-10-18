@@ -15,4 +15,5 @@ const schema = new mongoose.Schema({
 }, { timestamps: true, strict: 'throw' });
 schema.index({ eventId: 1 }, { unique: true });
 schema.index({ status: 1, nextAttemptAt: 1, leaseUntil: 1 });
+schema.plugin(require('../services/mlTestFence').modelPlugin);
 module.exports = mongoose.model('InventoryAlertOutboxEvent', schema);

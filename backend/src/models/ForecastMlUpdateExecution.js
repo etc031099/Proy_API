@@ -97,4 +97,5 @@ schema.index({ businessId: 1, scenarioId: 1, cliInvocationKey: 1 }, { unique: tr
   partialFilterExpression: { cliInvocationKey: { $type: 'string' } }, name: 'forecast_ml_execution_cli_uq' });
 schema.index({ businessId: 1, scenarioId: 1, requestedAt: -1, executionId: -1 }, { name: 'forecast_ml_execution_history' });
 
+schema.plugin(require('../services/mlTestFence').modelPlugin);
 module.exports = mongoose.models.ForecastMlUpdateExecution || mongoose.model('ForecastMlUpdateExecution', schema);

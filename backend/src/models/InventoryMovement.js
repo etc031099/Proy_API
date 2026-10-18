@@ -106,4 +106,5 @@ for (const operation of [
   inventoryMovementSchema.pre(operation, rejectMutation);
 }
 
+inventoryMovementSchema.plugin(require('../services/mlTestFence').modelPlugin);
 module.exports = mongoose.model('InventoryMovement', inventoryMovementSchema);

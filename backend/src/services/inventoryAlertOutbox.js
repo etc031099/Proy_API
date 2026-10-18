@@ -28,6 +28,7 @@ const repository = {
     { $set: update, $unset: { leaseToken: 1, leaseUntil: 1 } }).exec()
 };
 const send = async payload => {
+  if (!await require('./mlTestFence').externalAllowed()) return { category: 'ML_TEST_MODE', retryable: false };
   const url = process.env.NODE_RED_WEBHOOK_URL, secret = process.env.NODE_RED_WEBHOOK_SECRET;
   if (!url || !secret) return { category: 'DISABLED', retryable: true };
   // HTTPS for deployed traffic; loopback HTTP is allowed only for local development.
@@ -53,6 +54,7 @@ const createInventoryAlertDispatcher = ({ repo = repository, deliver = send, clo
   afterDelivered = repo === repository ? eventId => require('./inventoryAlertChannels').createInventoryAlertChannels().processPendingEvent(eventId) : async () => {} } = {}) => ({
   async run() {
     const summary = { claimed: 0, delivered: 0, retrying: 0, failed: 0 };
+    if (!await require('./mlTestFence').externalAllowed()) return { ...summary, suppressed: true };
     for (let i = 0; i < 10; i++) {
       const token = randomUUID(), row = await repo.claim(clock(), token);
       if (!row) break;

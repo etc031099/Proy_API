@@ -22,13 +22,14 @@ const unknownFields = (input, allowed) => {
 
 function productionRepository(model = Model, session) {
   const query = value => session ? value.session(session) : value;
+  const mutate = work => session ? work() : require('./mlTestFence').mutationTransaction(work);
   return {
     withSession: next => productionRepository(model, next),
     find: filter => query(model.findOne(filter)).select('-_id -createdAt -updatedAt').lean().exec(),
-    async insert(row) { return session ? (await model.create([row], { session }))[0].toObject() : (await model.create(row)).toObject(); },
-    replace: (scope, executionId, writeVersion, values) => query(model.findOneAndUpdate(
+    insert: row => mutate(async () => session ? (await model.create([row], { session }))[0].toObject() : (await model.create(row)).toObject()),
+    replace: (scope, executionId, writeVersion, values) => mutate(() => query(model.findOneAndUpdate(
       { ...scope, executionId, writeVersion }, { $set: values, $inc: { writeVersion: 1 } },
-      { new: true, runValidators: true })).select('-_id -createdAt -updatedAt').lean().exec(),
+      { new: true, runValidators: true })).select('-_id -createdAt -updatedAt').lean().exec()),
   };
 }
 
@@ -331,7 +332,7 @@ function createForecastMlUpdateExecutionService({ repository = productionReposit
     row.pendingBefore = null; row.pendingAfter = null; row.availableOrigins = null; row.eligibility = null;
     row.impact = { status: 'NOT_APPLICABLE', reasonCode: null };
   });
-  return Object.freeze({ createExecution, getExecution, findExecutionByManualRequest, findExecutionByGithubRun, findExecutionByCliInvocation,
+  const api = { createExecution, getExecution, findExecutionByManualRequest, findExecutionByGithubRun, findExecutionByCliInvocation,
     resumeInterruptedExecution, pinPredictionSnapshot, finalizePredictionImpact, finalizeInventoryImpact,
     bindExecutionRun,
     updateRunningMetadata,
@@ -342,7 +343,12 @@ function createForecastMlUpdateExecutionService({ repository = productionReposit
     transitionExecution, startExecution: mark('RUNNING'), markPending: mark('PENDING'),
     markDeferred: mark('DEFERRED'), markNotEligible: mark('NOT_ELIGIBLE'), markNoPendingWork: mark('NO_PENDING_WORK'),
     markPromoted: mark('PROMOTED'), markNoPromotion: mark('EVALUATED_NO_PROMOTION'), markPartial: mark('PARTIAL'),
-    markFailed: mark('FAILED'), markInterrupted: mark('INTERRUPTED'), recordHorizonResult, registerGithubAttempt, setImpactStatus });
+    markFailed: mark('FAILED'), markInterrupted: mark('INTERRUPTED'), recordHorizonResult, registerGithubAttempt, setImpactStatus };
+  const reads = new Set(['getExecution', 'findExecutionByManualRequest', 'findExecutionByGithubRun', 'findExecutionByCliInvocation', 'withSession']);
+  for (const [key, operation] of Object.entries(api)) if (!reads.has(key)) {
+    api[key] = (...args) => require('./mlTestFence').runCycle(() => operation(...args));
+  }
+  return Object.freeze(api);
 }
 
 module.exports = { createForecastMlUpdateExecutionService, productionRepository };

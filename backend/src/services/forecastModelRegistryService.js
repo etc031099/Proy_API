@@ -390,8 +390,12 @@ function createForecastModelRegistryService({ artifactModel = ForecastModelArtif
     return rows.map(publicMetadata);
   }
 
-  return Object.freeze({ createCandidateMetadata, getActiveModelMetadata, getActiveModelArtifact,
-    promoteCandidate, rejectCandidate, markCandidateFailed, listModelVersions });
+  const fence = work => require('./mlTestFence').runCycle(work);
+  return Object.freeze({ createCandidateMetadata: input => fence(() => createCandidateMetadata(input)),
+    getActiveModelMetadata, getActiveModelArtifact,
+    promoteCandidate: input => fence(() => promoteCandidate(input)),
+    rejectCandidate: input => fence(() => rejectCandidate(input)),
+    markCandidateFailed: input => fence(() => markCandidateFailed(input)), listModelVersions });
 }
 
 function verifyArtifact(artifact) {

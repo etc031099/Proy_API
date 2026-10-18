@@ -22,4 +22,5 @@ creditPaymentSchema.index(
   } }
 );
 
+creditPaymentSchema.plugin(require('../services/mlTestFence').modelPlugin);
 module.exports = mongoose.model('CreditPayment', creditPaymentSchema);

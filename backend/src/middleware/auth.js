@@ -58,6 +58,9 @@ const authenticate = async (req, res, next) => {
 
     // Attach user to request
     req.user = user;
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && user.businessId === require('../config/v3Operational').businessId) {
+      return await require('../services/mlTestFence').runCycle(() => next());
+    }
     next();
 
   } catch (error) {

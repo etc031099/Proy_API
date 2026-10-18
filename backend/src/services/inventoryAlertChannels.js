@@ -51,6 +51,7 @@ const messageFor = event => {
 };
 const createInventoryAlertChannels = ({ repo = repository, send = require('./telegramService').sendMessage, clock = () => new Date() } = {}) => {
   const prepare = async eventId => {
+    if (!await require('./mlTestFence').externalAllowed()) return { status: 'SUPPRESSED' };
     if (typeof eventId !== 'string' || !EVENT_PATTERN.test(eventId)) return null;
     const event = await repo.event(eventId);
     if (!event?.receivedAt) return null;
@@ -58,6 +59,7 @@ const createInventoryAlertChannels = ({ repo = repository, send = require('./tel
     return { status: 'PENDING' };
   };
   const processPendingEvent = async eventId => {
+    if (!await require('./mlTestFence').externalAllowed()) return { status: 'SUPPRESSED' };
     const event = await repo.event(eventId);
     // Receipt and Node-RED ACK alone never authorize a send before ACT-04A delivery.
     if (!event || event.status !== 'DELIVERED' || !event.receivedAt) return { status: 'PENDING' };

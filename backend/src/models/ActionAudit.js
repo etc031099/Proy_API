@@ -8,4 +8,5 @@ const schema = new mongoose.Schema({
   resultSummary: new mongoose.Schema({ id: String, type: String, currency: String, total: Number, stock: Number }, { _id: false, strict: 'throw' })
 }, { strict: 'throw' });
 schema.index({ businessId: 1, actionId: 1 }, { unique: true });
+schema.plugin(require('../services/mlTestFence').modelPlugin);
 module.exports = mongoose.model('ActionAudit', schema);

@@ -24,5 +24,6 @@ schema.index(
   } }
 );
 
+schema.plugin(require('../services/mlTestFence').modelPlugin);
 module.exports = mongoose.models.V3OperationalChange
   || mongoose.model('V3OperationalChange', schema);

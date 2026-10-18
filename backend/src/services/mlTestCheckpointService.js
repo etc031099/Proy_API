@@ -175,7 +175,7 @@ async function acquireControl(db, scope, checkpointId, capturedAt) {
 }
 async function verifyStored(db, checkpointId, scope) {
   scope = M.authorizedScope(scope);
-  const row = await db.collection(NAMES[1]).findOne({ checkpointId, ...scope });
+  const row = await db.collection(NAMES[1]).findOne({ checkpointId, ...scope }, { promoteLongs: false });
   if (!row || !['CREATING', 'READY'].includes(row.status) || row.schemaVersion !== 1) M.fail('CHECKPOINT_MANIFEST_INVALID');
   if (row.collectionManifest?.length !== M.COLLECTIONS.length || new Set(row.collectionManifest.map(m => m.collection)).size !== M.COLLECTIONS.length
       || row.hashes?.manifest !== M.hashValue(M.manifestContent(row))) M.fail('CHECKPOINT_MANIFEST_HASH_MISMATCH');
@@ -306,5 +306,6 @@ async function preflightCheckpoint({ client, db, scope, elapsedLimitMs = READ_LI
       bsonBytes: row.byteCount, estimatedChunks: row.chunkCount, largestDocumentBytes: row.largestDocumentBytes })) };
 }
 module.exports = { captureLocalCheckpoint, verifyLocalCheckpoint, preflightCheckpoint, provisionLocal,
+  scanSource,
   assertLocalTarget, closedThrough, codeOf, LIMIT_BYTES, LIMIT_DOCUMENTS, READ_LIMIT_MS,
   MAX_PREFLIGHT_READ_LIMIT_MS };

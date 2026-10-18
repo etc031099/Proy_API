@@ -18,6 +18,7 @@ const getWebhookUrl = () => process.env.NODE_RED_WEBHOOK_URL;
  * @returns {Promise<{delivered: boolean, status?: number, reason?: string}>}
  */
 const notifyNodeRed = async (event, payload = {}) => {
+  if (!await require('./mlTestFence').externalAllowed()) return { delivered: false, reason: 'ML_TEST_MODE' };
   const url = getWebhookUrl();
   if (!url) return { delivered: false, reason: 'disabled' };
 

@@ -20,4 +20,5 @@ const schema = new mongoose.Schema({
 schema.index({ eventId: 1, channel: 1, destinationKey: 1 }, { unique: true });
 schema.index({ status: 1, nextAttemptAt: 1, leaseUntil: 1 });
 schema.index({ businessId: 1, createdAt: -1 });
+schema.plugin(require('../services/mlTestFence').modelPlugin);
 module.exports = mongoose.model('InventoryAlertChannelDelivery', schema);

@@ -9,4 +9,5 @@ const schema = new mongoose.Schema({
 }, { strict: 'throw' });
 schema.index({ businessId: 1, automationId: 1, eventId: 1 }, { unique: true });
 schema.index({ businessId: 1, startedAt: -1 });
+schema.plugin(require('../services/mlTestFence').modelPlugin);
 module.exports = mongoose.model('AutomationRun', schema);

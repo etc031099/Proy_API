@@ -16,4 +16,5 @@ schema.index({ userId: 1, businessId: 1, pendingActionId: 1 }, { unique: true })
 schema.index({ userId: 1, businessId: 1, sourceChannel: 1, externalRequestId: 1 }, { unique: true });
 schema.index({ userId: 1, businessId: 1, conversationId: 1, status: 1, createdAt: -1 });
 // No TTL deletion: expiration is enforced on confirmation; retain terminal records for audit/idempotency.
+schema.plugin(require('../services/mlTestFence').modelPlugin);
 module.exports = mongoose.model('PendingAction', schema);
