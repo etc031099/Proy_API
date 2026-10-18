@@ -11,7 +11,7 @@ const fail = (code, httpStatus) => { throw Object.assign(new Error(code), { code
 // Fixed GitHub host/workflow/ref: neither the client nor a database row supplies
 // a URL, branch, token or arbitrary workflow input. No raw response/error logging.
 function createWorkflowDispatcher({ env = process.env, fetchImpl = globalThis.fetch } = {}) {
-  return async ({ manualRequestKey } = {}) => {
+  return async ({ manualRequestKey, testEpoch } = {}) => {
     if (!await require('./mlTestFence').externalAllowed()) return 'DEFERRED';
     if (manualRequestKey && (typeof manualRequestKey !== 'string'
         || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/.test(manualRequestKey))) return 'DEFERRED';
@@ -24,7 +24,8 @@ function createWorkflowDispatcher({ env = process.env, fetchImpl = globalThis.fe
         headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json', 'X-GitHub-Api-Version': '2026-03-10' },
         body: JSON.stringify({ ref: 'main', inputs: { mode: 'run',
-          ...(manualRequestKey ? { manualRequestKey } : {}) } }),
+          ...(manualRequestKey ? { manualRequestKey } : {}),
+          ...(testEpoch ? { testEpoch: JSON.stringify(require('./mlTestFence').parseToken(testEpoch)) } : {}) } }),
       });
       // Current API returns 200; 204 supports the previous API behavior.
       await response.body?.cancel();
@@ -183,6 +184,8 @@ function createForecastManualUpdateService({ repository, dispatch, history, cloc
         if (existing && !send) continue;
         row.manualPending = true;
         row.manualRequestKey = requestKey;
+        row.manualTestEpoch = existing?.manualTestEpoch || (require('./mlTestFence').current()
+          ? require('./mlTestFence').durableToken(require('./mlTestFence').current()) : null);
         row.lastTriggerSource = 'MANUAL';
         row.lastManualRequestAt = existing?.lastManualRequestAt || now;
         row.lastManualDispatchAt = now;
@@ -193,11 +196,13 @@ function createForecastManualUpdateService({ repository, dispatch, history, cloc
       if (audit) await audit.createExecution({ ...scope, triggerSource: 'MANUAL', manualRequestKey: requestKey,
         requestedAt: existing?.lastManualRequestAt || now, dataVersionBefore: snapshot.dataVersion, pendingBefore: true });
       return { requestStatus: existing ? 'ALREADY_PENDING' : 'REQUEST_ACCEPTED',
-        dispatch: send ? 'RESERVED' : existing.manualDispatchStatus || 'DEFERRED', requestKey, send };
+        dispatch: send ? 'RESERVED' : existing.manualDispatchStatus || 'DEFERRED', requestKey, send,
+        testEpoch: states[0].manualTestEpoch };
     });
     let dispatchStatus = result.dispatch;
     if (result.send) {
-      try { dispatchStatus = await dispatchWorkflow({ manualRequestKey: result.requestKey }); } catch { dispatchStatus = 'DEFERRED'; }
+      try { dispatchStatus = await dispatchWorkflow({ manualRequestKey: result.requestKey,
+        ...(result.testEpoch ? { testEpoch: result.testEpoch } : {}) }); } catch { dispatchStatus = 'DEFERRED'; }
       if (!['DISPATCHED', 'DEFERRED'].includes(dispatchStatus)) dispatchStatus = 'DEFERRED';
       // The durable request was committed BEFORE the network call. A metadata
       // write failure must not turn acceptance into an ambiguous POST failure.

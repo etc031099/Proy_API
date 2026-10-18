@@ -189,6 +189,7 @@ async function claimEligibleUpdate({ businessId = config.businessId, scenarioId 
       latestDataVersion: inputVersion, claimedDataVersion: inputVersion, claimedMatureOrigin: row.latestMatureOrigin,
       claimedObservationsClosedThrough: row.observationsClosedThrough,
       claimedManualRequestKey: row.manualPending ? row.manualRequestKey : null,
+      claimedTestEpoch: require('./mlTestFence').current() ? require('./mlTestFence').durableToken(require('./mlTestFence').current()) : null,
       claimedCorrectionVersion: row.historicalCorrectionVersion }, $inc: { fencingToken: 1 } },
     { new: true }).setOptions({ useBigInt64: true }).lean();
     if (claimed) {
@@ -200,8 +201,7 @@ async function claimEligibleUpdate({ businessId = config.businessId, scenarioId 
         historicalCorrection: claimed.claimedCorrectionVersion != null,
         affectedLocalDate: claimed.affectedLocalDate,
         leaseOwner, fencingToken: claimed.fencingToken, leaseUntil: claimed.leaseUntil,
-        ...(require('./mlTestFence').current() ? { testEpoch: Object.fromEntries(
-          ['resetEpoch', 'testCycleId', 'present'].map(key => [key, require('./mlTestFence').current()[key]])) } : {}) };
+        ...(claimed.claimedTestEpoch ? { testEpoch: claimed.claimedTestEpoch } : {}) };
     }
   }
   return null;
@@ -367,7 +367,7 @@ module.exports = { HORIZONS, DEBOUNCE_MS, RATE_LIMIT_MS, LEASE_MS, RIDGE_CATALOG
   recordCommittedChange,
   refreshWatermarks: input => require('./mlTestFence').mutationTransaction(() => refreshWatermarks(input)),
   claimEligibleUpdate: input => require('./mlTestFence').mutationTransaction(() => claimEligibleUpdate(input)),
-  ackUpdate: input => require('./mlTestFence').runCycle(() => ackUpdate(input), input.testEpoch),
-  failUpdate: input => require('./mlTestFence').runCycle(() => failUpdate(input), input.testEpoch),
+  ackUpdate: input => require('./mlTestFence').runClaim(() => ackUpdate(input), input),
+  failUpdate: input => require('./mlTestFence').runClaim(() => failUpdate(input), input),
   exportOperationalChanges,
   completeManualEvaluation: input => require('./mlTestFence').mutationTransaction(() => completeManualEvaluation(input)) };

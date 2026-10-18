@@ -292,6 +292,7 @@ function productionFixture() {
     connect: async (_uri, options) => { calls.push({ connectionOptions: options }); },
     disconnect: async () => calls.push('disconnect'),
     connection: { db: { get databaseName() { return control.database; },
+      collection: () => ({ findOne: async () => null }),
       admin: () => ({ command: async command => {
         assert.deepEqual(command, { hello: 1 }); return { setName: 'atlas-fixture', isWritablePrimary: control.primary };
       } }) } },

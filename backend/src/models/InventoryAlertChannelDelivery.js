@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const schema = new mongoose.Schema({
+  testEpoch: { type: mongoose.Schema.Types.Mixed, default: null },
   businessId: { type: String, required: true, immutable: true },
   eventId: { type: String, required: true, immutable: true },
   channel: { type: String, enum: ['telegram'], default: 'telegram', immutable: true },

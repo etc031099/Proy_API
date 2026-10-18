@@ -2,12 +2,14 @@
 const config = require('../config/v3Operational');
 const mongoose = require('mongoose');
 const F = require('./mlTestFence');
-const fail = code => { throw Object.assign(new Error(code), { code, httpStatus: 403 }); };
+const fail = (code, httpStatus = 403) => { throw Object.assign(new Error(code), { code, httpStatus }); };
 // Trusted session user only; never accept tenant/scenario/epoch from a body.
-function authorizeAdminAction(user, body = {}) {
+function authorizeAdminAction(user, body = {}, query = {}) {
+  if (!user?._id) fail('ML_TEST_AUTH_REQUIRED', 401);
   if (!user?._id || user.isActive !== true || user.role !== 'admin') fail('ML_TEST_ADMIN_REQUIRED');
   if (!body || typeof body !== 'object' || Array.isArray(body)) fail('ML_TEST_SCOPE_FORBIDDEN');
-  if (user.businessId !== config.businessId || ['businessId', 'scenarioId', 'resetEpoch', 'testCycleId'].some(key => key in body)) {
+  if (!query || typeof query !== 'object' || Array.isArray(query)) fail('ML_TEST_SCOPE_FORBIDDEN');
+  if (user.businessId !== config.businessId || ['businessId', 'scenarioId', 'resetEpoch', 'testCycleId'].some(key => key in body || key in query)) {
     fail('ML_TEST_SCOPE_FORBIDDEN');
   }
   return { businessId: config.businessId, scenarioId: config.scenarioId };

@@ -9,6 +9,26 @@ const fail = code => { throw Object.assign(new Error(code), { code, statusCode: 
 const tokenOf = row => Object.freeze({ resetEpoch: String(row?.resetEpoch ?? 0),
   testCycleId: row?.testCycleId ?? null, present: Boolean(row), state: row?.state || 'NO_TEST' });
 const sameToken = (a, b) => a.resetEpoch === b.resetEpoch && a.testCycleId === b.testCycleId && a.present === b.present;
+function parseToken(value) {
+  let token; try { token = typeof value === 'string' ? JSON.parse(value) : value; } catch { fail('TEST_EPOCH_INVALID'); }
+  if (!token || typeof token !== 'object' || Object.keys(token).some(key => !['resetEpoch', 'testCycleId', 'present'].includes(key))
+      || typeof token.present !== 'boolean' || typeof token.resetEpoch !== 'string' || !/^(0|[1-9]\d*)$/.test(token.resetEpoch)
+      || BigInt(token.resetEpoch) > 9223372036854775807n
+      || (token.testCycleId !== null && (typeof token.testCycleId !== 'string' || !/^[a-f0-9-]{36}$/.test(token.testCycleId)))) fail('TEST_EPOCH_INVALID');
+  return Object.freeze({ resetEpoch: String(token.resetEpoch), testCycleId: token.testCycleId, present: token.present });
+}
+const durableToken = token => Object.fromEntries(['resetEpoch', 'testCycleId', 'present'].map(key => [key, token[key]]));
+async function assertCurrent(db, expected) {
+  if (!sameToken(expected, await capture(db))) fail('STALE_TEST_EPOCH');
+}
+async function runClaim(work, claim) {
+  if (mongoose.connection.readyState === 1) {
+    const token = await capture(mongoose.connection.db);
+    if (token.present && BigInt(token.resetEpoch) > 0n && !claim?.testEpoch) fail('TEST_EPOCH_REQUIRED');
+    if (claim?.testEpoch) await assertCurrent(mongoose.connection.db, parseToken(claim.testEpoch));
+  }
+  return runCycle(work, claim?.testEpoch);
+}
 async function capture(db) {
   return tokenOf(await db.collection('mltestcontrols').findOne({ businessId: config.businessId }, { promoteLongs: false }));
 }
@@ -18,6 +38,7 @@ async function withEpoch(db, work, expected) {
     return work();
   }
   const token = expected || await capture(db);
+  if (expected) await assertCurrent(db, expected);
   // Await Mongoose thenables INSIDE the context; returning a lazy Query would
   // otherwise execute its hooks only after AsyncLocalStorage.run has exited.
   return cycles.run(token, async () => await work());
@@ -35,7 +56,7 @@ async function mutationTransaction(work) {
   return runCycle(async () => {
     const context = cycles.getStore();
     // Production paths retain their existing transaction boundaries.
-    if (!context?.present || await externalAllowed()) return work();
+    if (!context?.present) return work();
     if (context.session?.inTransaction()) return work();
     const session = await mongoose.startSession();
     try { return await session.withTransaction(() => cycles.run({ ...context, session }, async () => await work()),
@@ -50,12 +71,14 @@ async function guard({ db, session, expected = cycles.getStore() }) {
   const row = await controls.findOne({ businessId: config.businessId }, { session, promoteLongs: false });
   if (expected && (expected.resetEpoch !== String(row?.resetEpoch ?? 0)
       || expected.testCycleId !== (row?.testCycleId ?? null) || expected.present !== Boolean(row))) fail('STALE_TEST_EPOCH');
-  if (!row || row.state === 'NO_TEST') return;
+  if (!row) return;
+  if (row.state === 'NO_TEST' && String(row.resetEpoch) === '0' && !expected) return;
   if (!expected) fail('TEST_EPOCH_CONTEXT_REQUIRED');
-  if (row.state !== 'TEST_ACTIVE') fail('TEST_RESTORE_BLOCKED');
+  if (!['TEST_ACTIVE', 'NO_TEST'].includes(row.state)) fail('TEST_RESTORE_BLOCKED');
+  if (row.state === 'NO_TEST' && !session?.inTransaction()) return;
   if (!session?.inTransaction()) fail('TEST_TRANSACTION_REQUIRED');
   let changed;
-  try { changed = await controls.updateOne({ businessId: config.businessId, state: 'TEST_ACTIVE',
+  try { changed = await controls.updateOne({ businessId: config.businessId, state: row.state,
     resetEpoch: row.resetEpoch, testCycleId: expected.testCycleId }, { $set: { writeFenceNonce: randomUUID() } }, { session }); }
   catch (error) {
     if (error.code === 112 || error.hasErrorLabel?.('TransientTransactionError')) {
@@ -123,5 +146,6 @@ function modelPlugin(schema) {
   });
 }
 module.exports = { capture, withEpoch, runCycle, mutationTransaction, guard, externalAllowed, cacheIdentity, modelPlugin,
+  parseToken, durableToken, assertCurrent, runClaim, tokenOf,
   invalidateCaches: () => { cacheGeneration++; },
   current: () => cycles.getStore(), fail };

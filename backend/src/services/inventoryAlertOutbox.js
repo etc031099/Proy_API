@@ -19,13 +19,15 @@ const recordAlertEvent = async ({ alert, eventType, previousStock, newStock, pro
 };
 const backoffMs = attempts => [30000, 120000, 300000, 900000][Math.min(Math.max(attempts - 1, 0), 3)];
 const repository = {
-  claim: (now, token) => Event.findOneAndUpdate({ $or: [
+  claim: (now, token) => require('./mlTestFence').mutationTransaction(() => Event.findOneAndUpdate({ $or: [
     { status: { $in: ['PENDING', 'FAILED'] }, nextAttemptAt: { $ne: null, $lte: now } },
     { status: 'IN_FLIGHT', leaseUntil: { $lte: now } }
-  ] }, { $set: { status: 'IN_FLIGHT', leaseToken: token, leaseUntil: new Date(now.getTime() + 15000), lastAttemptAt: now },
-    $inc: { attempts: 1 } }, { new: true, sort: { createdAt: 1 } }).lean().exec(),
-  finish: (row, token, update) => Event.updateOne({ eventId: row.eventId, status: 'IN_FLIGHT', leaseToken: token },
-    { $set: update, $unset: { leaseToken: 1, leaseUntil: 1 } }).exec()
+  ] }, { $set: { status: 'IN_FLIGHT', leaseToken: token, leaseUntil: new Date(now.getTime() + 15000), lastAttemptAt: now,
+    testEpoch: require('./mlTestFence').current() ? require('./mlTestFence').durableToken(require('./mlTestFence').current()) : null },
+    $inc: { attempts: 1 } }, { new: true, sort: { createdAt: 1 } }).lean().exec()),
+  finish: (row, token, update) => require('./mlTestFence').runClaim(() => require('./mlTestFence').mutationTransaction(() =>
+    Event.updateOne({ eventId: row.eventId, status: 'IN_FLIGHT', leaseToken: token },
+      { $set: update, $unset: { leaseToken: 1, leaseUntil: 1 } }).exec()), row)
 };
 const send = async payload => {
   if (!await require('./mlTestFence').externalAllowed()) return { category: 'ML_TEST_MODE', retryable: false };

@@ -8,7 +8,8 @@ const config = require('../src/config/v3Operational');
 const { LIMITS, budget } = require('../src/services/mlTestOperationBudget');
 const admin = { _id: 'authenticated', businessId: config.businessId, role: 'admin', isActive: true };
 test('future admin boundary rejects unauthenticated, non-admin and client tenant/epoch overrides', () => {
-  for (const user of [null, { ...admin, role: 'user' }, { ...admin, isActive: false }, { ...admin, businessId: 'foreign' }]) {
+  assert.throws(() => access.authorizeAdminAction(null), { httpStatus: 401 });
+  for (const user of [{ ...admin, role: 'user' }, { ...admin, isActive: false }, { ...admin, businessId: 'foreign' }]) {
     assert.throws(() => access.authorizeAdminAction(user), { httpStatus: 403 });
   }
   for (const body of [{ businessId: config.businessId }, { scenarioId: 'foreign' }, { resetEpoch: '2' }, { testCycleId: 'x' }]) {

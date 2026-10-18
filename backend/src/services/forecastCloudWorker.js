@@ -10,6 +10,7 @@ const TRAINING_TIMEOUT_MS = 120000;
 const CYCLE_TIMEOUT_MS = 8 * 60 * 1000;
 const SAFE_CODES = new Set([
   'STALE_TEST_EPOCH', 'TEST_CLOUD_WORKER_DISABLED', 'TEST_RESTORE_BLOCKED', 'TEST_TRANSACTION_REQUIRED', 'TEST_EPOCH_CONTEXT_REQUIRED',
+  'TEST_EPOCH_REQUIRED', 'TEST_EPOCH_INVALID', 'TEST_QUEUE_IDENTITY_REQUIRED',
   'INVALID_CLOUD_ARGUMENTS', 'CLOUD_ENV_REQUIRED', 'INVALID_CLOUD_TARGET', 'CLOUD_SCOPE_MISMATCH',
   'CLOUD_CONNECTION_FAILED', 'CLOUD_DATABASE_MISMATCH', 'CLOUD_REPLICA_SET_REQUIRED',
   'ML_COLLECTIONS_NOT_READY', 'ML_INDEXES_NOT_READY', 'BOOTSTRAP_LINEAGE_INVALID',
@@ -53,7 +54,10 @@ function validateEnvironment(env) {
       || ['tlsInsecure', 'tlsAllowInvalidCertificates', 'tlsAllowInvalidHostnames', 'directConnection']
         .some(key => uri.searchParams.has(key) && uri.searchParams.get(key) !== 'false')) fail('INVALID_CLOUD_TARGET');
   return Object.freeze({ uri: env.FORECAST_CLOUD_MONGO_URI, database,
-    businessId: config.businessId, scenarioId: config.scenarioId, python: env.FORECAST_TRAINING_PYTHON });
+    businessId: config.businessId, scenarioId: config.scenarioId, python: env.FORECAST_TRAINING_PYTHON,
+    ...(env.FORECAST_TEST_EPOCH ? { testEpoch: require('./mlTestFence').parseToken(env.FORECAST_TEST_EPOCH) } : {}),
+    github: Boolean(env.GITHUB_RUN_ID), queuedAt: env.FORECAST_WORKER_QUEUED_AT,
+    manualRequestKey: env.FORECAST_MANUAL_REQUEST_KEY });
 }
 
 const version = value => {

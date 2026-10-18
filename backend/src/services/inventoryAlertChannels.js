@@ -24,11 +24,13 @@ const repository = {
       { upsert: true, runValidators: true, setDefaultsOnInsert: true }).exec();
     } catch (error) { if (error.code !== 11000) throw error; }
   },
-  claim: (event, now, token) => Delivery.findOneAndUpdate({ eventId: event.eventId, businessId: event.businessId, ...due(now) },
-    { $set: { status: 'IN_FLIGHT', leaseToken: token, leaseUntil: new Date(now.getTime() + LEASE_MS), lastAttemptAt: now },
-      $inc: { attempts: 1 } }, { new: true, sort: { createdAt: 1 } }).lean().exec(),
-  finish: (row, token, update) => Delivery.updateOne({ _id: row._id, businessId: row.businessId, status: 'IN_FLIGHT', leaseToken: token },
-    { $set: update, $unset: { leaseToken: 1, leaseUntil: 1 } }).exec(),
+  claim: (event, now, token) => require('./mlTestFence').mutationTransaction(() => Delivery.findOneAndUpdate({ eventId: event.eventId, businessId: event.businessId, ...due(now) },
+    { $set: { status: 'IN_FLIGHT', leaseToken: token, leaseUntil: new Date(now.getTime() + LEASE_MS), lastAttemptAt: now,
+      testEpoch: require('./mlTestFence').current() ? require('./mlTestFence').durableToken(require('./mlTestFence').current()) : null },
+      $inc: { attempts: 1 } }, { new: true, sort: { createdAt: 1 } }).lean().exec()),
+  finish: (row, token, update) => require('./mlTestFence').runClaim(() => require('./mlTestFence').mutationTransaction(() =>
+    Delivery.updateOne({ _id: row._id, businessId: row.businessId, status: 'IN_FLIGHT', leaseToken: token },
+      { $set: update, $unset: { leaseToken: 1, leaseUntil: 1 } }).exec()), row),
   // Filter eligibility before limiting, so an undelivered outbox backlog cannot
   // starve channel retries that are ready to send.
   pending: now => Delivery.aggregate([

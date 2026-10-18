@@ -38,6 +38,8 @@ const schema = new mongoose.Schema({
   claimedObservationsClosedThrough: { type: String, default: null },
   claimedCorrectionVersion: { type: mongoose.Schema.Types.BigInt, default: null },
   claimedManualRequestKey: { type: String, default: null },
+  claimedTestEpoch: { type: mongoose.Schema.Types.Mixed, default: null },
+  manualTestEpoch: { type: mongoose.Schema.Types.Mixed, default: null },
   lastAttemptAt: { type: Date, default: null },
   lastSuccessAt: { type: Date, default: null },
   lastFailureAt: { type: Date, default: null },

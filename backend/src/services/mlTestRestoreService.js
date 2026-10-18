@@ -42,10 +42,10 @@ async function* documents(db, checkpointId, collection) {
     if (pending.length) M.fail('CHECKPOINT_BSON_TRUNCATED');
   } finally { await cursor.close(); }
 }
-async function validateBeforeRestore(client, db, checkpointId, scope) {
+async function validateBeforeRestore(client, db, checkpointId, scope, authorization) {
   const checkpoint = await db.collection('mltestcheckpoints').findOne({ checkpointId, ...scope }, { promoteLongs: false });
   if (!checkpoint || checkpoint.status !== 'READY') M.fail('RESTORE_READY_CHECKPOINT_REQUIRED');
-  await S.verifyLocalCheckpoint({ client, db, checkpointId, scope });
+  await S.verifyLocalCheckpoint({ client, db, checkpointId, scope, authorization });
   for (const collection of ORDER) for await (const doc of documents(db, checkpointId, collection)) {
     const filter = M.scopeFilter(collection, scope);
     if (Object.entries(filter).some(([key, value]) => !isDeepStrictEqual(doc[key], value))) M.fail('CHECKPOINT_SCOPE_INVALID');
@@ -63,21 +63,30 @@ async function verifyRestored(client, db, checkpoint, scope) {
   return { dataVersion: actual.dataVersion, totalDocuments: actual.totalDocuments, totalBytes: actual.totalBytes };
 }
 async function restoreLocalCheckpoint({ client, db, checkpointId, restoreId, branch, scope,
-  afterCollection, invalidateCaches = async () => {} }) {
-  S.assertLocalTarget(client, db); scope = M.authorizedScope(scope);
+  finish = false, authorization, afterCollection, invalidateCaches = async () => {} }) {
+  S.assertExecutionTarget(client, db, authorization); scope = M.authorizedScope(scope);
   const checkBudget = budget(LIMITS.restoreMs);
   if (!/^[a-f0-9-]{36}$/.test(restoreId || '') || !['NORMAL', 'OUTLIER', 'SHIFT'].includes(branch)) M.fail('RESTORE_REQUEST_INVALID');
-  const checkpoint = await validateBeforeRestore(client, db, checkpointId, scope);
-  // This additional namespace is outside the restore allowlist. DDL is local-only.
+  if (typeof finish !== 'boolean') M.fail('RESTORE_REQUEST_INVALID');
+  const checkpoint = await validateBeforeRestore(client, db, checkpointId, scope, authorization);
+  // Outside the restore allowlist. DDL requires the same verified target grant.
   try { await db.createCollection(ARCHIVE); } catch (error) { if (error.code !== 48) throw error; }
   await db.collection(ARCHIVE).createIndex({ businessId: 1, restoreId: 1 }, { unique: true, name: 'ml_test_branch_restore_uq' });
   const controls = db.collection('mltestcontrols');
   const initial = await controls.findOne({ businessId: scope.businessId }, { promoteLongs: false });
+  if (finish && initial?.state === 'NO_TEST' && initial.restoreId === restoreId
+      && initial.lastCheckpointId === checkpointId && initial.restoreFinish === true && initial.finalizedAt) {
+    const receipt = await db.collection(ARCHIVE).findOne({ ...scope, restoreId });
+    if (!receipt || receipt.branch !== branch || receipt.checkpointId !== checkpointId) M.fail('RESTORE_IDENTITY_CONFLICT');
+    // Receipt only: fresh operational writes after finalization are legitimate.
+    return { status: 'NO_TEST', restoreId, resetEpoch: String(initial.resetEpoch), idempotent: true, cloudRestoreEnabled: false };
+  }
   if (!initial || initial.activeCheckpointId !== checkpointId) M.fail('RESTORE_CONTROL_MISMATCH');
   const archived = await db.collection(ARCHIVE).findOne({ ...scope, restoreId });
   if (archived && (archived.branch !== branch || archived.checkpointId !== checkpointId)) M.fail('RESTORE_IDENTITY_CONFLICT');
+  if (initial.restoreId === restoreId && Boolean(initial.restoreFinish) !== finish) M.fail('RESTORE_IDENTITY_CONFLICT');
   if (!Long.isLong(initial.resetEpoch) || initial.resetEpoch.compare(Long.ZERO) < 0) M.fail('RESTORE_EPOCH_INVALID');
-  if (initial.restoreId === restoreId && initial.state === 'TEST_ACTIVE' && initial.restoreCompletedAt) {
+  if (!finish && initial.restoreId === restoreId && initial.state === 'TEST_ACTIVE' && initial.restoreCompletedAt) {
     try {
       const verified = await verifyRestored(client, db, checkpoint, scope);
       require('./mlTestFence').invalidateCaches();
@@ -94,7 +103,7 @@ async function restoreLocalCheckpoint({ client, db, checkpointId, restoreId, bra
   // with the SAME restoreId. Ordinary calls cannot take over another owner.
   const resume = initial.restoreId === restoreId && ['FAILED', 'RESTORING'].includes(initial.state);
   if (!resume && initial.state !== 'TEST_ACTIVE') M.fail('RESTORE_CONTROL_BUSY');
-  if (!resume && initial.resetEpoch.compare(Long.MAX_VALUE) >= 0) M.fail('RESTORE_EPOCH_EXHAUSTED');
+  if (initial.resetEpoch.compare(Long.MAX_VALUE.subtract(Long.fromNumber(finish ? (resume ? 1 : 2) : (resume ? 0 : 1)))) > 0) M.fail('RESTORE_EPOCH_EXHAUSTED');
   let control;
   const ownerNonce = randomUUID();
   try {
@@ -106,7 +115,8 @@ async function restoreLocalCheckpoint({ client, db, checkpointId, restoreId, bra
         // be preempted before its bounded lease expires.
         ...(resume ? { restoreLeaseUntil: { $lte: new Date() } } : {}) },
       { $set: { state: 'RESTORING', restoreId, restoreOwnerNonce: ownerNonce,
-        restoreLeaseUntil: new Date(Date.now() + 60000), restoreCompletedAt: null, failureCode: null, updatedAt: new Date() },
+        restoreFinish: finish, restoreLeaseUntil: new Date(Date.now() + 60000), restoreCompletedAt: null, failureCode: null,
+        ...(!resume ? { epochChangedAt: new Date() } : {}), updatedAt: new Date() },
       ...(!resume ? { $inc: { resetEpoch: Long.ONE } } : {}) },
       { session, returnDocument: 'after', promoteLongs: false });
       if (!changed) M.fail('RESTORE_CONTROL_BUSY');
@@ -132,7 +142,7 @@ async function restoreLocalCheckpoint({ client, db, checkpointId, restoreId, bra
       return changed;
     });
     // Validate again under exclusive control before deleting the first source row.
-    await validateBeforeRestore(client, db, checkpointId, scope);
+    await validateBeforeRestore(client, db, checkpointId, scope, authorization);
     for (const collection of ORDER) {
       checkBudget();
       await transact(client, async session => {
@@ -159,9 +169,11 @@ async function restoreLocalCheckpoint({ client, db, checkpointId, restoreId, bra
     await invalidateCaches();
     const done = await controls.updateOne({ businessId: scope.businessId, state: 'RESTORING', restoreId,
       resetEpoch: control.resetEpoch, restoreOwnerNonce: ownerNonce },
-    { $set: { state: 'TEST_ACTIVE', restoreCompletedAt: new Date(), restoreLeaseUntil: null, failureCode: null, updatedAt: new Date() } });
+    { $set: { state: finish ? 'NO_TEST' : 'TEST_ACTIVE', restoreCompletedAt: new Date(), restoreLeaseUntil: null, failureCode: null, updatedAt: new Date(),
+      ...(finish ? { activeCheckpointId: null, lastCheckpointId: checkpointId, finalizedAt: new Date(), epochChangedAt: new Date() } : {}) },
+    ...(finish ? { $inc: { resetEpoch: Long.ONE } } : {}) });
     if (done.matchedCount !== 1) M.fail('STALE_TEST_EPOCH');
-    return { status: 'TEST_ACTIVE', restoreId, resetEpoch: String(control.resetEpoch), idempotent: false,
+    return { status: finish ? 'NO_TEST' : 'TEST_ACTIVE', restoreId, resetEpoch: String(finish ? control.resetEpoch.add(Long.ONE) : control.resetEpoch), idempotent: false,
       cloudRestoreEnabled: false, ...verified };
   } catch (error) {
     if (control) await controls.updateOne({ businessId: scope.businessId, state: 'RESTORING', restoreId,

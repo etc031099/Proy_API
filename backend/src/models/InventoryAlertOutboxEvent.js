@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 // Immutable business snapshot; only delivery metadata changes after insertion.
 const schema = new mongoose.Schema({
+  testEpoch: { type: mongoose.Schema.Types.Mixed, default: null },
   eventId: { type: String, required: true, immutable: true },
   eventType: { type: String, enum: ['inventory.alert.opened', 'inventory.alert.resolved'], required: true, immutable: true },
   businessId: { type: String, required: true, immutable: true },

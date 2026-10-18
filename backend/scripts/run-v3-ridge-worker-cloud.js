@@ -97,12 +97,14 @@ function productionDependencies(settings, overrides = {}) {
   const update = overrides.update || require('../src/services/forecastMlUpdateCoordinator');
   const registry = overrides.registry || require('../src/services/forecastModelRegistryService').createForecastModelRegistryService();
   const pythonCheck = overrides.checkPython || checkPython;
-  let worker, predictionImpact;
+  let worker, predictionImpact, launchToken;
   const connect = async () => {
     if (mongoose.connection.readyState !== 1) await mongoose.connect(settings.uri, { dbName: settings.database, autoCreate: false, autoIndex: false,
       serverSelectionTimeoutMS: 10000, connectTimeoutMS: 10000, socketTimeoutMS: 15000,
       maxPoolSize: 3, readPreference: 'primary' });
     if (!await require('../src/services/mlTestFence').externalAllowed()) fail('TEST_CLOUD_WORKER_DISABLED');
+    launchToken ||= await require('../src/services/mlTestWorkIdentity').bindLaunch(mongoose.connection.db, settings);
+    await require('../src/services/mlTestFence').assertCurrent(mongoose.connection.db, launchToken);
   };
   const readState = horizonDays => models.ForecastMlUpdateState.findOne({ businessId: settings.businessId,
     scenarioId: settings.scenarioId, horizonDays }).setOptions({ useBigInt64: true }).lean().maxTimeMS(5000);
@@ -170,6 +172,7 @@ function productionDependencies(settings, overrides = {}) {
   });
   return {
     update, preflight, executionHistory, predictionImpact,
+    withFence: async work => { await connect(); return require('../src/services/mlTestFence').withEpoch(mongoose.connection.db, work, launchToken); },
     completeManualEvaluation: input => update.completeManualEvaluation({ ...input,
       businessId: settings.businessId, scenarioId: settings.scenarioId }),
     readState,
@@ -214,8 +217,9 @@ async function main(argv = process.argv.slice(2), env = process.env, createDepen
         process.once(signal, handler); signalHandlers.push([signal, handler]);
       }
     }
-    if (mode === 'RUN' && dependencies.executionHistory) writesMayHaveOccurred = true;
-    report = await createCloudWorker({ ...dependencies,
+    const run = () => {
+      if (mode === 'RUN' && dependencies.executionHistory) writesMayHaveOccurred = true;
+      return createCloudWorker({ ...dependencies,
       completeManualEvaluation: async input => {
         writesMayHaveOccurred = true;
         return dependencies.completeManualEvaluation(input);
@@ -223,6 +227,8 @@ async function main(argv = process.argv.slice(2), env = process.env, createDepen
       writesMayHaveOccurred = true;
       return dependencies.runEligible(input);
     } }).run(mode);
+    };
+    report = await (dependencies.withFence ? dependencies.withFence(run) : run());
   } catch (error) {
     report = { status: 'FAILED', mode: mode || null, code: safeCode(error),
       writesPerformed: writesMayHaveOccurred ? null : 0, writesMayHaveOccurred };

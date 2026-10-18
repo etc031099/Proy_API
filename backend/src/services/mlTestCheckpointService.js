@@ -19,14 +19,18 @@ function assertLocalTarget(client, db) {
   if (client.options?.srvHost || !hosts?.length || hosts.some(host => !['localhost', '127.0.0.1', '::1'].includes(host.host))
       || !/^ml_checkpoint_[a-f0-9]{32}_test$/.test(db.databaseName)) M.fail('CHECKPOINT_LOCAL_TEST_DATABASE_REQUIRED');
 }
+function assertExecutionTarget(client, db, authorization) {
+  if (!require('./mlTestTargetAuthorization').authorized(client, db, authorization)) assertLocalTarget(client, db);
+}
 async function assertReplicaSet(db) {
   const hello = await db.admin().command({ hello: 1 });
   if (!hello.setName || !hello.isWritablePrimary) M.fail('CHECKPOINT_REPLICA_SET_REQUIRED');
 }
-// Only the three new namespaces are provisioned, and only in disposable LOCAL
-// test databases. Source indexes and collections are never changed here.
-async function provisionLocal(client, db) {
-  assertLocalTarget(client, db);
+// Only the three administrative namespaces are provisioned: disposable LOCAL
+// databases or an explicit admin/certification capability for the demo target.
+// Source indexes and collections are never changed here.
+async function provisionLocal(client, db, authorization) {
+  assertExecutionTarget(client, db, authorization);
   await assertReplicaSet(db);
   const models = [require('../models/MlTestControl'), require('../models/MlTestCheckpoint'), require('../models/MlTestCheckpointChunk')];
   for (let i = 0; i < models.length; i++) {
@@ -173,7 +177,7 @@ async function acquireControl(db, scope, checkpointId, capturedAt) {
   const row = await controls.findOneAndUpdate({ businessId: scope.businessId, state: 'NO_TEST',
     activeCheckpointId: null, resetEpoch: { $gte: Long.ZERO, $lt: Long.MAX_VALUE } }, {
     $set: { activeCheckpointId: checkpointId, testCycleId: randomUUID(), state: 'CHECKPOINT_CREATING',
-      updatedAt: capturedAt, failureCode: null }, $inc: { resetEpoch: Long.ONE }
+      updatedAt: capturedAt, epochChangedAt: capturedAt, failureCode: null }, $inc: { resetEpoch: Long.ONE }
   }, { returnDocument: 'after', promoteLongs: false, writeConcern: { w: 'majority' } });
   if (!row) M.fail('CHECKPOINT_CONTROL_BUSY');
   return row;
@@ -236,13 +240,13 @@ async function assertQuiescent(db, scope) {
     if (await db.collection(collection).findOne(filter, { projection: { _id: 1 }, maxTimeMS: 5000 })) M.fail('CHECKPOINT_SOURCE_BUSY');
   }
 }
-async function captureLocalCheckpoint({ client, db, scope, localWritersPaused = false, createdBy = null, targetBytes = M.TARGET_BYTES }) {
-  assertLocalTarget(client, db); scope = M.authorizedScope(scope);
+async function captureLocalCheckpoint({ client, db, scope, localWritersPaused = false, createdBy = null, targetBytes = M.TARGET_BYTES, authorization }) {
+  assertExecutionTarget(client, db, authorization); scope = M.authorizedScope(scope);
   const checkOperation = budget(LIMITS.captureMs);
   if (localWritersPaused !== true) M.fail('CHECKPOINT_LOCAL_QUIESCENCE_REQUIRED');
   if (createdBy !== null && (typeof createdBy !== 'string' || createdBy.length > 160)) M.fail('CHECKPOINT_ACTOR_INVALID');
   if (!Number.isSafeInteger(targetBytes) || targetBytes < 64 || targetBytes > M.TARGET_BYTES) M.fail('CHECKPOINT_CHUNK_TARGET_INVALID');
-  await provisionLocal(client, db);
+  await provisionLocal(client, db, authorization);
   await assertQuiescent(db, scope);
   const checkpointId = randomUUID(), capturedAt = new Date();
   const control = await acquireControl(db, scope, checkpointId, capturedAt);
@@ -276,8 +280,8 @@ async function captureLocalCheckpoint({ client, db, scope, localWritersPaused = 
     return { ...verified, status: 'READY', resetEpoch: control.resetEpoch.toString(), readDurationMs, totalDocuments };
   } catch (error) { await markFailed(db, checkpointId, scope, error); throw error; }
 }
-async function verifyLocalCheckpoint({ client, db, checkpointId, scope }) {
-  assertLocalTarget(client, db); scope = M.authorizedScope(scope);
+async function verifyLocalCheckpoint({ client, db, checkpointId, scope, authorization }) {
+  assertExecutionTarget(client, db, authorization); scope = M.authorizedScope(scope);
   try { return await verifyStored(db, checkpointId, scope); }
   catch (error) { await markFailed(db, checkpointId, scope, error); throw error; }
 }
@@ -321,5 +325,5 @@ async function preflightCheckpoint({ client, db, scope, elapsedLimitMs = READ_LI
 }
 module.exports = { captureLocalCheckpoint, verifyLocalCheckpoint, preflightCheckpoint, provisionLocal,
   scanSource,
-  assertLocalTarget, closedThrough, codeOf, LIMIT_BYTES, LIMIT_DOCUMENTS, READ_LIMIT_MS,
+  assertLocalTarget, assertExecutionTarget, closedThrough, codeOf, LIMIT_BYTES, LIMIT_DOCUMENTS, READ_LIMIT_MS,
   MAX_PREFLIGHT_READ_LIMIT_MS };

@@ -17,9 +17,14 @@ on:
         description: 'Correlación opaca de solicitud durable; no autoriza tenant ni promoción'
         required: false
         type: string
+      testEpoch:
+        description: 'Identidad durable emitida por backend; no autoriza tenant ni promoción'
+        required: false
+        type: string
 
 permissions:
   contents: read
+  actions: read
 
 # One production tenant/scenario in this repository. Worker lease/fencing also applies.
 concurrency:
@@ -55,6 +60,17 @@ jobs:
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
               output.write('FORECAST_TRAINING_PYTHON=' + sys.executable + '\n')
           PY
+      - name: Bind durable epoch from queued workflow (read-only)
+        timeout-minutes: 2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FORECAST_TEST_EPOCH: ${{ inputs.testEpoch }}
+          FORECAST_MANUAL_REQUEST_KEY: ${{ inputs.manualRequestKey }}
+          FORECAST_CLOUD_MONGO_URI: ${{ secrets.FORECAST_CLOUD_MONGO_URI }}
+          FORECAST_CLOUD_EXPECTED_DATABASE: ${{ secrets.FORECAST_CLOUD_EXPECTED_DATABASE }}
+          FORECAST_CLOUD_EXPECTED_BUSINESS_ID: ${{ secrets.FORECAST_CLOUD_EXPECTED_BUSINESS_ID }}
+          FORECAST_CLOUD_EXPECTED_SCENARIO_ID: ${{ secrets.FORECAST_CLOUD_EXPECTED_SCENARIO_ID }}
+        run: node backend/scripts/bind-v3-ridge-workflow-epoch.js
       - name: Read-only preflight
         timeout-minutes: 10
         env:
