@@ -136,6 +136,45 @@ describe('Forecast manual ML update panel', () => {
     expect(await screen.findByText('Actualización solicitada.')).toBeTruthy();
     expect(apiClient.requestForecastMlUpdate).toHaveBeenCalledTimes(1);
     expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('button', { name: 'Actualizar ML ahora' }).hasAttribute('disabled')).toBe(true);
+  });
+
+  it.each(['NOT_MATURE', 'COOLDOWN_ACTIVE', 'DEBOUNCE_NOT_ELAPSED'])(
+    'allows a manual request with 90 pending signals and %s', async eligibility => {
+      const pendingHorizon = (h: 7 | 14) => horizon(h, { pending: true, eligibility, requestStatus: 'NOT_ELIGIBLE_YET', readiness: {
+          ...horizon(h).readiness, status: eligibility === 'NOT_MATURE' ? 'WAITING_MATURITY'
+            : eligibility === 'COOLDOWN_ACTIVE' ? 'WAITING_COOLDOWN' : 'WAITING_DEBOUNCE', hasPendingSignals: true,
+          pendingSignalCount: 90, pendingSignalTypes: ['SALE_COMPLETED'], processedRevision: '83',
+          latestPendingRevision: '173', eligibility, reasonCode: eligibility,
+        } });
+      const pendingStatus: ForecastMlUpdateStatus = { ...initialStatus, dataVersion: '173',
+        horizons: [pendingHorizon(7), pendingHorizon(14)] };
+      vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValue(ok(pendingStatus));
+      render(<ForecastMlUpdatePanel />);
+      await screen.findByText('PENDIENTE');
+      const button = screen.getByRole('button', { name: 'Actualizar ML ahora' });
+      expect(button.hasAttribute('disabled')).toBe(false);
+      fireEvent.click(button);
+      expect(await screen.findByText('Actualización solicitada.')).toBeTruthy();
+      expect(apiClient.requestForecastMlUpdate).toHaveBeenCalledExactlyOnceWith();
+      expect(button.hasAttribute('disabled')).toBe(true);
+    },
+  );
+
+  it.each([
+    { currentlyRunning: true, requestStatus: 'NOT_ELIGIBLE_YET' },
+    { currentlyRunning: false, requestStatus: 'ALREADY_PENDING' },
+    { currentlyRunning: false, requestStatus: 'RUNNING' },
+  ])('blocks an existing worker or durable request: %j', async patch => {
+    const blockedStatus: ForecastMlUpdateStatus = { ...initialStatus,
+      horizons: [horizon(7, { pending: true, ...patch }), horizon(14)] };
+    vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValue(ok(blockedStatus));
+    render(<ForecastMlUpdatePanel />);
+    await screen.findAllByText('v1');
+    const button = screen.getByRole('button', { name: 'Actualizar ML ahora' });
+    expect(button.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(button);
+    expect(apiClient.requestForecastMlUpdate).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -231,6 +270,7 @@ describe('Forecast manual ML update panel', () => {
     const button = screen.getByRole('button', { name: 'Actualizar ML ahora' });
     fireEvent.click(button); fireEvent.click(button);
     expect(apiClient.requestForecastMlUpdate).toHaveBeenCalledTimes(1);
+    expect(button.hasAttribute('disabled')).toBe(true);
     resolveRequest({ httpStatus: 429, code: 'ML_UPDATE_RATE_LIMITED' });
     expect(await screen.findByText(/Se alcanzó el límite de solicitudes/)).toBeTruthy();
   });

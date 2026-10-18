@@ -218,7 +218,7 @@ export function ForecastMlUpdatePanel({ refreshToken = 0 }: { refreshToken?: num
   }, []);
 
   const submit = useCallback(async () => {
-    if (requestLock.current || requestActiveRef.current || rows.some(row => row.pending || row.currentlyRunning)) return;
+    if (requestLock.current || requestActiveRef.current || rows.some(row => row.currentlyRunning || row.requestStatus === 'ALREADY_PENDING' || row.requestStatus === 'RUNNING')) return;
     requestLock.current = true; setSending(true); setMessage('Solicitando actualización…');
     try {
       const result = await apiClient.requestForecastMlUpdate();
@@ -254,7 +254,7 @@ export function ForecastMlUpdatePanel({ refreshToken = 0 }: { refreshToken?: num
   return <section aria-label="Actualización del ML" className="space-y-3 border-b pb-4">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div><h3 className="font-semibold">Actualización del ML</h3><p className="mt-1 text-sm text-muted-foreground">La solicitud utiliza el mismo proceso automático y no garantiza una nueva versión.</p></div>
-      <Button type="button" onClick={() => { void submit(); }} disabled={sending || requestActive || rows.some(row => row.pending || row.currentlyRunning)}>
+      <Button type="button" onClick={() => { void submit(); }} disabled={sending || requestActive || rows.some(row => row.currentlyRunning || row.requestStatus === 'ALREADY_PENDING' || row.requestStatus === 'RUNNING')}>
         {sending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />}
         {sending ? 'Solicitando actualización…' : 'Actualizar ML ahora'}
       </Button>
