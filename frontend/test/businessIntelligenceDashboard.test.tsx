@@ -5,6 +5,12 @@ import { apiClient } from '@/lib/api';
 import { getTranslation } from '@/i18n/dict';
 import type { BusinessSummary, ForecastActiveModels, ForecastResponse, InventorySummary, ProductInventory } from '@/types/businessIntelligence';
 
+// Epoch maintenance/remount behavior is tested independently with real API
+// status responses in mlTestEpochBoundary.test.tsx.
+vi.mock('@/components/business-intelligence/MlTestEpochBoundary', () => ({
+  MlTestEpochBoundary: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 vi.mock('recharts', () => ({
   ResponsiveContainer: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   Bar: () => null, BarChart: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,

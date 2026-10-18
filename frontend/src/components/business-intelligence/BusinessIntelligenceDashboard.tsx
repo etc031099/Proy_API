@@ -15,6 +15,7 @@ import { ForecastEvaluationPanel } from './ForecastEvaluationPanel';
 import { ForecastDiagnosticsPanel } from './ForecastDiagnosticsPanel';
 import { ForecastMlUpdateHistoryPanel } from './ForecastMlUpdateHistoryPanel';
 import { AnalyticsErrorBoundary } from './AnalyticsErrorBoundary';
+import { MlTestEpochBoundary } from './MlTestEpochBoundary';
 
 type TabKey = 'summary' | 'forecast' | 'inventory' | ExtendedTab;
 type LoadState = 'loading' | 'ready' | 'error';
@@ -101,6 +102,10 @@ function ProductPicker({ selected, onSelect }: { selected: ProductOption | null;
 }
 
 export function BusinessIntelligenceDashboard() {
+  return <MlTestEpochBoundary><BusinessIntelligenceContent /></MlTestEpochBoundary>;
+}
+
+function BusinessIntelligenceContent() {
   const [tab, setTab] = useState<TabKey>('summary');
   const [mlHistoryRefreshToken, setMlHistoryRefreshToken] = useState(0);
   const [summary, setSummary] = useState<BusinessSummary | null>(null);

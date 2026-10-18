@@ -52,15 +52,19 @@ const send = async payload => {
 };
 const createInventoryAlertDispatcher = ({ repo = repository, deliver = send, clock = () => new Date(),
   afterDelivered = repo === repository ? eventId => require('./inventoryAlertChannels').createInventoryAlertChannels().processPendingEvent(eventId) : async () => {} } = {}) => ({
-  async run() {
+  async run() { return require('./mlTestFence').runCycle(async () => {
     const summary = { claimed: 0, delivered: 0, retrying: 0, failed: 0 };
     if (!await require('./mlTestFence').externalAllowed()) return { ...summary, suppressed: true };
     for (let i = 0; i < 10; i++) {
       const token = randomUUID(), row = await repo.claim(clock(), token);
       if (!row) break;
       summary.claimed++;
+      if (!await require('./mlTestFence').externalAllowed()) return { ...summary, suppressed: true };
       let result;
       try { result = await deliver(row.payload); } catch { result = { category: 'NETWORK', retryable: true }; }
+      // A physical request cannot be recalled, but a response from an old
+      // cycle must never ACK restored delivery state.
+      if (!await require('./mlTestFence').externalAllowed()) return { ...summary, suppressed: true };
       if (result.delivered) {
         await repo.finish(row, token, { status: 'DELIVERED', deliveredAt: clock(), nextAttemptAt: null, lastErrorCategory: null });
         summary.delivered++;
@@ -74,6 +78,7 @@ const createInventoryAlertDispatcher = ({ repo = repository, deliver = send, clo
       }
     }
     return summary;
+  });
   }
 });
 // Reserve channel work durably before ACK, but never send until ACT-04A is DELIVERED.

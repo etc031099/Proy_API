@@ -77,6 +77,9 @@ class ApiClient {
   async getForecastMlUpdateStatus(): Promise<AuthenticatedDiagnosticResult<ForecastMlUpdateStatus>> {
     return this.diagnosticRead('/intelligence/forecast/ml-update/status');
   }
+  async getMlTestControlStatus(): Promise<AuthenticatedDiagnosticResult<import('@/components/business-intelligence/MlTestEpochBoundary').MlTestControlStatus>> {
+    return this.diagnosticRead('/intelligence/test-control/status');
+  }
   async getForecastMlUpdateHistory(params: { limit?: number; cursor?: string } = {}): Promise<AuthenticatedDiagnosticResult<ForecastMlUpdateHistoryPage>> {
     return this.diagnosticRead('/intelligence/forecast/ml-update/history', params);
   }

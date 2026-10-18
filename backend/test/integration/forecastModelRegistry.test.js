@@ -208,7 +208,10 @@ test('forecast model registry supports isolated tenant/horizon versions, CAS pro
     assert.equal(await ForecastModelArtifact.countDocuments({ businessId: raceBusiness, status: 'ACTIVE' }), 1);
     const racePointer = await ForecastModelRegistry.findOne({ businessId: raceBusiness }).lean();
     assert.equal(racePointer.generation, 1);
-    assert.equal(racePointer.activeModelVersion, racePointer.activeArtifactId.equals(raceA._id) ? 1 : 2);
+    // Concurrent allocation need not assign version 1 to the first promise.
+    const winner = [raceA, raceB].find(row => racePointer.activeArtifactId.equals(row._id));
+    assert(winner, 'ACTIVE pointer must resolve to one of the competing candidates');
+    assert.equal(racePointer.activeModelVersion, winner.modelVersion);
 
   });
 

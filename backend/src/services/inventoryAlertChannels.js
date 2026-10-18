@@ -58,7 +58,7 @@ const createInventoryAlertChannels = ({ repo = repository, send = require('./tel
     await repo.ensure(event, await repo.connection(event.businessId), clock());
     return { status: 'PENDING' };
   };
-  const processPendingEvent = async eventId => {
+  const processPendingEvent = async eventId => require('./mlTestFence').runCycle(async () => {
     if (!await require('./mlTestFence').externalAllowed()) return { status: 'SUPPRESSED' };
     const event = await repo.event(eventId);
     // Receipt and Node-RED ACK alone never authorize a send before ACT-04A delivery.
@@ -66,6 +66,7 @@ const createInventoryAlertChannels = ({ repo = repository, send = require('./tel
     const token = randomUUID(), row = await repo.claim(event, clock(), token);
     if (!row) return { status: 'UNCHANGED' };
     const connection = await repo.connection(event.businessId);
+    if (!await require('./mlTestFence').externalAllowed()) return { status: 'SUPPRESSED' };
     const skipReason = !['inventory.alert.opened', 'inventory.alert.resolved'].includes(event.eventType) ? 'unsupported_event'
       : !connection?.chatId ? 'telegram_not_configured' : !connection.enabled ? 'telegram_disabled'
         : !(event.eventType === 'inventory.alert.opened' ? connection.stockRuleAlertsEnabled : connection.stockRuleResolvedAlertsEnabled)
@@ -76,16 +77,18 @@ const createInventoryAlertChannels = ({ repo = repository, send = require('./tel
     }
     try {
       await send(connection.chatId, messageFor(event));
+      if (!await require('./mlTestFence').externalAllowed()) return { status: 'SUPPRESSED' };
       await repo.finish(row, token, { status: 'DELIVERED', deliveredAt: clock(), nextAttemptAt: null, lastErrorCategory: null });
       return { status: 'DELIVERED' };
     } catch (error) {
+      if (!await require('./mlTestFence').externalAllowed()) return { status: 'SUPPRESSED' };
       const category = categorySet.has(error.category) ? error.category : 'NETWORK';
       const retryable = retryableSet.has(category) && row.attempts < MAX_ATTEMPTS;
       const nextAttemptAt = retryable ? new Date(clock().getTime() + require('./inventoryAlertOutbox').backoffMs(row.attempts)) : null;
       await repo.finish(row, token, { status: 'FAILED', lastErrorCategory: category, nextAttemptAt });
       return { status: retryable ? 'PENDING' : 'FAILED' };
     }
-  };
+  });
   return {
     prepare,
     processPendingEvent,

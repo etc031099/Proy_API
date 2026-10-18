@@ -66,9 +66,10 @@ async function guard({ db, session, expected = cycles.getStore() }) {
   }
   if (changed.matchedCount !== 1) fail('STALE_TEST_EPOCH');
 }
-async function externalAllowed(db = mongoose.connection.db) {
+async function externalAllowed(db = mongoose.connection.db, expected = cycles.getStore()) {
   if (!db) return true;
-  const row = await db.collection('mltestcontrols').findOne({ businessId: config.businessId }, { projection: { state: 1 } });
+  const row = await db.collection('mltestcontrols').findOne({ businessId: config.businessId }, { promoteLongs: false });
+  if (expected && !sameToken(expected, tokenOf(row))) return false;
   return !row || row.state === 'NO_TEST';
 }
 async function cacheIdentity() {

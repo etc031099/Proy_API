@@ -3,6 +3,7 @@ const { randomUUID, createHash } = require('node:crypto');
 const { Long } = require('mongoose').mongo.BSON;
 const M = require('./mlTestCheckpointManifest');
 const config = require('../config/v3Operational');
+const { LIMITS, budget } = require('./mlTestOperationBudget');
 const NAMES = ['mltestcontrols', 'mltestcheckpoints', 'mltestcheckpointchunks'];
 const LIMIT_BYTES = 128 * 1024 * 1024;
 const LIMIT_DOCUMENTS = 200000;
@@ -83,6 +84,7 @@ async function scanSource({ client, db, scope, targetBytes = M.TARGET_BYTES, onC
   elapsedLimitMs = READ_LIMIT_MS, cursorMaxTimeMs = READ_LIMIT_MS }) {
   scope = M.authorizedScope(scope);
   const started = Date.now();
+  const checkBudget = budget(elapsedLimitMs);
   const beforeIndexes = await indexManifest(db);
   const result = { collectionManifest: [], documentCounts: {}, byteCounts: {}, hashes: {}, totalBytes: 0,
     totalChunks: 0, dataVersion: null, activeModels: [], registryPointers: [], artifactReferences: [], totalDocuments: 0 };
@@ -114,6 +116,7 @@ async function scanSource({ client, db, scope, targetBytes = M.TARGET_BYTES, onC
       async function* documents() {
         try {
           for await (const raw of cursor) {
+            if (process.memoryUsage().rss > LIMITS.maxRssBytes) M.fail('CHECKPOINT_MEMORY_LIMIT_EXCEEDED');
             if (Date.now() - started > elapsedLimitMs) {
               if (currentProgress) {
                 currentProgress.fetchedAtLimit = true;
@@ -137,6 +140,7 @@ async function scanSource({ client, db, scope, targetBytes = M.TARGET_BYTES, onC
       }
       for await (const chunk of M.chunkDocuments(documents(), targetBytes)) {
         hash.update(chunk.payload); byteCount += chunk.byteCount; documentCount += chunk.documentCount; chunkCount++;
+        if (result.totalChunks + chunkCount > LIMITS.maxChunks) M.fail('CHECKPOINT_CHUNK_LIMIT_EXCEEDED');
         if (currentProgress) { currentProgress.estimatedChunks = chunkCount; reportProgress(); }
         chunks.push({ chunkIndex: chunk.chunkIndex, documentCount: chunk.documentCount,
           byteCount: chunk.byteCount, contentHash: chunk.contentHash });
@@ -153,6 +157,7 @@ async function scanSource({ client, db, scope, targetBytes = M.TARGET_BYTES, onC
     }
   });
   if (result.dataVersion === null) M.fail('CHECKPOINT_REVISION_MISSING');
+  checkBudget();
   const afterIndexes = await indexManifest(db);
   if (M.hashValue({ indexes: beforeIndexes }) !== M.hashValue({ indexes: afterIndexes })) M.fail('CHECKPOINT_SOURCE_INDEXES_CHANGED');
   return { ...result, indexManifest: beforeIndexes, readDurationMs: Date.now() - started };
@@ -173,10 +178,15 @@ async function acquireControl(db, scope, checkpointId, capturedAt) {
   if (!row) M.fail('CHECKPOINT_CONTROL_BUSY');
   return row;
 }
-async function verifyStored(db, checkpointId, scope) {
+async function verifyStored(db, checkpointId, scope, checkOperation = () => {}) {
+  const checkBudget = budget(LIMITS.verificationMs);
   scope = M.authorizedScope(scope);
   const row = await db.collection(NAMES[1]).findOne({ checkpointId, ...scope }, { promoteLongs: false });
   if (!row || !['CREATING', 'READY'].includes(row.status) || row.schemaVersion !== 1) M.fail('CHECKPOINT_MANIFEST_INVALID');
+  if (!Number.isSafeInteger(row.totalBytes) || row.totalBytes < 0 || row.totalBytes > LIMIT_BYTES
+      || !Number.isSafeInteger(row.totalChunks) || row.totalChunks < 0 || row.totalChunks > LIMITS.maxChunks
+      || Object.values(row.documentCounts || {}).some(value => !Number.isSafeInteger(value) || value < 0)
+      || Object.values(row.documentCounts || {}).reduce((sum, value) => sum + value, 0) > LIMIT_DOCUMENTS) M.fail('CHECKPOINT_TOTALS_INVALID');
   if (row.collectionManifest?.length !== M.COLLECTIONS.length || new Set(row.collectionManifest.map(m => m.collection)).size !== M.COLLECTIONS.length
       || row.hashes?.manifest !== M.hashValue(M.manifestContent(row))) M.fail('CHECKPOINT_MANIFEST_HASH_MISMATCH');
   let totalBytes = 0, totalChunks = 0;
@@ -189,6 +199,8 @@ async function verifyStored(db, checkpointId, scope) {
     const cursor = db.collection(NAMES[2]).find({ checkpointId, collection: entry.collection }).sort({ chunkIndex: 1 });
     try {
       for await (const chunk of cursor) {
+        checkOperation();
+        checkBudget();
         const payload = M.bytesOf(chunk.payload), expected = entry.chunks[chunkCount];
         if (!expected || chunk.chunkIndex !== chunkCount || expected.chunkIndex !== chunkCount
             || payload.length !== chunk.byteCount || payload.length > row.chunkTargetBytes || chunk.byteCount !== expected.byteCount
@@ -226,6 +238,7 @@ async function assertQuiescent(db, scope) {
 }
 async function captureLocalCheckpoint({ client, db, scope, localWritersPaused = false, createdBy = null, targetBytes = M.TARGET_BYTES }) {
   assertLocalTarget(client, db); scope = M.authorizedScope(scope);
+  const checkOperation = budget(LIMITS.captureMs);
   if (localWritersPaused !== true) M.fail('CHECKPOINT_LOCAL_QUIESCENCE_REQUIRED');
   if (createdBy !== null && (typeof createdBy !== 'string' || createdBy.length > 160)) M.fail('CHECKPOINT_ACTOR_INVALID');
   if (!Number.isSafeInteger(targetBytes) || targetBytes < 64 || targetBytes > M.TARGET_BYTES) M.fail('CHECKPOINT_CHUNK_TARGET_INVALID');
@@ -238,15 +251,16 @@ async function captureLocalCheckpoint({ client, db, scope, localWritersPaused = 
       createdAt: capturedAt, updatedAt: capturedAt, schemaVersion: 1, failureCode: null,
       observationsClosedThroughAtCapture: closedThrough(capturedAt), chunkTargetBytes: targetBytes,
       totalBytes: 0, totalChunks: 0 });
-    const snapshot = await scanSource({ client, db, scope, targetBytes,
-      onChunk: (collection, chunk) => db.collection(NAMES[2]).insertOne({ checkpointId, collection, ...chunk }) });
+    const snapshot = await scanSource({ client, db, scope, targetBytes, elapsedLimitMs: LIMITS.captureMs,
+      onChunk: (collection, chunk) => { checkOperation(); return db.collection(NAMES[2]).insertOne({ checkpointId, collection, ...chunk }); } });
     const { readDurationMs, totalDocuments, ...captured } = snapshot;
     const row = { checkpointId, ...scope, capturedAt, schemaVersion: 1, chunkTargetBytes: targetBytes,
       observationsClosedThroughAtCapture: closedThrough(capturedAt), ...captured };
     row.hashes.manifest = M.hashValue(M.manifestContent(row));
     await db.collection(NAMES[1]).updateOne({ checkpointId, ...scope, status: 'CREATING' }, { $set: { ...captured,
       hashes: row.hashes, updatedAt: new Date() } });
-    const verified = await verifyStored(db, checkpointId, scope);
+    const verified = await verifyStored(db, checkpointId, scope, checkOperation);
+    checkOperation();
     const session = client.startSession();
     try {
       session.startTransaction({ writeConcern: { w: 'majority' } });
@@ -287,7 +301,7 @@ async function preflightCheckpoint({ client, db, scope, elapsedLimitMs = READ_LI
           readProgress?.totalDocuments > LIMIT_DOCUMENTS ? 'MAX_DOCUMENTS' : null].filter(Boolean) : [],
       limits: { readLimitMs: elapsedLimitMs, maxTimeMsPerCursor: READ_LIMIT_MS,
         maxDocuments: LIMIT_DOCUMENTS, maxBytes: LIMIT_BYTES, chunkTargetBytes: M.TARGET_BYTES,
-        chunkCountLimit: null },
+        chunkCountLimit: LIMITS.maxChunks },
       collectionBytesAreLowerBounds: true,
       progress: readProgress ? { ...readProgress, elapsedMs: Date.now() - started,
         completedCollections: readProgress.completedCollections.map(row => ({ ...row })),

@@ -3,6 +3,7 @@ const { randomUUID } = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
 const S = require('./mlTestCheckpointService');
 const M = require('./mlTestCheckpointManifest');
+const { LIMITS, budget } = require('./mlTestOperationBudget');
 const { Long } = M.BSON;
 const ORDER = Object.freeze(['historicalscenarios', 'minimarketv3records', 'contacts', 'products',
   'transactions', 'inventorymovements', 'creditpayments', 'v3operationalchanges', 'v3operationalrevisions',
@@ -52,7 +53,7 @@ async function validateBeforeRestore(client, db, checkpointId, scope) {
   return checkpoint;
 }
 async function verifyRestored(client, db, checkpoint, scope) {
-  const actual = await S.scanSource({ client, db, scope });
+  const actual = await S.scanSource({ client, db, scope, elapsedLimitMs: LIMITS.verificationMs });
   for (const collection of ORDER) {
     if (actual.documentCounts[collection] !== checkpoint.documentCounts[collection]
         || actual.byteCounts[collection] !== checkpoint.byteCounts[collection]
@@ -64,6 +65,7 @@ async function verifyRestored(client, db, checkpoint, scope) {
 async function restoreLocalCheckpoint({ client, db, checkpointId, restoreId, branch, scope,
   afterCollection, invalidateCaches = async () => {} }) {
   S.assertLocalTarget(client, db); scope = M.authorizedScope(scope);
+  const checkBudget = budget(LIMITS.restoreMs);
   if (!/^[a-f0-9-]{36}$/.test(restoreId || '') || !['NORMAL', 'OUTLIER', 'SHIFT'].includes(branch)) M.fail('RESTORE_REQUEST_INVALID');
   const checkpoint = await validateBeforeRestore(client, db, checkpointId, scope);
   // This additional namespace is outside the restore allowlist. DDL is local-only.
@@ -132,6 +134,7 @@ async function restoreLocalCheckpoint({ client, db, checkpointId, restoreId, bra
     // Validate again under exclusive control before deleting the first source row.
     await validateBeforeRestore(client, db, checkpointId, scope);
     for (const collection of ORDER) {
+      checkBudget();
       await transact(client, async session => {
         const locked = await controls.updateOne({ businessId: scope.businessId, state: 'RESTORING',
           restoreId, resetEpoch: control.resetEpoch, restoreOwnerNonce: ownerNonce },
@@ -140,6 +143,7 @@ async function restoreLocalCheckpoint({ client, db, checkpointId, restoreId, bra
         await db.collection(collection).deleteMany(M.scopeFilter(collection, scope), { session });
         let batch = [], bytes = 0;
         for await (const doc of documents(db, checkpointId, collection)) {
+          checkBudget();
           batch.push(doc); bytes += M.BSON.calculateObjectSize(doc);
           if (bytes >= M.TARGET_BYTES || batch.length >= 100) {
             await db.collection(collection).insertMany(batch, { session, ordered: true }); batch = []; bytes = 0;
@@ -150,6 +154,7 @@ async function restoreLocalCheckpoint({ client, db, checkpointId, restoreId, bra
       if (afterCollection) await afterCollection(collection);
     }
     const verified = await verifyRestored(client, db, checkpoint, scope);
+    checkBudget();
     require('./mlTestFence').invalidateCaches();
     await invalidateCaches();
     const done = await controls.updateOne({ businessId: scope.businessId, state: 'RESTORING', restoreId,

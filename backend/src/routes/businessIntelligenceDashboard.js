@@ -21,6 +21,11 @@ const createBusinessIntelligenceDashboardRoutes = ({ service, authenticateMiddle
     return res.json({ success: true, data: result.data });
   };
   router.use(authenticateMiddleware, businessAccessMiddleware, limiter);
+  router.get('/test-control/status', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    try { return res.json({ success: true, data: await require('../services/mlTestAccess').readStatus(req.user) }); }
+    catch { return res.status(503).json({ success: false, code: 'ML_TEST_STATUS_UNAVAILABLE' }); }
+  });
   router.get('/revision', endpoint('revision'));
   router.get('/summary', endpoint('summary'));
   router.get('/sales', endpoint('sales'));
