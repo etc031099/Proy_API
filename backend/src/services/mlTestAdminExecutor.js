@@ -26,20 +26,16 @@ function createMlTestAdminExecutor({ client, db, target = 'CLOUD', env = process
     if (['CREATE', 'STATUS'].includes(action) && Object.keys(body).length) fail('ML_TEST_REQUEST_INVALID', 400);
     if (!['CREATE', 'STATUS'].includes(action) && (!/^[a-f0-9-]{36}$/.test(body.checkpointId || '')
         || !/^[a-f0-9-]{36}$/.test(body.restoreId || '') || !['NORMAL', 'OUTLIER', 'SHIFT'].includes(body.branch))) fail('ML_TEST_REQUEST_INVALID', 400);
+    if (action === 'STATUS') {
+      if (target === 'CLOUD') T.assertCloudStatusTarget({ client, db, env });
+      else if (target !== 'LOCAL_CERTIFICATION') fail('ML_TEST_TARGET_INVALID', 400);
+      else S.assertExecutionTarget(client, db, null);
+      return readAdminStatus(db, scope, { cloudRestoreEnabled: T.cloudFlagEnabled(env) && certificationId === T.CERTIFICATION });
+    }
     let authorization;
     if (target === 'CLOUD') authorization = T.authorizeCloudTarget({ client, db, user: req.user, env, certificationId });
     else if (target !== 'LOCAL_CERTIFICATION') fail('ML_TEST_TARGET_INVALID', 400);
     S.assertExecutionTarget(client, db, authorization);
-    if (action === 'STATUS') {
-      const control = await db.collection('mltestcontrols').findOne({ businessId: scope.businessId }, { promoteLongs: false });
-      const token = F.tokenOf(control);
-      return { state: token.state, resetEpoch: token.resetEpoch, testCycleId: token.testCycleId,
-        maintenance: !['NO_TEST', 'TEST_ACTIVE'].includes(token.state), cloudRestoreEnabled: T.authorized(client, db, authorization),
-        activeCheckpointId: control?.activeCheckpointId || null, lastCheckpointId: control?.lastCheckpointId || null,
-        restoreId: control?.restoreId || null, restoreFinish: control?.restoreFinish === true,
-        restoreLeaseUntil: control?.restoreLeaseUntil || null, finalizedAt: control?.finalizedAt || null,
-        failureCode: /^(?:CHECKPOINT|RESTORE|ML_TEST|STALE_TEST|TEST)_[A-Z_]+$/.test(control?.failureCode || '') ? control.failureCode : null };
-    }
     // Explicit LOCAL administrative provisioning only; never Model.init/Atlas.
     await provisionLocalAudit(client, db, authorization);
     const token = await F.capture(db), actionId = randomUUID(), timestamp = new Date();
@@ -55,7 +51,9 @@ function createMlTestAdminExecutor({ client, db, target = 'CLOUD', env = process
         if (!body.checkpointId || !body.restoreId || !body.branch) fail('ML_TEST_REQUEST_INVALID', 400);
         if (action === 'RECOVER_AND_FINISH') {
           const control = await db.collection('mltestcontrols').findOne({ businessId: scope.businessId });
-          if (!['FAILED', 'RESTORING'].includes(control?.state) || control.restoreId !== body.restoreId) fail('ML_TEST_SAME_RESTORE_REQUIRED');
+          const finalizedReceipt = control?.state === 'NO_TEST' && control.lastCheckpointId === body.checkpointId
+            && control.restoreId === body.restoreId && control.restoreFinish === true && control.finalizedAt;
+          if ((!['FAILED', 'RESTORING'].includes(control?.state) && !finalizedReceipt) || control.restoreId !== body.restoreId) fail('ML_TEST_SAME_RESTORE_REQUIRED');
           if (!control.restoreFinish) fail('ML_TEST_RESUME_CONTINUE_FIRST');
           // A failed capture has no certified source to restore: remain blocked.
         }
@@ -89,5 +87,31 @@ function createMlTestAdminExecutor({ client, db, target = 'CLOUD', env = process
       fail(code, [400, 401, 403, 409, 423, 503].includes(error.httpStatus) ? error.httpStatus : 503);
     }
   } };
+}
+async function readAdminStatus(db, scope, { cloudRestoreEnabled = false } = {}) {
+  const control = await db.collection('mltestcontrols').findOne({ businessId: scope.businessId }, { promoteLongs: false });
+  const token = F.tokenOf(control);
+  const checkpointId = control?.activeCheckpointId || control?.lastCheckpointId || null;
+  const checkpoint = checkpointId ? await db.collection('mltestcheckpoints').findOne(
+    { checkpointId, businessId: scope.businessId, scenarioId: scope.scenarioId },
+    { projection: { checkpointId: 1, status: 1, dataVersion: 1, capturedAt: 1, createdAt: 1,
+      totalDocuments: 1, totalBytes: 1, totalChunks: 1, failureCode: 1 } }) : null;
+  const safeCode = value => /^(?:CHECKPOINT|RESTORE|ML_TEST|STALE_TEST|TEST)_[A-Z_]+$/.test(value || '') ? value : null;
+  return { state: token.state, resetEpoch: token.resetEpoch, testCycleId: token.testCycleId,
+    maintenance: !['NO_TEST', 'TEST_ACTIVE'].includes(token.state), cloudRestoreEnabled,
+    activeCheckpointId: /^[a-f0-9-]{36}$/i.test(control?.activeCheckpointId || '') ? control.activeCheckpointId : null,
+    lastCheckpointId: /^[a-f0-9-]{36}$/i.test(control?.lastCheckpointId || '') ? control.lastCheckpointId : null,
+    checkpoint: checkpoint ? { checkpointId: checkpoint.checkpointId, status: checkpoint.status,
+      dataVersion: typeof checkpoint.dataVersion === 'string' ? checkpoint.dataVersion : null,
+      createdAt: checkpoint.createdAt || checkpoint.capturedAt || null,
+      progress: checkpoint.status === 'READY' ? { phase: 'VERIFIED',
+        totalDocuments: Number.isSafeInteger(checkpoint.totalDocuments) ? checkpoint.totalDocuments : null,
+        totalBytes: Number.isSafeInteger(checkpoint.totalBytes) ? checkpoint.totalBytes : null,
+        totalChunks: Number.isSafeInteger(checkpoint.totalChunks) ? checkpoint.totalChunks : null }
+        : { phase: checkpoint.status === 'CREATING' ? 'CAPTURING' : checkpoint.status },
+      failureCode: safeCode(checkpoint.failureCode) } : null,
+    restoreId: /^[a-f0-9-]{36}$/i.test(control?.restoreId || '') ? control.restoreId : null,
+    restoreFinish: control?.restoreFinish === true, restoreLeaseUntil: control?.restoreLeaseUntil || null,
+    finalizedAt: control?.finalizedAt || null, failureCode: safeCode(control?.failureCode) };
 }
 module.exports = { createMlTestAdminExecutor, cloudFlagEnabled, provisionLocalAudit, AUDIT };

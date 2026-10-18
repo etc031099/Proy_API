@@ -7,22 +7,27 @@ const CERTIFICATION = 'm6.10a3795b-admin-epoch-v1';
 const fail = code => { throw Object.assign(new Error(code), { code, httpStatus: 503 }); };
 const cloudFlagEnabled = env => env.ML_TEST_CLOUD_RESTORE_ENABLED === 'true';
 function authorizeCloudTarget({ client, db, user, env, certificationId }) {
-  const scope = authorizeAdminAction(user);
+  authorizeAdminAction(user);
   if (!cloudFlagEnabled(env)) fail('ML_TEST_CLOUD_RESTORE_DISABLED');
   if (certificationId !== CERTIFICATION) fail('ML_TEST_CLOUD_CERTIFICATION_REQUIRED');
+  assertCloudStatusTarget({ client, db, env });
+  const capability = Object.freeze({});
+  grants.set(capability, { client, db, businessId: config.businessId, scenarioId: config.scenarioId });
+  return capability;
+}
+// Read-only status may be queried with the restore flag off. It is bound to
+// the already configured application connection and fixed demo scope.
+function assertCloudStatusTarget({ client, db, env }) {
   let uri;
   try { uri = new URL(env.FORECAST_CLOUD_MONGO_URI); } catch { fail('ML_TEST_CLOUD_TARGET_INVALID'); }
   const database = env.FORECAST_CLOUD_EXPECTED_DATABASE;
-  if (env.FORECAST_CLOUD_EXPECTED_BUSINESS_ID !== scope.businessId || env.FORECAST_CLOUD_EXPECTED_SCENARIO_ID !== scope.scenarioId
+  if (env.FORECAST_CLOUD_EXPECTED_BUSINESS_ID !== config.businessId || env.FORECAST_CLOUD_EXPECTED_SCENARIO_ID !== config.scenarioId
       || !/^[A-Za-z0-9_-]{1,64}$/.test(database || '') || uri.protocol !== 'mongodb+srv:'
       || !uri.hostname.endsWith('.mongodb.net') || !uri.username || !uri.password || uri.port || uri.hash
       || uri.pathname !== `/${database}` || client?.options?.srvHost !== uri.hostname || db?.databaseName !== database || db?.client !== client
       || ['tls', 'ssl'].some(key => uri.searchParams.has(key) && uri.searchParams.get(key) !== 'true')
       || ['tlsInsecure', 'tlsAllowInvalidCertificates', 'tlsAllowInvalidHostnames', 'directConnection']
         .some(key => uri.searchParams.has(key) && uri.searchParams.get(key) !== 'false')) fail('ML_TEST_CLOUD_TARGET_INVALID');
-  const capability = Object.freeze({});
-  grants.set(capability, { client, db, businessId: config.businessId, scenarioId: config.scenarioId });
-  return capability;
 }
 function authorized(client, db, capability) {
   if (!capability || typeof capability !== 'object') return false;
@@ -30,4 +35,4 @@ function authorized(client, db, capability) {
   return Boolean(grant && grant.client === client && grant.db === db
     && grant.businessId === config.businessId && grant.scenarioId === config.scenarioId);
 }
-module.exports = { authorizeCloudTarget, authorized, cloudFlagEnabled, CERTIFICATION };
+module.exports = { authorizeCloudTarget, assertCloudStatusTarget, authorized, cloudFlagEnabled, CERTIFICATION };

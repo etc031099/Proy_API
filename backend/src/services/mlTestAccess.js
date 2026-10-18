@@ -23,7 +23,11 @@ async function readStatus(user, db = mongoose.connection.db) {
 }
 // This guard runs after authentication, before critical reads AND writes.
 async function maintenanceGuard(req, res, next, db = mongoose.connection.db) {
-  if (req.user?.businessId !== config.businessId || /^\/api\/intelligence\/test-control\/status(?:\?|$)/.test(req.originalUrl || '')) return next();
+  if (req.user?.businessId !== config.businessId
+      || /^\/api\/intelligence\/test-control\/status(?:\?|$)/.test(req.originalUrl || '')
+      // Read-only status and the authenticated restore continuation remain
+      // reachable so an admin can observe and recover the maintenance state.
+      || /^\/api\/ml-test\/(?:status|restore)(?:\?|$)/.test(req.originalUrl || '')) return next();
   try {
     const status = await readStatus(req.user, db);
     if (!status.maintenance) return next();
