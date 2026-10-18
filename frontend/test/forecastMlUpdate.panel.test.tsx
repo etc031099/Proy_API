@@ -24,6 +24,12 @@ const horizon = (horizonDays: 7 | 14, patch: Record<string, unknown> = {}) => ({
     requiredOrigins: 107 as const, availableOriginsActual: null }, ...patch,
 });
 const initialStatus: ForecastMlUpdateStatus = { dataVersion: '83', closedThrough: '2026-10-16', horizons: [horizon(7), horizon(14)] };
+const manualPendingStatus = (status: ForecastMlUpdateStatus) => {
+  const activate = (row: ForecastMlUpdateStatus['horizons'][number]) => ({ ...row, pending: true,
+    trigger: 'MANUAL' as const, requestStatus: 'ALREADY_PENDING' });
+  const horizons: ForecastMlUpdateStatus['horizons'] = [activate(status.horizons[0]), activate(status.horizons[1])];
+  return { ...status, horizons };
+};
 const ok = <T,>(data: T): AuthenticatedDiagnosticResult<T> => ({ httpStatus: 200, data });
 
 describe('Forecast manual ML update panel', () => {
@@ -130,6 +136,8 @@ describe('Forecast manual ML update panel', () => {
   });
 
   it('submits one empty-body request and shows accepted copy', async () => {
+    vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValueOnce(ok(initialStatus))
+      .mockResolvedValueOnce(ok(manualPendingStatus(initialStatus)));
     render(<ForecastMlUpdatePanel />);
     await screen.findByText('ACTIVO');
     fireEvent.click(screen.getByRole('button', { name: 'Actualizar ML ahora' }));
@@ -149,9 +157,10 @@ describe('Forecast manual ML update panel', () => {
         } });
       const pendingStatus: ForecastMlUpdateStatus = { ...initialStatus, dataVersion: '173',
         horizons: [pendingHorizon(7), pendingHorizon(14)] };
-      vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValue(ok(pendingStatus));
+      vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValueOnce(ok(pendingStatus))
+        .mockResolvedValueOnce(ok(manualPendingStatus(pendingStatus)));
       render(<ForecastMlUpdatePanel />);
-      await screen.findByText('PENDIENTE');
+      await screen.findByText('EVIDENCIA PENDIENTE');
       const button = screen.getByRole('button', { name: 'Actualizar ML ahora' });
       expect(button.hasAttribute('disabled')).toBe(false);
       fireEvent.click(button);
@@ -183,6 +192,10 @@ describe('Forecast manual ML update panel', () => {
   ] as const)('shows response copy for %s', async (requestStatus, copy) => {
     vi.mocked(apiClient.requestForecastMlUpdate).mockResolvedValueOnce(ok({ requestStatus,
       trigger: 'MANUAL', pending: true, horizons: [7, 14], dispatchStatus: 'DISPATCHED', messageCode: requestStatus }));
+    const active: ForecastMlUpdateStatus = requestStatus === 'RUNNING'
+      ? { ...initialStatus, horizons: [horizon(7, { currentlyRunning: true, requestStatus: 'RUNNING' }), horizon(14)] }
+      : manualPendingStatus(initialStatus);
+    vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValueOnce(ok(initialStatus)).mockResolvedValueOnce(ok(active));
     render(<ForecastMlUpdatePanel />); await screen.findByText('ACTIVO');
     fireEvent.click(screen.getByRole('button', { name: 'Actualizar ML ahora' }));
     expect(await screen.findByText(copy)).toBeTruthy();
@@ -191,6 +204,8 @@ describe('Forecast manual ML update panel', () => {
   it('shows DEFERRED as saved for automatic processing', async () => {
     vi.mocked(apiClient.requestForecastMlUpdate).mockResolvedValueOnce(ok({ requestStatus: 'REQUEST_ACCEPTED',
       trigger: 'MANUAL', pending: true, horizons: [7, 14], dispatchStatus: 'DEFERRED', messageCode: 'ML_UPDATE_REQUESTED' }));
+    vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValueOnce(ok(initialStatus))
+      .mockResolvedValueOnce(ok(manualPendingStatus(initialStatus)));
     render(<ForecastMlUpdatePanel />); await screen.findByText('ACTIVO');
     fireEvent.click(screen.getByRole('button', { name: 'Actualizar ML ahora' }));
     expect(await screen.findByText('Solicitud guardada; se procesará automáticamente.')).toBeTruthy();
@@ -211,7 +226,7 @@ describe('Forecast manual ML update panel', () => {
   it('polls each eight seconds, confirms completion with one final read and announces it', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date('2026-10-17T06:00:00Z'));
-    const pending = { ...initialStatus, horizons: [horizon(7, { pending: true, trigger: 'MANUAL' }), horizon(14, { pending: true, trigger: 'MANUAL' })] } as ForecastMlUpdateStatus;
+    const pending = manualPendingStatus(initialStatus);
     const settled = { ...initialStatus, horizons: [horizon(7, { lastResult: 'LAST_RESULT_NO_PENDING' }), horizon(14, { lastResult: 'LAST_RESULT_NO_PENDING' })] } as ForecastMlUpdateStatus;
     vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValueOnce(ok(initialStatus))
       .mockResolvedValueOnce(ok(pending)).mockResolvedValueOnce(ok(settled)).mockResolvedValueOnce(ok(settled));
@@ -224,6 +239,57 @@ describe('Forecast manual ML update panel', () => {
     expect(await screen.findByText('Revisión completada: no había trabajo pendiente. El modelo activo no cambió.')).toBeTruthy();
     await vi.advanceTimersByTimeAsync(24_000);
     expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(4);
+  });
+
+  it('ends a manual NOT_MATURE request while keeping immature signals visible', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const requestedAt = '2026-10-18T18:07:00.000Z';
+    const active = manualPendingStatus({ ...initialStatus, dataVersion: '173', horizons: [
+      horizon(7, { lastRequestAt: requestedAt, pending: true, requestStatus: 'ALREADY_PENDING' }),
+      horizon(14, { lastRequestAt: requestedAt, pending: true, requestStatus: 'ALREADY_PENDING' }),
+    ] });
+    const terminal = { ...active, horizons: active.horizons.map(row => ({ ...row,
+      currentlyRunning: false, requestStatus: 'NOT_ELIGIBLE_YET', lastEvaluatedAt: '2026-10-18T18:08:00.000Z',
+      lastResult: 'NOT_ELIGIBLE_YET', lastEvaluationReason: 'NOT_MATURE', readiness: {
+        ...row.readiness, status: 'WAITING_MATURITY', reasonCode: 'NOT_MATURE', eligibility: 'NOT_MATURE',
+        hasPendingSignals: true, pendingSignalCount: 90, pendingSignalTypes: ['SALE_COMPLETED'],
+        processedRevision: '83', latestPendingRevision: '173',
+      },
+    })) as ForecastMlUpdateStatus['horizons'] } satisfies ForecastMlUpdateStatus;
+    const onManualRequestFinished = vi.fn();
+    vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValueOnce(ok(initialStatus))
+      .mockResolvedValueOnce(ok(active)).mockResolvedValueOnce(ok(terminal)).mockResolvedValueOnce(ok(terminal));
+    render(<ForecastMlUpdatePanel onManualRequestFinished={onManualRequestFinished} />);
+    await screen.findByText('ACTIVO');
+    const button = screen.getByRole('button', { name: 'Actualizar ML ahora' });
+    fireEvent.click(button);
+    expect(await screen.findByText('Actualización solicitada.')).toBeTruthy();
+    expect(button.hasAttribute('disabled')).toBe(true);
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(await screen.findByText('Revisión completada. La evidencia todavía debe completar su período de madurez antes de evaluar un nuevo modelo.')).toBeTruthy();
+    expect(screen.getByText('EVIDENCIA PENDIENTE')).toBeTruthy();
+    expect(screen.getAllByText('90')).toHaveLength(2);
+    expect(screen.getByText('Datos pendientes').parentElement?.textContent).toContain('Sí');
+    expect(button.hasAttribute('disabled')).toBe(false);
+    expect(onManualRequestFinished).toHaveBeenCalledTimes(1);
+    expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(4);
+  });
+
+  it('keeps pending evidence independent from an active manual request on initial load', async () => {
+    const terminalPending: ForecastMlUpdateStatus = { ...initialStatus, dataVersion: '173', horizons: [
+      horizon(7, { pending: true, requestStatus: 'NOT_ELIGIBLE_YET', lastRequestAt: '2026-10-18T18:07:00.000Z',
+        lastEvaluatedAt: '2026-10-18T18:08:00.000Z', lastEvaluationReason: 'NOT_MATURE', readiness: {
+          ...horizon(7).readiness, status: 'WAITING_MATURITY', hasPendingSignals: true, pendingSignalCount: 90,
+        } }),
+      horizon(14, { pending: true, requestStatus: 'NOT_ELIGIBLE_YET', lastRequestAt: '2026-10-18T18:07:00.000Z',
+        lastEvaluatedAt: '2026-10-18T18:08:00.000Z', lastEvaluationReason: 'NOT_MATURE', readiness: {
+          ...horizon(14).readiness, status: 'WAITING_MATURITY', hasPendingSignals: true, pendingSignalCount: 90,
+        } }),
+    ] };
+    vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValue(ok(terminalPending));
+    render(<ForecastMlUpdatePanel />);
+    await screen.findByText('EVIDENCIA PENDIENTE');
+    expect(screen.getByRole('button', { name: 'Actualizar ML ahora' }).hasAttribute('disabled')).toBe(false);
   });
 
   it('keeps polling while a horizon is running even when it is no longer pending', async () => {
@@ -243,8 +309,9 @@ describe('Forecast manual ML update panel', () => {
 
   it('switches to slower polling after two minutes and stops after an eight-minute window', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const pending = { ...initialStatus, horizons: [horizon(7, { pending: true }), horizon(14, { pending: true })] } as ForecastMlUpdateStatus;
-    vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValueOnce(ok(initialStatus)).mockResolvedValue(ok(pending));
+    const pending = manualPendingStatus(initialStatus);
+    vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValueOnce(ok(initialStatus))
+      .mockResolvedValueOnce(ok(pending)).mockResolvedValue(ok(pending));
     render(<ForecastMlUpdatePanel />); await waitFor(() => expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole('button', { name: 'Actualizar ML ahora' }));
     await waitFor(() => expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(2));
@@ -289,6 +356,17 @@ describe('Forecast manual ML update panel', () => {
     await waitFor(() => expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole('button', { name: 'Actualizar estado' }));
     await waitFor(() => expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(2));
+  });
+
+  it('reloads durable history when the manual request completion token changes', async () => {
+    vi.spyOn(apiClient, 'getForecastMlUpdateHistory').mockResolvedValue(ok({
+      items: [], page: { limit: 20, nextCursor: null },
+    }));
+    const { rerender } = render(<ForecastMlUpdateHistoryPanel refreshToken={0} />);
+    expect(await screen.findByText('Aún no hay ejecuciones históricas capturadas.')).toBeTruthy();
+    expect(apiClient.getForecastMlUpdateHistory).toHaveBeenCalledTimes(1);
+    rerender(<ForecastMlUpdateHistoryPanel refreshToken={1} />);
+    await waitFor(() => expect(apiClient.getForecastMlUpdateHistory).toHaveBeenCalledTimes(2));
   });
 
   it('computes the next scheduled UTC cron minute as Peru local time', () => {

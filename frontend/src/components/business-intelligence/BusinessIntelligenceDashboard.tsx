@@ -102,6 +102,7 @@ function ProductPicker({ selected, onSelect }: { selected: ProductOption | null;
 
 export function BusinessIntelligenceDashboard() {
   const [tab, setTab] = useState<TabKey>('summary');
+  const [mlHistoryRefreshToken, setMlHistoryRefreshToken] = useState(0);
   const [summary, setSummary] = useState<BusinessSummary | null>(null);
   const [inventory, setInventory] = useState<InventorySummary | null>(null);
   const [summaryState, setSummaryState] = useState<LoadState>('loading');
@@ -251,8 +252,9 @@ export function BusinessIntelligenceDashboard() {
       </section>}
       {tab === 'forecast' && <section id="intelligence-panel-forecast" role="tabpanel" aria-labelledby="intelligence-tab-forecast" tabIndex={0} className="mt-4 space-y-6">
         <div><h2 className="text-xl font-semibold">Pronóstico operativo</h2><p className="text-sm text-muted-foreground">Modelo operacional actual: Ridge Regression para horizontes acumulados de 7 y 14 días. MA28 es un baseline estadístico de referencia. HGB es histórico/experimental y no se utiliza para serving LIVE.</p></div>
-        <ForecastDiagnosticsPanel onForecastModelsChange={setActiveForecastModels} />
-        <ForecastMlUpdateHistoryPanel />
+        <ForecastDiagnosticsPanel onForecastModelsChange={setActiveForecastModels}
+          onManualRequestFinished={() => setMlHistoryRefreshToken(value => value + 1)} />
+        <ForecastMlUpdateHistoryPanel refreshToken={mlHistoryRefreshToken} />
         <Card><CardContent className="p-5"><ProductPicker selected={selected} onSelect={chooseProduct} /></CardContent></Card>
         {!selected && <EmptyProductState />}
         {selected && <ForecastPanel product={selected} forecasts={forecastByHorizon} horizon={horizon} setHorizon={setHorizon} activeModels={activeForecastModels} onRetry={() => { apiClient.invalidateIntelligenceReads(); setDetailRetry(value => value + 1); }} />}

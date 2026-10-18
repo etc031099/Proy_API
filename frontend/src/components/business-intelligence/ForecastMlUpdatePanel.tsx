@@ -64,8 +64,9 @@ function headline(status: ForecastMlUpdateStatus | null, failure: string | null)
   if (failure) return 'ERROR';
   if (!status || status.horizons.length !== 2) return 'CONSULTANDO';
   if (status.horizons.some(row => row.currentlyRunning)) return 'ACTUALIZANDO';
-  if (status.horizons.some(row => row.pending)) return 'PENDIENTE';
+  if (status.horizons.some(row => row.requestStatus === 'ALREADY_PENDING')) return 'SOLICITUD PENDIENTE';
   if (status.horizons.some(row => row.lastResult === 'LAST_RESULT_FAILED')) return 'ERROR';
+  if (status.horizons.some(row => row.pending)) return 'EVIDENCIA PENDIENTE';
   if (status.horizons.some(row => row.lastResult === 'LAST_RESULT_INSUFFICIENT_HISTORY'
     || ['NOT_MATURE', 'COOLDOWN_ACTIVE', 'PREVIOUS_FAILURE_NOT_RETRYABLE'].includes(row.lastEvaluationReason || ''))) return 'NO ELEGIBLE';
   if (status.horizons.every(row => row.lastResult === 'LAST_RESULT_NO_PENDING')) return 'SIN CAMBIOS';
@@ -117,18 +118,24 @@ function completionMessage(status: ForecastMlUpdateStatus): string {
   if (status.horizons.every(row => row.lastResult === 'LAST_RESULT_NO_PENDING')) {
     return 'Revisión completada: no había trabajo pendiente. El modelo activo no cambió.';
   }
+  if (status.horizons.some(row => row.lastEvaluationReason === 'NOT_MATURE')) {
+    return 'Revisión completada. La evidencia todavía debe completar su período de madurez antes de evaluar un nuevo modelo.';
+  }
   return reasonMessage(status) || 'Estado actualizado. Las versiones activas siguen disponibles.';
 }
 
 const isSettled = (status: ForecastMlUpdateStatus) => status.horizons.length === 2
-  && status.horizons.every(row => !row.pending && !row.currentlyRunning);
+  && status.horizons.every(row => !row.currentlyRunning
+    && row.requestStatus !== 'ALREADY_PENDING' && row.requestStatus !== 'RUNNING');
 
 function technicalValue(value: unknown) {
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   return safeCode(value) || (typeof value === 'string' && /^\d{1,20}$/.test(value) ? value : 'No disponible');
 }
 
-export function ForecastMlUpdatePanel({ refreshToken = 0 }: { refreshToken?: number }) {
+export function ForecastMlUpdatePanel({ refreshToken = 0, onManualRequestFinished }: {
+  refreshToken?: number; onManualRequestFinished?: () => void;
+}) {
   const [status, setStatus] = useState<ForecastMlUpdateStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -140,15 +147,20 @@ export function ForecastMlUpdatePanel({ refreshToken = 0 }: { refreshToken?: num
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelPollWait = useRef<(() => void) | null>(null);
   const alive = useRef(true);
+  const finishRequest = useCallback((finishedStatus: ForecastMlUpdateStatus, notifyHistory = false) => {
+    const wasTrackingRequest = requestActiveRef.current;
+    requestActiveRef.current = false;
+    setRequestActive(false);
+    setMessage(completionMessage(finishedStatus));
+    if (wasTrackingRequest || notifyHistory) onManualRequestFinished?.();
+  }, [onManualRequestFinished]);
   const refreshStatus = useCallback(async () => {
     const result = await apiClient.getForecastMlUpdateStatus();
     if (!alive.current) return result;
     if (result.httpStatus >= 200 && result.httpStatus < 300 && result.data) {
       setStatus(result.data); setStatusError(null);
       if (requestActiveRef.current && isSettled(result.data)) {
-        requestActiveRef.current = false;
-        setRequestActive(false);
-        setMessage(completionMessage(result.data));
+        finishRequest(result.data);
       }
     } else {
       setStatusError(result.httpStatus === 401 ? 'Sesión no autorizada. Inicia sesión nuevamente.'
@@ -156,7 +168,7 @@ export function ForecastMlUpdatePanel({ refreshToken = 0 }: { refreshToken?: num
     }
     setLoading(false);
     return result;
-  }, []);
+  }, [finishRequest]);
 
   useEffect(() => {
     alive.current = true;
@@ -201,9 +213,7 @@ export function ForecastMlUpdatePanel({ refreshToken = 0 }: { refreshToken?: num
           if (finalResult.httpStatus >= 200 && finalResult.httpStatus < 300 && finalResult.data) {
             setStatus(finalResult.data); setStatusError(null);
             if (isSettled(finalResult.data)) {
-              requestActiveRef.current = false;
-              setRequestActive(false);
-              setMessage(completionMessage(finalResult.data));
+              finishRequest(finalResult.data);
               return;
             }
           }
@@ -215,7 +225,7 @@ export function ForecastMlUpdatePanel({ refreshToken = 0 }: { refreshToken?: num
     if (alive.current && requestActiveRef.current) {
       setMessage('La evaluación continúa en segundo plano. Puedes actualizar el estado manualmente más tarde.');
     }
-  }, []);
+  }, [finishRequest]);
 
   const submit = useCallback(async () => {
     if (requestLock.current || requestActiveRef.current || rows.some(row => row.currentlyRunning || row.requestStatus === 'ALREADY_PENDING' || row.requestStatus === 'RUNNING')) return;
@@ -230,13 +240,12 @@ export function ForecastMlUpdatePanel({ refreshToken = 0 }: { refreshToken?: num
       }
       setMessage(requestMessage(result));
       const latest = await refreshStatus();
-      const hasWork = Boolean(result.data.pending || latest?.data?.horizons.some(row => row.pending || row.currentlyRunning));
-      if (hasWork) {
+      if (latest?.data && isSettled(latest.data)) {
+        finishRequest(latest.data, true);
+      } else if (!latest?.data || !isSettled(latest.data)) {
         requestActiveRef.current = true;
         setRequestActive(true);
         void pollAfterRequest();
-      } else if (latest?.data) {
-        setMessage(completionMessage(latest.data));
       }
     } catch {
       if (alive.current) setMessage('No se pudo confirmar la solicitud. Revisa el estado antes de volver a intentar.');
@@ -244,7 +253,7 @@ export function ForecastMlUpdatePanel({ refreshToken = 0 }: { refreshToken?: num
       requestLock.current = false;
       if (alive.current) setSending(false);
     }
-  }, [pollAfterRequest, refreshStatus, rows]);
+  }, [finishRequest, pollAfterRequest, refreshStatus, rows]);
 
   const byHorizon = (horizon: 7 | 14) => rows.find(row => row.horizonDays === horizon);
   const currentHeadline = headline(status, statusError);

@@ -68,7 +68,7 @@ function executionSummary(row: ForecastMlUpdateExecution) {
   </>;
 }
 
-export function ForecastMlUpdateHistoryPanel() {
+export function ForecastMlUpdateHistoryPanel({ refreshToken = 0 }: { refreshToken?: number }) {
   const [page, setPage] = useState<ForecastMlUpdateHistoryPage | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -85,7 +85,7 @@ export function ForecastMlUpdateHistoryPanel() {
     } catch { if (id === requestId.current) setError(true); }
     finally { if (id === requestId.current) setLoading(false); }
   }, []);
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => { void refresh(); }, [refresh, refreshToken]);
 
   const loadMore = async () => {
     if (!page?.page.nextCursor || loadingMore) return;

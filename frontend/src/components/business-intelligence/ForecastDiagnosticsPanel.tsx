@@ -9,7 +9,8 @@ import { apiClient } from '@/lib/api';
 import type { AuthenticatedDiagnosticResult, ForecastActiveModel, ForecastActiveModels, HealthDiagnostic } from '@/types/businessIntelligence';
 import { ForecastMlUpdatePanel } from './ForecastMlUpdatePanel';
 
-type Props = { onForecastModelsChange: (models: ForecastActiveModel[] | null) => void };
+type Props = { onForecastModelsChange: (models: ForecastActiveModel[] | null) => void;
+  onManualRequestFinished?: () => void };
 type SectionState = 'loading' | 'retrying' | 'ready' | 'error';
 
 const DIAGNOSTIC_RETRY_DELAY_MS = 2500;
@@ -127,7 +128,7 @@ function HealthSection({ result }: { result: AuthenticatedDiagnosticResult<Healt
   </section>;
 }
 
-export function ForecastDiagnosticsPanel({ onForecastModelsChange }: Props) {
+export function ForecastDiagnosticsPanel({ onForecastModelsChange, onManualRequestFinished }: Props) {
   const [forecast, setForecast] = useState<AuthenticatedDiagnosticResult<ForecastActiveModels> | null>(null);
   const [health, setHealth] = useState<AuthenticatedDiagnosticResult<HealthDiagnostic> | null>(null);
   const [forecastState, setForecastState] = useState<SectionState>('loading');
@@ -212,7 +213,7 @@ export function ForecastDiagnosticsPanel({ onForecastModelsChange }: Props) {
   return <Card aria-label="Estado del ML">
     <CardHeader><div className="flex flex-wrap items-start justify-between gap-3"><div><CardTitle>Estado del ML</CardTitle><CardDescription>Estado del pronóstico y solicitudes de evaluación bajo la política vigente.</CardDescription></div>
       <Button type="button" size="sm" variant="outline" disabled={isBusy} onClick={() => setRequestNumber(value => value + 1)}><RefreshCw className="mr-2 h-4 w-4" />{isBusy ? 'Consultando…' : 'Actualizar estado'}</Button></div></CardHeader>
-    <CardContent className="space-y-4"><ForecastMlUpdatePanel refreshToken={requestNumber} />
+    <CardContent className="space-y-4"><ForecastMlUpdatePanel refreshToken={requestNumber} onManualRequestFinished={onManualRequestFinished} />
       {forecastState === 'loading' && <p role="status" className="text-sm text-muted-foreground">Cargando pronósticos…</p>}
       {forecastState === 'retrying' && <p role="status" className="text-sm text-muted-foreground">Preparando servicio de pronósticos…</p>}
       {forecastState === 'error' && <p role="alert" className="text-sm text-muted-foreground">No se pudo consultar el diagnóstico de pronósticos. Puedes actualizar el estado e intentarlo nuevamente.</p>}
