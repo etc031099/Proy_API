@@ -14,6 +14,7 @@ import { ChartCard, MetricInfo, MetricLabel } from './MetricInfo';
 import { ForecastEvaluationPanel } from './ForecastEvaluationPanel';
 import { ForecastDiagnosticsPanel } from './ForecastDiagnosticsPanel';
 import { ForecastMlUpdateHistoryPanel } from './ForecastMlUpdateHistoryPanel';
+import { ForecastReplayEvidencePanel } from './ForecastReplayEvidencePanel';
 import { AnalyticsErrorBoundary } from './AnalyticsErrorBoundary';
 import { MlTestEpochBoundary } from './MlTestEpochBoundary';
 
@@ -260,6 +261,7 @@ function BusinessIntelligenceContent() {
         <ForecastDiagnosticsPanel onForecastModelsChange={setActiveForecastModels}
           onManualRequestFinished={() => setMlHistoryRefreshToken(value => value + 1)} />
         <ForecastMlUpdateHistoryPanel refreshToken={mlHistoryRefreshToken} />
+        <ForecastReplayEvidencePanel />
         <Card><CardContent className="p-5"><ProductPicker selected={selected} onSelect={chooseProduct} /></CardContent></Card>
         {!selected && <EmptyProductState />}
         {selected && <ForecastPanel product={selected} forecasts={forecastByHorizon} horizon={horizon} setHorizon={setHorizon} activeModels={activeForecastModels} onRetry={() => { apiClient.invalidateIntelligenceReads(); setDetailRetry(value => value + 1); }} />}

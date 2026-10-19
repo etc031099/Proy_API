@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BusinessIntelligenceDashboard } from '@/components/business-intelligence/BusinessIntelligenceDashboard';
 import { apiClient } from '@/lib/api';
 import { getTranslation } from '@/i18n/dict';
-import type { BusinessSummary, ForecastActiveModels, ForecastResponse, InventorySummary, ProductInventory } from '@/types/businessIntelligence';
+import type { BusinessSummary, CertifiedForecastReplayEvidence, ForecastActiveModels, ForecastResponse, InventorySummary, ProductInventory } from '@/types/businessIntelligence';
 
 // Epoch maintenance/remount behavior is tested independently with real API
 // status responses in mlTestEpochBoundary.test.tsx.
@@ -46,6 +46,18 @@ const activeForecastFixture: ForecastActiveModels = { models: [
     trainedDataVersion: '0', dataCutoff: '2026-10-13', featureVersion: 'RIDGE_CAUSAL27_V1', promotionPolicyVersion: 'M6.10A22-PROMOTION-v1',
     metrics: { wape: 0.2, mae: 1.4, bias: -0.03 } })),
 ] };
+const replayEvidenceFixture: CertifiedForecastReplayEvidence = {
+  demoRunId: 'cert-stable-2020', purpose: 'REPLAY_ONLY', profile: 'STABLE', seed: 2020, requiredOrigins: 107,
+  policy: { numericPolicy: 'M6.10A22-PROMOTION-v1', replayPolicy: 'REPLAY-CAUSAL27-107-v1' }, level: 'LEVEL_7_FULL_EVALUATION',
+  liveImpact: { modifiesLive: false, modifiesRegistry: false, modifiesActive: false, promotesActive: false },
+  horizons: [
+    { horizonDays: 7, status: 'PASS', metrics: { wape: 0.21821910661531238, mae: 2.7553986143126212, normalizedBias: 0.015203166728022906, relativeWapeImprovement: 0.07285079744035697 },
+      globalChecks: { G1_POOLED_WAPE_5PCT: true, G2_POOLED_BIAS_10PCT: true, G3_POOLED_MACRO_MAE_110PCT: true }, reasons: [], selectedIdentity: 'replay:cert-stable-2020:7d:v2', selectedState: 'REPLAY_SELECTED' },
+    { horizonDays: 14, status: 'REJECTED', metrics: { wape: 0.16015837551541576, mae: 4.056983784638979, normalizedBias: 0.010429423363195635, relativeWapeImprovement: 0.13230439506009892 },
+      globalChecks: { G1_POOLED_WAPE_5PCT: true, G2_POOLED_BIAS_10PCT: true, G3_POOLED_MACRO_MAE_110PCT: true }, reasons: ['P_FOLD_CATA_MAE:F3:BEB-GAS-003'], candidateState: 'REPLAY_REJECTED' },
+  ],
+  interpretation: { execution: 'HISTORICAL_OFFLINE_REPLAY', isLiveState: false, requiredOriginsWasWeakened: false, explanations: [] },
+};
 const productInventoryFixture: ProductInventory = {
   ...temporal, status: 'READY', availability: 'READY', freshness: { mode: 'LIVE', updatedAt: temporal.updatedAt, dataThrough: temporal.dataThrough },
   product: forecastFixture.product, stock: { onHand: 21, incoming: 0, inventoryPosition: 21 },
@@ -88,6 +100,7 @@ describe('business intelligence dashboard', () => {
     });
     vi.spyOn(apiClient, 'getForecastMlUpdateStatus').mockResolvedValue({ httpStatus: 200, data: { dataVersion: '83', closedThrough: '2026-10-16', horizons: [mlHorizon(7), mlHorizon(14)] } });
     vi.spyOn(apiClient, 'getForecastMlUpdateHistory').mockResolvedValue({ httpStatus: 200, data: { items: [], page: { limit: 20, nextCursor: null } } });
+    vi.spyOn(apiClient, 'getCertifiedForecastReplayEvidence').mockResolvedValue({ httpStatus: 200, data: replayEvidenceFixture });
     vi.spyOn(apiClient, 'getForecastModelEvaluation').mockRejectedValue(new Error('Evaluation not part of these LIVE fixtures'));
   });
 
@@ -233,6 +246,39 @@ describe('business intelligence dashboard', () => {
     expect(forecastCardText(7)).toContain('16.25');
     expect(forecastCardText(14)).toContain('32.50');
     expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenCalledTimes(2);
+  });
+
+  it('presents certified replay evidence separately without running replay or changing the LIVE horizon selector', async () => {
+    vi.spyOn(apiClient, 'searchBusinessIntelligenceProducts').mockResolvedValue(success({ products: [productOption] }));
+    vi.spyOn(apiClient, 'getBusinessIntelligenceForecast').mockResolvedValue(success(forecastFixture));
+    render(<BusinessIntelligenceDashboard />);
+    await openForecast();
+    const panel = await screen.findByRole('region', { name: 'Evidencia histórica de promoción' });
+    expect(apiClient.getCertifiedForecastReplayEvidence).toHaveBeenCalledTimes(1);
+    expect(within(panel).getByText('Replay histórico certificado · no modifica el modelo LIVE')).toBeTruthy();
+    expect(within(panel).getByText('PASS')).toBeTruthy();
+    expect(within(panel).getByText('REJECTED')).toBeTruthy();
+    expect(within(panel).getByText(/\+7[,.]29\s*%/)).toBeTruthy();
+    expect(within(panel).getByText(/\+13[,.]23\s*%/)).toBeTruthy();
+    expect(within(panel).getByText('BEB-GAS-003')).toBeTruthy();
+    expect(within(panel).getByText(/mejoró las métricas globales, pero fue bloqueado/)).toBeTruthy();
+    expect(within(panel).getByText(/no modifica Registry, no modifica ACTIVE y no promociona modelos LIVE/)).toBeTruthy();
+    expect(within(panel).queryByRole('button')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Pronóstico 1 día/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /Pronóstico 7 días/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Pronóstico 14 días/ })).toBeTruthy();
+  });
+
+  it('keeps Prediction usable when certified replay evidence is temporarily unavailable', async () => {
+    vi.mocked(apiClient.getCertifiedForecastReplayEvidence).mockRejectedValueOnce(new Error('temporary failure'));
+    vi.spyOn(apiClient, 'searchBusinessIntelligenceProducts').mockResolvedValue(success({ products: [productOption] }));
+    vi.spyOn(apiClient, 'getBusinessIntelligenceForecast').mockResolvedValue(success(forecastFixture));
+    render(<BusinessIntelligenceDashboard />);
+    await openForecast();
+    expect(await screen.findByText('La evidencia histórica no está disponible temporalmente.')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Pronóstico operativo' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Pronóstico 7 días/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Pronóstico 14 días/ })).toBeTruthy();
   });
 
   it('clears prior horizon values and loads both Ridge horizons when the selected product changes', async () => {

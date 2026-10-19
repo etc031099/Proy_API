@@ -2,7 +2,7 @@ import axios, { AxiosInstance, AxiosError } from 'axios';
 import type { ForecastEvaluation } from '@/types/forecastEvaluation';
 import { ApiResponse, DemandForecastResponse, DemoV2RegisterData, DemoV3RegisterData } from '@/types';
 import type { AgentMessageRequest, AgentResponse, AgentConversationList, AgentConversationDetail } from '@/types/agent';
-import type { AnalyticsEnvelope, AssociationsAnalytics, AuthenticatedDiagnosticResult, BusinessHealthAnalytics, BusinessSummary, CustomerAnalyticsDetail, CustomersAnalytics, ForecastActiveModels, ForecastMlUpdateExecutionDetail, ForecastMlUpdateHistoryPage, ForecastMlUpdateProductsPage, ForecastMlUpdateRequestResult, ForecastMlUpdateStatus, ForecastResponse, HealthDiagnostic, InventorySummary, ProductInventory, ProductOption, RelatedProductAnalytics, SalesAnalytics, SalesPeriod, SupplierAnalyticsDetail, SuppliersAnalytics } from '@/types/businessIntelligence';
+import type { AnalyticsEnvelope, AssociationsAnalytics, AuthenticatedDiagnosticResult, BusinessHealthAnalytics, BusinessSummary, CertifiedForecastReplayEvidence, CustomerAnalyticsDetail, CustomersAnalytics, ForecastActiveModels, ForecastMlUpdateExecutionDetail, ForecastMlUpdateHistoryPage, ForecastMlUpdateProductsPage, ForecastMlUpdateRequestResult, ForecastMlUpdateStatus, ForecastResponse, HealthDiagnostic, InventorySummary, ProductInventory, ProductOption, RelatedProductAnalytics, SalesAnalytics, SalesPeriod, SupplierAnalyticsDetail, SuppliersAnalytics } from '@/types/businessIntelligence';
 import type { CustomerClustering } from '@/types/customerClustering';
 import type { SalesAnomalies } from '@/types/salesAnomalies';
 import { IntelligenceReadCache, type IntelligenceRevision } from './intelligenceReadCache';
@@ -507,6 +507,10 @@ class ApiClient {
 
   async getForecastModelDiagnostics(): Promise<AuthenticatedDiagnosticResult<ForecastActiveModels>> {
     return this.diagnosticRead('/intelligence/forecast/models/active');
+  }
+
+  async getCertifiedForecastReplayEvidence(): Promise<AuthenticatedDiagnosticResult<CertifiedForecastReplayEvidence>> {
+    return this.diagnosticRead('/intelligence/forecast/replay/certified-stable-2020');
   }
 
   async getHealthDiagnostics(): Promise<AuthenticatedDiagnosticResult<HealthDiagnostic>> {

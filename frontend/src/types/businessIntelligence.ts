@@ -116,6 +116,27 @@ export interface ForecastActiveModels {
     snapshotStatus: 'AVAILABLE' | 'UNAVAILABLE'; snapshotReasonCode: string | null;
     horizons: Record<string, { status: string; reasonCode: string | null; mlLoadStatus?: string; mlLoadReasonCode?: string | null }> };
 }
+export interface CertifiedForecastReplayEvidence {
+  demoRunId: 'cert-stable-2020';
+  purpose: 'REPLAY_ONLY';
+  profile: 'STABLE';
+  seed: 2020;
+  requiredOrigins: 107;
+  policy: { numericPolicy: 'M6.10A22-PROMOTION-v1'; replayPolicy: 'REPLAY-CAUSAL27-107-v1' };
+  level: 'LEVEL_7_FULL_EVALUATION';
+  liveImpact: { modifiesLive: false; modifiesRegistry: false; modifiesActive: false; promotesActive: false };
+  horizons: Array<{
+    horizonDays: 7 | 14;
+    status: 'PASS' | 'REJECTED';
+    metrics: { wape: number; mae: number; normalizedBias: number; relativeWapeImprovement: number };
+    globalChecks: { G1_POOLED_WAPE_5PCT: boolean; G2_POOLED_BIAS_10PCT: boolean; G3_POOLED_MACRO_MAE_110PCT: boolean };
+    reasons: string[];
+    selectedIdentity?: string;
+    selectedState?: 'REPLAY_SELECTED';
+    candidateState?: 'REPLAY_REJECTED';
+  }>;
+  interpretation: { execution: 'HISTORICAL_OFFLINE_REPLAY'; isLiveState: false; requiredOriginsWasWeakened: false; explanations: string[] };
+}
 export interface HealthDiagnostic {
   httpStatus: number;
   dependencyStatus: { inventory: string; forecast: string; supplier: string; healthAssembly: string };
