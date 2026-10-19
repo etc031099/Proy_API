@@ -287,12 +287,17 @@ describe('business intelligence dashboard', () => {
   it('orders Prediction from current ML state to product forecast, history, replay, and local tests', async () => {
     vi.spyOn(apiClient, 'searchBusinessIntelligenceProducts').mockResolvedValue(success({ products: [productOption] }));
     vi.spyOn(apiClient, 'getBusinessIntelligenceForecast').mockResolvedValue(success(forecastFixture));
+    vi.spyOn(apiClient, 'getMlTestControlStatus').mockResolvedValue({ httpStatus: 200, data: { state: 'NO_TEST', resetEpoch: '0', testCycleId: null,
+      maintenance: false, cloudRestoreEnabled: false, capabilities: { destructiveMlTestControls: { allowed: true, target: 'LOCAL', reasonCode: null } } } });
+    vi.spyOn(apiClient, 'getMlTestLifecycleStatus').mockResolvedValue({ httpStatus: 200, data: { state: 'NO_TEST', resetEpoch: '0', testCycleId: null,
+      maintenance: false, checkpoint: null, cloudRestoreEnabled: false } });
     render(<BusinessIntelligenceDashboard />);
     await openForecast();
     const orderedLabels = [
       'Estado del Machine Learning', 'Salud de los modelos LIVE',
       'Preparación para próxima evaluación', 'Pronóstico por producto',
       'Historial de actualizaciones ML', 'Evidencia histórica de promoción',
+      'Evidencia histórica y comparación de modelos', 'Pruebas del Machine Learning',
     ];
     const orderedNodes = orderedLabels.map(title => screen.getByText(title));
     for (let index = 0; index < orderedNodes.length - 1; index += 1) {

@@ -266,7 +266,6 @@ function BusinessIntelligenceContent() {
         {selected && <ForecastPanel product={selected} forecasts={forecastByHorizon} horizon={horizon} setHorizon={setHorizon} activeModels={activeForecastModels} onRetry={() => { apiClient.invalidateIntelligenceReads(); setDetailRetry(value => value + 1); }} />}
         <ForecastMlUpdateHistoryPanel refreshToken={mlHistoryRefreshToken} />
         <ForecastReplayEvidencePanel />
-        <MlTestControlPanel />
         <details className="rounded-xl border p-4">
           <summary className="cursor-pointer font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Evidencia histórica y comparación de modelos</summary>
           <div className="mt-4 space-y-3"><p className="text-sm text-muted-foreground">Esta sección contiene experimentos y evaluaciones históricas. No corresponde al modelo LIVE utilizado actualmente para predicciones operativas.</p>
@@ -274,6 +273,7 @@ function BusinessIntelligenceContent() {
             <ForecastEvaluationPanel />
           </div>
         </details>
+        <MlTestControlPanel />
       </section>}
       {tab === 'inventory' && <section id="intelligence-panel-inventory" role="tabpanel" aria-labelledby="intelligence-tab-inventory" tabIndex={0} className="mt-4 space-y-6">
         <Card><CardContent className="p-5"><ProductPicker selected={selected} onSelect={chooseProduct} /></CardContent></Card>
