@@ -71,8 +71,8 @@ async function openForecast() {
   await waitFor(() => expect(apiClient.searchBusinessIntelligenceProducts).toHaveBeenCalled());
   fireEvent.click(await screen.findByRole('button', { name: /Pan francés.*SKU: PAN-FRE-001/ }));
 }
-function forecastCardText(days: 1 | 7 | 14) {
-  const label = days === 1 ? 'Pronóstico 1 día' : `Pronóstico ${days} días`;
+function forecastCardText(days: 7 | 14) {
+  const label = `Pronóstico ${days} días`;
   return screen.getByText(label, { exact: true }).closest('button')?.textContent || '';
 }
 
@@ -180,28 +180,26 @@ describe('business intelligence dashboard', () => {
     expect(screen.getByText('Algunos costos no están disponibles.')).toBeTruthy();
   });
 
-  it('searches products only on demand and offers 1, 7 and 14-day forecast without 28-day horizon', async () => {
+  it('searches products only on demand and offers operational 7 and 14-day forecasts without 1 or 28-day options', async () => {
     vi.spyOn(apiClient, 'searchBusinessIntelligenceProducts').mockResolvedValue(success({ products: [productOption] }));
     vi.spyOn(apiClient, 'getBusinessIntelligenceForecast').mockResolvedValue(success(forecastFixture));
     render(<BusinessIntelligenceDashboard />);
     expect(apiClient.getBusinessIntelligenceForecast).not.toHaveBeenCalled();
     await openForecast();
-    expect(await screen.findByText('Pronóstico 1 día')).toBeTruthy();
-    expect(screen.getByText('Pronóstico 7 días')).toBeTruthy();
-    expect(screen.getByText('Pronóstico 14 días')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Pronóstico 1 día/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /Pronóstico 7 días/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Pronóstico 14 días/ })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Pronóstico 28 días/ })).toBeNull();
-    expect(screen.getAllByText('Media móvil de 28 días (histórico)').length).toBeGreaterThan(0);
+    expect(await screen.findByText('Media móvil de 28 días (histórico)')).toBeTruthy();
     expect(screen.getByText('Día cerrado sin ventas')).toBeTruthy();
     expect(screen.getByText('Dato faltante')).toBeTruthy();
     expect(screen.getByText('Día parcial')).toBeTruthy();
   });
 
-  it('shows LIVE Ridge metadata and never substitutes MA28 for the unapproved one-day horizon', async () => {
+  it('shows LIVE Ridge metadata for 7/14, keeps 7d selected initially, and never requests a one-day forecast', async () => {
     vi.spyOn(apiClient, 'searchBusinessIntelligenceProducts').mockResolvedValue(success({ products: [productOption] }));
-    vi.spyOn(apiClient, 'getBusinessIntelligenceForecast').mockImplementation(async (_sku, days) => success(days === 1
-      ? { ...forecastFixture, mode: 'LIVE', status: 'MODEL_NOT_APPROVED', reasonCode: 'PROMOTION_POLICY_FAILED', method: null,
-        horizonDays: 1, predictionUnits: null, horizons: { '1d': null, '7d': null, '14d': null }, forecastPeriod: { startDate: null, selectedHorizonDays: 1, units: null } }
-      : { ...forecastFixture, mode: 'LIVE', status: 'READY', method: 'RIDGE_REGRESSION', modelFamily: 'RIDGE_REGRESSION',
+    vi.spyOn(apiClient, 'getBusinessIntelligenceForecast').mockImplementation(async (_sku, days) => success(
+      { ...forecastFixture, mode: 'LIVE', status: 'READY', method: 'RIDGE_REGRESSION', modelFamily: 'RIDGE_REGRESSION',
         horizonDays: days, modelVersion: 1, featureVersion: 'RIDGE_CAUSAL27_V1', promotionPolicyVersion: 'M6.10A22-PROMOTION-v1',
         observationsThrough: '2026-10-15', observationCutoff: '2026-10-15', dataCutoff: '2026-10-14',
         observedSeries: [...forecastFixture.observedSeries, { date: '2026-10-15', units: 3, status: 'CLOSED' as const }],
@@ -215,9 +213,11 @@ describe('business intelligence dashboard', () => {
     expect(screen.getByText(/Corte de entrenamiento 14 oct/i)).toBeTruthy();
     expect(screen.getByText('Modelo v1')).toBeTruthy();
     expect(await screen.findByText(/Baseline estadístico MA28/)).toBeTruthy();
-    expect(forecastCardText(1)).toContain('No aprobado');
     expect(forecastCardText(7)).toContain('16.25');
     expect(forecastCardText(14)).toContain('32.50');
+    expect(screen.getByRole('button', { name: /Pronóstico 7 días/ }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: /Pronóstico 14 días/ }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.queryByRole('button', { name: /Pronóstico 1 día/ })).toBeNull();
     expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenCalledTimes(2);
     expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenNthCalledWith(1, 'PAN-FRE-001', 7);
     expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenNthCalledWith(2, 'PAN-FRE-001', 14);
@@ -225,14 +225,13 @@ describe('business intelligence dashboard', () => {
     fireEvent.click(screen.getByRole('button', { name: /Pronóstico 14 días/ }));
     expect(await screen.findByText(/Pronóstico total para 14 días:/)).toBeTruthy();
     expect(forecastCardText(7)).toContain('16.25');
-    fireEvent.click(screen.getByRole('button', { name: /Pronóstico 1 día/ }));
-    expect(await screen.findByText('Este horizonte de 1 día no tiene un modelo aprobado.')).toBeTruthy();
-    expect(screen.getByText(/No se sustituye por el baseline/)).toBeTruthy();
-    expect(forecastCardText(1)).toContain('No aprobado');
-    expect(forecastCardText(7)).toContain('16.25');
-    expect(forecastCardText(14)).toContain('32.50');
+    expect(screen.getByRole('button', { name: /Pronóstico 14 días/ }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: /Pronóstico 7 días/ }).getAttribute('aria-pressed')).toBe('false');
     fireEvent.click(screen.getByRole('button', { name: /Pronóstico 7 días/ }));
     expect(await screen.findByText(/Pronóstico total para 7 días:/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Pronóstico 7 días/ }).getAttribute('aria-pressed')).toBe('true');
+    expect(forecastCardText(7)).toContain('16.25');
+    expect(forecastCardText(14)).toContain('32.50');
     expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenCalledTimes(2);
   });
 
