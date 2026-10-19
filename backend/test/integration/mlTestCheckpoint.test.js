@@ -78,7 +78,8 @@ test('local replica set: scoped BSON checkpoint, consistent read, CAS, verificat
       assert.equal(report.writes, 0); assert.equal(report.totalBsonBytes, checkpoint.totalBytes);
       assert.equal(report.collections.find(row => row.collection === 'products').estimatedChunks, 2);
       assert.equal(report.cloudRestoreEnabled, false);
-      assert(commands.includes('find')); assert(commands.includes('commitTransaction'));
+      assert(commands.includes('find')); assert(!commands.includes('commitTransaction'));
+      assert(!commands.includes('abortTransaction'));
       assert(!commands.some(name => ['insert', 'update', 'delete', 'create', 'createIndexes', 'findAndModify', 'drop'].includes(name)));
     });
     await t.test('snapshot reads remain consistent across collections under an external concurrent write', { skip: !runFocus('snapshot') }, async () => {

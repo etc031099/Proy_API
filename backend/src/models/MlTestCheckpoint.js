@@ -21,7 +21,16 @@ const schema = new mongoose.Schema({
   totalBytes: { type: Number, required: true, min: 0 },
   totalChunks: { type: Number, required: true, min: 0 },
   chunkTargetBytes: { type: Number, required: true, min: 64, max: 4 * 1024 * 1024 },
-  failureCode: { type: String, default: null }
+  failureCode: { type: String, default: null },
+  captureProtocolVersion: { type: String, enum: ['SNAPSHOT_SESSION_V1'] },
+  readyAt: { type: Date, default: null },
+  failureDiagnostics: { type: mongoose.Schema.Types.Mixed },
+  captureMetrics: { type: mongoose.Schema.Types.Mixed },
+  abandonedAt: { type: Date, default: null },
+  abandonedBy: { type: String, default: null },
+  abandonedEpoch: { type: String, default: null },
+  abandonedCycleId: { type: String, default: null },
+  abandonmentActionId: { type: String, default: null }
 }, { collection: 'mltestcheckpoints', timestamps: true, strict: 'throw', autoCreate: false, autoIndex: false });
 schema.index({ checkpointId: 1 }, { unique: true, name: 'ml_test_checkpoint_id_uq' });
 schema.index({ businessId: 1, scenarioId: 1, status: 1, createdAt: -1 }, { name: 'ml_test_checkpoint_status' });

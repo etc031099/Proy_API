@@ -91,7 +91,7 @@ test('operative checkpoint drains durable writers and excludes concurrent admiss
       await access.maintenanceGuard({ user: admin, method: 'POST', originalUrl: '/api/products' }, res,
         () => assert.fail('mutation must not pass maintenance'), db);
       assert.deepEqual(denied, [503]);
-      for (const url of ['/api/ml-test/status', '/api/ml-test/restore']) {
+      for (const url of ['/api/ml-test/status', '/api/ml-test/restore', '/api/ml-test/recover-failed-checkpoint']) {
         let allowed = false;
         await access.maintenanceGuard({ user: admin, originalUrl: url }, res, () => { allowed = true; }, db);
         assert.equal(allowed, true);
@@ -190,6 +190,8 @@ test('real authenticated HTTP admission drains response lifetime without countin
     assert.equal((await pending.json()).data.quiescence.activeWriterCount, 1);
     const recovery = await fetch(`${base}/api/ml-test/restore`, { method: 'POST', headers, body: '{"mode":"finish"}' });
     assert.equal(recovery.status, 409); // Reachable, but no READY source yet.
+    const abort = await fetch(`${base}/api/ml-test/recover-failed-checkpoint`, { method: 'POST', headers, body: '{}' });
+    assert.equal(abort.status, 409); // Reachable, but CHECKPOINT_CREATING cannot be abandoned.
     releaseWriter(); assert.equal((await writer).status, 200);
     const captured = await capture; assert.equal(captured.status, 201);
     const ready = (await captured.json()).data;

@@ -37,6 +37,11 @@ function testExecutor() {
       totalDocuments: 100, totalBytes: 2048, totalChunks: 1, readDurationMs: 23 };
     if (action === 'RESTORE') return { status: 'TEST_ACTIVE', restoreId: req.body.restoreId, resetEpoch: '4', dataVersion: '173', totalDocuments: 100, totalBytes: 2048 };
     if (action === 'RESTORE_AND_FINISH') return { status: 'NO_TEST', restoreId: req.body.restoreId, resetEpoch: '5', dataVersion: '173', totalDocuments: 100, totalBytes: 2048 };
+    if (action === 'ABORT_FAILED_CHECKPOINT') {
+      const checkpointId = status.activeCheckpointId;
+      Object.assign(status, { state: 'NO_TEST', activeCheckpointId: null, checkpoint: null, resetEpoch: '4', maintenance: false });
+      return { status: 'FAILED_CHECKPOINT_ABORTED', abortedCheckpointId: checkpointId, resetEpoch: '4', idempotent: false };
+    }
     throw Object.assign(new Error('secret/path must not escape'), { code: 'INTERNAL', httpStatus: 503 });
   } };
 }
@@ -164,4 +169,22 @@ test('only the authenticated admin restore path can pass through maintenance to 
   next = false;
   await maintenanceGuard({ user: admin, method: 'POST', originalUrl: '/api/products', params: {} }, res, () => { next = true; }, db);
   assert.equal(next, false); assert.equal(responseStatus, 503);
+});
+
+test('failed-checkpoint recovery requires admin and empty body; clients cannot choose checkpoint, scope, epoch or actor', async () => {
+  const executor = testExecutor();
+  await withServer(createMlTestAdminRoutes({ authenticateMiddleware: fakeAuth, getExecutor: () => executor }), async base => {
+    assert.equal((await fetch(`${base}/recover-failed-checkpoint`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status, 401);
+    assert.equal((await fetch(`${base}/recover-failed-checkpoint`, { method: 'POST', headers: { ...authHeader, 'x-test-user': 'user' }, body: '{}' })).status, 403);
+    for (const key of ['checkpointId', 'businessId', 'scenarioId', 'resetEpoch', 'actor', 'writersPaused']) {
+      assert.equal((await fetch(`${base}/recover-failed-checkpoint`, { method: 'POST', headers: authHeader, body: JSON.stringify({ [key]: 'forged' }) })).status, 400);
+    }
+    assert.equal((await fetch(`${base}/recover-failed-checkpoint?checkpointId=forged`, { method: 'POST', headers: authHeader, body: '{}' })).status, 400);
+    const response = await fetch(`${base}/recover-failed-checkpoint`, { method: 'POST', headers: authHeader, body: '{}' });
+    const body = await response.json(); assert.equal(response.status, 200);
+    assert.equal(body.data.state, 'NO_TEST'); assert.equal(body.data.maintenance, false);
+    assert.equal(body.data.status, 'FAILED_CHECKPOINT_ABORTED');
+    assert.deepEqual(executor.actions.map(row => row.action), ['ABORT_FAILED_CHECKPOINT', 'STATUS']);
+    assert.deepEqual(executor.actions[0].body, {});
+  });
 });

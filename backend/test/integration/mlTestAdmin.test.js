@@ -184,7 +184,7 @@ test('failed capture without READY checkpoint never has a force-NO_TEST escape; 
       return collection; };
     const executor = A.createMlTestAdminExecutor({ client, db, target: 'LOCAL_CERTIFICATION', writersPaused: true });
     const req = body => ({ user, body, query: {} });
-    await assert.rejects(executor.execute(req({}), 'CREATE'), { code: 'ML_TEST_OPERATION_FAILED' });
+    await assert.rejects(executor.execute(req({}), 'CREATE'), { code: 'CHECKPOINT_OPERATION_FAILED' });
     const failed = await F.capture(db); assert.equal(failed.state, 'FAILED');
     const control = await original('mltestcontrols').findOne({ businessId: scope.businessId });
     await assert.rejects(executor.execute(req({ checkpointId: control.activeCheckpointId, restoreId: randomUUID(), branch: 'NORMAL' }),

@@ -65,7 +65,7 @@ const authenticate = async (req, res, next) => {
         // Administrative lifecycle owns the fence; counting CREATE as a writer
         // would make it wait for its own response. The route still checks admin,
         // target, flag, certification and an empty/strict body independently.
-        && !/^\/api\/ml-test\/(?:checkpoint|restore)(?:\?|$)/.test(req.originalUrl || '')) {
+        && !/^\/api\/ml-test\/(?:checkpoint|restore|recover-failed-checkpoint)(?:\?|$)/.test(req.originalUrl || '')) {
       const fence = require('../services/mlTestFence');
       return await fence.runCycle(() => fence.untilResponseFinished(res, next));
     }

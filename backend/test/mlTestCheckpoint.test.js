@@ -139,17 +139,18 @@ test('read-only preflight attaches exact bounded progress when the elapsed time 
   assert.equal(S.LIMIT_BYTES, 128 * 1024 * 1024);
   assert.equal(S.LIMIT_DOCUMENTS, 200000);
   const raw = BSON.serialize({ _id: 'sample' });
-  let clockCalls = 0, inTransaction = false;
-  const client = { startSession: () => ({ startTransaction: () => { inTransaction = true; },
-    inTransaction: () => inTransaction, commitTransaction: async () => { inTransaction = false; },
-    abortTransaction: async () => { inTransaction = false; }, endSession: async () => {} }) };
+  let now = 1000;
+  const client = { startSession: options => {
+    assert.equal(options.snapshot, true); assert.equal(options.causalConsistency, false);
+    return { endSession: async () => {} };
+  } };
   const db = { databaseName: 'diagnostic-only', admin: () => ({ command: async () => ({ setName: 'test', isWritablePrimary: true }) }),
     listCollections: () => ({ toArray: async () => [] }), collection: name => ({
       findOne: async () => null,
-      find: () => ({ sort() { return this; }, async *[Symbol.asyncIterator]() { if (name === 'transactions') yield raw; }, close: async () => {} })
+      find: () => ({ sort() { return this; }, async *[Symbol.asyncIterator]() { if (name === 'transactions') { now = 121001; yield raw; } }, close: async () => {} })
     }) };
   const originalNow = Date.now;
-  Date.now = () => ++clockCalls < 4 ? 1000 : 121001;
+  Date.now = () => now;
   try {
     await assert.rejects(S.preflightCheckpoint({ client, db, scope: config, elapsedLimitMs: PREFLIGHT_READ_BUDGET_MS }), error => {
       assert.equal(error.code, 'CHECKPOINT_READ_LIMIT_EXCEEDED');

@@ -32,6 +32,7 @@ function createMlTestAdminRoutes({ authenticateMiddleware = authenticate, adminM
     quiescence: value.quiescence || null,
     checkpointId: value.activeCheckpointId || value.lastCheckpointId || null,
     activeCheckpointId: value.activeCheckpointId || null, lastCheckpointId: value.lastCheckpointId || null,
+    lastAbortedCheckpointId: value.lastAbortedCheckpointId || null, lastAbortedAt: value.lastAbortedAt || null,
     checkpoint: value.checkpoint || null, restoreId: value.restoreId || null,
     restoreFinish: value.restoreFinish === true, restoreLeaseUntil: value.restoreLeaseUntil || null,
     finalizedAt: value.finalizedAt || null, failureCode: value.failureCode || value.checkpoint?.failureCode || null,
@@ -86,6 +87,18 @@ function createMlTestAdminRoutes({ authenticateMiddleware = authenticate, adminM
         resetEpoch: result.resetEpoch, dataVersion: result.dataVersion,
         totalDocuments: result.totalDocuments, totalBytes: result.totalBytes,
         idempotent: result.idempotent === true
+      } });
+    } catch (error) { return respondError(res, error); }
+  });
+  router.post('/recover-failed-checkpoint', async (req, res) => {
+    try {
+      emptyBody(req);
+      const executor = getExecutor();
+      const result = await executor.execute(req, 'ABORT_FAILED_CHECKPOINT');
+      const status = await executor.execute({ ...req, body: {}, query: {} }, 'STATUS');
+      return res.set('Cache-Control', 'no-store').json({ success: true, data: {
+        ...safeStatus(status), status: result.status, abortedCheckpointId: result.abortedCheckpointId,
+        resetEpoch: result.resetEpoch, idempotent: result.idempotent === true
       } });
     } catch (error) { return respondError(res, error); }
   });
