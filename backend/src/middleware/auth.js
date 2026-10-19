@@ -1,5 +1,12 @@
 const { verifyToken } = require('../utils/jwt');
 const { User } = require('../models');
+const ADMIN_ML_LIFECYCLE_PATH = /^\/api\/ml-test\/(?:checkpoint|restore|recover-failed-checkpoint|recover-stale-checkpoint|purge-failed-checkpoint-payloads)(?:\?|$)/;
+
+function shouldApplyBusinessWriterFence(method, businessId, originalUrl) {
+  return !['GET', 'HEAD', 'OPTIONS'].includes(method)
+    && businessId === require('../config/v3Operational').businessId
+    && !ADMIN_ML_LIFECYCLE_PATH.test(originalUrl || '');
+}
 
 /**
  * Authentication middleware
@@ -61,11 +68,10 @@ const authenticate = async (req, res, next) => {
     let continueRequest = false;
     await require('../services/mlTestAccess').maintenanceGuard(req, res, () => { continueRequest = true; });
     if (!continueRequest) return;
-    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && user.businessId === require('../config/v3Operational').businessId
-        // Administrative lifecycle owns the fence; counting CREATE as a writer
-        // would make it wait for its own response. The route still checks admin,
-        // target, flag, certification and an empty/strict body independently.
-        && !/^\/api\/ml-test\/(?:checkpoint|restore|recover-failed-checkpoint)(?:\?|$)/.test(req.originalUrl || '')) {
+    // Administrative lifecycle owns its maintenance/CAS fencing. The allowlist
+    // is limited to these routes; each still applies route-level admin, target,
+    // feature-flag and operation-specific validation.
+    if (shouldApplyBusinessWriterFence(req.method, user.businessId, req.originalUrl)) {
       const fence = require('../services/mlTestFence');
       return await fence.runCycle(() => fence.untilResponseFinished(res, next));
     }
@@ -167,5 +173,6 @@ const checkBusinessAccess = (req, res, next) => {
 module.exports = {
   authenticate,
   authorize,
-  checkBusinessAccess
+  checkBusinessAccess,
+  shouldApplyBusinessWriterFence
 };

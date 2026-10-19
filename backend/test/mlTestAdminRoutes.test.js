@@ -6,6 +6,9 @@ const { randomUUID } = require('node:crypto');
 const { createMlTestAdminRoutes } = require('../src/routes/mlTestAdmin');
 const { createMlTestAdminExecutor } = require('../src/services/mlTestAdminExecutor');
 const { maintenanceGuard } = require('../src/services/mlTestAccess');
+const { authenticate, authorize, shouldApplyBusinessWriterFence } = require('../src/middleware/auth');
+const { generateToken } = require('../src/utils/jwt');
+const { User } = require('../src/models');
 const config = require('../src/config/v3Operational');
 
 const admin = { _id: 'admin-from-session', role: 'admin', isActive: true, businessId: config.businessId };
@@ -46,6 +49,55 @@ function testExecutor() {
   } };
 }
 const authHeader = { 'x-test-user': 'admin', 'content-type': 'application/json' };
+
+test('only the five administrative lifecycle mutations bypass the ordinary business writer fence', () => {
+  // Checkpoint is exempt from the writer fence in normal operation, but its
+  // maintenance guard intentionally blocks starting another checkpoint while
+  // one is already creating. The remaining administrative actions are allowed
+  // through maintenance to recover or finish lifecycle work.
+  for (const route of ['checkpoint', 'restore', 'recover-failed-checkpoint', 'recover-stale-checkpoint', 'purge-failed-checkpoint-payloads']) {
+    assert.equal(shouldApplyBusinessWriterFence('POST', config.businessId, `/api/ml-test/${route}`), false, route);
+    assert.equal(shouldApplyBusinessWriterFence('POST', config.businessId, `/api/ml-test/${route}?operation=1`), false, `${route} query`);
+  }
+  assert.equal(shouldApplyBusinessWriterFence('POST', config.businessId, '/api/products'), true);
+  assert.equal(shouldApplyBusinessWriterFence('POST', config.businessId, '/api/ml-test/checkpoint-storage'), true);
+  assert.equal(shouldApplyBusinessWriterFence('POST', 'FOREIGN-TENANT', '/api/products'), false);
+  assert.equal(shouldApplyBusinessWriterFence('GET', config.businessId, '/api/products'), false);
+});
+
+test('real authenticate middleware passes lifecycle requests during maintenance without entering the writer fence', async t => {
+  const previousSecret = process.env.JWT_SECRET;
+  process.env.JWT_SECRET = 'local-test-secret-for-ml-admin-authentication';
+  t.after(() => {
+    if (previousSecret === undefined) delete process.env.JWT_SECRET;
+    else process.env.JWT_SECRET = previousSecret;
+  });
+  t.mock.method(User, 'findById', () => ({ select: async () => admin }));
+  const fence = require('../src/services/mlTestFence');
+  let fenceCalls = 0;
+  t.mock.method(fence, 'runCycle', async () => { fenceCalls += 1; throw new Error('normal writer fence invoked'); });
+  const authorization = `Bearer ${generateToken({ id: admin._id })}`;
+
+  for (const route of ['restore', 'recover-failed-checkpoint', 'recover-stale-checkpoint', 'purge-failed-checkpoint-payloads']) {
+    let continued = false;
+    let responseStatus = null;
+    let responseBody = null;
+    const req = { method: 'POST', originalUrl: `/api/ml-test/${route}`, header: name => name === 'Authorization' ? authorization : undefined };
+    const res = { status(value) { responseStatus = value; return this; }, set() { return this; }, json(value) { responseBody = value; return this; } };
+    await authenticate(req, res, () => { continued = true; });
+    assert.equal(continued, true, `${route}: status=${responseStatus} code=${responseBody?.code || 'none'}`);
+  }
+  assert.equal(fenceCalls, 0);
+});
+
+test('route admin authorization still rejects a normal authenticated user', () => {
+  let status = null;
+  let continued = false;
+  const res = { status(value) { status = value; return this; }, json() { return this; } };
+  authorize('admin')({ user: { role: 'user' } }, res, () => { continued = true; });
+  assert.equal(status, 403);
+  assert.equal(continued, false);
+});
 
 test('private route requires authenticated admin and returns read-only scoped status', async () => {
   const executor = testExecutor();
