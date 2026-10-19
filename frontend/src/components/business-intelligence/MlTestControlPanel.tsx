@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { apiClient } from '@/lib/api';
-import type { ForecastMlUpdateStatus, MlTestLifecycleStatus, ProductInventory } from '@/types/businessIntelligence';
+import type { ForecastMlUpdateStatus, MlTestLifecycleStatus, MlTestScenarioAnalysisResult, ProductInventory } from '@/types/businessIntelligence';
 
 type ViewState = 'loading' | 'ready' | 'unavailable' | 'not-local';
 type Action = 'checkpoint' | 'continue' | 'finish' | null;
@@ -41,6 +41,33 @@ function eligibilityCopy(reason: string | null | undefined): string {
     default: return reason ? 'La evidencia todavía no está disponible para evaluación.' : 'Estado de elegibilidad no disponible.';
   }
 }
+function analysisOutcomeCopy(result: MlTestScenarioAnalysisResult): string {
+  if (result.outcome === 'PROMOTED') return result.promoted
+    ? 'Modelo promovido.'
+    : 'El worker reportó PROMOTED, pero no se confirmó un cambio de modelo ACTIVE.';
+  switch (result.outcome) {
+    case 'NOT_MATURE': return 'Todavía no existe suficiente evidencia temporal madura para evaluar un nuevo modelo.';
+    case 'DEBOUNCE_NOT_ELAPSED': return 'El sistema está agrupando cambios recientes antes de evaluar.';
+    case 'COOLDOWN_ACTIVE': return 'El sistema mantiene un intervalo de seguridad antes de otra evaluación.';
+    case 'NO_PENDING_WORK': return 'No hay cambios pendientes por evaluar.';
+    case 'LEASE_ACTIVE': return 'Ya existe una evaluación de este horizonte en curso.';
+    case 'PREVIOUS_FAILURE_NOT_RETRYABLE': return 'La evaluación previa requiere atención antes de reintentarse.';
+    case 'REJECTED': return 'Se evaluó un candidato, pero la política no permitió promoverlo.';
+    case 'NO_PROMOTION_INSUFFICIENT_HISTORY': return 'La evidencia disponible no alcanzó los requisitos para evaluar o promover un candidato.';
+    default: return 'La revisión local terminó; consulta los detalles técnicos si necesitas ampliar el resultado.';
+  }
+}
+function analysisFailureCopy(httpStatus: number): string {
+  if (httpStatus === 400) return 'La solicitud de análisis no es válida.';
+  if (httpStatus === 401 || httpStatus === 403) return 'La cuenta o el entorno ya no están autorizados para esta prueba.';
+  if (httpStatus === 409) return 'El ciclo de prueba cambió o existe otra operación incompatible.';
+  if (httpStatus === 503) return 'El análisis local está temporalmente no disponible.';
+  return 'No se pudo conectar con el análisis local. Puedes actualizar el estado e intentarlo de nuevo.';
+}
+function sameTestCycle(value: MlTestLifecycleStatus | null | undefined, token: ScenarioSnapshot): boolean {
+  return value?.state === 'TEST_ACTIVE' && value.checkpoint?.status === 'READY'
+    && value.testCycleId === token.testCycleId && value.resetEpoch === token.resetEpoch && value.maintenance !== true;
+}
 function pendingCount(status: ForecastMlUpdateStatus | null, horizon: 7 | 14): number | null {
   const row = status?.horizons.find(item => item.horizonDays === horizon);
   return typeof row?.readiness?.pendingSignalCount === 'number' ? row.readiness.pendingSignalCount : null;
@@ -62,9 +89,14 @@ export function MlTestControlPanel() {
   const [scenarioBusy, setScenarioBusy] = useState(false);
   const [scenarioError, setScenarioError] = useState<string | null>(null);
   const [changesObserved, setChangesObserved] = useState(false);
+  const [analysisResults, setAnalysisResults] = useState<Partial<Record<7 | 14, MlTestScenarioAnalysisResult>>>({});
+  const [analysisErrors, setAnalysisErrors] = useState<Partial<Record<7 | 14, string>>>({});
+  const [analysisRunning, setAnalysisRunning] = useState<7 | 14 | null>(null);
+  const [analysisMessage, setAnalysisMessage] = useState<string | null>(null);
 
   const clearScenario = useCallback(() => {
     setScenario(null); setSnapshot(null); setCurrent(null); setScenarioError(null); setChangesObserved(false);
+    setAnalysisResults({}); setAnalysisErrors({}); setAnalysisRunning(null); setAnalysisMessage(null);
   }, []);
 
   const refresh = useCallback(async (clearMessage = true) => {
@@ -178,6 +210,46 @@ export function MlTestControlPanel() {
     } finally { setScenarioBusy(false); }
   };
 
+  const analyzeScenario = async () => {
+    if (!snapshot || !changesObserved || scenarioBusy || action || maintenance || analysisRunning !== null) return;
+    if (!window.confirm('Se revisarán las señales del escenario para 7 y 14 días. El análisis respetará las políticas de madurez, debounce, cooldown y 107 orígenes.')) return;
+    const token = snapshot;
+    setAnalysisResults({}); setAnalysisErrors({}); setAnalysisMessage(null); setAnalysisRunning(7);
+    try {
+      for (const horizonDays of [7, 14] as const) {
+        setAnalysisRunning(horizonDays);
+        let response;
+        try { response = await apiClient.analyzeMlTestScenario(horizonDays); }
+        catch { response = { httpStatus: 0 }; }
+        const result = response.data;
+        if (response.httpStatus < 200 || response.httpStatus >= 300 || !result) {
+          setAnalysisErrors(previous => ({ ...previous, [horizonDays]: analysisFailureCopy(response.httpStatus) }));
+          break;
+        }
+        if (result.horizonDays !== horizonDays || result.testCycleId !== token.testCycleId || result.resetEpoch !== token.resetEpoch) {
+          clearScenario();
+          setAnalysisMessage('El ciclo de prueba cambió durante el análisis. Actualiza el estado antes de continuar.');
+          return;
+        }
+        setAnalysisResults(previous => ({ ...previous, [horizonDays]: result }));
+        if (horizonDays === 7) {
+          let lifecycle;
+          try { lifecycle = await apiClient.getMlTestLifecycleStatus(); }
+          catch { lifecycle = { httpStatus: 0 }; }
+          if (lifecycle.httpStatus !== 200 || !lifecycle.data) {
+            setAnalysisMessage('No se pudo confirmar el ciclo después del análisis de 7 días; no se ejecutó el análisis de 14 días. Actualiza el estado antes de continuar.');
+            break;
+          }
+          if (!sameTestCycle(lifecycle.data, token)) {
+            clearScenario(); setStatus(lifecycle.data);
+            setAnalysisMessage('El ciclo de prueba cambió durante el análisis. Actualiza el estado antes de continuar.');
+            return;
+          }
+        }
+      }
+    } finally { setAnalysisRunning(null); }
+  };
+
   // Capability failures intentionally hide the whole section, not just its destructive controls.
   if (view !== 'ready' || !status) return null;
 
@@ -201,7 +273,7 @@ export function MlTestControlPanel() {
           <CardTitle className="text-base">Estado del ciclo de prueba</CardTitle>
           <div className="flex gap-2"><Badge variant="outline">LOCAL AUTORIZADO</Badge><Badge variant={status.state === 'TEST_ACTIVE' ? 'default' : 'secondary'}>{status.state === 'TEST_ACTIVE' ? 'TEST ACTIVE' : status.state === 'NO_TEST' ? 'SIN PRUEBA ACTIVA' : status.state}</Badge></div>
         </div>
-        <CardDescription>La venta se registra en la pantalla comercial habitual. Este panel no crea ventas ni ejecuta entrenamiento.</CardDescription>
+        <CardDescription>La venta se registra en la pantalla comercial habitual. Este panel no crea ventas ni fuerza entrenamiento o promoción.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <dl className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
@@ -236,6 +308,7 @@ export function MlTestControlPanel() {
         </div>
         {scenarioBusy && <p role="status" className="text-sm text-muted-foreground">Consultando producto y estado inicial…</p>}
         {scenarioError && <p role="alert" className="rounded-md border border-amber-500/40 p-3 text-sm">{scenarioError}</p>}
+        {analysisMessage && <p role="status" className="rounded-md border p-3 text-sm">{analysisMessage}</p>}
         {scenario && snapshot && selectedDefinition && <div className="space-y-4 rounded-lg border p-4">
           <div><h3 className="font-semibold">{selectedDefinition.title}: {selectedDefinition.description}</h3>
             <p className="mt-1 text-sm text-muted-foreground">Producto de demostración: <span className="font-medium text-foreground">{snapshot.inventory.product.sku} · {snapshot.inventory.product.name || snapshot.inventory.product.sku}</span></p>
@@ -288,7 +361,33 @@ export function MlTestControlPanel() {
               </details>
               <p className="text-sm font-medium">107 orígenes maduros no significan 107 ventas.</p>
               <p className="text-xs text-muted-foreground">Generar señales no significa que el modelo haya sido entrenado o promocionado.</p>
-              {changesObserved && <div role="status" className="rounded-md border border-primary/30 bg-primary/5 p-3"><p className="font-medium">Escenario listo para análisis</p><p className="text-sm text-muted-foreground">El siguiente paso revisará estas señales con el worker local manteniendo las políticas de madurez, debounce, cooldown y 107 orígenes.</p></div>}
+              {changesObserved && <div className="space-y-3 rounded-md border border-primary/30 bg-primary/5 p-3">
+                <div><p className="font-medium">Escenario listo para análisis</p><p className="text-sm text-muted-foreground">El análisis local revisa primero 7 días y luego 14 días; respeta madurez, debounce, cooldown y 107 orígenes.</p></div>
+                <Button type="button" disabled={scenarioBusy || busy || maintenance || analysisRunning !== null}
+                  onClick={() => void analyzeScenario()}>{analysisRunning === 7 ? 'Analizando 7 días…' : analysisRunning === 14 ? 'Analizando 14 días…' : 'Analizar escenario'}</Button>
+              </div>}
+              {(analysisResults[7] || analysisResults[14] || analysisErrors[7] || analysisErrors[14]) && <section aria-label="Resultados del análisis local" className="space-y-3">
+                <div><p className="font-medium">Resultados del análisis</p><p className="text-sm text-muted-foreground">Entrenar un candidato no significa promoverlo. La política de promoción sigue siendo la autoridad final.</p></div>
+                {([7, 14] as const).map(days => {
+                  const result = analysisResults[days];
+                  const error = analysisErrors[days];
+                  if (!result && !error) return null;
+                  return <div key={days} className="rounded-md border p-3 text-sm">
+                    <h4 className="font-medium">{days} días</h4>
+                    {error ? <p role="alert" className="mt-1 text-destructive">{error}</p> : result && <>
+                      <p className="mt-1">{analysisOutcomeCopy(result)}</p>
+                      <dl className="mt-2 grid gap-2 sm:grid-cols-2">
+                        <div><dt className="text-muted-foreground">Entrenamiento realizado</dt><dd>{result.trained ? 'Sí' : 'No'}</dd></div>
+                        <div><dt className="text-muted-foreground">Candidato creado</dt><dd>{result.candidateCreated ? 'Sí' : 'No'}</dd></div>
+                        <div><dt className="text-muted-foreground">Modelo promovido</dt><dd>{result.promoted ? 'Sí' : 'No'}</dd></div>
+                        <div><dt className="text-muted-foreground">Orígenes requeridos / disponibles</dt><dd>{result.requiredOrigins} / {result.availableOrigins ?? 'No disponible'}</dd></div>
+                      </dl>
+                      {result.activeModelBefore && result.activeModelAfter && <p className="mt-2 text-muted-foreground">ACTIVE: {result.activeModelBefore.modelVersion == null ? 'No disponible' : `v${result.activeModelBefore.modelVersion}`} → {result.activeModelAfter.modelVersion == null ? 'No disponible' : `v${result.activeModelAfter.modelVersion}`}</p>}
+                    </>}
+                  </div>;
+                })}
+                {analysisErrors[7] && <p className="text-sm text-muted-foreground">No se ejecutó el horizonte de 14 días porque falló la solicitud de 7 días.</p>}
+              </section>}
             </section>}
           </>}
         </div>}

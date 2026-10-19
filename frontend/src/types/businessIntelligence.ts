@@ -176,6 +176,21 @@ export interface MlTestLifecycleResult extends MlTestLifecycleStatus {
   totalChunks?: number;
   idempotent?: boolean;
 }
+export interface MlTestScenarioAnalysisResult {
+  horizonDays: 7 | 14;
+  testCycleId: string;
+  resetEpoch: string;
+  outcome: string;
+  trained: boolean;
+  candidateCreated: boolean;
+  promoted: boolean;
+  reasonCode: string | null;
+  requiredOrigins: number;
+  availableOrigins: number | null;
+  activeModelBefore: { modelVersion: number | null; trainedDataVersion: string | null; dataCutoff: string | null } | null;
+  activeModelAfter: { modelVersion: number | null; trainedDataVersion: string | null; dataCutoff: string | null } | null;
+  message: string;
+}
 export type ForecastMlUpdateRequestStatus = 'REQUEST_ACCEPTED' | 'ALREADY_PENDING' | 'RUNNING';
 export interface ForecastMlUpdateRequestResult {
   requestStatus: ForecastMlUpdateRequestStatus;

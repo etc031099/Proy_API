@@ -30,6 +30,15 @@ describe('authenticated forecast diagnostics API', () => {
     expect(get).toHaveBeenCalledWith('/intelligence/forecast/ml-update/status', expect.objectContaining({ timeout: 15_000 }));
   });
 
+  it('posts only the fixed 7d/14d horizon payload to the local ML test analysis route', async () => {
+    const instance = (apiClient as unknown as { instance: { post: (path: string, body: unknown, config?: unknown) => Promise<unknown> } }).instance;
+    const post = vi.spyOn(instance, 'post').mockResolvedValue({ status: 200,
+      data: { success: true, data: { horizonDays: 7, testCycleId: 'cycle', resetEpoch: '4' } } });
+    await expect(apiClient.analyzeMlTestScenario(7)).resolves.toMatchObject({ httpStatus: 200, data: { horizonDays: 7 } });
+    expect(post).toHaveBeenCalledWith('/ml-test/analyze', { horizonDays: 7 },
+      expect.objectContaining({ timeout: 180_000, validateStatus: expect.any(Function) }));
+  });
+
   it('posts exactly an empty body and sanitizes API failures', async () => {
     const instance = (apiClient as unknown as { instance: { post: (path: string, body: unknown, config?: unknown) => Promise<unknown> } }).instance;
     const post = vi.spyOn(instance, 'post').mockResolvedValueOnce({ status: 202,

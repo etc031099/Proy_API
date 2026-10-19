@@ -2,7 +2,7 @@ import axios, { AxiosInstance, AxiosError } from 'axios';
 import type { ForecastEvaluation } from '@/types/forecastEvaluation';
 import { ApiResponse, DemandForecastResponse, DemoV2RegisterData, DemoV3RegisterData } from '@/types';
 import type { AgentMessageRequest, AgentResponse, AgentConversationList, AgentConversationDetail } from '@/types/agent';
-import type { AnalyticsEnvelope, AssociationsAnalytics, AuthenticatedDiagnosticResult, BusinessHealthAnalytics, BusinessSummary, CertifiedForecastReplayEvidence, CustomerAnalyticsDetail, CustomersAnalytics, ForecastActiveModels, ForecastMlUpdateExecutionDetail, ForecastMlUpdateHistoryPage, ForecastMlUpdateProductsPage, ForecastMlUpdateRequestResult, ForecastMlUpdateStatus, ForecastResponse, HealthDiagnostic, InventorySummary, MlTestControlStatus, MlTestLifecycleResult, MlTestLifecycleStatus, ProductInventory, ProductOption, RelatedProductAnalytics, SalesAnalytics, SalesPeriod, SupplierAnalyticsDetail, SuppliersAnalytics } from '@/types/businessIntelligence';
+import type { AnalyticsEnvelope, AssociationsAnalytics, AuthenticatedDiagnosticResult, BusinessHealthAnalytics, BusinessSummary, CertifiedForecastReplayEvidence, CustomerAnalyticsDetail, CustomersAnalytics, ForecastActiveModels, ForecastMlUpdateExecutionDetail, ForecastMlUpdateHistoryPage, ForecastMlUpdateProductsPage, ForecastMlUpdateRequestResult, ForecastMlUpdateStatus, ForecastResponse, HealthDiagnostic, InventorySummary, MlTestControlStatus, MlTestLifecycleResult, MlTestLifecycleStatus, MlTestScenarioAnalysisResult, ProductInventory, ProductOption, RelatedProductAnalytics, SalesAnalytics, SalesPeriod, SupplierAnalyticsDetail, SuppliersAnalytics } from '@/types/businessIntelligence';
 import type { CustomerClustering } from '@/types/customerClustering';
 import type { SalesAnomalies } from '@/types/salesAnomalies';
 import { IntelligenceReadCache, type IntelligenceRevision } from './intelligenceReadCache';
@@ -101,6 +101,21 @@ class ApiClient {
   }
   async restoreMlTestCheckpoint(mode: 'continue' | 'finish'): Promise<AuthenticatedDiagnosticResult<MlTestLifecycleResult>> {
     return this.mlTestMutation('/ml-test/restore', { mode });
+  }
+  async analyzeMlTestScenario(horizonDays: 7 | 14): Promise<AuthenticatedDiagnosticResult<MlTestScenarioAnalysisResult>> {
+    try {
+      const response = await this.instance.post('/ml-test/analyze', { horizonDays }, {
+        timeout: 180_000, validateStatus: () => true,
+      });
+      const envelope = response.data as { success?: unknown; data?: MlTestScenarioAnalysisResult; code?: unknown } | undefined;
+      const code = typeof envelope?.code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(envelope.code) ? envelope.code : undefined;
+      return { httpStatus: response.status,
+        ...(envelope?.success === true && envelope.data !== undefined ? { data: envelope.data } : {}),
+        ...(code ? { code } : {}) };
+    } catch (error) {
+      const status = axios.isAxiosError(error) ? error.response?.status || 0 : 0;
+      return { httpStatus: status, code: status === 401 ? 'SESSION_UNAUTHORIZED' : 'SERVICE_TEMPORARILY_UNAVAILABLE' };
+    }
   }
   async getForecastMlUpdateHistory(params: { limit?: number; cursor?: string } = {}): Promise<AuthenticatedDiagnosticResult<ForecastMlUpdateHistoryPage>> {
     return this.diagnosticRead('/intelligence/forecast/ml-update/history', params);
