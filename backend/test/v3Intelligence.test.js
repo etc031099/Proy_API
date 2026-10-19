@@ -205,6 +205,38 @@ test('F.5A live reads build an authenticated v2 snapshot, preserve hybrid period
   assert.equal(built[0].businessId, V3.businessId); assert.equal(built[0].asOfDate, '2026-10-14');
   assert.equal(built[0].now.toISOString(), '2026-10-14T17:30:00.000Z');
 });
+test('F.5A TEST_ACTIVE reset epoch is forwarded to LIVE snapshots, but is absent outside a test cycle', async () => {
+  const fence = require('../src/services/mlTestFence'), original = fence.cacheIdentityDetails;
+  const built = [];
+  fence.cacheIdentityDetails = async () => ({ identity: 'true:123e4567-e89b-12d3-a456-426614174000:4:1',
+    testEpoch: { testCycleId: '123e4567-e89b-12d3-a456-426614174000', resetEpoch: '4' } });
+  try {
+    const f = fixture({ clock: () => new Date('2026-10-14T17:30:00.000Z'), snapshotBuilder: async input => {
+      built.push(input);
+      return { mode: 'LIVE', dataVersion: '4', snapshot: { metadata: {
+        snapshotVersion: 'v3-operational-snapshot-v2', businessId: input.businessId, scenarioId: V3.scenarioId,
+        asOfDate: input.asOfDate, dataVersion: '4', snapshotHash: 'f'.repeat(64),
+        ...(input.testEpoch ? { testEpoch: input.testEpoch } : {})
+      } } };
+    } });
+    zero(await f.run('¿Cuánto vendí hoy?'));
+    assert.deepEqual(built[0].testEpoch, { testCycleId: '123e4567-e89b-12d3-a456-426614174000', resetEpoch: '4' });
+    assert.deepEqual(f.calls[0].payload.operationalSnapshot.metadata.testEpoch, built[0].testEpoch);
+  } finally { fence.cacheIdentityDetails = original; }
+
+  const builtOutside = [];
+  fence.cacheIdentityDetails = async () => ({ identity: 'false::0:1', testEpoch: null });
+  try {
+    const f = fixture({ clock: () => new Date('2026-10-14T17:30:00.000Z'), snapshotBuilder: async input => {
+      builtOutside.push(input);
+      return { mode: 'LIVE', dataVersion: '4', snapshot: { metadata: { snapshotVersion: 'v3-operational-snapshot-v2',
+        businessId: input.businessId, scenarioId: V3.scenarioId, asOfDate: input.asOfDate, dataVersion: '4', snapshotHash: 'f'.repeat(64) } } };
+    } });
+    zero(await f.run('¿Cuánto vendí hoy?'));
+    assert.equal(builtOutside[0].testEpoch, null);
+    assert.equal(Object.hasOwn(f.calls[0].payload.operationalSnapshot.metadata, 'testEpoch'), false);
+  } finally { fence.cacheIdentityDetails = original; }
+});
 test('F.5A zero-sales today and yesterday stay on their own LIVE dates, without cutoff fallback', async () => {
   const f = fixture({ clock: () => new Date('2026-10-14T17:30:00.000Z'), zeroSalesDates: ['2026-10-13', '2026-10-14'] });
   for (const [message, day] of [['¿Cuánto vendí hoy?', '2026-10-14'], ['¿Cuánto vendí ayer?', '2026-10-13']]) {

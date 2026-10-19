@@ -57,17 +57,21 @@ class LiveInventorySupplierAdapter:
 
     def _key(self, live: LiveV3Context, domain: str, request) -> tuple[str, ...]:
         meta = live.snapshot.metadata
+        test_epoch = meta.testEpoch
         filters = {key: getattr(request, key, None) for key in
                    ("mode", "skus", "supplierCode", "productSkus", "risk", "abc", "xyz", "flag", "metric", "limit", "offset", "period")}
         return (meta.businessId, meta.scenarioId, live.data_version, live.context_hash,
+                test_epoch.testCycleId if test_epoch else "", test_epoch.resetEpoch if test_epoch else "",
                 live.as_of_date.isoformat(), domain, self.ENGINE_VERSION,
                 json.dumps(filters, sort_keys=True, separators=(",", ":"), default=str))
 
     def inventory_data(self, request, live: LiveV3Context, forecast_rows=None):
         meta = live.snapshot.metadata
+        test_epoch = meta.testEpoch
         forecast_identity = hashlib.sha256(json.dumps(forecast_rows or [], sort_keys=True,
             separators=(",", ":"), default=str, allow_nan=False).encode("utf-8")).hexdigest()
         key = (meta.businessId, meta.scenarioId, live.data_version, live.context_hash,
+               test_epoch.testCycleId if test_epoch else "", test_epoch.resetEpoch if test_epoch else "",
                live.as_of_date.isoformat(), "inventory", self.ENGINE_VERSION,
                forecast_identity)
         with self._lock:

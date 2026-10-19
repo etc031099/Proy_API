@@ -483,9 +483,12 @@ class LiveV3ContextStore:
     def cache_key(snapshot: V3OperationalSnapshot, engine_version: str = ENGINE_VERSION,
                   *, period: Any = None, entity_filter: Any = None) -> tuple[str, ...]:
         meta = snapshot.metadata
+        test_epoch = meta.testEpoch
         return (meta.businessId, meta.scenarioId, meta.historicalDatasetVersion,
                 meta.historicalDatasetSha256, meta.snapshotVersion, meta.dataVersion,
                 meta.snapshotHash, meta.asOfDate.isoformat(), meta.observationsClosedThrough.isoformat(),
+                test_epoch.testCycleId if test_epoch else "",
+                test_epoch.resetEpoch if test_epoch else "",
                 engine_version, json.dumps(period, sort_keys=True, separators=(",", ":"), default=str),
                 json.dumps(entity_filter, sort_keys=True, separators=(",", ":"), default=str))
 
@@ -503,8 +506,10 @@ class LiveV3ContextStore:
             return self._build_validated(snapshot, base_records)
 
     def _build_validated(self, snapshot: V3OperationalSnapshot, base_records: Mapping[str, Any]) -> LiveV3Context:
+        test_epoch = snapshot.metadata.testEpoch
         boundary = (snapshot.metadata.businessId, snapshot.metadata.scenarioId, snapshot.metadata.dataVersion,
-                    snapshot.metadata.asOfDate.isoformat(), snapshot.metadata.observationsClosedThrough.isoformat())
+                    snapshot.metadata.asOfDate.isoformat(), snapshot.metadata.observationsClosedThrough.isoformat(),
+                    test_epoch.testCycleId if test_epoch else "", test_epoch.resetEpoch if test_epoch else "")
         previous_hash = self._hash_by_boundary.get(boundary)
         if previous_hash is not None and previous_hash != snapshot.metadata.snapshotHash:
             _raise_invalid("Same revision and as-of boundary produced different content.", 409, "SNAPSHOT_VERSION_MISMATCH")

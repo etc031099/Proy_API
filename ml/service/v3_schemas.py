@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictBool, StrictFloat, StrictInt, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictBool, StrictFloat, StrictInt, model_serializer, model_validator
 
 
 BUSINESS_ID = "MINIMARKET-PASCO-V3"
@@ -57,6 +57,11 @@ class CostCoverage(FrozenSnapshotSchema):
     unknownSaleLines: StrictInt = Field(ge=0, le=65_536)
 
 
+class SnapshotTestEpoch(FrozenSnapshotSchema):
+    testCycleId: str = Field(pattern=r"^[a-f0-9-]{36}$")
+    resetEpoch: str = Field(pattern=r"^(0|[1-9][0-9]*)$", max_length=19)
+
+
 class SnapshotMetadata(FrozenSnapshotSchema):
     snapshotVersion: Literal["v3-operational-snapshot-v1", "v3-operational-snapshot-v2"]
     contractVersion: Literal["1", "2"]
@@ -79,6 +84,14 @@ class SnapshotMetadata(FrozenSnapshotSchema):
     availabilityCoverage: Literal["UNKNOWN", "OBSERVED"]
     snapshotHash: str = Field(pattern=r"^[a-f0-9]{64}$")
     payloadBytes: StrictInt = Field(ge=1, le=1_572_864)
+    testEpoch: SnapshotTestEpoch | None = None
+
+    @model_serializer(mode="wrap")
+    def omit_inactive_test_epoch(self, handler):
+        value = handler(self)
+        if self.testEpoch is None:
+            value.pop("testEpoch", None)
+        return value
 
 
 class SupplierOfferProjection(FrozenSnapshotSchema):

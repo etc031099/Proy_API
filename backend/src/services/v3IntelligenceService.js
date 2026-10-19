@@ -29,7 +29,8 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
   let cacheEpoch = null;
   const resolveContext = async context => {
     if (context.businessId !== V3.businessId) return null;
-    const epoch = await require('./mlTestFence').cacheIdentity();
+    const cacheState = await require('./mlTestFence').cacheIdentityDetails();
+    const epoch = cacheState.identity;
     if (cacheEpoch !== epoch) {
       contexts.clear(); entities.clear(); turnContexts.clear(); liveSnapshots.clear(); cacheEpoch = epoch;
     }
@@ -50,7 +51,7 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
       const instant = operationalClock.now();
       const date = operationalDate(instant, V3.timezone);
       const binding = Object.freeze({ ...verified, operationalDate: date, asOfDate: date,
-        clockInstant: instant.toISOString(), testCacheIdentity: epoch });
+        clockInstant: instant.toISOString(), testCacheIdentity: epoch, testEpoch: cacheState.testEpoch });
       turnContexts.set(turnKey, { binding, expiresAt: Date.now() + 5 * 60 * 1000 });
       while (turnContexts.size > 512) turnContexts.delete(turnContexts.keys().next().value);
     }
@@ -73,7 +74,8 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
     return entities.get(key);
   };
   const getLiveSnapshot = (binding, requestId, asOfDate) => {
-    const build = () => buildSnapshot({ businessId: binding.businessId, asOfDate, now: new Date(binding.clockInstant) });
+    const build = () => buildSnapshot({ businessId: binding.businessId, asOfDate,
+      now: new Date(binding.clockInstant), testEpoch: binding.testEpoch });
     // Reuse one immutable snapshot only inside a single assistant request (e.g. a
     // bounded multi-intent). A new requestId always reads a fresh revision.
     if (!requestId) return build();

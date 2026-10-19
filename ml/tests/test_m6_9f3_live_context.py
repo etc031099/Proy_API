@@ -17,6 +17,7 @@ from ml.service.v3_schemas import (
     BUSINESS_ID, DATASET_SHA256, DATASET_VERSION, SCENARIO_ID, TIMEZONE,
     V3OperationalSnapshot,
 )
+from ml.service.v3_live_inventory_supplier import LiveInventorySupplierAdapter
 
 SECRET = "test-only-v3-live-secret-value-000000000"
 BASE_RECORDS = {
@@ -194,6 +195,36 @@ class M69F3LiveContextTests(unittest.TestCase):
         with self.assertRaises(LiveSnapshotError) as raised:
             store.build(second, **validation_args(second))
         self.assertEqual(raised.exception.code, "SNAPSHOT_VERSION_MISMATCH")
+
+    def test_same_revision_after_restore_epoch_rebuilds_context_and_isolates_cache(self):
+        normal_snapshot = signed_snapshot()
+        self.assertNotIn("testEpoch", normal_snapshot.model_dump(mode="json")["metadata"])
+        store = LiveV3ContextStore(max_entries=4)
+        first_raw = empty_snapshot()
+        first_raw["metadata"]["testEpoch"] = {
+            "testCycleId": "123e4567-e89b-12d3-a456-426614174000", "resetEpoch": "4",
+        }
+        first = signed_snapshot(first_raw)
+        context_before_restore = store.build(first, **validation_args(first))
+
+        restored_raw = copy.deepcopy(first_raw)
+        restored_raw["metadata"]["testEpoch"]["resetEpoch"] = "5"
+        restored_raw["stockStates"][0]["onHand"] = 8
+        after_restore = signed_snapshot(restored_raw)
+        context_after_restore = store.build(after_restore, **validation_args(after_restore))
+
+        self.assertEqual(first.metadata.dataVersion, after_restore.metadata.dataVersion)
+        self.assertNotEqual(first.metadata.testEpoch.resetEpoch, after_restore.metadata.testEpoch.resetEpoch)
+        self.assertNotEqual(store.cache_key(first), store.cache_key(after_restore))
+        self.assertIsNot(context_before_restore, context_after_restore)
+        self.assertEqual(context_before_restore.stock_for(sku="P1"), 7)
+        self.assertEqual(context_after_restore.stock_for(sku="P1"), 8)
+        self.assertIs(context_after_restore, store.build(after_restore, **validation_args(after_restore)))
+        adapter = LiveInventorySupplierAdapter({}, {}, None, None)
+        request = type("Request", (), {key: None for key in
+            ("mode", "skus", "supplierCode", "productSkus", "risk", "abc", "xyz", "flag", "metric", "limit", "offset", "period")})()
+        self.assertNotEqual(adapter._key(context_before_restore, "inventory", request),
+                            adapter._key(context_after_restore, "inventory", request))
 
     def test_hash_tenant_oversize_and_future_leakage_fail_closed(self):
         snapshot = signed_snapshot()

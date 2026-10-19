@@ -165,12 +165,18 @@ async function externalAllowed(db = mongoose.connection.db, expected = cycles.ge
   if (expected && !sameToken(expected, tokenOf(row))) return false;
   return !row || row.state === 'NO_TEST';
 }
-async function cacheIdentity() {
-  if (mongoose.connection.readyState !== 1) return 'NO_TEST';
+async function cacheIdentityDetails() {
+  if (mongoose.connection.readyState !== 1) return { identity: 'NO_TEST', testEpoch: null };
   const token = await capture(mongoose.connection.db);
   if (['RESTORING', 'FAILED', 'CHECKPOINT_CREATING'].includes(token.state)) fail('TEST_RESTORE_BLOCKED');
-  return `${token.present}:${token.testCycleId || ''}:${token.resetEpoch}:${cacheGeneration}`;
+  return {
+    identity: `${token.present}:${token.testCycleId || ''}:${token.resetEpoch}:${cacheGeneration}`,
+    testEpoch: token.state === 'TEST_ACTIVE' && token.testCycleId
+      ? { testCycleId: token.testCycleId, resetEpoch: token.resetEpoch }
+      : null,
+  };
 }
+async function cacheIdentity() { return (await cacheIdentityDetails()).identity; }
 // Applied only to checkpoint allowlisted models. Raw administrative restore uses
 // the driver deliberately; raw application writers are not implicitly trusted.
 function modelPlugin(schema) {
@@ -266,7 +272,7 @@ function modelPlugin(schema) {
     await check(this.constructor, this.$session(), [this]);
   });
 }
-module.exports = { capture, withEpoch, runCycle, mutationTransaction, guard, externalAllowed, cacheIdentity, modelPlugin,
+module.exports = { capture, withEpoch, runCycle, mutationTransaction, guard, externalAllowed, cacheIdentity, cacheIdentityDetails, modelPlugin,
   withWriter, untilResponseFinished, drainWriters,
   parseToken, durableToken, assertCurrent, runClaim, tokenOf,
   invalidateCaches: () => { cacheGeneration++; },

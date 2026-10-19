@@ -507,9 +507,14 @@ async function readSnapshotData({ businessId, session, asOfDate, capturedAtUtc }
   };
 }
 
-async function buildV3OperationalSnapshot({ businessId, asOfDate, now = new Date(), minimumDataVersion = null }) {
+async function buildV3OperationalSnapshot({ businessId, asOfDate, now = new Date(), minimumDataVersion = null, testEpoch = null }) {
   await resolveV3OperationalScenario(businessId);
   if (!validIsoDay(asOfDate)) throw fail('INVALID_AS_OF_DATE', 'asOfDate must be a valid ISO calendar day.', 400);
+  if (testEpoch !== null && testEpoch !== undefined
+      && (!testEpoch || typeof testEpoch.testCycleId !== 'string' || !/^[a-f0-9-]{36}$/.test(testEpoch.testCycleId)
+        || typeof testEpoch.resetEpoch !== 'string' || !/^(0|[1-9]\d*)$/.test(testEpoch.resetEpoch))) {
+    throw fail('TEST_EPOCH_INVALID', 'ML test snapshot identity is invalid.', 409);
+  }
   const operationalDate = limaDate(now);
   if (asOfDate <= config.historicalCutoff) return { mode: 'HISTORICAL', scenarioId: config.scenarioId, asOfDate, dataVersion: null, snapshot: null };
   if (asOfDate > operationalDate) throw fail('FUTURE_AS_OF_DATE', 'asOfDate cannot be later than the V3 operational date.', 400);
@@ -520,6 +525,14 @@ async function buildV3OperationalSnapshot({ businessId, asOfDate, now = new Date
       const floor = await getDataVersion(businessId, { session, majority: true });
       const required = minimumDataVersion != null && BigInt(minimumDataVersion) > BigInt(floor) ? String(minimumDataVersion) : floor;
       session.startTransaction({ readConcern: { level: 'snapshot' }, readPreference: 'primary' });
+      if (testEpoch) {
+        const control = await mongoose.connection.db.collection('mltestcontrols').findOne(
+          { businessId }, { session, promoteLongs: false });
+        if (control?.state !== 'TEST_ACTIVE' || control.testCycleId !== testEpoch.testCycleId
+            || String(control.resetEpoch ?? 0) !== testEpoch.resetEpoch) {
+          throw fail('STALE_TEST_EPOCH', 'ML test cycle changed before snapshot capture.', 409);
+        }
+      }
       const scenario = await resolveV3OperationalScenario(businessId, { session });
       const revisionRow = await V3OperationalRevision.findById(businessId).session(session)
         .setOptions({ useBigInt64: true }).lean().maxTimeMS(5000);
@@ -556,6 +569,9 @@ async function buildV3OperationalSnapshot({ businessId, asOfDate, now = new Date
         catalogChanges: sections.catalogChanges, sales: sections.sales, purchases: sections.purchases,
         transactionChanges: sections.transactionChanges, stockStates: data.stockStates, closedSalesDays: sections.closedSalesDays
       };
+      if (testEpoch) {
+        payload.metadata.testEpoch = { testCycleId: testEpoch.testCycleId, resetEpoch: testEpoch.resetEpoch };
+      }
       const hashInput = { ...payload, metadata: { ...payload.metadata, capturedAtUtc: undefined } };
       payload.metadata.snapshotHash = logicalHash(hashInput);
       enforcePayloadLimit(payload);
