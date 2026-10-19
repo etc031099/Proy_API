@@ -26,6 +26,52 @@ test('technical status is scoped, sanitized and keeps cloud restore disabled', a
   assert(!JSON.stringify(own).includes('secret'));
   assert.equal((await access.readStatus({ businessId: 'foreign' }, db)).state, 'NO_TEST'); assert.equal(reads, 1);
 });
+function localCapabilityFixture({ database = 'inventory_billing_local', hello = {}, env = {}, user = admin } = {}) {
+  const client = { options: { replicaSet: 'rs0', hosts: [{ host: '127.0.0.1', port: 27017 }] } };
+  const db = { client, databaseName: database,
+    collection: () => ({ findOne: async () => ({ resetEpoch: BSON.Long.fromNumber(3), state: 'TEST_ACTIVE', testCycleId: 'cycle-123' }) }),
+    admin: () => ({ command: async () => ({ setName: 'rs0', isWritablePrimary: true,
+      me: '127.0.0.1:27017', hosts: ['127.0.0.1:27017'], ...hello }) }) };
+  const configEnv = { NODE_ENV: 'development', ML_TEST_LOCAL_ENABLED: 'true',
+    ML_TEST_LOCAL_EXPECTED_DATABASE: 'inventory_billing_local', MONGODB_REPLICA_SET: 'rs0',
+    MONGODB_URI: 'mongodb://demo-user:demo-password@127.0.0.1:27017/inventory_billing_local?replicaSet=rs0', ...env };
+  return { client, db, env: configEnv, user };
+}
+test('test-control status grants destructive capability only for validated local admin target', async () => {
+  const fixture = localCapabilityFixture();
+  const status = await access.readStatus(fixture.user, fixture.db, fixture);
+  assert.deepEqual(status.capabilities.destructiveMlTestControls, { allowed: true, target: 'LOCAL', reasonCode: null });
+  assert.equal(status.resetEpoch, '3'); assert.equal(status.testCycleId, 'cycle-123');
+  assert.equal(status.maintenance, false); assert.equal(status.state, 'TEST_ACTIVE');
+  assert(!JSON.stringify(status).includes('demo-password'));
+  assert(!JSON.stringify(status).includes('demo-user'));
+  assert(!JSON.stringify(status).includes('mongodb://'));
+});
+test('test-control capability fails closed for disabled flag and production', async () => {
+  const disabled = localCapabilityFixture({ env: { ML_TEST_LOCAL_ENABLED: 'false' } });
+  assert.deepEqual((await access.readStatus(disabled.user, disabled.db, disabled)).capabilities.destructiveMlTestControls,
+    { allowed: false, target: null, reasonCode: 'ML_TEST_LOCAL_DISABLED' });
+  const production = localCapabilityFixture({ env: { NODE_ENV: 'production' } });
+  assert.deepEqual((await access.readStatus(production.user, production.db, production)).capabilities.destructiveMlTestControls,
+    { allowed: false, target: null, reasonCode: 'ML_TEST_PRODUCTION_FORBIDDEN' });
+});
+test('test-control capability fails closed for wrong target, replica set, or non-admin user', async () => {
+  const wrongDatabase = localCapabilityFixture({ database: 'inventory_billing' });
+  assert.equal((await access.readStatus(wrongDatabase.user, wrongDatabase.db, wrongDatabase)).capabilities.destructiveMlTestControls.reasonCode,
+    'ML_TEST_LOCAL_TARGET_INVALID');
+  const wrongReplicaSet = localCapabilityFixture({ hello: { setName: 'other-rs' } });
+  assert.equal((await access.readStatus(wrongReplicaSet.user, wrongReplicaSet.db, wrongReplicaSet)).capabilities.destructiveMlTestControls.reasonCode,
+    'ML_TEST_LOCAL_REPLICA_SET_REQUIRED');
+  const atlasTarget = localCapabilityFixture({ env: { MONGODB_URI: 'mongodb+srv://user:password@cluster.mongodb.net/inventory_billing_local' } });
+  assert.deepEqual((await access.readStatus(atlasTarget.user, atlasTarget.db, atlasTarget)).capabilities.destructiveMlTestControls,
+    { allowed: false, target: null, reasonCode: 'ML_TEST_LOCAL_TARGET_INVALID' });
+  const ordinaryUser = localCapabilityFixture({ user: { ...admin, role: 'user' } });
+  assert.deepEqual((await access.readStatus(ordinaryUser.user, ordinaryUser.db, ordinaryUser)).capabilities.destructiveMlTestControls,
+    { allowed: false, target: null, reasonCode: 'ML_TEST_ADMIN_REQUIRED' });
+  const inactiveAdmin = localCapabilityFixture({ user: { ...admin, isActive: false } });
+  assert.deepEqual((await access.readStatus(inactiveAdmin.user, inactiveAdmin.db, inactiveAdmin)).capabilities.destructiveMlTestControls,
+    { allowed: false, target: null, reasonCode: 'ML_TEST_ADMIN_REQUIRED' });
+});
 test('external delivery claimed in prior epoch is suppressed immediately before send, even after returning to NO_TEST', async () => {
   let row = { state: 'NO_TEST', resetEpoch: BSON.Long.fromNumber(1), testCycleId: 'cycle' }, sent = 0;
   const db = { collection: () => ({ findOne: async () => row }) };
