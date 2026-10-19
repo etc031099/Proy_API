@@ -68,10 +68,11 @@ test('authenticated admin from another tenant cannot read or mutate the authoriz
 test('checkpoint endpoint delegates to executor; rejects client tenant/scenario scope and empty-body contract is enforced', async () => {
   const executor = testExecutor();
   await withServer(createMlTestAdminRoutes({ authenticateMiddleware: fakeAuth, getExecutor: () => executor }), async base => {
-    for (const body of [{ businessId: 'foreign' }, { scenarioId: 'foreign' }]) {
+    for (const body of [{ businessId: 'foreign' }, { scenarioId: 'foreign' }, { writersPaused: true }, { localWritersPaused: true }]) {
       const deniedScope = await fetch(`${base}/checkpoint`, { method: 'POST', headers: authHeader, body: JSON.stringify(body) });
       assert.equal(deniedScope.status, 400);
     }
+    assert.equal((await fetch(`${base}/checkpoint?writersPaused=true`, { method: 'POST', headers: authHeader, body: '{}' })).status, 400);
     const response = await fetch(`${base}/checkpoint`, { method: 'POST', headers: authHeader, body: '{}' });
     const body = await response.json(); assert.equal(response.status, 201);
     assert.equal(body.data.checkpointId, executor.status.activeCheckpointId);

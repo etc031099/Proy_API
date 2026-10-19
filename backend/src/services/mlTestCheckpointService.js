@@ -240,17 +240,27 @@ async function assertQuiescent(db, scope) {
     if (await db.collection(collection).findOne(filter, { projection: { _id: 1 }, maxTimeMS: 5000 })) M.fail('CHECKPOINT_SOURCE_BUSY');
   }
 }
-async function captureLocalCheckpoint({ client, db, scope, localWritersPaused = false, createdBy = null, targetBytes = M.TARGET_BYTES, authorization }) {
+async function captureCheckpoint({ client, db, scope, localWritersPaused = false, createdBy = null, targetBytes = M.TARGET_BYTES, authorization }, operational) {
   assertExecutionTarget(client, db, authorization); scope = M.authorizedScope(scope);
   const checkOperation = budget(LIMITS.captureMs);
-  if (localWritersPaused !== true) M.fail('CHECKPOINT_LOCAL_QUIESCENCE_REQUIRED');
+  // A caller assertion is retained ONLY for disposable local certification.
+  // Cloud always requires the operative state transition and durable drain.
+  if (!operational && (localWritersPaused !== true
+      || require('./mlTestTargetAuthorization').authorized(client, db, authorization))) M.fail('CHECKPOINT_LOCAL_QUIESCENCE_REQUIRED');
   if (createdBy !== null && (typeof createdBy !== 'string' || createdBy.length > 160)) M.fail('CHECKPOINT_ACTOR_INVALID');
   if (!Number.isSafeInteger(targetBytes) || targetBytes < 64 || targetBytes > M.TARGET_BYTES) M.fail('CHECKPOINT_CHUNK_TARGET_INVALID');
   await provisionLocal(client, db, authorization);
+  // Reject already-visible jobs/dispatches without entering maintenance. The
+  // operative path repeats this check after closing admission and draining.
   await assertQuiescent(db, scope);
   const checkpointId = randomUUID(), capturedAt = new Date();
   const control = await acquireControl(db, scope, checkpointId, capturedAt);
   try {
+    if (operational) {
+      await require('./mlTestFence').drainWriters(db, control);
+      checkOperation();
+      await assertQuiescent(db, scope);
+    }
     await db.collection(NAMES[1]).insertOne({ checkpointId, ...scope, createdBy, status: 'CREATING', capturedAt,
       createdAt: capturedAt, updatedAt: capturedAt, schemaVersion: 1, failureCode: null,
       observationsClosedThroughAtCapture: closedThrough(capturedAt), chunkTargetBytes: targetBytes,
@@ -280,6 +290,8 @@ async function captureLocalCheckpoint({ client, db, scope, localWritersPaused = 
     return { ...verified, status: 'READY', resetEpoch: control.resetEpoch.toString(), readDurationMs, totalDocuments };
   } catch (error) { await markFailed(db, checkpointId, scope, error); throw error; }
 }
+const captureLocalCheckpoint = options => captureCheckpoint(options, false);
+const captureOperationalCheckpoint = options => captureCheckpoint(options, true);
 async function verifyLocalCheckpoint({ client, db, checkpointId, scope, authorization }) {
   assertExecutionTarget(client, db, authorization); scope = M.authorizedScope(scope);
   try { return await verifyStored(db, checkpointId, scope); }
@@ -324,6 +336,7 @@ async function preflightCheckpoint({ client, db, scope, elapsedLimitMs = READ_LI
       bsonBytes: row.byteCount, estimatedChunks: row.chunkCount, largestDocumentBytes: row.largestDocumentBytes })) };
 }
 module.exports = { captureLocalCheckpoint, verifyLocalCheckpoint, preflightCheckpoint, provisionLocal,
+  captureOperationalCheckpoint,
   scanSource,
   assertLocalTarget, assertExecutionTarget, closedThrough, codeOf, LIMIT_BYTES, LIMIT_DOCUMENTS, READ_LIMIT_MS,
   MAX_PREFLIGHT_READ_LIMIT_MS };

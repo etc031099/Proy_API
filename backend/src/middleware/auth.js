@@ -61,12 +61,22 @@ const authenticate = async (req, res, next) => {
     let continueRequest = false;
     await require('../services/mlTestAccess').maintenanceGuard(req, res, () => { continueRequest = true; });
     if (!continueRequest) return;
-    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && user.businessId === require('../config/v3Operational').businessId) {
-      return await require('../services/mlTestFence').runCycle(() => next());
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && user.businessId === require('../config/v3Operational').businessId
+        // Administrative lifecycle owns the fence; counting CREATE as a writer
+        // would make it wait for its own response. The route still checks admin,
+        // target, flag, certification and an empty/strict body independently.
+        && !/^\/api\/ml-test\/(?:checkpoint|restore)(?:\?|$)/.test(req.originalUrl || '')) {
+      const fence = require('../services/mlTestFence');
+      return await fence.runCycle(() => fence.untilResponseFinished(res, next));
     }
     next();
 
   } catch (error) {
+    if (/^(?:TEST|STALE_TEST)_/.test(error.code || '')) {
+      if (res.headersSent) return;
+      return res.status(503).json({ success: false, code: 'ML_TEST_MAINTENANCE',
+        message: 'Operación temporalmente bloqueada por el control de prueba.' });
+    }
     if (error.name === 'JsonWebTokenError') {
       return res.status(401).json({
         success: false,

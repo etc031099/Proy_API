@@ -11,7 +11,7 @@ const SAFE_CODE = /^(?:CHECKPOINT|RESTORE|ML_TEST|STALE_TEST|TEST)_[A-Z_]+$/;
 const fail = (code, status = 409) => { throw Object.assign(new Error(code), { code, httpStatus: status }); };
 const executorFor = (env = process.env) => createMlTestAdminExecutor({
   client: mongoose.connection.getClient(), db: mongoose.connection.db, target: 'CLOUD', env,
-  certificationId: CERTIFICATION, writersPaused: env.ML_TEST_WRITERS_PAUSED === 'true'
+  certificationId: CERTIFICATION
 });
 
 function createMlTestAdminRoutes({ authenticateMiddleware = authenticate, adminMiddleware = authorize('admin'), getExecutor = executorFor } = {}) {
@@ -29,6 +29,7 @@ function createMlTestAdminRoutes({ authenticateMiddleware = authenticate, adminM
   };
   const safeStatus = value => ({ state: value.state, resetEpoch: value.resetEpoch,
     testCycleId: value.testCycleId, maintenance: value.maintenance,
+    quiescence: value.quiescence || null,
     checkpointId: value.activeCheckpointId || value.lastCheckpointId || null,
     activeCheckpointId: value.activeCheckpointId || null, lastCheckpointId: value.lastCheckpointId || null,
     checkpoint: value.checkpoint || null, restoreId: value.restoreId || null,

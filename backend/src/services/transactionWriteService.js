@@ -293,4 +293,5 @@ const writeTransaction = async ({ input, businessId, historical = null, session:
   }
 };
 
-module.exports = { writeTransaction: input => require('./mlTestFence').runCycle(() => writeTransaction(input)) };
+module.exports = { writeTransaction: input => require('./mlTestFence').runCycle(() => writeTransaction(input), undefined,
+  { businessId: input?.businessId }) };

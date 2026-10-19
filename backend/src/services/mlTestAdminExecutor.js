@@ -45,7 +45,7 @@ function createMlTestAdminExecutor({ client, db, target = 'CLOUD', env = process
     await db.collection(AUDIT).insertOne(audit, { writeConcern: { w: 'majority' } });
     try {
       let result;
-      if (action === 'CREATE') result = await S.captureLocalCheckpoint({ client, db, scope,
+      if (action === 'CREATE') result = await (target === 'CLOUD' ? S.captureOperationalCheckpoint : S.captureLocalCheckpoint)({ client, db, scope,
         localWritersPaused: writersPaused === true, createdBy: String(req.user._id), authorization });
       else {
         if (!body.checkpointId || !body.restoreId || !body.branch) fail('ML_TEST_REQUEST_INVALID', 400);
@@ -97,8 +97,12 @@ async function readAdminStatus(db, scope, { cloudRestoreEnabled = false } = {}) 
     { projection: { checkpointId: 1, status: 1, dataVersion: 1, capturedAt: 1, createdAt: 1,
       totalDocuments: 1, totalBytes: 1, totalChunks: 1, failureCode: 1 } }) : null;
   const safeCode = value => /^(?:CHECKPOINT|RESTORE|ML_TEST|STALE_TEST|TEST)_[A-Z_]+$/.test(value || '') ? value : null;
+  const admissionClosed = !['NO_TEST', 'TEST_ACTIVE'].includes(token.state);
+  const activeWriterCount = control?.activeWriterIds == null ? 0
+    : Array.isArray(control.activeWriterIds) ? control.activeWriterIds.length : null;
   return { state: token.state, resetEpoch: token.resetEpoch, testCycleId: token.testCycleId,
-    maintenance: !['NO_TEST', 'TEST_ACTIVE'].includes(token.state), cloudRestoreEnabled,
+    maintenance: admissionClosed, cloudRestoreEnabled,
+    quiescence: { admissionClosed, writersPaused: admissionClosed && activeWriterCount === 0, activeWriterCount },
     activeCheckpointId: /^[a-f0-9-]{36}$/i.test(control?.activeCheckpointId || '') ? control.activeCheckpointId : null,
     lastCheckpointId: /^[a-f0-9-]{36}$/i.test(control?.lastCheckpointId || '') ? control.lastCheckpointId : null,
     checkpoint: checkpoint ? { checkpointId: checkpoint.checkpointId, status: checkpoint.status,

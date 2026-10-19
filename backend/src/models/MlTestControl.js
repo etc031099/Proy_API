@@ -13,6 +13,7 @@ const schema = new mongoose.Schema({
   epochChangedAt: { type: Date, default: null },
   finalizedAt: { type: Date, default: null },
   writeFenceNonce: { type: String, default: null },
+  activeWriterIds: { type: [String], default: [] },
   restoreHeartbeatNonce: { type: String, default: null },
   restoreOwnerNonce: { type: String, default: null },
   restoreLeaseUntil: { type: Date, default: null },
