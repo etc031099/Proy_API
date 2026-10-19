@@ -267,6 +267,21 @@ test('long chunk I/O outlives the local transaction limit: legacy transaction fa
   };
   client.on('commandStarted', listener);
   const wrapped = Object.create(db), original = db.collection.bind(db);
+  const wrappedClient = Object.create(client);
+  wrappedClient.startSession = (...args) => {
+    const session = client.startSession(...args), commit = session.commitTransaction.bind(session);
+    session.commitTransaction = async (...commitArgs) => {
+      const result = await commit(...commitArgs);
+      if (session.delayAfterChunkCommit) {
+        session.delayAfterChunkCommit = false;
+        await delay(95000); // Delay after the short chunk transaction, while the source snapshot stays pinned.
+        try { await db.collection('products').findOne({}, { session: old }); }
+        catch (error) { legacyCode = error.code; }
+      }
+      return result;
+    };
+    return session;
+  };
   let delayed = false, deniedWriter = false, legacyCode;
   wrapped.collection = name => {
     const collection = original(name);
@@ -278,9 +293,7 @@ test('long chunk I/O outlives the local transaction limit: legacy transaction fa
           delayed = true;
           await assert.rejects(F.withWriter(db, () => assert.fail('writer cannot enter while snapshot streams')), { code: 'TEST_RESTORE_BLOCKED' });
           deniedWriter = true;
-          await delay(95000); // One controlled wait, never a larger production timeout.
-          try { await db.collection('products').findOne({}, { session: old }); }
-          catch (error) { legacyCode = error.code; }
+          args[1].session.delayAfterChunkCommit = true;
         }
         return result;
       };
@@ -288,7 +301,7 @@ test('long chunk I/O outlives the local transaction limit: legacy transaction fa
     return collection;
   };
   try {
-    const result = await S.captureOperationalCheckpoint({ client, db: wrapped, scope });
+    const result = await S.captureOperationalCheckpoint({ client: wrappedClient, db: wrapped, scope });
     assert.equal(legacyCode, 251); assert.equal(result.status, 'READY'); assert(deniedWriter);
     assert.equal(result.metrics.snapshotTransactionMs, 0); assert(result.metrics.snapshotSessionMs >= 95000);
     assert(result.metrics.maxChunkBytes <= M.TARGET_BYTES);

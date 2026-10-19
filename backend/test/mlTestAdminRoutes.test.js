@@ -61,6 +61,34 @@ test('private route requires authenticated admin and returns read-only scoped st
   });
 });
 
+test('orphan recovery/storage/purge remain private, reject client overrides and delegate only server actions', async () => {
+  const actions = [];
+  const status = { state: 'NO_TEST', maintenance: false, resetEpoch: '6', quiescence: { writersPaused: false, activeWriterCount: 0 } };
+  const executor = { async execute(req, action) {
+    actions.push(action);
+    if (action === 'STATUS') return status;
+    if (action === 'STORAGE') return { writes: 0, mode: 'READ_ONLY', checkpoints: [] };
+    if (action === 'ABORT_STALE_CHECKPOINT') return { status: 'STALE_CHECKPOINT_ABORTED', resetEpoch: '6', abortedCheckpointId: randomUUID() };
+    return { status: 'CHECKPOINT_PAYLOADS_PURGED', deletedChunks: 2, reclaimedBytes: 8 };
+  } };
+  await withServer(createMlTestAdminRoutes({ authenticateMiddleware: fakeAuth, getExecutor: () => executor }), async base => {
+    for (const route of ['recover-stale-checkpoint', 'purge-failed-checkpoint-payloads']) {
+      for (const [headers, expected] of [[{ 'content-type': 'application/json' }, 401],
+        [{ 'content-type': 'application/json', 'x-test-user': 'user' }, 403]])
+        assert.equal((await fetch(`${base}/${route}`, { method: 'POST', headers, body: '{}' })).status, expected);
+      for (const body of [{ checkpointId: randomUUID() }, { force: true }, { deadlineAt: 0 }, { businessId: 'foreign' }])
+        assert.equal((await fetch(`${base}/${route}`, { method: 'POST', headers: authHeader, body: JSON.stringify(body) })).status, 400);
+      assert.equal((await fetch(`${base}/${route}?force=true`, { method: 'POST', headers: authHeader, body: '{}' })).status, 400);
+      assert.equal((await fetch(`${base}/${route}`, { method: 'POST', headers: authHeader, body: '{}' })).status, 200);
+    }
+    assert.equal((await fetch(`${base}/checkpoint-storage`)).status, 401);
+    assert.equal((await fetch(`${base}/checkpoint-storage`, { headers: { 'x-test-user': 'user' } })).status, 403);
+    const response = await fetch(`${base}/checkpoint-storage`, { headers: authHeader });
+    assert.equal((await response.json()).data.writes, 0);
+    assert.deepEqual(actions, ['ABORT_STALE_CHECKPOINT', 'STATUS', 'PURGE_FAILED_CHECKPOINT_PAYLOADS', 'STORAGE']);
+  });
+});
+
 test('authenticated admin from another tenant cannot read or mutate the authorized demo scope', async () => {
   const noDb = new Proxy({}, { get: () => assert.fail('foreign tenant must be rejected before DB access') });
   const executor = createMlTestAdminExecutor({ db: noDb, env: {}, target: 'CLOUD' });

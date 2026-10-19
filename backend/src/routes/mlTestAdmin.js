@@ -102,6 +102,32 @@ function createMlTestAdminRoutes({ authenticateMiddleware = authenticate, adminM
       } });
     } catch (error) { return respondError(res, error); }
   });
+  router.get('/checkpoint-storage', async (req, res) => {
+    try {
+      if (Object.keys(req.query || {}).length) fail('ML_TEST_REQUEST_INVALID', 400);
+      const result = await getExecutor().execute({ ...req, body: {}, query: {} }, 'STORAGE');
+      return res.set('Cache-Control', 'no-store').json({ success: true, data: result });
+    } catch (error) { return respondError(res, error); }
+  });
+  router.post('/recover-stale-checkpoint', async (req, res) => {
+    try {
+      emptyBody(req);
+      const executor = getExecutor();
+      const result = await executor.execute(req, 'ABORT_STALE_CHECKPOINT');
+      const status = await executor.execute({ ...req, body: {}, query: {} }, 'STATUS');
+      return res.set('Cache-Control', 'no-store').json({ success: true, data: {
+        ...safeStatus(status), status: result.status, abortedCheckpointId: result.abortedCheckpointId,
+        resetEpoch: result.resetEpoch, idempotent: result.idempotent === true
+      } });
+    } catch (error) { return respondError(res, error); }
+  });
+  router.post('/purge-failed-checkpoint-payloads', async (req, res) => {
+    try {
+      emptyBody(req);
+      const result = await getExecutor().execute(req, 'PURGE_FAILED_CHECKPOINT_PAYLOADS');
+      return res.set('Cache-Control', 'no-store').json({ success: true, data: result });
+    } catch (error) { return respondError(res, error); }
+  });
   return router;
 }
 

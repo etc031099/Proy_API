@@ -4,6 +4,7 @@ const { Long } = require('mongoose').mongo.BSON;
 const M = require('./mlTestCheckpointManifest');
 const config = require('../config/v3Operational');
 const D = require('./mlTestCheckpointDiagnostics');
+const Lifecycle = require('./mlTestCheckpointLifecycle');
 const CAPTURE_PROTOCOL = 'SNAPSHOT_SESSION_V1';
 const { LIMITS, budget, captureBudgetMs, checkpointBudget } = require('./mlTestOperationBudget');
 const NAMES = ['mltestcontrols', 'mltestcheckpoints', 'mltestcheckpointchunks'];
@@ -92,7 +93,7 @@ function summarizeDocument(collection, raw, result) {
 }
 async function scanSource({ client, db, scope, targetBytes = M.TARGET_BYTES, onChunk, onProgress,
   elapsedLimitMs = READ_LIMIT_MS, cursorMaxTimeMs = READ_LIMIT_MS, onStage = () => {},
-  checkOperation = null, now = Date.now, metrics = {} }) {
+  checkOperation = null, heartbeat = null, now = Date.now, metrics = {} }) {
   scope = M.authorizedScope(scope);
   const started = now();
   const checkBudget = budget(elapsedLimitMs, { now });
@@ -135,6 +136,7 @@ async function scanSource({ client, db, scope, targetBytes = M.TARGET_BYTES, onC
         try {
           for await (const raw of cursor) {
             checkOperation?.('SNAPSHOT_READ', collection);
+            await heartbeat?.('SNAPSHOT_READ');
             const rss = process.memoryUsage().rss;
             metrics.peakRssBytes = Math.max(metrics.peakRssBytes || 0, rss);
             if (rss > LIMITS.maxRssBytes) M.fail('CHECKPOINT_MEMORY_LIMIT_EXCEEDED');
@@ -211,7 +213,7 @@ async function acquireControl(db, scope, checkpointId, capturedAt, checkOperatio
   if (!row) M.fail('CHECKPOINT_CONTROL_BUSY');
   return row;
 }
-async function verifyStored(db, checkpointId, scope, checkOperation = () => {}) {
+async function verifyStored(db, checkpointId, scope, checkOperation = () => {}, heartbeat = null) {
   const checkBudget = checkOperation.operationBudget ? () => {} : budget(LIMITS.verificationMs);
   scope = M.authorizedScope(scope);
   const row = await db.collection(NAMES[1]).findOne({ checkpointId, ...scope }, { promoteLongs: false });
@@ -235,6 +237,7 @@ async function verifyStored(db, checkpointId, scope, checkOperation = () => {}) 
     try {
       for await (const chunk of cursor) {
         checkOperation('VERIFY', entry.collection);
+        await heartbeat?.('VERIFY');
         checkBudget();
         const payload = M.bytesOf(chunk.payload), expected = entry.chunks[chunkCount];
         if (!expected || chunk.chunkIndex !== chunkCount || expected.chunkIndex !== chunkCount
@@ -256,9 +259,12 @@ async function verifyStored(db, checkpointId, scope, checkOperation = () => {}) 
 }
 async function markFailed(db, checkpointId, scope, error, diagnostics = {}) {
   const failureCode = codeOf(error);
-  await db.collection(NAMES[1]).updateOne({ checkpointId, ...scope }, { $set: { status: 'FAILED', failureCode,
-    ...diagnostics, updatedAt: new Date() } });
-  await db.collection(NAMES[0]).updateOne({ businessId: scope.businessId, activeCheckpointId: checkpointId },
+  const { captureOwnerNonce, ...stored } = diagnostics;
+  await db.collection(NAMES[1]).updateOne({ checkpointId, ...scope,
+    ...(captureOwnerNonce ? { status: 'CREATING', captureOwnerNonce, abandonedAt: null } : {}) }, { $set: { status: 'FAILED', failureCode,
+    ...stored, updatedAt: new Date() } });
+  await db.collection(NAMES[0]).updateOne({ businessId: scope.businessId, activeCheckpointId: checkpointId,
+    ...(captureOwnerNonce ? { state: 'CHECKPOINT_CREATING' } : {}) },
     { $set: { state: 'FAILED', failureCode, updatedAt: new Date() } });
 }
 async function assertQuiescent(db, scope, { session, timeoutMS = 5000 } = {}) {
@@ -295,6 +301,8 @@ async function captureCheckpoint({ client, db, scope, localWritersPaused = false
   await assertQuiescent(db, scope);
   checkpointId = randomUUID();
   const capturedAt = new Date();
+  const ownership = Lifecycle.ownership(capturedAt.getTime(), Math.max(1, checkOperation.remaining()));
+  const ownedCheckpoint = { checkpointId, ...scope, ...ownership };
   const control = await acquireControl(db, scope, checkpointId, capturedAt, checkOperation);
   const context = { checkpointId, phase: 'QUIESCENCE', sessionPhase: 'NOT_OPEN', collection: null };
   const sampler = setInterval(() => { metrics.peakRssBytes = Math.max(metrics.peakRssBytes, process.memoryUsage().rss); }, 25);
@@ -304,6 +312,7 @@ async function captureCheckpoint({ client, db, scope, localWritersPaused = false
     await db.collection(NAMES[1]).insertOne({ checkpointId, ...scope, createdBy, status: 'CREATING', capturedAt,
       createdAt: capturedAt, updatedAt: capturedAt, schemaVersion: 1, failureCode: null,
       captureProtocolVersion: CAPTURE_PROTOCOL, readyAt: null,
+      ...ownership,
       observationsClosedThroughAtCapture: closedThrough(capturedAt), chunkTargetBytes: targetBytes,
       totalBytes: 0, totalChunks: 0 }, { timeoutMS: Math.max(1, checkOperation('QUIESCENCE')) });
     checkOperation('QUIESCENCE');
@@ -314,24 +323,32 @@ async function captureCheckpoint({ client, db, scope, localWritersPaused = false
       await assertQuiescent(db, scope);
     }
     checkOperation('SNAPSHOT_READ');
+    let lastHeartbeat = Date.now();
+    const heartbeat = async phase => {
+      if (Date.now() - lastHeartbeat < Lifecycle.HEARTBEAT_MS) return;
+      await Lifecycle.touch(db, ownedCheckpoint, phase, { timeoutMS: Math.max(1, checkOperation(phase)) });
+      lastHeartbeat = Date.now();
+    };
     const snapshot = await scanSource({ client, db, scope, targetBytes, elapsedLimitMs: operationTimeoutMs,
-      metrics, now, checkOperation, onStage: stage => {
+      metrics, now, checkOperation, heartbeat, onStage: stage => {
         const phase = stage.phase === 'CHUNK_WRITE' ? 'CHUNK_WRITE'
           : ['QUIESCENCE', 'DRAIN'].includes(stage.phase) ? stage.phase : 'SNAPSHOT_READ';
         Object.assign(context, { ...stage, phase }); checkOperation(phase, stage.collection);
-      }, onChunk: (collection, chunk) => db.collection(NAMES[2]).insertOne({ checkpointId, collection, ...chunk },
-        { timeoutMS: Math.max(1, checkOperation('CHUNK_WRITE', collection)) }) });
+      }, onChunk: (collection, chunk) => Lifecycle.writeChunk({ client, db, control, checkpoint: ownedCheckpoint,
+        collection, chunk, timeoutMS: Math.min(30000, Math.max(1, checkOperation('CHUNK_WRITE', collection))) }) });
     const { readDurationMs, totalDocuments, ...captured } = snapshot;
     const row = { checkpointId, ...scope, capturedAt, schemaVersion: 1, chunkTargetBytes: targetBytes,
       observationsClosedThroughAtCapture: closedThrough(capturedAt), ...captured };
     row.hashes.manifest = M.hashValue(M.manifestContent(row));
     context.phase = 'MANIFEST_WRITE';
-    await db.collection(NAMES[1]).updateOne({ checkpointId, ...scope, status: 'CREATING' }, { $set: { ...captured,
+    const manifestWrite = await db.collection(NAMES[1]).updateOne({ checkpointId, ...scope, status: 'CREATING',
+      captureOwnerNonce: ownership.captureOwnerNonce, abandonedAt: null }, { $set: { ...captured,
       hashes: row.hashes, updatedAt: new Date() } }, { timeoutMS: Math.max(1, checkOperation('SNAPSHOT_READ')) });
+    if (manifestWrite.matchedCount !== 1) M.fail('CHECKPOINT_CAPTURE_OWNERSHIP_LOST');
     context.phase = 'VERIFY';
     checkOperation('VERIFY');
     const verifyStarted = now();
-    const verified = await verifyStored(db, checkpointId, scope, checkOperation);
+    const verified = await verifyStored(db, checkpointId, scope, checkOperation, heartbeat);
     checkOperation('VERIFY');
     metrics.verifyMs = now() - verifyStarted;
     const session = client.startSession();
@@ -344,7 +361,9 @@ async function captureCheckpoint({ client, db, scope, localWritersPaused = false
         resetEpoch: control.resetEpoch, state: 'CHECKPOINT_CREATING' }, { $set: { state: 'TEST_ACTIVE', updatedAt: new Date() } },
         { session, timeoutMS: Math.max(1, checkOperation('FINALIZE')) });
       if (result.matchedCount !== 1) M.fail('CHECKPOINT_CONTROL_CONFLICT');
-      const ready = await db.collection(NAMES[1]).updateOne({ checkpointId, ...scope, status: 'CREATING' },
+      const ready = await db.collection(NAMES[1]).updateOne({ checkpointId, ...scope, status: 'CREATING',
+        captureOwnerNonce: ownership.captureOwnerNonce, abandonedAt: null,
+        captureDeadlineAt: { $gt: new Date() }, captureLeaseUntil: { $gt: new Date() } },
         { $set: { status: 'READY', readyAt: new Date(), captureMetrics: D.safeMetrics(metrics), updatedAt: new Date() } },
         { session, timeoutMS: Math.max(1, checkOperation('FINALIZE')) });
       if (ready.matchedCount !== 1) M.fail('CHECKPOINT_CONTROL_CONFLICT');
@@ -363,7 +382,10 @@ async function captureCheckpoint({ client, db, scope, localWritersPaused = false
     }
     const failureDiagnostics = D.failure(error, { ...context, durationMs: metrics.totalMs });
     try { logDiagnostic(failureDiagnostics); } catch { /* Never log the raw error as fallback. */ }
-    await markFailed(db, checkpointId, scope, error, { failureDiagnostics, captureMetrics: D.safeMetrics(metrics) });
+    try { await markFailed(db, checkpointId, scope, error, { captureOwnerNonce: ownership.captureOwnerNonce,
+      failureDiagnostics, captureMetrics: D.safeMetrics(metrics) }); }
+    catch { try { logDiagnostic({ event: 'ML_TEST_CHECKPOINT_FAILURE_PERSISTENCE_FAILED', checkpointId,
+      code: 'CHECKPOINT_FAILURE_PERSISTENCE_FAILED' }); } catch { /* No raw Mongo error. Recovery remains fenced. */ } }
     throw error;
   } finally { clearInterval(sampler); }
 }

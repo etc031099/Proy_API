@@ -8,10 +8,13 @@ const F = require('./mlTestFence');
 const T = require('./mlTestTargetAuthorization');
 const Recovery = require('./mlTestFailedCheckpointRecovery');
 const D = require('./mlTestCheckpointDiagnostics');
+const Lifecycle = require('./mlTestCheckpointLifecycle');
+const Storage = require('./mlTestCheckpointStorage');
 const fail = (code, httpStatus = 409) => { throw Object.assign(new Error(code), { code, httpStatus }); };
 const cloudFlagEnabled = T.cloudFlagEnabled;
-const ACTIONS = new Set(['CREATE', 'STATUS', 'RESTORE', 'RESTORE_AND_FINISH', 'RECOVER_AND_FINISH', 'ABORT_FAILED_CHECKPOINT']);
-const EMPTY_ACTIONS = new Set(['CREATE', 'STATUS', 'ABORT_FAILED_CHECKPOINT']);
+const ACTIONS = new Set(['CREATE', 'STATUS', 'STORAGE', 'RESTORE', 'RESTORE_AND_FINISH', 'RECOVER_AND_FINISH',
+  'ABORT_FAILED_CHECKPOINT', 'ABORT_STALE_CHECKPOINT', 'PURGE_FAILED_CHECKPOINT_PAYLOADS']);
+const EMPTY_ACTIONS = new Set(['CREATE', 'STATUS', 'STORAGE', 'ABORT_FAILED_CHECKPOINT', 'ABORT_STALE_CHECKPOINT', 'PURGE_FAILED_CHECKPOINT_PAYLOADS']);
 const AUDIT = Recovery.AUDIT; // Intentionally outside the restore allowlist.
 async function provisionLocalAudit(client, db, authorization) {
   S.assertExecutionTarget(client, db, authorization);
@@ -29,11 +32,12 @@ function createMlTestAdminExecutor({ client, db, target = 'CLOUD', env = process
     if (EMPTY_ACTIONS.has(action) && Object.keys(body).length) fail('ML_TEST_REQUEST_INVALID', 400);
     if (!EMPTY_ACTIONS.has(action) && (!/^[a-f0-9-]{36}$/.test(body.checkpointId || '')
         || !/^[a-f0-9-]{36}$/.test(body.restoreId || '') || !['NORMAL', 'OUTLIER', 'SHIFT'].includes(body.branch))) fail('ML_TEST_REQUEST_INVALID', 400);
-    if (action === 'STATUS') {
+    if (['STATUS', 'STORAGE'].includes(action)) {
       if (target === 'CLOUD') T.assertCloudStatusTarget({ client, db, env });
       else if (target !== 'LOCAL_CERTIFICATION') fail('ML_TEST_TARGET_INVALID', 400);
       else S.assertExecutionTarget(client, db, null);
-      return readAdminStatus(db, scope, { cloudRestoreEnabled: T.cloudFlagEnabled(env) && certificationId === T.CERTIFICATION });
+      return action === 'STORAGE' ? Storage.reportStorage(db, scope)
+        : readAdminStatus(db, scope, { cloudRestoreEnabled: T.cloudFlagEnabled(env) && certificationId === T.CERTIFICATION });
     }
     let authorization;
     if (target === 'CLOUD') authorization = T.authorizeCloudTarget({ client, db, user: req.user, env, certificationId });
@@ -48,12 +52,15 @@ function createMlTestAdminExecutor({ client, db, target = 'CLOUD', env = process
     await db.collection(AUDIT).insertOne(audit, { writeConcern: { w: 'majority' } });
     try {
       let result;
-      if (action === 'ABORT_FAILED_CHECKPOINT') {
+      if (['ABORT_FAILED_CHECKPOINT', 'ABORT_STALE_CHECKPOINT'].includes(action)) {
         // Control transition, preserved receipt and SUCCEEDED audit commit
         // together. Never rewrite that success in a later non-atomic step.
-        result = await Recovery.abortFailedCheckpoint({ client, db, scope, authorization, actionId, actor: String(req.user._id) });
+        result = await Recovery.abortFailedCheckpoint({ client, db, scope, authorization, actionId, actor: String(req.user._id),
+          stale: action === 'ABORT_STALE_CHECKPOINT' });
         return { ...result, cloudRestoreEnabled: T.authorized(client, db, authorization) };
       }
+      if (action === 'PURGE_FAILED_CHECKPOINT_PAYLOADS') return Storage.purgeFailedPayloads({ client, db, scope,
+        authorization, actionId, actor: String(req.user._id) });
       if (action === 'CREATE') result = await (target === 'CLOUD' ? S.captureOperationalCheckpoint : S.captureLocalCheckpoint)({ client, db, scope,
         localWritersPaused: writersPaused === true, createdBy: String(req.user._id), authorization });
       else {
@@ -80,7 +87,7 @@ function createMlTestAdminExecutor({ client, db, target = 'CLOUD', env = process
       await db.collection(AUDIT).updateOne({ actionId, result: 'STARTED' }, { $set: { result: 'FAILED', failureCode: code, completedAt: new Date(),
         ...(failed ? { epoch: String(failed.resetEpoch), testCycleId: failed.testCycleId,
           checkpointId: body.checkpointId || failed.activeCheckpointId || failed.lastCheckpointId
-            || (action === 'ABORT_FAILED_CHECKPOINT' ? failed.lastAbortedCheckpointId : null) || null } : {}) } },
+            || (['ABORT_FAILED_CHECKPOINT', 'ABORT_STALE_CHECKPOINT'].includes(action) ? failed.lastAbortedCheckpointId : null) || null } : {}) } },
         { writeConcern: { w: 'majority' } });
       fail(code, [400, 409, 423, 503].includes(error.httpStatus) ? error.httpStatus : 409);
     }
@@ -106,7 +113,9 @@ async function readAdminStatus(db, scope, { cloudRestoreEnabled = false } = {}) 
   const checkpoint = checkpointId ? await db.collection('mltestcheckpoints').findOne(
     { checkpointId, businessId: scope.businessId, scenarioId: scope.scenarioId },
     { projection: { checkpointId: 1, status: 1, dataVersion: 1, capturedAt: 1, createdAt: 1,
-      totalDocuments: 1, totalBytes: 1, totalChunks: 1, failureCode: 1, failureDiagnostics: 1, captureMetrics: 1 } }) : null;
+      totalDocuments: 1, totalBytes: 1, totalChunks: 1, failureCode: 1, failureDiagnostics: 1, captureMetrics: 1,
+      readyAt: 1, updatedAt: 1, captureProtocolVersion: 1, captureOwnershipVersion: 1, captureOwnerNonce: 1,
+      captureDeadlineAt: 1, captureHeartbeatAt: 1, captureLeaseUntil: 1, capturePhase: 1 } }) : null;
   const safeCode = value => /^(?:CHECKPOINT|RESTORE|ML_TEST|STALE_TEST|TEST)_[A-Z_]+$/.test(value || '') ? value : null;
   const admissionClosed = !['NO_TEST', 'TEST_ACTIVE'].includes(token.state);
   const activeWriterCount = control?.activeWriterIds == null ? 0
@@ -127,6 +136,10 @@ async function readAdminStatus(db, scope, { cloudRestoreEnabled = false } = {}) 
         totalChunks: Number.isSafeInteger(checkpoint.totalChunks) ? checkpoint.totalChunks : null }
         : { phase: checkpoint.status === 'CREATING' ? 'CAPTURING' : checkpoint.status },
       failureCode: safeCode(checkpoint.failureCode), failureDiagnostics: D.safeStoredFailure(checkpoint.failureDiagnostics),
+      capture: { deadlineAt: checkpoint.captureDeadlineAt || null, heartbeatAt: checkpoint.captureHeartbeatAt || null,
+        leaseUntil: checkpoint.captureLeaseUntil || null,
+        phase: ['QUIESCENCE', 'DRAIN', 'SNAPSHOT_READ', 'CHUNK_WRITE', 'VERIFY', 'FINALIZE'].includes(checkpoint.capturePhase) ? checkpoint.capturePhase : null,
+        staleCandidate: Lifecycle.staleCapture(control, checkpoint) },
       metrics: D.safeMetrics(checkpoint.captureMetrics) } : null,
     restoreId: /^[a-f0-9-]{36}$/i.test(control?.restoreId || '') ? control.restoreId : null,
     restoreFinish: control?.restoreFinish === true, restoreLeaseUntil: control?.restoreLeaseUntil || null,
