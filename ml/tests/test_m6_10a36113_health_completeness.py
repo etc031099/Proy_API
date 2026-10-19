@@ -151,6 +151,19 @@ class HealthCompletenessTests(unittest.TestCase):
             assemble(fixture)
         self.assertEqual(raised.exception.code, "DATA_NOT_AVAILABLE")
 
+    def test_customer_aggregate_diagnostics_are_forwarded_without_customer_rows(self):
+        fixture = health_fixture()
+        fixture.customer["availabilityStatus"] = "PARTIAL"
+        fixture.customer["availabilityDiagnostics"] = [{
+            "code": "CUSTOMER_PERIOD_COST_COVERAGE_INCOMPLETE",
+            "affectedCustomerCount": 3,
+            "unknownSaleLineCount": 7,
+        }]
+        data = assemble(fixture)
+        self.assertEqual(data["availabilityStatus"], "PARTIAL")
+        self.assertEqual(data["customerDiagnostics"], fixture.customer["availabilityDiagnostics"])
+        self.assertIn("CUSTOMER_ANALYTICS_PARTIAL", data["blockingReasons"])
+
 
 if __name__ == "__main__":
     unittest.main()
