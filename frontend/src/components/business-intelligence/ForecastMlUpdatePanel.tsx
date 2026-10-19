@@ -312,7 +312,7 @@ export function ForecastMlUpdatePanel({ refreshToken = 0, onManualRequestFinishe
       <div className="rounded-md bg-muted/40 p-3"><p className="text-xs text-muted-foreground">Ridge LIVE · 7 días</p><p className="mt-1 font-semibold">{modelVersion(byHorizon(7))} · {byHorizon(7)?.activeModelVersion == null ? 'No disponible' : 'Activo'}</p></div>
       <div className="rounded-md bg-muted/40 p-3"><p className="text-xs text-muted-foreground">Ridge LIVE · 14 días</p><p className="mt-1 font-semibold">{modelVersion(byHorizon(14))} · {byHorizon(14)?.activeModelVersion == null ? 'No disponible' : 'Activo'}</p></div>
       <div className="rounded-md bg-muted/40 p-3"><p className="text-xs text-muted-foreground">Revisión de datos</p><p className="mt-1 font-semibold">{technicalValue(status?.dataVersion)}</p></div>
-      <div className="rounded-md bg-muted/40 p-3"><p className="text-xs text-muted-foreground">Última evaluación</p><p className="mt-1 font-semibold">{formatDate(evaluationAt)}</p></div>
+      <div className="min-w-0 rounded-md bg-muted/40 p-3"><p className="text-xs text-muted-foreground">Última evaluación</p><p className="mt-1 whitespace-nowrap font-semibold">{formatDate(evaluationAt)}</p></div>
       <div className="rounded-md bg-muted/40 p-3"><p className="text-xs text-muted-foreground">Actualización automática</p><p className="mt-1 font-semibold">Activa · cada 6 h</p></div>
     </div>
     {statusError && <p role="alert" className="text-sm text-destructive">{statusError}</p>}

@@ -206,7 +206,9 @@ describe('business intelligence dashboard', () => {
     expect(screen.getByRole('button', { name: /Pronóstico 7 días/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Pronóstico 14 días/ })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Pronóstico 28 días/ })).toBeNull();
-    expect(await screen.findByText('Media móvil de 28 días (histórico)')).toBeTruthy();
+    expect(await screen.findByText('Ver detalles del modelo')).toBeTruthy();
+    fireEvent.click(screen.getByText('Ver detalles del modelo'));
+    expect((await screen.findAllByText('Media móvil de 28 días (histórico)')).length).toBeGreaterThan(0);
     expect(screen.getByText('Día cerrado sin ventas')).toBeTruthy();
     expect(screen.getByText('Dato faltante')).toBeTruthy();
     expect(screen.getByText('Día parcial')).toBeTruthy();
@@ -223,12 +225,14 @@ describe('business intelligence dashboard', () => {
         horizons: { '1d': null, '7d': days === 7 ? 16.25 : null, '14d': days === 14 ? 32.5 : null } }));
     render(<BusinessIntelligenceDashboard />);
     await openForecast();
-    expect(await screen.findByText('Machine Learning Ridge')).toBeTruthy();
-    expect(screen.getAllByText('Método seleccionado:')).toHaveLength(1);
-    expect(screen.getByText(/Datos observados hasta: 15 oct/i)).toBeTruthy();
-    expect(screen.getByText(/Corte de entrenamiento 14 oct/i)).toBeTruthy();
-    expect(screen.getByText('Modelo v1')).toBeTruthy();
-    expect(await screen.findByText(/Baseline estadístico MA28/)).toBeTruthy();
+    expect(await screen.findByText('Modelo LIVE · Ridge v1')).toBeTruthy();
+    const modelDetails = screen.getByText('Ver detalles del modelo').closest('details')!;
+    expect(modelDetails.open).toBe(false);
+    fireEvent.click(screen.getByText('Ver detalles del modelo'));
+    expect(within(modelDetails).getByText('Machine Learning Ridge')).toBeTruthy();
+    expect(within(modelDetails).getByText(/15 oct/i)).toBeTruthy();
+    expect(within(modelDetails).getByText(/14 oct/i)).toBeTruthy();
+    expect(within(modelDetails).getByText(/Baseline estadístico MA28/)).toBeTruthy();
     expect(forecastCardText(7)).toContain('16.25');
     expect(forecastCardText(14)).toContain('32.50');
     expect(screen.getByRole('button', { name: /Pronóstico 7 días/ }).getAttribute('aria-pressed')).toBe('true');
@@ -239,12 +243,12 @@ describe('business intelligence dashboard', () => {
     expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenNthCalledWith(2, 'PAN-FRE-001', 14);
 
     fireEvent.click(screen.getByRole('button', { name: /Pronóstico 14 días/ }));
-    expect(await screen.findByText(/Pronóstico total para 14 días:/)).toBeTruthy();
+    expect(await screen.findByText(/Total para 14 días:/)).toBeTruthy();
     expect(forecastCardText(7)).toContain('16.25');
     expect(screen.getByRole('button', { name: /Pronóstico 14 días/ }).getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByRole('button', { name: /Pronóstico 7 días/ }).getAttribute('aria-pressed')).toBe('false');
     fireEvent.click(screen.getByRole('button', { name: /Pronóstico 7 días/ }));
-    expect(await screen.findByText(/Pronóstico total para 7 días:/)).toBeTruthy();
+    expect(await screen.findByText(/Total para 7 días:/)).toBeTruthy();
     expect(screen.getByRole('button', { name: /Pronóstico 7 días/ }).getAttribute('aria-pressed')).toBe('true');
     expect(forecastCardText(7)).toContain('16.25');
     expect(forecastCardText(14)).toContain('32.50');
@@ -258,18 +262,42 @@ describe('business intelligence dashboard', () => {
     await openForecast();
     const panel = await screen.findByRole('region', { name: 'Evidencia histórica de promoción' });
     expect(apiClient.getCertifiedForecastReplayEvidence).toHaveBeenCalledTimes(1);
-    expect(within(panel).getByText('Replay histórico certificado · no modifica el modelo LIVE')).toBeTruthy();
-    expect(within(panel).getByText('PASS')).toBeTruthy();
-    expect(within(panel).getByText('REJECTED')).toBeTruthy();
+    expect(within(panel).getByText(/Evaluación histórica y offline/)).toBeTruthy();
+    expect(within(panel).getByText('Aprobado en replay')).toBeTruthy();
+    expect(within(panel).getByText('Rechazado en replay')).toBeTruthy();
+    expect(within(panel).getByText(/Un aprobado en replay no equivale a una promoción LIVE/)).toBeTruthy();
     expect(within(panel).getByText(/\+7[,.]29\s*%/)).toBeTruthy();
     expect(within(panel).getByText(/\+13[,.]23\s*%/)).toBeTruthy();
-    expect(within(panel).getByText('BEB-GAS-003')).toBeTruthy();
-    expect(within(panel).getByText(/mejoró las métricas globales, pero fue bloqueado/)).toBeTruthy();
-    expect(within(panel).getByText(/no modifica Registry, no modifica ACTIVE y no promociona modelos LIVE/)).toBeTruthy();
+    expect(within(panel).getByText(/no cambia el Registry ni los modelos activos/)).toBeTruthy();
+    expect(within(panel).getByText(/mejoró las métricas globales, pero fue rechazado porque empeoró demasiado/)).toBeTruthy();
+    expect(within(panel).getByText(/Producto afectado/).parentElement?.textContent).toContain('BEB-GAS-003');
+    expect(within(panel).getByText('¿Por qué se rechazó?').closest('details')?.open).toBe(false);
+    const replayDetails = within(panel).getByText('Ver detalles técnicos').closest('details')!;
+    expect(replayDetails.open).toBe(false);
+    fireEvent.click(within(panel).getByText('Ver detalles técnicos'));
+    expect(within(replayDetails).getByText(/Semilla reproducible/)).toBeTruthy();
+    expect(within(replayDetails).getByText(/BEB-GAS-003/)).toBeTruthy();
+    expect(within(replayDetails).getByText(/P_FOLD_CATA_MAE:F3:BEB-GAS-003/)).toBeTruthy();
     expect(within(panel).queryByRole('button')).toBeNull();
     expect(screen.queryByRole('button', { name: /Pronóstico 1 día/ })).toBeNull();
     expect(screen.getByRole('button', { name: /Pronóstico 7 días/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Pronóstico 14 días/ })).toBeTruthy();
+  });
+
+  it('orders Prediction from current ML state to product forecast, history, replay, and local tests', async () => {
+    vi.spyOn(apiClient, 'searchBusinessIntelligenceProducts').mockResolvedValue(success({ products: [productOption] }));
+    vi.spyOn(apiClient, 'getBusinessIntelligenceForecast').mockResolvedValue(success(forecastFixture));
+    render(<BusinessIntelligenceDashboard />);
+    await openForecast();
+    const orderedLabels = [
+      'Estado del Machine Learning', 'Salud de los modelos LIVE',
+      'Preparación para próxima evaluación', 'Pronóstico por producto',
+      'Historial de actualizaciones ML', 'Evidencia histórica de promoción',
+    ];
+    const orderedNodes = orderedLabels.map(title => screen.getByText(title));
+    for (let index = 0; index < orderedNodes.length - 1; index += 1) {
+      expect(orderedNodes[index]!.compareDocumentPosition(orderedNodes[index + 1]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
   });
 
   it('keeps Prediction usable when certified replay evidence is temporarily unavailable', async () => {
@@ -321,7 +349,7 @@ describe('business intelligence dashboard', () => {
     vi.spyOn(apiClient, 'getBusinessIntelligenceForecast');
     render(<BusinessIntelligenceDashboard />);
     fireEvent.click(screen.getByRole('tab', { name: 'Predicción' }));
-    expect(await screen.findByText('No se seleccionó ningún producto automáticamente.')).toBeTruthy();
+    expect(await screen.findByText('Elige un producto para consultar su pronóstico.')).toBeTruthy();
     expect(apiClient.searchBusinessIntelligenceProducts).not.toHaveBeenCalled();
     expect(apiClient.getBusinessIntelligenceForecast).not.toHaveBeenCalled();
   });
@@ -394,7 +422,7 @@ describe('business intelligence dashboard', () => {
     render(<BusinessIntelligenceDashboard />);
     expect(await screen.findByRole('table', { name: 'Ranking de riesgo y reposición' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /Pan francés.*PAN-FRE-001/ }));
-    expect((await screen.findAllByText('Método seleccionado:')).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/Modelo LIVE · Ridge/)).length).toBeGreaterThan(0);
     expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenCalledWith('PAN-FRE-001', 7);
   });
 

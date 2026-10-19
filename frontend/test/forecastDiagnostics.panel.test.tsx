@@ -47,7 +47,7 @@ describe('forecast serving diagnostics panel', () => {
 
   it('shows only the approved LIVE 7-day and 14-day horizons', async () => {
     render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
-    expect(await screen.findByText('Modelos LIVE')).toBeTruthy();
+    expect(await screen.findByText('Salud de los modelos LIVE')).toBeTruthy();
     expect(screen.getByText('Ridge · 7 días')).toBeTruthy();
     expect(screen.getByText('Ridge · 14 días')).toBeTruthy();
     expect(screen.queryByText('Ridge · 1 día')).toBeNull();

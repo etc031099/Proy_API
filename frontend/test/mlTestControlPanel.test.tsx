@@ -89,9 +89,11 @@ describe('ML test control panel', () => {
 
   it('shows lifecycle controls only after explicit LOCAL capability', async () => {
     mockLocal(); render(<MlTestControlPanel />);
-    expect(await screen.findByText('LOCAL AUTORIZADO')).toBeTruthy();
+    expect(await screen.findByText('Sin prueba activa')).toBeTruthy();
+    expect(screen.getByText('Punto de restauración')).toBeTruthy();
+    expect(screen.queryByText('LOCAL AUTORIZADO')).toBeNull();
     expect(screen.getByRole('button', { name: 'Iniciar prueba' })).toBeTruthy();
-    expect(screen.getByText('SIN PRUEBA ACTIVA')).toBeTruthy();
+    expect(screen.queryByText('SIN PRUEBA ACTIVA')).toBeNull();
     expect(screen.queryByRole('heading', { name: 'Escenario de prueba' })).toBeNull();
   });
 
@@ -105,10 +107,10 @@ describe('ML test control panel', () => {
       .mockResolvedValueOnce({ httpStatus: 200, data: active({ resetEpoch: '5' }) });
     vi.stubGlobal('confirm', vi.fn(() => true)); render(<MlTestControlPanel />);
     fireEvent.click(await screen.findByRole('button', { name: 'Iniciar prueba' }));
-    expect(screen.getByRole('button', { name: 'Creando checkpoint…' }).hasAttribute('disabled')).toBe(true);
-    await waitFor(() => expect(screen.getByText('TEST ACTIVE')).toBeTruthy());
+    expect(screen.getByRole('button', { name: 'Creando punto de restauración…' }).hasAttribute('disabled')).toBe(true);
+    await waitFor(() => expect(screen.getByText('Prueba activa')).toBeTruthy());
     expect(create).toHaveBeenCalledTimes(1); expect(status).toHaveBeenCalledTimes(2);
-    expect(await screen.findByText('Checkpoint creado. La prueba local está activa.')).toBeTruthy();
+    expect(await screen.findByText('Punto de restauración creado. La prueba local está activa.')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Escenario de prueba' })).toBeTruthy();
   });
 
@@ -186,7 +188,7 @@ describe('ML test control panel', () => {
 
   it('does not show scenario choices before checkpoint is READY', async () => {
     mockLocal(active({ checkpoint: { status: 'CREATING' } })); render(<MlTestControlPanel />);
-    await screen.findByText('TEST ACTIVE');
+    await screen.findByText('Prueba activa');
     expect(screen.queryByRole('heading', { name: 'Escenario de prueba' })).toBeNull();
     expect(screen.queryByRole('button', { name: /NORMAL|OUTLIER|SHIFT/ })).toBeNull();
   });
@@ -200,8 +202,8 @@ describe('ML test control panel', () => {
     vi.stubGlobal('confirm', vi.fn(() => true)); render(<MlTestControlPanel />);
     fireEvent.click(await screen.findByRole('button', { name: /NORMAL/ }));
     await screen.findByText(/Estado inicial observado/);
-    fireEvent.click(screen.getByRole('button', { name: 'Restaurar checkpoint' }));
-    expect(await screen.findByText('Checkpoint restaurado. El ciclo de prueba continúa activo.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Restaurar punto de restauración' }));
+    expect(await screen.findByText('Punto de restauración aplicado. La prueba continúa activa.')).toBeTruthy();
     expect(screen.getByText('5')).toBeTruthy(); expect(screen.queryByText(/Estado inicial observado/)).toBeNull();
     expect(restore).toHaveBeenCalledWith('continue'); expect(screen.getByRole('heading', { name: 'Escenario de prueba' })).toBeTruthy();
   });
@@ -213,14 +215,14 @@ describe('ML test control panel', () => {
     const restore = vi.spyOn(apiClient, 'restoreMlTestCheckpoint').mockResolvedValue({ httpStatus: 200, data: lifecycle({ resetEpoch: '5' }) });
     vi.stubGlobal('confirm', vi.fn(() => true)); render(<MlTestControlPanel />);
     fireEvent.click(await screen.findByRole('button', { name: 'Finalizar prueba' }));
-    expect(await screen.findByText('SIN PRUEBA ACTIVA')).toBeTruthy();
+    expect(await screen.findByText('Sin prueba activa')).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'Escenario de prueba' })).toBeNull(); expect(restore).toHaveBeenCalledWith('finish');
   });
 
   it('keeps maintenance protective and explains the state', async () => {
     mockLocal(lifecycle({ state: 'RESTORING', resetEpoch: '2', maintenance: true })); render(<MlTestControlPanel />);
     expect(await screen.findByText('Restauración en progreso. Las operaciones están temporalmente bloqueadas.')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /iniciar prueba|restaurar checkpoint|finalizar prueba/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /iniciar prueba|restaurar punto|finalizar prueba/i })).toBeNull();
   });
 
   it.each([409, 503])('shows a recoverable message for HTTP %i', async httpStatus => {
@@ -344,7 +346,7 @@ describe('ML test control panel', () => {
     vi.spyOn(apiClient, 'restoreMlTestCheckpoint').mockResolvedValue({ httpStatus: 200, data: active({ resetEpoch: '5' }) });
     fireEvent.click(screen.getByRole('button', { name: 'Analizar escenario' }));
     await screen.findByRole('region', { name: 'Resultados del análisis local' });
-    fireEvent.click(screen.getByRole('button', { name: 'Restaurar checkpoint' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Restaurar punto de restauración' }));
     await waitFor(() => expect(screen.queryByRole('region', { name: 'Resultados del análisis local' })).toBeNull());
     expect(screen.queryByText(/Estado inicial observado/)).toBeNull();
   });

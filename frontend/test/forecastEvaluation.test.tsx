@@ -88,9 +88,11 @@ describe('forecast ML evidence and operative method', () => {
   it('loads evidence within the Forecast view without selecting a LIVE product', async () => {
     vi.spyOn(apiClient, 'getBusinessIntelligenceSummary').mockRejectedValue(new Error('No LIVE'));
     vi.spyOn(apiClient, 'getInventoryAnalytics').mockRejectedValue(new Error('No LIVE'));
+    vi.spyOn(apiClient, 'getMlTestControlStatus').mockResolvedValue({ httpStatus: 200, data: { state: 'NO_TEST', resetEpoch: '0', testCycleId: null,
+      maintenance: false, cloudRestoreEnabled: false, capabilities: { destructiveMlTestControls: { allowed: false, target: null, reasonCode: 'ML_TEST_PRODUCTION_FORBIDDEN' } } } });
     const forecast = vi.spyOn(apiClient, 'getBusinessIntelligenceForecast');
     render(<BusinessIntelligenceDashboard />);
-    fireEvent.click(screen.getByRole('tab', { name: 'Predicción' }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Predicción' }));
     expect(screen.getByRole('heading', { name: 'Pronóstico operativo' })).toBeTruthy();
     expect(await screen.findByText('Baseline estadístico de referencia')).toBeTruthy();
     expect(forecast).not.toHaveBeenCalled();
@@ -98,6 +100,8 @@ describe('forecast ML evidence and operative method', () => {
   });
 
   it('keeps historical evidence collapsed and a history failure independent from ML status and Health', async () => {
+    vi.spyOn(apiClient, 'getMlTestControlStatus').mockResolvedValue({ httpStatus: 200, data: { state: 'NO_TEST', resetEpoch: '0', testCycleId: null,
+      maintenance: false, cloudRestoreEnabled: false, capabilities: { destructiveMlTestControls: { allowed: false, target: null, reasonCode: 'ML_TEST_PRODUCTION_FORBIDDEN' } } } });
     vi.spyOn(apiClient, 'getForecastMlUpdateHistory').mockRejectedValue(new Error('private history error'));
     vi.spyOn(apiClient, 'getForecastModelDiagnostics').mockResolvedValue({ httpStatus: 200, data: {
       models: [{ horizonDays: 7, status: 'ACTIVE', activeModelStatus: 'ACTIVE', modelFamily: 'RIDGE_REGRESSION', recipeId: 'RIDGE' },
@@ -115,11 +119,11 @@ describe('forecast ML evidence and operative method', () => {
       dataVersion: '83', closedThrough: '2026-10-16', horizons: [horizonStatus(7), horizonStatus(14)],
     } satisfies ForecastMlUpdateStatus });
     render(<BusinessIntelligenceDashboard />);
-    fireEvent.click(screen.getByRole('tab', { name: 'Predicción' }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Predicción' }));
     const historyError = await screen.findByRole('alert');
     expect(historyError.textContent).toMatch(/pronósticos siguen disponibles/);
     expect(await screen.findByText('Ensamblado Health')).toBeTruthy();
-    expect(screen.getByText('Modelo operacional actual: Ridge Regression para horizontes acumulados de 7 y 14 días. MA28 es un baseline estadístico de referencia. HGB es histórico/experimental y no se utiliza para serving LIVE.')).toBeTruthy();
+    expect(screen.getByText('Pronósticos operativos Ridge para horizontes acumulados de 7 y 14 días.')).toBeTruthy();
     const historical = screen.getByText('Evidencia histórica y comparación de modelos').closest('details');
     expect(historical?.open).toBe(false);
     expect(screen.getByText(/No corresponde al modelo LIVE utilizado actualmente/)).toBeTruthy();

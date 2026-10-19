@@ -112,15 +112,15 @@ function resultVariant(row: ForecastMlUpdateExecution): 'default' | 'destructive
 }
 function executionSummary(row: ForecastMlUpdateExecution) {
   return <div className="min-w-0 space-y-1">
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
       <Badge variant={resultVariant(row)}>{resultLabel(row)}</Badge>
       <span className="text-sm text-muted-foreground">{triggerLabel(row.triggerSource)} · {localDate(row.requestedAt)}</span>
     </div>
-    <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
-      <span><span className="text-muted-foreground">Revisión </span>{safeText(row.dataVersionEvaluated)}</span>
+    <div className="grid gap-x-4 gap-y-0.5 text-sm sm:grid-cols-3">
+      <span className="whitespace-nowrap"><span className="text-muted-foreground">Revisión </span>{safeText(row.dataVersionEvaluated)}</span>
       {[7, 14].map(days => {
         const item = horizon(row.horizons, days as 7 | 14);
-        return <span key={days}><span className="text-muted-foreground">{days}d </span>{safeVersion(item?.activeVersionBefore)} → {safeVersion(item?.activeVersionAfter)}</span>;
+        return <span key={days} className="whitespace-nowrap"><span className="text-muted-foreground">{days}d </span>{safeVersion(item?.activeVersionBefore)} → {safeVersion(item?.activeVersionAfter)}</span>;
       })}
     </div>
     <p className="truncate text-sm text-muted-foreground">{shortResult(row)}</p>
@@ -231,9 +231,9 @@ function ExecutionCard({ row, expanded, onToggle }: { row: ForecastMlUpdateExecu
     if (!detail) void loadDetail();
   };
   const id = `ml-execution-${row.executionId}`;
-  return <article className="rounded-md border px-3 py-2.5">
+  return <article className="rounded-md border px-3 py-2">
     {executionSummary(row)}
-    <Button type="button" variant="ghost" size="sm" className="mt-1 px-2" aria-expanded={expanded} aria-controls={id} onClick={() => void toggle()}>
+    <Button type="button" variant="ghost" size="sm" className="mt-0.5 px-2" aria-expanded={expanded} aria-controls={id} onClick={() => void toggle()}>
       {expanded ? 'Ocultar detalle' : 'Ver detalle'}<ChevronDown className={`ml-2 h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} aria-hidden="true" />
     </Button>
     {expanded && <div id={id} className="mt-3 space-y-4 border-t pt-4">

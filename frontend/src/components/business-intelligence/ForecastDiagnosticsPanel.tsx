@@ -113,7 +113,7 @@ function ForecastSection({ result }: { result: AuthenticatedDiagnosticResult<For
   const models = result.data?.models || [];
   const modelFor = (days: number) => models.find(model => model.horizonDays === days);
   return <section aria-label="Diagnóstico de pronósticos" className="space-y-3 border-t pt-4">
-    <div><h3 className="font-semibold">Modelos LIVE</h3><p className="text-sm text-muted-foreground">Pronósticos Ridge aprobados para 7 y 14 días.</p></div>
+    <div><h3 className="font-semibold">Salud de los modelos LIVE</h3><p className="text-sm text-muted-foreground">Pronósticos Ridge aprobados para 7 y 14 días.</p></div>
     {message ? <p role={result.httpStatus === 401 ? 'alert' : 'status'} className="text-sm text-muted-foreground">{message}{codeText(result.code) ? ` · ${codeText(result.code)}` : ''}</p> : <>
       <div className="grid gap-3 md:grid-cols-2"><HorizonStatus model={modelFor(7)} /><HorizonStatus model={modelFor(14)} /></div>
       <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">Ver metadatos de servicio</summary>
@@ -230,7 +230,7 @@ export function ForecastDiagnosticsPanel({ onForecastModelsChange, onManualReque
   return <Card aria-label="Estado del ML">
     <CardHeader><div className="flex flex-wrap items-start justify-between gap-3"><div><CardTitle>Estado del Machine Learning</CardTitle><CardDescription>Modelos LIVE y preparación de la siguiente evaluación.</CardDescription></div>
       <Button type="button" size="sm" variant="outline" disabled={isBusy} onClick={() => setRequestNumber(value => value + 1)}><RefreshCw className="mr-2 h-4 w-4" />{isBusy ? 'Consultando…' : 'Actualizar estado'}</Button></div></CardHeader>
-    <CardContent className="space-y-4"><ForecastMlUpdatePanel refreshToken={requestNumber} onManualRequestFinished={onManualRequestFinished} />
+    <CardContent className="space-y-4">
       {forecastState === 'loading' && <p role="status" className="text-sm text-muted-foreground">Cargando pronósticos…</p>}
       {forecastState === 'retrying' && <p role="status" className="text-sm text-muted-foreground">Preparando servicio de pronósticos…</p>}
       {forecastState === 'error' && <p role="alert" className="text-sm text-muted-foreground">No se pudo consultar el diagnóstico de pronósticos. Puedes actualizar el estado e intentarlo nuevamente.</p>}
@@ -238,6 +238,7 @@ export function ForecastDiagnosticsPanel({ onForecastModelsChange, onManualReque
       {(healthState === 'loading' || healthState === 'retrying') && <section aria-label="Diagnóstico de salud" className="space-y-3 border-t pt-4"><h3 className="font-semibold">Health</h3><p role="status" className="text-sm text-muted-foreground">{healthState === 'retrying' ? 'Preparando diagnóstico Health…' : 'Cargando Health…'}</p></section>}
       {healthState === 'error' && <section aria-label="Diagnóstico de salud" className="space-y-3 border-t pt-4"><h3 className="font-semibold">Health</h3><p role="alert" className="text-sm text-muted-foreground">No se pudo consultar Health. Puedes actualizar el estado e intentarlo nuevamente.</p></section>}
       {healthState === 'ready' && health && <HealthSection result={health} />}
+      <ForecastMlUpdatePanel refreshToken={requestNumber} onManualRequestFinished={onManualRequestFinished} />
     </CardContent>
   </Card>;
 }

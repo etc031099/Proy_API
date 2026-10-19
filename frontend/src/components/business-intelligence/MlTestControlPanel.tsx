@@ -14,10 +14,19 @@ type Scenario = 'NORMAL' | 'OUTLIER' | 'SHIFT';
 type ScenarioSnapshot = { inventory: ProductInventory; ml: ForecastMlUpdateStatus; resetEpoch: string; testCycleId: string };
 const DEMO_SKU = 'BEB-AGU-001';
 const SCENARIOS: Array<{ id: Scenario; title: string; description: string; quantities: number[]; requiredStock: number }> = [
-  { id: 'NORMAL', title: 'NORMAL', description: 'Simula una venta cotidiana para comprobar cómo una operación normal genera nueva evidencia para el ML.', quantities: [1], requiredStock: 1 },
-  { id: 'OUTLIER', title: 'OUTLIER', description: 'Simula una venta excepcionalmente alta para observar cómo el sistema registra un cambio fuera del comportamiento habitual.', quantities: [15], requiredStock: 15 },
-  { id: 'SHIFT', title: 'SHIFT', description: 'Simula varias ventas altas consecutivas para representar un cambio sostenido en el patrón de demanda.', quantities: [3, 4, 3, 4, 3], requiredStock: 17 },
+  { id: 'NORMAL', title: 'Escenario normal (NORMAL)', description: 'Simula una venta cotidiana para comprobar cómo una operación normal genera nueva evidencia para el ML.', quantities: [1], requiredStock: 1 },
+  { id: 'OUTLIER', title: 'Venta excepcional (OUTLIER)', description: 'Simula una venta excepcionalmente alta para observar cómo el sistema registra un cambio fuera del comportamiento habitual.', quantities: [15], requiredStock: 15 },
+  { id: 'SHIFT', title: 'Cambio sostenido (SHIFT)', description: 'Simula varias ventas altas consecutivas para representar un cambio sostenido en el patrón de demanda.', quantities: [3, 4, 3, 4, 3], requiredStock: 17 },
 ];
+
+function lifecycleLabel(state: string): string {
+  if (state === 'TEST_ACTIVE') return 'Prueba activa';
+  if (state === 'NO_TEST') return 'Sin prueba activa';
+  if (state === 'CHECKPOINT_CREATING') return 'Preparando punto de restauración';
+  if (state === 'RESTORING') return 'Restauración en curso';
+  if (state === 'FAILED') return 'Requiere atención';
+  return 'Estado no disponible';
+}
 
 function friendlyFailure(httpStatus: number): string {
   if (httpStatus === 409) return 'La operación no puede ejecutarse en el estado actual. Actualiza el estado e inténtalo de nuevo si corresponde.';
@@ -126,13 +135,13 @@ export function MlTestControlPanel() {
   const run = async (requestedAction: Exclude<Action, null>) => {
     if (action) return;
     const confirmations: Record<Exclude<Action, null>, string> = {
-      checkpoint: 'Se guardará un checkpoint del estado actual para poder regresar exactamente a este punto.',
-      continue: 'Se eliminarán los cambios realizados durante esta prueba y el sistema volverá al checkpoint guardado. El ciclo de prueba continuará activo.',
-      finish: 'Se restaurará el checkpoint y se cerrará el ciclo de prueba.',
+      checkpoint: 'Se guardará un punto de restauración del estado actual para poder regresar exactamente a este punto.',
+      continue: 'Se eliminarán los cambios realizados durante esta prueba y el sistema volverá al punto de restauración guardado. El ciclo continuará activo.',
+      finish: 'Se restaurará el punto de restauración y se cerrará el ciclo de prueba.',
     };
     if (!window.confirm(confirmations[requestedAction])) return;
     setAction(requestedAction);
-    setMessage(requestedAction === 'checkpoint' ? 'Creando checkpoint…' : 'Restaurando checkpoint…');
+    setMessage(requestedAction === 'checkpoint' ? 'Creando punto de restauración…' : 'Restaurando punto de restauración…');
     try {
       const response = requestedAction === 'checkpoint'
         ? await apiClient.createMlTestCheckpoint()
@@ -141,8 +150,8 @@ export function MlTestControlPanel() {
         setMessage(friendlyFailure(response.httpStatus));
       } else {
         setMessage(requestedAction === 'finish'
-          ? 'Checkpoint restaurado y ciclo de prueba finalizado.'
-          : requestedAction === 'continue' ? 'Checkpoint restaurado. El ciclo de prueba continúa activo.' : 'Checkpoint creado. La prueba local está activa.');
+          ? 'Punto de restauración aplicado y ciclo de prueba finalizado.'
+          : requestedAction === 'continue' ? 'Punto de restauración aplicado. La prueba continúa activa.' : 'Punto de restauración creado. La prueba local está activa.');
         clearScenario();
       }
       await refresh(false);
@@ -205,7 +214,7 @@ export function MlTestControlPanel() {
       setStatus(lifecycle.data); setCurrent(next); setChangesObserved(changedFromBaseline(snapshot, next));
     } catch (error) {
       setScenarioError(error instanceof Error && error.message === 'CYCLE_CHANGED'
-        ? 'El ciclo cambió; se limpió la comparación para proteger el checkpoint actual.'
+        ? 'El ciclo cambió; se limpió la comparación para proteger el punto de restauración actual.'
         : 'No se pudieron actualizar las lecturas. El estado anterior se conserva; puedes reintentar.');
     } finally { setScenarioBusy(false); }
   };
@@ -265,29 +274,33 @@ export function MlTestControlPanel() {
   return <section aria-labelledby="ml-test-controls-title" className="space-y-3">
     <div>
       <h2 id="ml-test-controls-title" className="text-xl font-semibold">Pruebas del Machine Learning</h2>
-      <p className="text-sm text-muted-foreground">Guía local de escenarios con checkpoint y lecturas comparativas.</p>
+      <p className="text-sm text-muted-foreground">Guía de escenarios locales con punto de restauración y lecturas comparativas.</p>
     </div>
     <Card>
       <CardHeader className="pb-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <CardTitle className="text-base">Estado del ciclo de prueba</CardTitle>
-          <div className="flex gap-2"><Badge variant="outline">LOCAL AUTORIZADO</Badge><Badge variant={status.state === 'TEST_ACTIVE' ? 'default' : 'secondary'}>{status.state === 'TEST_ACTIVE' ? 'TEST ACTIVE' : status.state === 'NO_TEST' ? 'SIN PRUEBA ACTIVA' : status.state}</Badge></div>
+          <CardTitle className="text-base">Estado de la prueba</CardTitle>
+          <Badge variant={status.state === 'TEST_ACTIVE' ? 'default' : 'secondary'}>{lifecycleLabel(status.state)}</Badge>
         </div>
         <CardDescription>La venta se registra en la pantalla comercial habitual. Este panel no crea ventas ni fuerza entrenamiento o promoción.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <dl className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
-          <div><dt className="text-muted-foreground">Ciclo de prueba</dt><dd className="break-all font-medium">{status.testCycleId || 'Ninguno'}</dd></div>
-          <div><dt className="text-muted-foreground">Época de restauración</dt><dd className="font-medium">{status.resetEpoch}</dd></div>
-          <div><dt className="text-muted-foreground">Mantenimiento</dt><dd className="font-medium">{maintenance ? 'Activo' : 'No'}</dd></div>
-          <div><dt className="text-muted-foreground">Checkpoint</dt><dd className="font-medium">{status.checkpoint?.status || 'No disponible'}</dd></div>
+        <dl className="grid gap-3 text-sm sm:grid-cols-2">
+          <div><dt className="text-muted-foreground">Punto de restauración</dt><dd className="font-medium">{checkpointReady ? 'Listo' : status.state === 'NO_TEST' ? 'Aún no creado' : 'No disponible'}</dd></div>
+          {status.state === 'TEST_ACTIVE' && <div><dt className="text-muted-foreground">Mantenimiento</dt><dd className="font-medium">{maintenance ? 'Activo' : 'No'}</dd></div>}
         </dl>
+        <details className="rounded-md border px-3 py-2 text-sm"><summary className="w-fit cursor-pointer font-medium">Detalles técnicos</summary><dl className="mt-2 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
+          <div><dt>Identificador del ciclo</dt><dd className="break-all">{status.testCycleId || 'Ninguno'}</dd></div>
+          <div><dt>Época de restauración</dt><dd>{status.resetEpoch}</dd></div>
+          <div><dt>Estado técnico del punto</dt><dd>{status.checkpoint?.status || 'No disponible'}</dd></div>
+          <div><dt>Entorno</dt><dd>Pruebas habilitadas solo localmente</dd></div>
+        </dl></details>
         {maintenance && <p role="status" className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">Restauración en progreso. Las operaciones están temporalmente bloqueadas.</p>}
-        {!maintenance && status.state === 'TEST_ACTIVE' && !checkpointReady && <p role="status" className="text-sm text-muted-foreground">No hay un checkpoint listo para restaurar.</p>}
+        {!maintenance && status.state === 'TEST_ACTIVE' && !checkpointReady && <p role="status" className="text-sm text-muted-foreground">No hay un punto de restauración listo.</p>}
         {!maintenance && <div className="flex flex-wrap gap-2">
-          {status.state === 'NO_TEST' && <Button type="button" disabled={!canStart} onClick={() => void run('checkpoint')}>{action === 'checkpoint' ? 'Creando checkpoint…' : 'Iniciar prueba'}</Button>}
+          {status.state === 'NO_TEST' && <Button type="button" disabled={!canStart} onClick={() => void run('checkpoint')}>{action === 'checkpoint' ? 'Creando punto de restauración…' : 'Iniciar prueba'}</Button>}
           {status.state === 'TEST_ACTIVE' && <>
-            <Button type="button" variant="outline" disabled={!canRestore} onClick={() => void run('continue')}>{action === 'continue' ? 'Restaurando…' : 'Restaurar checkpoint'}</Button>
+            <Button type="button" variant="outline" disabled={!canRestore} onClick={() => void run('continue')}>{action === 'continue' ? 'Restaurando…' : 'Restaurar punto de restauración'}</Button>
             <Button type="button" variant="destructive" disabled={!canRestore} onClick={() => void run('finish')}>{action === 'finish' ? 'Finalizando…' : 'Finalizar prueba'}</Button>
           </>}
           <Button type="button" variant="ghost" disabled={busy} onClick={() => void refresh()}>Actualizar estado</Button>
@@ -297,7 +310,7 @@ export function MlTestControlPanel() {
     </Card>
 
     {canRestore && <Card>
-      <CardHeader><CardTitle className="text-base">Escenario de prueba</CardTitle><CardDescription>Elige un caso solo después de tener el checkpoint listo. Cada operación se registra manualmente en la pantalla normal de ventas.</CardDescription></CardHeader>
+      <CardHeader><CardTitle className="text-base">Escenario de prueba</CardTitle><CardDescription>Elige un caso solo después de tener listo el punto de restauración. Cada operación se registra manualmente en la pantalla normal de ventas.</CardDescription></CardHeader>
       <CardContent className="space-y-4">
         <div className="grid gap-3 md:grid-cols-3">
           {SCENARIOS.map(item => <button key={item.id} type="button" disabled={!canChooseScenario}
@@ -315,7 +328,7 @@ export function MlTestControlPanel() {
             <p className="text-sm text-muted-foreground">Stock actual: <span className="font-medium text-foreground">{snapshot.inventory.stock.onHand}</span></p>
           </div>
           {!stockSufficient ? <p role="alert" className="rounded-md border border-amber-500/40 p-3 text-sm">El producto no tiene stock suficiente para ejecutar este escenario desde el estado actual.</p> : <>
-            <div className="rounded-md bg-muted/40 p-3 text-sm"><p className="font-medium">Estado inicial observado</p><p>Stock: {snapshot.inventory.stock.onHand} · Revisión operativa: {snapshot.ml.dataVersion} · Época: {snapshot.resetEpoch} · Ciclo: {snapshot.testCycleId}</p></div>
+            <div className="rounded-md bg-muted/40 p-3 text-sm"><p className="font-medium">Estado inicial observado</p><p>Stock: {snapshot.inventory.stock.onHand} · Revisión operativa: {snapshot.ml.dataVersion}</p><details className="mt-2 text-xs text-muted-foreground"><summary className="w-fit cursor-pointer">Identificadores técnicos</summary><p className="mt-1 break-all">Época: {snapshot.resetEpoch} · Ciclo: {snapshot.testCycleId}</p></details></div>
             <ol className="list-inside list-decimal space-y-1 text-sm">
               {selectedDefinition.quantities.map((quantity, index) => <li key={`${index}-${quantity}`}>Venta {selectedDefinition.quantities.length > 1 ? `${index + 1} → ` : ''}SKU {DEMO_SKU}, cantidad {quantity} unidad{quantity === 1 ? '' : 'es'}{selectedDefinition.quantities.length > 1 ? ' (una transacción separada)' : ''}.</li>)}
             </ol>

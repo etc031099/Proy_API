@@ -133,7 +133,7 @@ describe('Forecast manual ML update panel', () => {
     expect(screen.getByRole('region', { name: 'Historial de actualizaciones ML' })).toBeTruthy();
     fireEvent.click(screen.getByText('Ver detalles'));
     expect(screen.getByText('Cierre operativo vigente').parentElement?.textContent).toMatch(/16 oct/);
-    const automaticLabel = await screen.findByText('Automático');
+    const automaticLabel = await screen.findByText(/Automático/);
     expect(automaticLabel.closest('article')?.textContent).toContain('3:35');
     expect(automaticLabel.closest('article')?.textContent).toContain('Sin trabajo pendiente');
     fireEvent.click(within(automaticLabel.closest('article')!).getByRole('button', { name: 'Ver detalle' }));
@@ -353,7 +353,7 @@ describe('Forecast manual ML update panel', () => {
 
   it('shows 7d and 14d LIVE without exposing the unapproved 1d horizon in normal UI', async () => {
     render(<ForecastDiagnosticsPanel onForecastModelsChange={vi.fn()} />);
-    expect(await screen.findByText('Modelos LIVE')).toBeTruthy();
+    expect(await screen.findByText('Salud de los modelos LIVE')).toBeTruthy();
     expect(screen.getByText('Ridge · 7 días')).toBeTruthy();
     expect(screen.getByText('Ridge · 14 días')).toBeTruthy();
     expect(screen.queryByText('No aprobado')).toBeNull();
