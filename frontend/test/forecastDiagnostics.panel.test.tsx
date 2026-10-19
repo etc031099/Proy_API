@@ -21,6 +21,15 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+async function revealHealthDetails() {
+  fireEvent.click(await screen.findByText('Ver estado de Health'));
+}
+
+function revealModelDetails(index = 0) {
+  const toggles = screen.getAllByText('Ver detalles técnicos');
+  fireEvent.click(toggles[index]);
+}
+
 describe('forecast serving diagnostics panel', () => {
   const onForecastModelsChange = vi.fn();
 
@@ -36,26 +45,34 @@ describe('forecast serving diagnostics panel', () => {
   });
   afterEach(() => { cleanup(); vi.useRealTimers(); });
 
-  it('renders the 1-day policy status and reason', async () => {
+  it('shows only the approved LIVE 7-day and 14-day horizons', async () => {
     render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
-    expect(await screen.findByText('No aprobado')).toBeTruthy();
-    expect(screen.getByText('PROMOTION_POLICY_FAILED')).toBeTruthy();
+    expect(await screen.findByText('Modelos LIVE')).toBeTruthy();
+    expect(screen.getByText('Ridge · 7 días')).toBeTruthy();
+    expect(screen.getByText('Ridge · 14 días')).toBeTruthy();
+    expect(screen.queryByText('Ridge · 1 día')).toBeNull();
+    expect(screen.queryByText('PROMOTION_POLICY_FAILED')).toBeNull();
   });
 
   it('renders the 7-day exact reason and safe registry summary', async () => {
     render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
-    expect(await screen.findByText('ACTIVE_POINTER_MISSING')).toBeTruthy();
+    await screen.findByText('Ridge · 7 días');
+    await revealModelDetails(0);
+    expect(await screen.findByText(/ACTIVE_POINTER_MISSING/)).toBeTruthy();
     expect(screen.getByText(/Sí \/ No \/ No/)).toBeTruthy();
   });
 
   it('renders the 14-day exact reason', async () => {
     render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
-    expect(await screen.findByText('ACTIVE_ARTIFACT_NOT_FOUND')).toBeTruthy();
+    await screen.findByText('Ridge · 14 días');
+    await revealModelDetails(1);
+    expect(await screen.findByText(/ACTIVE_ARTIFACT_NOT_FOUND/)).toBeTruthy();
   });
 
   it('renders Health and dependency statuses from the diagnostic response', async () => {
     render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
-    expect(await screen.findByText('Ensamblado Health')).toBeTruthy();
+    await revealHealthDetails();
+    expect(await screen.findByText('Servicios analíticos')).toBeTruthy();
     expect(screen.getAllByText('Parcial').length).toBeGreaterThan(0);
     expect(screen.getByText('Proveedores')).toBeTruthy();
     expect(screen.getByText('Listo')).toBeTruthy();
@@ -75,7 +92,7 @@ describe('forecast serving diagnostics panel', () => {
     expect(healthGet).toHaveBeenCalledTimes(1);
 
     await act(async () => { healthRead.resolve(ok(health)); await healthRead.promise; });
-    expect(await screen.findByText('Ensamblado Health')).toBeTruthy();
+    expect(await screen.findByText('Servicios analíticos')).toBeTruthy();
     expect(screen.queryByText('Cargando Health…')).toBeNull();
   });
 
@@ -87,7 +104,7 @@ describe('forecast serving diagnostics panel', () => {
     render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
 
     await act(async () => { healthRead.resolve(ok(health)); await healthRead.promise; });
-    expect(await screen.findByText('Ensamblado Health')).toBeTruthy();
+    expect(await screen.findByText('Servicios analíticos')).toBeTruthy();
     expect(screen.getByText('Cargando pronósticos…')).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'Diagnóstico de pronósticos' })).toBeNull();
 
@@ -121,7 +138,7 @@ describe('forecast serving diagnostics panel', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(screen.getByText('Preparando servicio de pronósticos…')).toBeTruthy();
     await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
-    expect(screen.getByText('Ensamblado Health')).toBeTruthy();
+    expect(screen.getByText('Servicios analíticos')).toBeTruthy();
     expect(screen.getByText(/No se pudo consultar el diagnóstico de pronósticos/)).toBeTruthy();
     expect(forecastGet).toHaveBeenCalledTimes(2);
   });
@@ -149,17 +166,24 @@ describe('forecast serving diagnostics panel', () => {
 
   it('does not expose tenant IDs, hashes, artifact bytes or credentials', async () => {
     const { container } = render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
-    await screen.findByText('ACTIVE_POINTER_MISSING');
+    await screen.findByText('Ridge · 7 días');
+    await revealModelDetails();
+    await screen.findByText(/ACTIVE_POINTER_MISSING/);
     expect(container.textContent).not.toMatch(/PRIVATE_BUSINESS_ID|PRIVATE_SCENARIO_ID|artifactHash|artifactData|Authorization|Bearer|JWT|cookie|Mongo|API_KEY/i);
-    expect(container.textContent).toContain('Revisión de datos: 0');
-    expect(container.textContent).toContain('Observaciones cerradas hasta:');
+    expect(container.textContent).not.toContain('PRIVATE_BUSINESS_ID');
+    expect(container.textContent).not.toContain('Observaciones cerradas hasta:');
+    fireEvent.click(screen.getByText('Ver metadatos de servicio'));
+    expect(container.textContent).toContain('Revisión del servicio');
+    expect(container.textContent).toContain('Observaciones cerradas hasta');
   });
 
   it('refresh invokes only the two explicit diagnostic GET helpers', async () => {
     const forecastGet = vi.mocked(apiClient.getForecastModelDiagnostics);
     const healthGet = vi.mocked(apiClient.getHealthDiagnostics);
     render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
-    await screen.findByText('ACTIVE_POINTER_MISSING');
+    await screen.findByText('Ridge · 7 días');
+    await revealModelDetails();
+    await screen.findByText(/ACTIVE_POINTER_MISSING/);
     fireEvent.click(screen.getByRole('button', { name: 'Actualizar estado' }));
     await waitFor(() => expect(forecastGet).toHaveBeenCalledTimes(2));
     expect(healthGet).toHaveBeenCalledTimes(2);
@@ -169,8 +193,10 @@ describe('forecast serving diagnostics panel', () => {
 
   it('uses only the read-only diagnostics and keeps active models for forecast detail', async () => {
     render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
-    await screen.findByText('ACTIVE_POINTER_MISSING');
-    expect(screen.getByText(/no garantiza una nueva versión/)).toBeTruthy();
+    await screen.findByText('Ridge · 7 días');
+    await revealModelDetails();
+    await screen.findByText(/ACTIVE_POINTER_MISSING/);
+    expect(screen.getByText('Resumen del ML')).toBeTruthy();
     expect(onForecastModelsChange).toHaveBeenCalledWith(forecast.models);
     expect(vi.mocked(apiClient.getForecastModelDiagnostics)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(apiClient.getHealthDiagnostics)).toHaveBeenCalledTimes(1);
@@ -186,12 +212,13 @@ describe('forecast serving diagnostics panel', () => {
 
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(screen.getByText('Preparando servicio de pronósticos…')).toBeTruthy();
-    expect(screen.getByText('Ensamblado Health')).toBeTruthy();
+    expect(screen.getByText('Servicios analíticos')).toBeTruthy();
     expect(forecastGet).toHaveBeenCalledTimes(1);
     expect(healthGet).toHaveBeenCalledTimes(1);
 
     await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
-    expect(screen.getByText('ACTIVE_POINTER_MISSING')).toBeTruthy();
+    await revealModelDetails();
+    expect(screen.getByText(/ACTIVE_POINTER_MISSING/)).toBeTruthy();
     expect(forecastGet).toHaveBeenCalledTimes(2);
     expect(healthGet).toHaveBeenCalledTimes(1);
   });
@@ -206,7 +233,8 @@ describe('forecast serving diagnostics panel', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(screen.getByText('Preparando servicio de pronósticos…')).toBeTruthy();
     await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
-    expect(screen.getByText('ACTIVE_POINTER_MISSING')).toBeTruthy();
+    await revealModelDetails();
+    expect(screen.getByText(/ACTIVE_POINTER_MISSING/)).toBeTruthy();
     expect(forecastGet).toHaveBeenCalledTimes(2);
   });
 
@@ -225,7 +253,7 @@ describe('forecast serving diagnostics panel', () => {
     expect(healthGet).toHaveBeenCalledTimes(1);
 
     await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
-    expect(screen.getByText('Ensamblado Health')).toBeTruthy();
+    expect(screen.getByText('Servicios analíticos')).toBeTruthy();
     expect(healthGet).toHaveBeenCalledTimes(2);
     expect(forecastGet).toHaveBeenCalledTimes(1);
   });
@@ -244,7 +272,7 @@ describe('forecast serving diagnostics panel', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(screen.getByText('Preparando diagnóstico Health…')).toBeTruthy();
     await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
-    expect(screen.getByText('Ensamblado Health')).toBeTruthy();
+    expect(screen.getByText('Servicios analíticos')).toBeTruthy();
     expect(healthGet).toHaveBeenCalledTimes(2);
   });
 
@@ -301,7 +329,8 @@ describe('forecast serving diagnostics panel', () => {
     render(<ForecastDiagnosticsPanel onForecastModelsChange={onForecastModelsChange} />);
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
-    expect(screen.getByText('ACTIVE_POINTER_MISSING')).toBeTruthy();
+    await revealModelDetails();
+    expect(screen.getByText(/ACTIVE_POINTER_MISSING/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Actualizar estado' }));
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });

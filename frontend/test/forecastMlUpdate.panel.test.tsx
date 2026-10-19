@@ -45,21 +45,24 @@ describe('Forecast manual ML update panel', () => {
 
   it('loads status, shows active 7d/14d models and automatic schedule', async () => {
     render(<ForecastMlUpdatePanel />);
-    expect((await screen.findAllByText('v1')).length).toBe(2);
-    expect(screen.getByText('Actualización automática:')).toBeTruthy();
-    expect(screen.getByText('ACTIVO')).toBeTruthy();
-    expect(screen.getByText('Preparación para próxima evaluación ML')).toBeTruthy();
-    expect(screen.getAllByText('Sin cambios nuevos para revisar.')).toHaveLength(2);
-    expect(screen.getAllByText(/107 orígenes maduros, no 107 ventas/)).toHaveLength(2);
-    expect(screen.getAllByText('Los orígenes disponibles se verifican durante la revisión del worker.')).toHaveLength(2);
+    expect(await screen.findByText('Modelos activos')).toBeTruthy();
+    expect(screen.getByText(/Ridge LIVE · 7 días/).parentElement?.textContent).toContain('v1');
+    expect(screen.getByText(/Ridge LIVE · 14 días/).parentElement?.textContent).toContain('v1');
+    expect(screen.getByText('Actualización automática').parentElement?.textContent).toContain('Activa');
+    expect(screen.getByText('Preparación para próxima evaluación')).toBeTruthy();
+    expect(screen.getByText('No hay señales pendientes; los modelos LIVE siguen disponibles.')).toBeTruthy();
+    expect(screen.getAllByText('Ver detalles')).toHaveLength(1);
+    fireEvent.click(screen.getByText('Ver detalles'));
+    expect(screen.getAllByText('107 orígenes maduros no significan 107 ventas.')).toHaveLength(1);
+    expect(screen.queryByText('Sin cambios nuevos para revisar.')).toBeNull();
     expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(1);
   });
 
   it.each([
-    ['WAITING_MATURITY', 'Hay señales nuevas registradas. Aún están esperando madurez.'],
-    ['WAITING_DEBOUNCE', 'Hay señales registradas. Se agrupan antes de revisar el trabajo.'],
-    ['WAITING_COOLDOWN', 'Esperando el intervalo de seguridad antes de la próxima revisión.'],
-    ['READY_FOR_WORKER_REVIEW', 'Listo para que el worker revise la nueva evidencia; esto no implica aprobación de promoción.'],
+    ['WAITING_MATURITY', 'Hay evidencia pendiente, pero todavía no es madura.'],
+    ['WAITING_DEBOUNCE', 'Hay evidencia pendiente; el sistema agrupa los cambios antes de revisar.'],
+    ['WAITING_COOLDOWN', 'Hay evidencia pendiente; se espera el intervalo de seguridad para revisarla.'],
+    ['READY_FOR_WORKER_REVIEW', 'Hay evidencia lista para revisión; esto no implica que un modelo vaya a promoverse.'],
   ] as const)('explains %s without claiming current origins', async (readinessStatus, copy) => {
     const status = { ...initialStatus, horizons: [horizon(7, { readiness: {
       ...horizon(7).readiness, status: readinessStatus, hasPendingSignals: true,
@@ -69,9 +72,11 @@ describe('Forecast manual ML update panel', () => {
     vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValue(ok(status));
     render(<ForecastMlUpdatePanel />);
     expect(await screen.findByText(copy)).toBeTruthy();
+    expect(screen.getByText('Señales pendientes: 7d 2 · 14d 0')).toBeTruthy();
+    expect(screen.getByText('Ver detalles').closest('details')?.hasAttribute('open')).toBe(false);
+    fireEvent.click(screen.getByText('Ver detalles'));
     expect(screen.getByText('Venta completada')).toBeTruthy();
-    expect(screen.getByText('2')).toBeTruthy();
-    expect(screen.queryByText(/\/107/)).toBeNull();
+    expect(screen.getByText(/Señales pendientes: 7d 2/)).toBeTruthy();
   });
 
   it('shows an active worker review as distinct from pending signals or promotion', async () => {
@@ -80,7 +85,8 @@ describe('Forecast manual ML update panel', () => {
     } }), horizon(14)] as [ReturnType<typeof horizon>, ReturnType<typeof horizon>] } satisfies ForecastMlUpdateStatus;
     vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValue(ok(status));
     render(<ForecastMlUpdatePanel />);
-    expect(await screen.findByText('Hay una revisión en curso.')).toBeTruthy();
+    expect(await screen.findByText('Revisión en curso')).toBeTruthy();
+    expect(screen.getByText('Hay una revisión en curso para uno de los horizontes.')).toBeTruthy();
     expect(screen.queryByText(/orígenes disponibles: \d+\/107/)).toBeNull();
   });
 
@@ -118,28 +124,30 @@ describe('Forecast manual ML update panel', () => {
 
     render(<><ForecastMlUpdatePanel /><ForecastMlUpdateHistoryPanel /></>);
 
+    fireEvent.click(await screen.findByText('Ver detalles operativos'));
     const requestLabel = await screen.findByText('Última solicitud manual');
     const workerLabel = screen.getByText('Último intento elegible del worker');
     expect(requestLabel.parentElement?.textContent).toContain('2:07');
     expect(workerLabel.parentElement?.textContent).toContain('2:05');
     expect(screen.queryByText('Última ejecución')).toBeNull();
-    expect(screen.getByText(/historial durable, que es la referencia para la fecha y el resultado de todas las ejecuciones/)).toBeTruthy();
-    fireEvent.click(screen.getByText('Detalles técnicos'));
-    expect(screen.getByText('Cierre operativo vigente (día cerrado)').parentElement?.textContent).toMatch(/16 oct/);
-
+    expect(screen.getByRole('region', { name: 'Historial de actualizaciones ML' })).toBeTruthy();
+    fireEvent.click(screen.getByText('Ver detalles'));
+    expect(screen.getByText('Cierre operativo vigente').parentElement?.textContent).toMatch(/16 oct/);
     const automaticLabel = await screen.findByText('Automático');
     expect(automaticLabel.closest('article')?.textContent).toContain('3:35');
     expect(automaticLabel.closest('article')?.textContent).toContain('Sin trabajo pendiente');
     fireEvent.click(within(automaticLabel.closest('article')!).getByRole('button', { name: 'Ver detalle' }));
     const capturedClosedThrough = await within(automaticLabel.closest('article')!).findByText(/Observaciones cerradas para esta ejecución:/);
     expect(capturedClosedThrough.parentElement?.textContent).toMatch(/15 oct/);
+    fireEvent.click(within(automaticLabel.closest('article')!).getByText('Detalles técnicos'));
+    expect(within(automaticLabel.closest('article')!).getAllByText(/NO_PENDING_WORK/).length).toBeGreaterThan(0);
   });
 
   it('submits one empty-body request and shows accepted copy', async () => {
     vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValueOnce(ok(initialStatus))
       .mockResolvedValueOnce(ok(manualPendingStatus(initialStatus)));
     render(<ForecastMlUpdatePanel />);
-    await screen.findByText('ACTIVO');
+    await screen.findByText('Modelos activos');
     fireEvent.click(screen.getByRole('button', { name: 'Actualizar ML ahora' }));
     expect(await screen.findByText('Actualización solicitada.')).toBeTruthy();
     expect(apiClient.requestForecastMlUpdate).toHaveBeenCalledTimes(1);
@@ -160,7 +168,7 @@ describe('Forecast manual ML update panel', () => {
       vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValueOnce(ok(pendingStatus))
         .mockResolvedValueOnce(ok(manualPendingStatus(pendingStatus)));
       render(<ForecastMlUpdatePanel />);
-      await screen.findByText('EVIDENCIA PENDIENTE');
+      expect((await screen.findAllByText('Evidencia pendiente')).length).toBeGreaterThan(0);
       const button = screen.getByRole('button', { name: 'Actualizar ML ahora' });
       expect(button.hasAttribute('disabled')).toBe(false);
       fireEvent.click(button);
@@ -179,7 +187,7 @@ describe('Forecast manual ML update panel', () => {
       horizons: [horizon(7, { pending: true, ...patch }), horizon(14)] };
     vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValue(ok(blockedStatus));
     render(<ForecastMlUpdatePanel />);
-    await screen.findAllByText('v1');
+    expect((await screen.findAllByText('Evidencia pendiente')).length).toBeGreaterThan(0);
     const button = screen.getByRole('button', { name: 'Actualizar ML ahora' });
     expect(button.hasAttribute('disabled')).toBe(true);
     fireEvent.click(button);
@@ -196,7 +204,7 @@ describe('Forecast manual ML update panel', () => {
       ? { ...initialStatus, horizons: [horizon(7, { currentlyRunning: true, requestStatus: 'RUNNING' }), horizon(14)] }
       : manualPendingStatus(initialStatus);
     vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValueOnce(ok(initialStatus)).mockResolvedValueOnce(ok(active));
-    render(<ForecastMlUpdatePanel />); await screen.findByText('ACTIVO');
+    render(<ForecastMlUpdatePanel />); await screen.findByText('Modelos activos');
     fireEvent.click(screen.getByRole('button', { name: 'Actualizar ML ahora' }));
     expect(await screen.findByText(copy)).toBeTruthy();
   });
@@ -206,7 +214,7 @@ describe('Forecast manual ML update panel', () => {
       trigger: 'MANUAL', pending: true, horizons: [7, 14], dispatchStatus: 'DEFERRED', messageCode: 'ML_UPDATE_REQUESTED' }));
     vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValueOnce(ok(initialStatus))
       .mockResolvedValueOnce(ok(manualPendingStatus(initialStatus)));
-    render(<ForecastMlUpdatePanel />); await screen.findByText('ACTIVO');
+    render(<ForecastMlUpdatePanel />); await screen.findByText('Modelos activos');
     fireEvent.click(screen.getByRole('button', { name: 'Actualizar ML ahora' }));
     expect(await screen.findByText('Solicitud guardada; se procesará automáticamente.')).toBeTruthy();
   });
@@ -216,11 +224,13 @@ describe('Forecast manual ML update panel', () => {
       lastEvaluationReason: 'NO_PROMOTION_INSUFFICIENT_HISTORY' }), horizon(14)] } as ForecastMlUpdateStatus;
     vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValue(ok(status));
     render(<ForecastMlUpdatePanel />);
-    expect(await screen.findByText('NO ELEGIBLE')).toBeTruthy();
+    expect(await screen.findByText('Aún no elegible')).toBeTruthy();
     expect(screen.getByText('El sistema recibió la solicitud, pero aún no hay suficiente evidencia madura para generar un nuevo modelo.')).toBeTruthy();
-    expect(screen.queryByText('NO_PROMOTION_INSUFFICIENT_HISTORY')).toBeNull();
-    fireEvent.click(screen.getByText('Detalles técnicos'));
-    expect(screen.getByText(/NO_PROMOTION_INSUFFICIENT_HISTORY/)).toBeTruthy();
+    expect(screen.getByText('Ver detalles').closest('details')?.hasAttribute('open')).toBe(false);
+    fireEvent.click(screen.getByText('Ver detalles operativos'));
+    expect(screen.getByText('Ver detalles').closest('details')?.hasAttribute('open')).toBe(false);
+    fireEvent.click(screen.getByText('Ver detalles'));
+    expect(screen.getAllByText(/NO_PROMOTION_INSUFFICIENT_HISTORY/).length).toBeGreaterThan(0);
   });
 
   it('polls each eight seconds, confirms completion with one final read and announces it', async () => {
@@ -260,16 +270,15 @@ describe('Forecast manual ML update panel', () => {
     vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValueOnce(ok(initialStatus))
       .mockResolvedValueOnce(ok(active)).mockResolvedValueOnce(ok(terminal)).mockResolvedValueOnce(ok(terminal));
     render(<ForecastMlUpdatePanel onManualRequestFinished={onManualRequestFinished} />);
-    await screen.findByText('ACTIVO');
+    await screen.findByText('Modelos activos');
     const button = screen.getByRole('button', { name: 'Actualizar ML ahora' });
     fireEvent.click(button);
     expect(await screen.findByText('Actualización solicitada.')).toBeTruthy();
     expect(button.hasAttribute('disabled')).toBe(true);
     await vi.advanceTimersByTimeAsync(8_000);
     expect(await screen.findByText('Revisión completada. La evidencia todavía debe completar su período de madurez antes de evaluar un nuevo modelo.')).toBeTruthy();
-    expect(screen.getByText('EVIDENCIA PENDIENTE')).toBeTruthy();
-    expect(screen.getAllByText('90')).toHaveLength(2);
-    expect(screen.getByText('Datos pendientes').parentElement?.textContent).toContain('Sí');
+    expect(screen.getAllByText('Evidencia pendiente').length).toBeGreaterThan(0);
+    expect(screen.getByText('Señales pendientes: 7d 90 · 14d 90')).toBeTruthy();
     expect(button.hasAttribute('disabled')).toBe(false);
     expect(onManualRequestFinished).toHaveBeenCalledTimes(1);
     expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(4);
@@ -288,7 +297,7 @@ describe('Forecast manual ML update panel', () => {
     ] };
     vi.mocked(apiClient.getForecastMlUpdateStatus).mockResolvedValue(ok(terminalPending));
     render(<ForecastMlUpdatePanel />);
-    await screen.findByText('EVIDENCIA PENDIENTE');
+    expect((await screen.findAllByText('Evidencia pendiente')).length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'Actualizar ML ahora' }).hasAttribute('disabled')).toBe(false);
   });
 
@@ -333,7 +342,7 @@ describe('Forecast manual ML update panel', () => {
   it('prevents double clicks and shows a recoverable API error', async () => {
     let resolveRequest: (value: AuthenticatedDiagnosticResult<import('@/types/businessIntelligence').ForecastMlUpdateRequestResult>) => void = () => {};
     vi.mocked(apiClient.requestForecastMlUpdate).mockReturnValueOnce(new Promise(resolve => { resolveRequest = resolve; }));
-    render(<ForecastMlUpdatePanel />); await screen.findByText('ACTIVO');
+    render(<ForecastMlUpdatePanel />); await screen.findByText('Modelos activos');
     const button = screen.getByRole('button', { name: 'Actualizar ML ahora' });
     fireEvent.click(button); fireEvent.click(button);
     expect(apiClient.requestForecastMlUpdate).toHaveBeenCalledTimes(1);
@@ -342,12 +351,13 @@ describe('Forecast manual ML update panel', () => {
     expect(await screen.findByText(/Se alcanzó el límite de solicitudes/)).toBeTruthy();
   });
 
-  it('keeps the 1d approval policy and both Ridge horizons visible', async () => {
+  it('shows 7d and 14d LIVE without exposing the unapproved 1d horizon in normal UI', async () => {
     render(<ForecastDiagnosticsPanel onForecastModelsChange={vi.fn()} />);
-    expect(await screen.findByText('No aprobado')).toBeTruthy();
-    expect(screen.getByText('7 días')).toBeTruthy();
-    expect(screen.getByText('14 días')).toBeTruthy();
-    expect(screen.getByText('1 día')).toBeTruthy();
+    expect(await screen.findByText('Modelos LIVE')).toBeTruthy();
+    expect(screen.getByText('Ridge · 7 días')).toBeTruthy();
+    expect(screen.getByText('Ridge · 14 días')).toBeTruthy();
+    expect(screen.queryByText('No aprobado')).toBeNull();
+    expect(screen.queryByText('1 día')).toBeNull();
     expect(screen.getByRole('button', { name: 'Actualizar ML ahora' })).toBeTruthy();
   });
 

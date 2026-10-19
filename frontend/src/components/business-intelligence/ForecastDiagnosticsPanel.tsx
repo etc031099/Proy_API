@@ -36,7 +36,7 @@ const statusLabel = (value?: string | null) => {
   if (value === 'NOT_CHECKED') return 'No comprobado';
   return safeText(value) || 'No disponible';
 };
-const presence = (value?: boolean) => value === true ? 'Sí' : value === false ? 'No' : 'No comprobado';
+const presence = (value?: boolean | null) => value === true ? 'Sí' : value === false ? 'No' : 'No comprobado';
 const horizonLabel = (days: number) => days === 1 ? '1 día' : `${days} días`;
 const dateLabel = (value?: string | null) => {
   if (!value) return null;
@@ -78,21 +78,33 @@ function waitForRetry(delay: number, timers: Map<ReturnType<typeof setTimeout>, 
 }
 
 function HorizonStatus({ model }: { model?: ForecastActiveModel }) {
-  if (!model) return <div><h4 className="font-medium">Horizonte no devuelto</h4><p className="text-sm text-muted-foreground">Sin diagnóstico para este horizonte.</p></div>;
+  if (!model) return <article className="rounded-lg border p-4"><h4 className="font-medium">Ridge · horizonte sin diagnóstico</h4><p className="mt-2 text-sm text-muted-foreground">No se recibió información para este modelo.</p></article>;
   const reason = codeText(model.reasonCode);
-  return <div className="rounded-md border p-3">
-    <div className="flex flex-wrap items-center justify-between gap-2"><h4 className="font-medium">{horizonLabel(model.horizonDays)}</h4><Badge variant={model.status === 'ACTIVE' ? 'default' : 'outline'}>{statusLabel(model.status)}</Badge></div>
-    {reason && <p className="mt-1 text-sm text-muted-foreground">Motivo: <code>{reason}</code></p>}
-    {model.horizonDays !== 1 && <dl className="mt-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
-      {model.modelVersion != null && <div><dt>Versión activa</dt><dd>{model.modelVersion}</dd></div>}
-      <div><dt>Registry / pointer / artefacto</dt><dd>{presence(model.registryFound)} / {presence(model.activePointerFound)} / {presence(model.artifactFound)}{safeText(model.artifactStatus) ? ` · ${safeText(model.artifactStatus)}` : ''}</dd></div>
-      {model.mlLoadStatus && <div><dt>Carga ML</dt><dd>{statusLabel(model.mlLoadStatus)}{codeText(model.mlLoadReasonCode) ? ` · ${codeText(model.mlLoadReasonCode)}` : ''}</dd></div>}
-      {typeof model.horizonMatches === 'boolean' && <div><dt>Horizonte compatible</dt><dd>{presence(model.horizonMatches)}</dd></div>}
-      {typeof model.recipeMatches === 'boolean' && <div><dt>Receta compatible</dt><dd>{presence(model.recipeMatches)}</dd></div>}
-      {typeof model.featureHashMatches === 'boolean' && <div><dt>Features compatibles</dt><dd>{presence(model.featureHashMatches)}</dd></div>}
-      {typeof model.artifactHashValid === 'boolean' && <div><dt>Integridad del artefacto</dt><dd>{model.artifactHashValid ? 'Válida' : 'No válida'}</dd></div>}
-    </dl>}
-  </div>;
+  const integrity = model.artifactHashValid === true && model.artifactFound === true ? 'Correcta'
+    : model.artifactHashValid === false || model.artifactFound === false ? 'Revisar' : 'No comprobada';
+  const compatibility = [model.horizonMatches, model.recipeMatches, model.featureHashMatches].some(value => value === false) ? 'Revisar'
+    : [model.horizonMatches, model.recipeMatches, model.featureHashMatches].every(value => value === true) ? 'Correcta' : 'No comprobada';
+  return <article className="space-y-3 rounded-lg border p-4">
+    <div className="flex flex-wrap items-center justify-between gap-2"><h4 className="font-medium">Ridge · {horizonLabel(model.horizonDays)}</h4><Badge variant={model.status === 'ACTIVE' ? 'default' : model.status === 'MODEL_UNAVAILABLE' ? 'destructive' : 'outline'}>{statusLabel(model.status)}</Badge></div>
+    <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-2">
+      <div><dt className="text-muted-foreground">Versión</dt><dd>{model.modelVersion == null ? 'No disponible' : `v${model.modelVersion}`}</dd></div>
+      <div><dt className="text-muted-foreground">Datos entrenados hasta</dt><dd>{safeText(model.trainedDataVersion) || 'No disponible'}</dd></div>
+      <div><dt className="text-muted-foreground">Integridad</dt><dd>{integrity}</dd></div>
+      <div><dt className="text-muted-foreground">Compatibilidad</dt><dd>{compatibility}</dd></div>
+    </dl>
+    <details className="border-t pt-2 text-xs text-muted-foreground">
+      <summary className="cursor-pointer font-medium">Ver detalles técnicos</summary>
+      <dl className="mt-2 grid gap-2 sm:grid-cols-2">
+        <div><dt>Estado técnico</dt><dd>{statusLabel(model.status)}{reason ? ` · ${reason}` : ''}</dd></div>
+        <div><dt>Familia / versión de features / receta</dt><dd>{safeText(model.modelFamily) || 'No disponible'} / {safeText(model.featureVersion) || 'No disponible'} / {safeText(model.recipeId) || 'No disponible'}</dd></div>
+        <div><dt>Registry / pointer / artefacto</dt><dd>{presence(model.registryFound)} / {presence(model.activePointerFound)} / {presence(model.artifactFound)}{safeText(model.artifactStatus) ? ` · ${safeText(model.artifactStatus)}` : ''}</dd></div>
+        <div><dt>Carga ML</dt><dd>{model.mlLoadStatus ? statusLabel(model.mlLoadStatus) : 'No comprobado'}{codeText(model.mlLoadReasonCode) ? ` · ${codeText(model.mlLoadReasonCode)}` : ''}</dd></div>
+        <div><dt>Horizonte / receta / features compatibles</dt><dd>{presence(model.horizonMatches)} / {presence(model.recipeMatches)} / {presence(model.featureHashMatches)}</dd></div>
+        <div><dt>Integridad del artefacto</dt><dd>{model.artifactHashValid == null ? 'No comprobada' : model.artifactHashValid ? 'Válida' : 'No válida'}</dd></div>
+        <div><dt>Fecha de entrenamiento / corte</dt><dd>{dateLabel(model.trainedAt) || 'No disponible'} / {dateLabel(model.dataCutoff) || 'No disponible'}</dd></div>
+      </dl>
+    </details>
+  </article>;
 }
 
 function ForecastSection({ result }: { result: AuthenticatedDiagnosticResult<ForecastActiveModels> }) {
@@ -100,12 +112,15 @@ function ForecastSection({ result }: { result: AuthenticatedDiagnosticResult<For
   const serving = result.data?.forecastServing;
   const models = result.data?.models || [];
   const modelFor = (days: number) => models.find(model => model.horizonDays === days);
-  return <section aria-label="Diagnóstico de pronósticos" className="space-y-3">
-    <div className="flex flex-wrap items-center gap-2"><h3 className="font-semibold">Pronósticos</h3><span className="text-xs text-muted-foreground">HTTP {result.httpStatus || 'sin respuesta'}</span></div>
+  return <section aria-label="Diagnóstico de pronósticos" className="space-y-3 border-t pt-4">
+    <div><h3 className="font-semibold">Modelos LIVE</h3><p className="text-sm text-muted-foreground">Pronósticos Ridge aprobados para 7 y 14 días.</p></div>
     {message ? <p role={result.httpStatus === 401 ? 'alert' : 'status'} className="text-sm text-muted-foreground">{message}{codeText(result.code) ? ` · ${codeText(result.code)}` : ''}</p> : <>
-      {serving?.dataVersion != null && <p className="text-xs text-muted-foreground">Revisión de datos: {safeText(serving.dataVersion) || 'No disponible'}</p>}
-      {serving?.observationsClosedThrough && <p className="text-xs text-muted-foreground">Observaciones cerradas hasta: {dateLabel(serving.observationsClosedThrough) || 'No disponible'}</p>}
-      <div className="grid gap-2 sm:grid-cols-3"><HorizonStatus model={modelFor(1)} /><HorizonStatus model={modelFor(7)} /><HorizonStatus model={modelFor(14)} /></div>
+      <div className="grid gap-3 md:grid-cols-2"><HorizonStatus model={modelFor(7)} /><HorizonStatus model={modelFor(14)} /></div>
+      <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">Ver metadatos de servicio</summary>
+        <dl className="mt-2 grid gap-2 sm:grid-cols-2"><div><dt>Revisión del servicio</dt><dd>{safeText(serving?.dataVersion) || 'No disponible'}</dd></div>
+          <div><dt>Observaciones cerradas hasta</dt><dd>{dateLabel(serving?.observationsClosedThrough) || 'No disponible'}</dd></div>
+          <div><dt>Estado de snapshot</dt><dd>{safeText(serving?.snapshotStatus) || 'No disponible'}{codeText(serving?.snapshotReasonCode) ? ` · ${codeText(serving?.snapshotReasonCode)}` : ''}</dd></div></dl>
+      </details>
     </>}
   </section>;
 }
@@ -115,16 +130,18 @@ function HealthSection({ result }: { result: AuthenticatedDiagnosticResult<Healt
   const diagnostic = result.data;
   const nestedFailure = diagnostic && diagnostic.httpStatus >= 500;
   const reason = codeText(diagnostic?.reasonCode) || codeText(result.code);
-  return <section aria-label="Diagnóstico de salud" className="space-y-3 border-t pt-4">
-    <div className="flex flex-wrap items-center gap-2"><h3 className="font-semibold">Health</h3>{diagnostic && <span className="text-xs text-muted-foreground">HTTP {diagnostic.httpStatus}</span>}</div>
-    {message ? <p role={result.httpStatus === 401 ? 'alert' : 'status'} className="text-sm text-muted-foreground">{message}{reason ? ` · ${reason}` : ''}</p> : diagnostic && <>
-      <Badge variant={nestedFailure ? 'destructive' : 'outline'}>{nestedFailure ? 'Servicio temporalmente no disponible' : statusLabel(diagnostic.dependencyStatus.healthAssembly)}</Badge>
-      {reason && <p className="text-sm text-muted-foreground">Motivo: <code>{reason}</code></p>}
-      <dl className="grid gap-2 text-sm sm:grid-cols-2"><div><dt className="text-muted-foreground">Forecast</dt><dd>{statusLabel(diagnostic.dependencyStatus.forecast)}</dd></div>
-        <div><dt className="text-muted-foreground">Inventario</dt><dd>{statusLabel(diagnostic.dependencyStatus.inventory)}</dd></div>
-        <div><dt className="text-muted-foreground">Proveedores</dt><dd>{statusLabel(diagnostic.dependencyStatus.supplier)}</dd></div>
-        <div><dt className="text-muted-foreground">Ensamblado Health</dt><dd>{statusLabel(diagnostic.dependencyStatus.healthAssembly)}</dd></div></dl>
-    </>}
+  return <section aria-label="Estado de servicios analíticos" className="border-t pt-3">
+    <div className="flex flex-wrap items-center gap-2"><h3 className="text-sm font-medium">Servicios analíticos</h3>
+      {message ? <Badge variant="outline">No disponible</Badge> : diagnostic && <Badge variant={nestedFailure ? 'destructive' : diagnostic.dependencyStatus.healthAssembly === 'READY' ? 'default' : 'outline'}>{nestedFailure ? 'Servicio temporalmente no disponible' : statusLabel(diagnostic.dependencyStatus.healthAssembly)}</Badge>}
+    </div>
+    {message && <p role={result.httpStatus === 401 ? 'alert' : 'status'} className="mt-2 text-sm text-muted-foreground">{message}{reason ? ` · ${reason}` : ''}</p>}
+    {diagnostic && <details className="mt-2 text-xs text-muted-foreground"><summary className="cursor-pointer">Ver estado de Health</summary>
+      <div className="mt-2">HTTP {diagnostic.httpStatus}{reason && <span> · Motivo: {reason}</span>}</div>
+      <dl className="mt-2 grid gap-2 sm:grid-cols-2"><div><dt>Forecast</dt><dd>{statusLabel(diagnostic.dependencyStatus.forecast)}</dd></div>
+        <div><dt>Inventario</dt><dd>{statusLabel(diagnostic.dependencyStatus.inventory)}</dd></div>
+        <div><dt>Proveedores</dt><dd>{statusLabel(diagnostic.dependencyStatus.supplier)}</dd></div>
+        <div><dt>Ensamblado Health</dt><dd>{statusLabel(diagnostic.dependencyStatus.healthAssembly)}</dd></div></dl>
+      </details>}
   </section>;
 }
 
@@ -211,7 +228,7 @@ export function ForecastDiagnosticsPanel({ onForecastModelsChange, onManualReque
   const isBusy = forecastState === 'loading' || forecastState === 'retrying' || healthState === 'loading' || healthState === 'retrying';
 
   return <Card aria-label="Estado del ML">
-    <CardHeader><div className="flex flex-wrap items-start justify-between gap-3"><div><CardTitle>Estado del ML</CardTitle><CardDescription>Estado del pronóstico y solicitudes de evaluación bajo la política vigente.</CardDescription></div>
+    <CardHeader><div className="flex flex-wrap items-start justify-between gap-3"><div><CardTitle>Estado del Machine Learning</CardTitle><CardDescription>Modelos LIVE y preparación de la siguiente evaluación.</CardDescription></div>
       <Button type="button" size="sm" variant="outline" disabled={isBusy} onClick={() => setRequestNumber(value => value + 1)}><RefreshCw className="mr-2 h-4 w-4" />{isBusy ? 'Consultando…' : 'Actualizar estado'}</Button></div></CardHeader>
     <CardContent className="space-y-4"><ForecastMlUpdatePanel refreshToken={requestNumber} onManualRequestFinished={onManualRequestFinished} />
       {forecastState === 'loading' && <p role="status" className="text-sm text-muted-foreground">Cargando pronósticos…</p>}

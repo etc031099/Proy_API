@@ -452,6 +452,7 @@ describe('business intelligence dashboard', () => {
     render(<BusinessIntelligenceDashboard />);
     fireEvent.click(screen.getByRole('tab', { name: 'Predicción' }));
     const diagnosticPanel = screen.getByLabelText('Estado del ML');
+    fireEvent.click(await within(diagnosticPanel).findByText('Ver estado de Health'));
     await waitFor(() => expect(within(diagnosticPanel).getByText('Ensamblado Health').nextElementSibling?.textContent).toBe('Parcial'));
     expect(within(diagnosticPanel).getByText('Forecast').nextElementSibling?.textContent).toBe('Listo');
     expect(within(diagnosticPanel).getByText('Inventario').nextElementSibling?.textContent).toBe('Listo');

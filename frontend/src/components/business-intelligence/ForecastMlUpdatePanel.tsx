@@ -60,13 +60,18 @@ export function readinessMessage(status: NonNullable<ForecastMlUpdateHorizonStat
 
 const signalDate = (value: string | null) => value ? formatDate(value) : 'No registrada';
 
+function hasPendingEvidence(status: ForecastMlUpdateStatus | null): boolean {
+  return Boolean(status?.horizons.some(row => row.pending || row.readiness?.hasPendingSignals
+    || (row.readiness?.pendingSignalCount ?? 0) > 0));
+}
+
 function headline(status: ForecastMlUpdateStatus | null, failure: string | null): string {
   if (failure) return 'ERROR';
   if (!status || status.horizons.length !== 2) return 'CONSULTANDO';
   if (status.horizons.some(row => row.currentlyRunning)) return 'ACTUALIZANDO';
   if (status.horizons.some(row => row.requestStatus === 'ALREADY_PENDING')) return 'SOLICITUD PENDIENTE';
   if (status.horizons.some(row => row.lastResult === 'LAST_RESULT_FAILED')) return 'ERROR';
-  if (status.horizons.some(row => row.pending)) return 'EVIDENCIA PENDIENTE';
+  if (hasPendingEvidence(status)) return 'EVIDENCIA PENDIENTE';
   if (status.horizons.some(row => row.lastResult === 'LAST_RESULT_INSUFFICIENT_HISTORY'
     || ['NOT_MATURE', 'COOLDOWN_ACTIVE', 'PREVIOUS_FAILURE_NOT_RETRYABLE'].includes(row.lastEvaluationReason || ''))) return 'NO ELEGIBLE';
   if (status.horizons.every(row => row.lastResult === 'LAST_RESULT_NO_PENDING')) return 'SIN CAMBIOS';
@@ -103,6 +108,35 @@ function reasonMessage(status: ForecastMlUpdateStatus | null) {
   if (status.horizons.some(row => row.lastResult === 'LAST_RESULT_REJECTED')) return 'La evaluación no cumplió los criterios de promoción. El modelo activo se conserva.';
   if (status.horizons.some(row => row.lastResult === 'LAST_RESULT_FAILED')) return 'No se pudo completar la evaluación. El modelo activo se conserva; puedes consultar el estado nuevamente.';
   return null;
+}
+
+function preparationSummary(status: ForecastMlUpdateStatus | null, statusError: string | null): string {
+  if (statusError) return 'No se pudo confirmar el estado del ML. Actualiza el estado para volver a consultar.';
+  if (!status) return 'Consultando la preparación de los modelos activos.';
+  if (status.horizons.some(row => row.currentlyRunning)) return 'Hay una revisión en curso para uno de los horizontes.';
+  if (hasPendingEvidence(status)) {
+    const readiness = status.horizons.map(row => row.readiness?.status);
+    if (readiness.includes('WAITING_MATURITY')) return 'Hay evidencia pendiente, pero todavía no es madura.';
+    if (readiness.includes('WAITING_DEBOUNCE')) return 'Hay evidencia pendiente; el sistema agrupa los cambios antes de revisar.';
+    if (readiness.includes('WAITING_COOLDOWN')) return 'Hay evidencia pendiente; se espera el intervalo de seguridad para revisarla.';
+    if (readiness.includes('READY_FOR_WORKER_REVIEW')) return 'Hay evidencia lista para revisión; esto no implica que un modelo vaya a promoverse.';
+    return 'Hay evidencia pendiente de revisión.';
+  }
+  return reasonMessage(status) || 'No hay señales pendientes; los modelos LIVE siguen disponibles.';
+}
+
+function friendlyHeadline(value: string): string {
+  switch (value) {
+    case 'ACTUALIZANDO': return 'Revisión en curso';
+    case 'SOLICITUD PENDIENTE': return 'Solicitud pendiente';
+    case 'EVIDENCIA PENDIENTE': return 'Evidencia pendiente';
+    case 'NO ELEGIBLE': return 'Aún no elegible';
+    case 'SIN CAMBIOS': return 'Sin cambios pendientes';
+    case 'ACTIVO': return 'Modelos activos';
+    case 'ERROR': return 'Error';
+    case 'CONSULTANDO': return 'Consultando';
+    default: return 'No disponible';
+  }
 }
 
 function completionMessage(status: ForecastMlUpdateStatus): string {
@@ -257,65 +291,60 @@ export function ForecastMlUpdatePanel({ refreshToken = 0, onManualRequestFinishe
 
   const byHorizon = (horizon: 7 | 14) => rows.find(row => row.horizonDays === horizon);
   const currentHeadline = headline(status, statusError);
-  const explanation = reasonMessage(status);
+  const explanation = preparationSummary(status, statusError);
+  const messageIsFinalResult = Boolean(message && (/^(Revisión|Evaluación) completada/.test(message)
+    || message.startsWith('No se pudo completar la evaluación')));
   const statusTone = currentHeadline === 'ERROR' ? 'destructive' : currentHeadline === 'ACTIVO' ? 'default' : 'outline';
+  const pending7 = byHorizon(7)?.readiness?.pendingSignalCount;
+  const pending14 = byHorizon(14)?.readiness?.pendingSignalCount;
+  const evaluationAt = rows.map(row => row.lastEvaluatedAt).filter((value): value is string => Boolean(value)).sort().at(-1);
 
-  return <section aria-label="Actualización del ML" className="space-y-3 border-b pb-4">
-    <div className="flex flex-wrap items-start justify-between gap-3">
-      <div><h3 className="font-semibold">Actualización del ML</h3><p className="mt-1 text-sm text-muted-foreground">La solicitud utiliza el mismo proceso automático y no garantiza una nueva versión.</p></div>
+  return <section aria-label="Resumen del ML" className="space-y-3">
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <h3 className="font-semibold">Resumen del ML</h3>
       <Button type="button" onClick={() => { void submit(); }} disabled={sending || requestActive || rows.some(row => row.currentlyRunning || row.requestStatus === 'ALREADY_PENDING' || row.requestStatus === 'RUNNING')}>
         {sending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />}
         {sending ? 'Solicitando actualización…' : 'Actualizar ML ahora'}
       </Button>
     </div>
-    <div className="flex flex-wrap items-center gap-2"><Badge variant={statusTone}>{loading ? 'CONSULTANDO' : currentHeadline}</Badge><span className="text-sm text-muted-foreground">Actualización automática: <span className="font-medium text-foreground">Activa · cada 6 horas</span></span></div>
+    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+      <div className="rounded-md bg-muted/40 p-3"><p className="text-xs text-muted-foreground">Estado general</p><Badge className="mt-1" variant={statusTone}>{loading ? 'Consultando' : friendlyHeadline(currentHeadline)}</Badge></div>
+      <div className="rounded-md bg-muted/40 p-3"><p className="text-xs text-muted-foreground">Ridge LIVE · 7 días</p><p className="mt-1 font-semibold">{modelVersion(byHorizon(7))} · {byHorizon(7)?.activeModelVersion == null ? 'No disponible' : 'Activo'}</p></div>
+      <div className="rounded-md bg-muted/40 p-3"><p className="text-xs text-muted-foreground">Ridge LIVE · 14 días</p><p className="mt-1 font-semibold">{modelVersion(byHorizon(14))} · {byHorizon(14)?.activeModelVersion == null ? 'No disponible' : 'Activo'}</p></div>
+      <div className="rounded-md bg-muted/40 p-3"><p className="text-xs text-muted-foreground">Revisión de datos</p><p className="mt-1 font-semibold">{technicalValue(status?.dataVersion)}</p></div>
+      <div className="rounded-md bg-muted/40 p-3"><p className="text-xs text-muted-foreground">Última evaluación</p><p className="mt-1 font-semibold">{formatDate(evaluationAt)}</p></div>
+      <div className="rounded-md bg-muted/40 p-3"><p className="text-xs text-muted-foreground">Actualización automática</p><p className="mt-1 font-semibold">Activa · cada 6 h</p></div>
+    </div>
     {statusError && <p role="alert" className="text-sm text-destructive">{statusError}</p>}
     {message && <p role="status" aria-live="polite" className="text-sm">{message}</p>}
-    {explanation && <p role="status" className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">{explanation}</p>}
-    <p className="text-xs text-muted-foreground">Próxima revisión automática: {nextAutomaticReview()}.</p>
     {status && <>
-      <dl className="grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-4">
-        <div><dt className="text-muted-foreground">Modelo activo 7d</dt><dd>{modelVersion(byHorizon(7))}</dd></div>
-        <div><dt className="text-muted-foreground">Modelo activo 14d</dt><dd>{modelVersion(byHorizon(14))}</dd></div>
-        <div><dt className="text-muted-foreground">Revisión de datos</dt><dd>{technicalValue(status.dataVersion)}</dd></div>
-        <div><dt className="text-muted-foreground">Datos pendientes</dt><dd>{rows.some(row => row.pending) ? 'Sí' : 'No'}</dd></div>
-        <div><dt className="text-muted-foreground">Última solicitud manual</dt><dd>{formatDate(rows.map(row => row.lastRequestAt).filter(Boolean).sort().at(-1))}</dd></div>
-        <div><dt className="text-muted-foreground">Último intento elegible del worker</dt><dd>{formatDate(rows.map(row => row.lastAttemptAt).filter(Boolean).sort().at(-1))}</dd></div>
-        <div><dt className="text-muted-foreground">Último resultado del estado operativo</dt><dd>{currentHeadline === 'SIN CAMBIOS' ? 'Sin cambios pendientes' : currentHeadline === 'NO ELEGIBLE' ? 'Aún no elegible' : currentHeadline === 'ERROR' ? 'Evaluación no completada' : rows.some(row => row.lastResult === 'LAST_RESULT_PROMOTED') ? 'Candidato promovido' : 'No hay un resultado nuevo'}</dd></div>
-      </dl>
-      <section aria-label="Preparación para próxima evaluación ML" className="space-y-3 rounded-md border p-3">
-        <div><h4 className="font-medium">Preparación para próxima evaluación ML</h4>
-          <p className="mt-1 text-xs text-muted-foreground">Una venta nueva puede cambiar stock e inventario inmediatamente. El modelo Ridge solo se evalúa cuando la evidencia madura y se cumplen las condiciones de seguridad.</p>
-          <p className="text-xs text-muted-foreground">El contador de señales se muestra por horizonte; una misma señal puede aparecer en 7d y 14d.</p></div>
-        <div className="grid gap-3 md:grid-cols-2">
-          {rows.map(row => <article key={`readiness-${row.horizonDays}`} className="space-y-2 rounded-md bg-muted/30 p-3">
-            <h5 className="font-medium">Ridge {row.horizonDays} días</h5>
-            <p className="text-sm" role="status">{readinessMessage(row.readiness?.status || 'UNKNOWN', row.readiness?.pendingSignalCount || 0)}</p>
-            <dl className="grid gap-x-3 gap-y-1 text-xs sm:grid-cols-2">
-              <div><dt className="text-muted-foreground">Señales pendientes</dt><dd>{row.readiness?.pendingSignalCount ?? 'No disponible'}</dd></div>
-              <div><dt className="text-muted-foreground">Tipos</dt><dd>{row.readiness?.pendingSignalTypes?.length
-                ? row.readiness.pendingSignalTypes.map(type => signalLabels[type] || 'Otra señal').join(', ') : 'Ninguna registrada'}</dd></div>
-              <div><dt className="text-muted-foreground">Primera señal pendiente</dt><dd>{signalDate(row.readiness?.firstPendingSignalAt || null)}</dd></div>
-              <div><dt className="text-muted-foreground">Última señal pendiente</dt><dd>{signalDate(row.readiness?.lastPendingSignalAt || null)}</dd></div>
-            </dl>
-            <p className="text-xs text-muted-foreground">Criterio de evidencia: {row.readiness?.requiredOrigins ?? row.requiredOrigins} orígenes maduros, no 107 ventas.</p>
-            <p className="text-xs text-muted-foreground">Los orígenes disponibles se verifican durante la revisión del worker.</p>
-          </article>)}
+      <section aria-label="Preparación para próxima evaluación" className="rounded-lg border p-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div><h4 className="font-medium">Preparación para próxima evaluación</h4>{!messageIsFinalResult && <p role="status" className="mt-1 text-sm text-muted-foreground">{explanation}</p>}</div>
+          <Badge variant="outline">{hasPendingEvidence(status) ? 'Evidencia pendiente' : 'Sin evidencia pendiente'}</Badge>
         </div>
+        <p className="mt-2 text-xs text-muted-foreground">Señales pendientes: 7d {pending7 ?? 'No disponible'} · 14d {pending14 ?? 'No disponible'}</p>
+        <details className="mt-2 border-t pt-2 text-sm"><summary className="cursor-pointer font-medium">Ver detalles</summary>
+          <dl className="mt-2 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
+            <div><dt>Cierre operativo vigente</dt><dd>{formatClosedDay(status.closedThrough)}</dd></div>
+            {rows.map(row => <div key={`ready-${row.horizonDays}`}><dt>Ridge {row.horizonDays}d · estado / elegibilidad / motivo</dt><dd>{technicalValue(row.readiness?.status)} / {technicalValue(row.readiness?.eligibility)} / {technicalValue(row.readiness?.reasonCode)}</dd></div>)}
+            {rows.map(row => <div key={`count-${row.horizonDays}`}><dt>Ridge {row.horizonDays}d · tipos de señal</dt><dd>{row.readiness?.pendingSignalTypes?.length ? row.readiness.pendingSignalTypes.map(type => signalLabels[type] || 'Otra señal').join(', ') : 'Ninguna registrada'}</dd></div>)}
+            {rows.map(row => <div key={`time-${row.horizonDays}`}><dt>Ridge {row.horizonDays}d · primera / última señal</dt><dd>{signalDate(row.readiness?.firstPendingSignalAt || null)} / {signalDate(row.readiness?.lastPendingSignalAt || null)}</dd></div>)}
+            {rows.map(row => <div key={`revision-${row.horizonDays}`}><dt>Ridge {row.horizonDays}d · revisión procesada / última con señales</dt><dd>{technicalValue(row.readiness?.processedRevision)} / {technicalValue(row.readiness?.latestPendingRevision)}</dd></div>)}
+            {rows.map(row => <div key={`origins-${row.horizonDays}`}><dt>Ridge {row.horizonDays}d · orígenes disponibles / requeridos</dt><dd>{row.readiness?.availableOriginsActual == null ? 'No disponible' : row.readiness.availableOriginsActual} / {row.readiness?.requiredOrigins ?? row.requiredOrigins}</dd></div>)}
+            {rows.map(row => <div key={`next-${row.horizonDays}`}><dt>Ridge {row.horizonDays}d · próxima elegibilidad</dt><dd>{formatDate(row.readiness?.nextEligibleAt || row.nextEligibleAt)}</dd></div>)}
+            {rows.map(row => <div key={`trigger-${row.horizonDays}`}><dt>Ridge {row.horizonDays}d · origen / resultado</dt><dd>{technicalValue(row.trigger)} / {technicalValue(row.lastEvaluationReason || row.lastResult)}</dd></div>)}
+            <div><dt>Política de evidencia</dt><dd>107 orígenes maduros no significan 107 ventas.</dd></div>
+          </dl>
+        </details>
       </section>
-      <p className="text-xs text-muted-foreground">Este resumen muestra solicitudes manuales y el último intento con trabajo elegible. Las revisiones automáticas que terminan sin trabajo pendiente también quedan registradas en el historial durable, que es la referencia para la fecha y el resultado de todas las ejecuciones.</p>
-      <details className="rounded-md border p-3 text-sm"><summary className="cursor-pointer font-medium">Detalles técnicos</summary>
-        <dl className="mt-2 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
-          <div><dt>Cierre operativo vigente (día cerrado)</dt><dd>{formatClosedDay(status.closedThrough)}</dd></div>
-          {rows.map(row => <div key={`readiness-tech-${row.horizonDays}`}><dt>Horizonte {row.horizonDays}d · revisión técnica de preparación</dt><dd>{technicalValue(row.readiness?.status)} / elegibilidad {technicalValue(row.readiness?.eligibility)} / motivo {technicalValue(row.readiness?.reasonCode)}</dd></div>)}
-          {rows.map(row => <div key={`revision-tech-${row.horizonDays}`}><dt>Horizonte {row.horizonDays}d · revisiones procesada / señal pendiente</dt><dd>{technicalValue(row.readiness?.processedRevision)} / {technicalValue(row.readiness?.latestPendingRevision)}</dd></div>)}
-          {rows.map(row => <div key={`maturity-tech-${row.horizonDays}`}><dt>Horizonte {row.horizonDays}d · madurez última / ya entrenada</dt><dd>{technicalValue(row.readiness?.latestMatureOrigin)} / {technicalValue(row.readiness?.lastTrainedMatureOrigin)}</dd></div>)}
-          {rows.map(row => <div key={`pending-tech-${row.horizonDays}`}><dt>Horizonte {row.horizonDays}d · pendiente desde / último cambio / marca de debounce</dt><dd>{formatDate(row.readiness?.pendingSince)} / {formatDate(row.readiness?.lastDirtyAt)} / {formatDate(row.readiness?.nextEligibleAt)}</dd></div>)}
-          {rows.map(row => <div key={row.horizonDays}><dt>Horizonte {row.horizonDays}d · trigger / elegibilidad / resultado</dt><dd>{technicalValue(row.trigger)} / {technicalValue(row.eligibility)} / {technicalValue(row.lastEvaluationReason || row.lastResult)}</dd></div>)}
-          {rows.map(row => <div key={`origins-${row.horizonDays}`}><dt>Horizonte {row.horizonDays}d · evidencia disponible ahora</dt><dd>{row.readiness?.availableOriginsActual == null ? 'No calculada en esta consulta; se valida durante la revisión del worker' : `${row.readiness.availableOriginsActual}/${row.requiredOrigins}`}</dd></div>)}
-          {rows.map(row => <div key={`version-${row.horizonDays}`}><dt>trainedDataVersion {row.horizonDays}d</dt><dd>{technicalValue(row.trainedDataVersion)}</dd></div>)}
-          {rows.map(row => <div key={`dispatch-${row.horizonDays}`}><dt>Dispatch {row.horizonDays}d</dt><dd>{technicalValue(row.dispatchStatus)}</dd></div>)}
-          <div><dt>Política</dt><dd>Horizontes 7d/14d · 107 origins · 1d no aprobado</dd></div>
+      <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">Ver detalles operativos</summary>
+        <dl className="mt-2 grid gap-2 sm:grid-cols-2">
+          <div><dt>Próxima revisión automática aproximada</dt><dd>{nextAutomaticReview()}</dd></div>
+          <div><dt>Última solicitud manual</dt><dd>{formatDate(rows.map(row => row.lastRequestAt).filter(Boolean).sort().at(-1))}</dd></div>
+          <div><dt>Último intento elegible del worker</dt><dd>{formatDate(rows.map(row => row.lastAttemptAt).filter(Boolean).sort().at(-1))}</dd></div>
+          <div><dt>Último resultado operativo</dt><dd>{rows.map(row => technicalValue(row.lastEvaluationReason || row.lastResult)).filter(value => value !== 'No disponible').join(' · ') || 'No registrado'}</dd></div>
+          {rows.map(row => <div key={`trained-${row.horizonDays}`}><dt>Revisión de datos usada por Ridge {row.horizonDays}d</dt><dd>{technicalValue(row.trainedDataVersion)}</dd></div>)}
         </dl>
       </details>
     </>}
