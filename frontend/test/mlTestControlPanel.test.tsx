@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MlTestControlPanel } from '@/components/business-intelligence/MlTestControlPanel';
 import { apiClient } from '@/lib/api';
-import type { ForecastMlUpdateStatus, MlTestControlStatus, MlTestLifecycleStatus, MlTestScenarioAnalysisResult, ProductInventory } from '@/types/businessIntelligence';
+import type { ForecastMlUpdateStatus, ForecastResponse, MlTestControlStatus, MlTestLifecycleStatus, MlTestScenarioAnalysisResult, ProductInventory } from '@/types/businessIntelligence';
 
 const allowed: MlTestControlStatus = { state: 'NO_TEST', resetEpoch: '0', testCycleId: null, maintenance: false,
   cloudRestoreEnabled: false, capabilities: { destructiveMlTestControls: { allowed: true, target: 'LOCAL', reasonCode: null } } };
@@ -40,6 +40,18 @@ const analysisResult = (horizonDays: 7 | 14, overrides: Partial<MlTestScenarioAn
   activeModelAfter: { modelVersion: 1, trainedDataVersion: '83', dataCutoff: '2026-10-15' },
   message: 'safe backend message', ...overrides,
 });
+const ridgeForecast = (horizonDays: 7 | 14, units: number): ForecastResponse => ({
+  asOf: '2026-10-19', timezone: 'America/Lima', mode: 'LIVE', updatedAt: null, dataThrough: null,
+  status: 'READY', product: { sku: 'BEB-AGU-001', name: 'Agua Cielo Sin Gas 625 ml' }, method: 'RIDGE_REGRESSION',
+  horizonDays, modelFamily: 'RIDGE_REGRESSION', activeModelStatus: 'ACTIVE', modelVersion: 1, observationCutoff: '2026-10-18',
+  horizons: { '1d': null, '7d': horizonDays === 7 ? units : null, '14d': horizonDays === 14 ? units : null }, observedSeries: [],
+  forecastPeriod: { startDate: '2026-10-20', selectedHorizonDays: horizonDays, units },
+});
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+}
 
 function mockLocal(status = lifecycle()) {
   vi.spyOn(apiClient, 'getMlTestControlStatus').mockResolvedValue({ httpStatus: 200, data: allowed });
@@ -49,6 +61,7 @@ function mockScenario(status = active(), stock = 21) {
   mockLocal(status);
   vi.spyOn(apiClient, 'getBusinessIntelligenceProductInventory').mockResolvedValue({ success: true, data: inventory(stock) });
   vi.spyOn(apiClient, 'getForecastMlUpdateStatus').mockResolvedValue({ httpStatus: 200, data: mlStatus(173) });
+  vi.spyOn(apiClient, 'getBusinessIntelligenceForecast').mockImplementation(async (_sku, horizon) => ({ success: true, data: ridgeForecast(horizon === 14 ? 14 : 7, horizon === 14 ? 30 : 15) }));
 }
 async function prepareChangedScenario() {
   mockScenario();
@@ -122,7 +135,7 @@ describe('ML test control panel', () => {
     expect(apiClient.getBusinessIntelligenceProductInventory).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /NORMAL/ }));
     expect(await screen.findByText(/SKU BEB-AGU-001, cantidad 1 unidad/)).toBeTruthy();
-    expect(screen.getByText('21')).toBeTruthy();
+    expect(screen.getAllByText('21').length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole('button', { name: /OUTLIER/ }));
     expect(await screen.findByText(/SKU BEB-AGU-001, cantidad 15 unidades/)).toBeTruthy();
   });
@@ -169,21 +182,84 @@ describe('ML test control panel', () => {
     const saleLink = screen.getByRole('link', { name: 'Abrir pantalla de ventas' });
     expect(saleLink.getAttribute('href')).toBe('/transactions/sale');
     expect(saleLink.getAttribute('target')).toBe('_blank');
-    expect(screen.getByText(/Stock: 21 · Revisión operativa: 173/)).toBeTruthy();
+    expect(within(screen.getByLabelText('Estado inicial observado')).getByText('Stock').parentElement?.textContent).toContain('21');
     fireEvent.click(saleLink);
-    expect(screen.getByText(/Stock: 21 · Revisión operativa: 173/)).toBeTruthy();
+    expect(within(screen.getByLabelText('Estado inicial observado')).getByText('Stock').parentElement?.textContent).toContain('21');
     expect(screen.getByRole('button', { name: 'Comprobar cambios' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Comprobar cambios' }));
     expect(await screen.findByText('21 → 20')).toBeTruthy();
     expect(screen.getByText('173 → 174')).toBeTruthy();
     expect(screen.getAllByText('0 → 1')).toHaveLength(2);
     expect(screen.getByText('107 orígenes maduros no significan 107 ventas.')).toBeTruthy();
-    expect(screen.getAllByText('El sistema está agrupando cambios recientes antes de evaluarlos.')).toHaveLength(2);
+    expect(screen.getAllByText('El sistema recibió nueva evidencia, pero todavía está agrupando los cambios recientes antes de evaluar un candidato.')).toHaveLength(2);
     expect(screen.getByText('Escenario listo para análisis')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Analizar escenario' })).toBeTruthy();
     expect(productRead).toHaveBeenCalledTimes(2); expect(mlRead).toHaveBeenCalledTimes(2);
+    expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenNthCalledWith(1, 'BEB-AGU-001', 7);
+    expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenNthCalledWith(2, 'BEB-AGU-001', 14);
+    const comparison = screen.getByRole('region', { name: 'Comparación del escenario' });
+    expect(within(comparison).getByText('Pronóstico Ridge 7d').parentElement?.textContent).toContain('15 unidades → 15 unidades');
+    expect(within(comparison).getByText('Pronóstico Ridge 14d').parentElement?.textContent).toContain('30 unidades → 30 unidades');
+    expect(within(comparison).getByText('Modelo activo 7d').parentElement?.textContent).toContain('v1 → v1');
+    expect(within(comparison).getByText('Modelo activo 14d').parentElement?.textContent).toContain('v1 → v1');
     expect(invalidate).toHaveBeenCalledTimes(1);
     expect(checkpoint).not.toHaveBeenCalled(); expect(restore).not.toHaveBeenCalled(); expect(manualRequest).not.toHaveBeenCalled();
+  });
+
+  it('shows Ridge before and after, active versions and optional inventory fields without treating equal forecasts as failure', async () => {
+    mockScenario();
+    const coverageInventory = (stock: number, daysCover: number, riskLevel: 'LOW' | 'HIGH') => ({ ...inventory(stock),
+      coverage: { daysCover, status: 'AVAILABLE' }, risk: { level: riskLevel, reasonCodes: [] }, recommendation: { reorderNow: false, preventiveRecommendation: null, recommendedQty: 4 } });
+    vi.spyOn(apiClient, 'getBusinessIntelligenceProductInventory').mockResolvedValueOnce({ success: true, data: coverageInventory(21, 10, 'LOW') })
+      .mockResolvedValueOnce({ success: true, data: coverageInventory(20, 8, 'HIGH') });
+    vi.spyOn(apiClient, 'getForecastMlUpdateStatus').mockResolvedValueOnce({ httpStatus: 200, data: mlStatus(173) })
+      .mockResolvedValueOnce({ httpStatus: 200, data: mlStatus(174, 1, 1, 'NOT_MATURE') });
+    const forecastRead = vi.spyOn(apiClient, 'getBusinessIntelligenceForecast').mockImplementation(async (_sku, horizon) => ({
+      success: true, data: ridgeForecast(horizon === 14 ? 14 : 7, horizon === 14 ? 30 : 15) }));
+    render(<MlTestControlPanel />);
+    fireEvent.click(await screen.findByRole('button', { name: /NORMAL/ }));
+    await screen.findByText(/Estado inicial observado/);
+    expect(screen.queryByRole('region', { name: 'Comparación del escenario' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Comprobar cambios' }));
+    const comparison = await screen.findByRole('region', { name: 'Comparación del escenario' });
+    expect(within(comparison).getByText('Impacto observado del escenario')).toBeTruthy();
+    expect(within(comparison).getByText('Pronóstico Ridge 7d').parentElement?.textContent).toContain('15 unidades → 15 unidades');
+    expect(within(comparison).getByText('Pronóstico Ridge 14d').parentElement?.textContent).toContain('30 unidades → 30 unidades');
+    expect(within(comparison).getAllByText('Sin cambio observable en esta consulta.')).toHaveLength(2);
+    expect(within(comparison).getByText('Modelo activo 7d').parentElement?.textContent).toContain('v1 → v1');
+    expect(within(comparison).getByText('Cobertura').parentElement?.textContent).toContain('10 días → 8 días');
+    expect(within(comparison).getByText('Riesgo').parentElement?.textContent).toContain('LOW → HIGH');
+    expect(forecastRead).toHaveBeenCalledTimes(4);
+    expect(within(comparison).getByText(/no atribuye causalidad exclusiva/)).toBeTruthy();
+  });
+
+  it('represents unavailable Ridge reads honestly and does not create a forecast fallback', async () => {
+    mockScenario();
+    vi.spyOn(apiClient, 'getBusinessIntelligenceForecast').mockResolvedValue({ success: true, data: {
+      ...ridgeForecast(7, 12), status: 'MODEL_NOT_APPROVED', modelFamily: null, activeModelStatus: 'NOT_APPROVED', forecastPeriod: null,
+    } });
+    render(<MlTestControlPanel />);
+    fireEvent.click(await screen.findByRole('button', { name: /NORMAL/ }));
+    await screen.findByText(/Estado inicial observado/);
+    expect(screen.getAllByText('Pronóstico Ridge 7d').every(label => label.parentElement?.textContent?.includes('No disponible'))).toBe(true);
+    expect(screen.getAllByText('Pronóstico Ridge 14d').every(label => label.parentElement?.textContent?.includes('No disponible'))).toBe(true);
+  });
+
+  it('keeps the raw reason code collapsed under technical details', async () => {
+    await prepareChangedScenario();
+    vi.spyOn(apiClient, 'analyzeMlTestScenario').mockResolvedValueOnce({ httpStatus: 200,
+      data: analysisResult(7, { outcome: 'DEBOUNCE_NOT_ELAPSED', reasonCode: 'DEBOUNCE_NOT_ELAPSED' }) })
+      .mockResolvedValueOnce({ httpStatus: 200,
+        data: analysisResult(14, { outcome: 'DEBOUNCE_NOT_ELAPSED', reasonCode: 'DEBOUNCE_NOT_ELAPSED' }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Analizar escenario' }));
+    const result = await screen.findByRole('region', { name: 'Resultado de la revisión ML' });
+    expect(within(result).getAllByText('El sistema recibió nueva evidencia, pero todavía está agrupando los cambios recientes antes de evaluar un candidato.')).toHaveLength(2);
+    const technicalDetails = within(result).getAllByText('Ver detalles técnicos')[0].closest('details');
+    expect(technicalDetails?.hasAttribute('open')).toBe(false);
+    fireEvent.click(within(result).getAllByText('Ver detalles técnicos')[0]);
+    expect(within(result).getAllByText('DEBOUNCE_NOT_ELAPSED').every(code => code.closest('details') !== null)).toBe(true);
+    expect(within(result).getAllByText('Entrenamiento')).toHaveLength(2);
+    expect(within(result).getAllByText('No')).toHaveLength(6);
   });
 
   it('does not show scenario choices before checkpoint is READY', async () => {
@@ -195,9 +271,13 @@ describe('ML test control panel', () => {
 
   it('restore continue clears scenario and preserves the active cycle at the new epoch', async () => {
     mockScenario();
+    const productRead = vi.spyOn(apiClient, 'getBusinessIntelligenceProductInventory');
+    const mlRead = vi.spyOn(apiClient, 'getForecastMlUpdateStatus');
+    const forecastRead = vi.spyOn(apiClient, 'getBusinessIntelligenceForecast');
     vi.spyOn(apiClient, 'getMlTestLifecycleStatus').mockResolvedValueOnce({ httpStatus: 200, data: active() })
       .mockResolvedValueOnce({ httpStatus: 200, data: active() })
-      .mockResolvedValueOnce({ httpStatus: 200, data: active({ resetEpoch: '5' }) });
+      .mockResolvedValueOnce({ httpStatus: 200, data: active({ resetEpoch: '5' }) })
+      .mockResolvedValue({ httpStatus: 200, data: active({ resetEpoch: '5' }) });
     const restore = vi.spyOn(apiClient, 'restoreMlTestCheckpoint').mockResolvedValue({ httpStatus: 200, data: active({ resetEpoch: '5' }) });
     vi.stubGlobal('confirm', vi.fn(() => true)); render(<MlTestControlPanel />);
     fireEvent.click(await screen.findByRole('button', { name: /NORMAL/ }));
@@ -205,18 +285,66 @@ describe('ML test control panel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Restaurar punto de restauración' }));
     expect(await screen.findByText('Punto de restauración aplicado. La prueba continúa activa.')).toBeTruthy();
     expect(screen.getByText('5')).toBeTruthy(); expect(screen.queryByText(/Estado inicial observado/)).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Restauración completada' })).toBeTruthy();
+    expect(screen.getByText('Coincide con el punto de restauración')).toBeTruthy();
+    expect(screen.getByText('Stock').parentElement?.textContent).toContain('Post-restore: 21');
+    expect(screen.getByRole('button', { name: 'Repetir escenario' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Elegir otro escenario' })).toBeTruthy();
+    expect(productRead).toHaveBeenCalledTimes(2);
+    expect(mlRead).toHaveBeenCalledTimes(2);
+    expect(forecastRead).toHaveBeenCalledTimes(4);
     expect(restore).toHaveBeenCalledWith('continue'); expect(screen.getByRole('heading', { name: 'Escenario de prueba' })).toBeTruthy();
+  });
+
+  it('shows restore progress and keeps destructive actions locked while the restore request is pending', async () => {
+    mockScenario();
+    const pendingRestore = deferred<Awaited<ReturnType<typeof apiClient.restoreMlTestCheckpoint>>>();
+    vi.spyOn(apiClient, 'restoreMlTestCheckpoint').mockReturnValue(pendingRestore.promise);
+    vi.stubGlobal('confirm', vi.fn(() => true)); render(<MlTestControlPanel />);
+    fireEvent.click(await screen.findByRole('button', { name: /NORMAL/ }));
+    await screen.findByText(/Estado inicial observado/);
+    fireEvent.click(screen.getByRole('button', { name: 'Restaurar punto de restauración' }));
+    expect(screen.getByRole('status').textContent).toContain('Restaurando punto de restauración…');
+    expect(screen.getByRole('button', { name: 'Restaurando…' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Finalizar prueba' }).hasAttribute('disabled')).toBe(true);
+    pendingRestore.resolve({ httpStatus: 200, data: active({ resetEpoch: '5' }) });
+    expect(await screen.findByText(/La restauración terminó, pero no se pudo confirmar/)).toBeTruthy();
+  });
+
+  it('reports restore mismatches instead of presenting them as a successful match', async () => {
+    mockScenario();
+    vi.spyOn(apiClient, 'getMlTestLifecycleStatus').mockResolvedValueOnce({ httpStatus: 200, data: active() })
+      .mockResolvedValueOnce({ httpStatus: 200, data: active() })
+      .mockResolvedValueOnce({ httpStatus: 200, data: active({ resetEpoch: '5' }) })
+      .mockResolvedValue({ httpStatus: 200, data: active({ resetEpoch: '5' }) });
+    vi.spyOn(apiClient, 'getBusinessIntelligenceProductInventory').mockResolvedValueOnce({ success: true, data: inventory(21) })
+      .mockResolvedValueOnce({ success: true, data: inventory(20) });
+    vi.spyOn(apiClient, 'restoreMlTestCheckpoint').mockResolvedValue({ httpStatus: 200, data: active({ resetEpoch: '5' }) });
+    vi.stubGlobal('confirm', vi.fn(() => true)); render(<MlTestControlPanel />);
+    fireEvent.click(await screen.findByRole('button', { name: /NORMAL/ }));
+    await screen.findByText(/Estado inicial observado/);
+    fireEvent.click(screen.getByRole('button', { name: 'Restaurar punto de restauración' }));
+    expect(await screen.findByText(/La restauración terminó; revisa las diferencias de verificación/)).toBeTruthy();
+    expect(screen.getByRole('alert').textContent).toContain('diferencias o lecturas no disponibles');
+    expect(screen.queryByText('Coincide con el punto de restauración')).toBeNull();
+    expect(screen.getByText(/Post-restore: 20 · Baseline esperado: 21 · Difiere/)).toBeTruthy();
   });
 
   it('restore finish returns to NO_TEST and removes the scenario workflow', async () => {
     mockScenario();
     vi.spyOn(apiClient, 'getMlTestLifecycleStatus').mockResolvedValueOnce({ httpStatus: 200, data: active() })
-      .mockResolvedValueOnce({ httpStatus: 200, data: lifecycle({ resetEpoch: '5' }) });
+      .mockResolvedValueOnce({ httpStatus: 200, data: active() })
+      .mockResolvedValueOnce({ httpStatus: 200, data: lifecycle({ resetEpoch: '6' }) })
+      .mockResolvedValueOnce({ httpStatus: 200, data: lifecycle({ resetEpoch: '6' }) });
     const restore = vi.spyOn(apiClient, 'restoreMlTestCheckpoint').mockResolvedValue({ httpStatus: 200, data: lifecycle({ resetEpoch: '5' }) });
     vi.stubGlobal('confirm', vi.fn(() => true)); render(<MlTestControlPanel />);
+    fireEvent.click(await screen.findByRole('button', { name: /NORMAL/ }));
+    await screen.findByText(/Estado inicial observado/);
     fireEvent.click(await screen.findByRole('button', { name: 'Finalizar prueba' }));
     expect(await screen.findByText('Sin prueba activa')).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'Escenario de prueba' })).toBeNull(); expect(restore).toHaveBeenCalledWith('finish');
+    expect(screen.getByRole('heading', { name: 'Restauración completada' })).toBeTruthy();
+    expect(screen.getAllByText(/Prueba finalizada\. El sistema volvió al punto inicial\./)).toHaveLength(2);
   });
 
   it('keeps maintenance protective and explains the state', async () => {
@@ -267,13 +395,14 @@ describe('ML test control panel', () => {
     expect(analyze.mock.invocationCallOrder[0]).toBeLessThan(analyze.mock.invocationCallOrder[1]);
     expect(await screen.findAllByText('Todavía no existe suficiente evidencia temporal madura para evaluar un nuevo modelo.')).toHaveLength(4);
     expect(screen.getAllByText('107 / No disponible')).toHaveLength(2);
-    expect(screen.getAllByText('Entrenamiento realizado').length).toBe(2);
-    expect(screen.getByText(/Entrenar un candidato no significa promoverlo\./)).toBeTruthy();
-    expect(screen.getByText(/La política de promoción sigue siendo la autoridad final\./)).toBeTruthy();
+    expect(screen.getAllByText('Entrenamiento').length).toBe(2);
+    const resultRegion = screen.getByRole('region', { name: 'Resultado de la revisión ML' });
+    expect(resultRegion.textContent).toContain('Entrenar un candidato tampoco significa promoverlo');
+    expect(resultRegion.textContent).toContain('la política de promoción sigue siendo la autoridad final');
   });
 
   it.each([
-    ['DEBOUNCE_NOT_ELAPSED', 'El sistema está agrupando cambios recientes antes de evaluar.'],
+    ['DEBOUNCE_NOT_ELAPSED', 'El sistema recibió nueva evidencia, pero todavía está agrupando los cambios recientes antes de evaluar un candidato.'],
     ['COOLDOWN_ACTIVE', 'El sistema mantiene un intervalo de seguridad antes de otra evaluación.'],
     ['NO_PENDING_WORK', 'No hay cambios pendientes por evaluar.'],
   ])('presents %s in teacher-friendly language', async (outcome, copy) => {
@@ -322,7 +451,7 @@ describe('ML test control panel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Analizar escenario' }));
     expect(await screen.findByText('El ciclo de prueba cambió durante el análisis. Actualiza el estado antes de continuar.')).toBeTruthy();
     expect(analyze).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole('region', { name: 'Resultados del análisis local' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Resultado de la revisión ML' })).toBeNull();
     expect(lifecycleRead).toHaveBeenCalled();
   });
 
@@ -345,9 +474,9 @@ describe('ML test control panel', () => {
       .mockResolvedValueOnce({ httpStatus: 200, data: analysisResult(14) });
     vi.spyOn(apiClient, 'restoreMlTestCheckpoint').mockResolvedValue({ httpStatus: 200, data: active({ resetEpoch: '5' }) });
     fireEvent.click(screen.getByRole('button', { name: 'Analizar escenario' }));
-    await screen.findByRole('region', { name: 'Resultados del análisis local' });
+    await screen.findByRole('region', { name: 'Resultado de la revisión ML' });
     fireEvent.click(screen.getByRole('button', { name: 'Restaurar punto de restauración' }));
-    await waitFor(() => expect(screen.queryByRole('region', { name: 'Resultados del análisis local' })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Resultado de la revisión ML' })).toBeNull());
     expect(screen.queryByText(/Estado inicial observado/)).toBeNull();
   });
 
@@ -360,7 +489,7 @@ describe('ML test control panel', () => {
     const sale = vi.spyOn(apiClient, 'createTransaction');
     const replay = vi.spyOn(apiClient, 'getCertifiedForecastReplayEvidence');
     fireEvent.click(screen.getByRole('button', { name: 'Analizar escenario' }));
-    const results = await screen.findByRole('region', { name: 'Resultados del análisis local' });
+    const results = await screen.findByRole('region', { name: 'Resultado de la revisión ML' });
     await waitFor(() => expect(within(results).getAllByText('No hay cambios pendientes por evaluar.')).toHaveLength(2));
     expect(analyze.mock.calls.map(call => call[0])).toEqual([7, 14]);
     expect(live).not.toHaveBeenCalled(); expect(sale).not.toHaveBeenCalled(); expect(replay).not.toHaveBeenCalled();

@@ -16,6 +16,7 @@ import { ForecastDiagnosticsPanel } from './ForecastDiagnosticsPanel';
 import { ForecastMlUpdateHistoryPanel } from './ForecastMlUpdateHistoryPanel';
 import { ForecastReplayEvidencePanel } from './ForecastReplayEvidencePanel';
 import { MlTestControlPanel } from './MlTestControlPanel';
+import { MlTestScenarioUiProvider, useMlTestScenarioUiState } from './MlTestScenarioUiContext';
 import { AnalyticsErrorBoundary } from './AnalyticsErrorBoundary';
 import { MlTestEpochBoundary } from './MlTestEpochBoundary';
 
@@ -104,11 +105,13 @@ function ProductPicker({ selected, onSelect }: { selected: ProductOption | null;
 }
 
 export function BusinessIntelligenceDashboard() {
-  return <MlTestEpochBoundary><BusinessIntelligenceContent /></MlTestEpochBoundary>;
+  return <MlTestScenarioUiProvider><MlTestEpochBoundary><BusinessIntelligenceContent /></MlTestEpochBoundary></MlTestScenarioUiProvider>;
 }
 
 function BusinessIntelligenceContent() {
-  const [tab, setTab] = useState<TabKey>('summary');
+  const scenarioUi = useMlTestScenarioUiState();
+  const tab = scenarioUi.tab as TabKey;
+  const setTab = scenarioUi.setTab as React.Dispatch<React.SetStateAction<TabKey>>;
   const [mlHistoryRefreshToken, setMlHistoryRefreshToken] = useState(0);
   const [summary, setSummary] = useState<BusinessSummary | null>(null);
   const [inventory, setInventory] = useState<InventorySummary | null>(null);
