@@ -175,6 +175,33 @@ export interface MlTestLifecycleResult extends MlTestLifecycleStatus {
   totalBytes?: number;
   totalChunks?: number;
   idempotent?: boolean;
+  activityAfterRestore?: MlTestActivityVerification;
+}
+export interface MlTestActivityOperation {
+  transactionId: string;
+  revision: string;
+  quantity: number;
+  occurredAt: string | null;
+  kind: 'SALE_COMPLETED' | 'SALE_CANCELLED';
+  status: 'completed' | 'cancelled';
+}
+export interface MlTestActivityProduct {
+  sku: string; name: string; saleCount: number; totalQuantity: number;
+  cancellationCount: number; cancelledQuantity: number;
+  latestActivityAt: string | null; latestActivityRevision: string;
+  operationCount: number; operations: MlTestActivityOperation[];
+}
+export interface MlTestActivity {
+  checkpointId: string; testCycleId: string | null; resetEpoch: string;
+  summary: { baselineRevision: string; currentRevision: string; totalSales: number;
+    grossUnits: number; affectedProducts: number; cancellationCount: number };
+  products: MlTestActivityProduct[];
+  page: { limit: number; nextCursor: string | null; operationsPerProduct: number };
+}
+export interface MlTestActivityVerification {
+  status: 'EMPTY' | 'NOT_EMPTY' | 'UNAVAILABLE';
+  checkpointId?: string; resetEpoch?: string; baselineRevision?: string; currentRevision?: string;
+  totalSales?: number; grossUnits?: number; affectedProducts?: number; cancellationCount?: number;
 }
 export interface MlTestScenarioAnalysisResult {
   horizonDays: 7 | 14;

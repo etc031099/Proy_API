@@ -6,6 +6,7 @@ const { randomUUID } = require('node:crypto');
 const { authenticate, authorize } = require('../middleware/auth');
 const { createMlTestAdminExecutor } = require('../services/mlTestAdminExecutor');
 const { createMlTestLocalRidgeAnalysis } = require('../services/mlTestLocalRidgeAnalysis');
+const { createMlTestActivity } = require('../services/mlTestActivity');
 
 const SAFE_CODE = /^(?:CHECKPOINT|RESTORE|ML_TEST|STALE_TEST|STALE_FENCING|TEST)_[A-Z_]+$/;
 const fail = (code, status = 409) => { throw Object.assign(new Error(code), { code, httpStatus: status }); };
@@ -15,15 +16,18 @@ const executorFor = (env = process.env) => createMlTestAdminExecutor({
 const localAnalyzerFor = (env = process.env) => createMlTestLocalRidgeAnalysis({
   client: mongoose.connection.getClient(), db: mongoose.connection.db, env
 });
+const activityFor = (env = process.env) => createMlTestActivity({
+  client: mongoose.connection.getClient(), db: mongoose.connection.db, env
+});
 
 function createMlTestAdminRoutes({ authenticateMiddleware = authenticate, adminMiddleware = authorize('admin'),
-  getExecutor = executorFor, getLocalAnalyzer = localAnalyzerFor } = {}) {
+  getExecutor = executorFor, getLocalAnalyzer = localAnalyzerFor, getActivity = activityFor } = {}) {
   const router = express.Router();
   router.use(authenticateMiddleware, adminMiddleware);
 
   const respondError = (res, error) => {
     const code = SAFE_CODE.test(error?.code || '') ? error.code : 'ML_TEST_OPERATION_FAILED';
-    return res.status([400, 401, 403, 409, 423, 503].includes(error?.httpStatus) ? error.httpStatus : 503)
+    return res.status([400, 401, 403, 409, 413, 423, 503].includes(error?.httpStatus) ? error.httpStatus : 503)
       .set('Cache-Control', 'no-store').json({ success: false, code, message: 'La operación administrativa de prueba no pudo completarse.' });
   };
   const emptyBody = req => {
@@ -46,6 +50,13 @@ function createMlTestAdminRoutes({ authenticateMiddleware = authenticate, adminM
       if (Object.keys(req.query || {}).length) fail('ML_TEST_REQUEST_INVALID', 400);
       const result = await getExecutor().execute(req, 'STATUS');
       return res.set('Cache-Control', 'no-store').json({ success: true, data: safeStatus(result) });
+    } catch (error) { return respondError(res, error); }
+  });
+
+  router.get('/activity', async (req, res) => {
+    try {
+      const data = await getActivity().execute({ user: req.user, query: req.query });
+      return res.set('Cache-Control', 'no-store').json({ success: true, data });
     } catch (error) { return respondError(res, error); }
   });
 
@@ -95,11 +106,17 @@ function createMlTestAdminRoutes({ authenticateMiddleware = authenticate, adminM
         : (body.mode === 'finish' ? 'RESTORE_AND_FINISH' : 'RESTORE');
       const result = await executor.execute({ ...req, body: { checkpointId, restoreId, branch: 'NORMAL' }, query: {} }, action);
       const status = await executor.execute({ ...req, body: {}, query: {} }, 'STATUS');
+      // Observability only: a failed read must never turn a successful restore
+      // into a reported restore failure. Finish cannot use GET /activity,
+      // which deliberately requires TEST_ACTIVE.
+      let activityAfterRestore;
+      try { activityAfterRestore = await getActivity().verifyRestored({ user: req.user }); }
+      catch { activityAfterRestore = { status: 'UNAVAILABLE' }; }
       return res.set('Cache-Control', 'no-store').json({ success: true, data: {
         ...safeStatus(status), status: result.status, restoreId: result.restoreId || restoreId,
         resetEpoch: result.resetEpoch, dataVersion: result.dataVersion,
         totalDocuments: result.totalDocuments, totalBytes: result.totalBytes,
-        idempotent: result.idempotent === true
+        idempotent: result.idempotent === true, activityAfterRestore
       } });
     } catch (error) { return respondError(res, error); }
   });
@@ -144,4 +161,4 @@ function createMlTestAdminRoutes({ authenticateMiddleware = authenticate, adminM
   return router;
 }
 
-module.exports = { createMlTestAdminRoutes, executorFor, localAnalyzerFor };
+module.exports = { createMlTestAdminRoutes, executorFor, localAnalyzerFor, activityFor };

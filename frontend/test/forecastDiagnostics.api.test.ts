@@ -4,6 +4,13 @@ import { apiClient } from '@/lib/api';
 describe('authenticated forecast diagnostics API', () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it('reads local test activity through the authenticated client with only cursor pagination', async () => {
+    const instance = (apiClient as unknown as { instance: { get: (path: string, config?: unknown) => Promise<unknown> } }).instance;
+    const get = vi.spyOn(instance, 'get').mockResolvedValue({ status: 200, data: { success: true, data: { products: [] } } });
+    await expect(apiClient.getMlTestActivity({ limit: 20, cursor: 'opaque' })).resolves.toMatchObject({ httpStatus: 200, data: { products: [] } });
+    expect(get).toHaveBeenCalledWith('/ml-test/activity', expect.objectContaining({ params: { limit: 20, cursor: 'opaque' }, timeout: 15000 }));
+  });
+
   it('gets forecast model diagnostics through the existing authenticated Axios instance', async () => {
     const instance = (apiClient as unknown as { instance: { get: (path: string, config?: unknown) => Promise<unknown> } }).instance;
     const get = vi.spyOn(instance, 'get').mockResolvedValue({ status: 200, data: { success: true, data: { models: [] } } });

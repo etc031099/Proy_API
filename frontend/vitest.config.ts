@@ -25,6 +25,7 @@ export default defineConfig({
       'test/businessIntelligenceDashboard.test.tsx',
       'test/mlTestEpochBoundary.test.tsx',
       'test/mlTestControlPanel.test.tsx',
+      'test/mlTestScenarioUiContext.test.tsx',
       'test/forecastEvaluation.test.tsx',
       'test/customerClustering.test.tsx',
       'test/salesAnomalies.test.tsx',

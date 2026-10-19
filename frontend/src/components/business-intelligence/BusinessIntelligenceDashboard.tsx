@@ -1,14 +1,14 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, BarChart3, CalendarClock, Loader2, PackageSearch, RefreshCw, Search } from 'lucide-react';
+import { AlertTriangle, BarChart3, CalendarClock, Loader2, PackageSearch, RefreshCw } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
 import { apiClient } from '@/lib/api';
 import type { BusinessSummary, ForecastActiveModel, ForecastResponse, IntelligenceMode, InventorySummary, ProductInventory, ProductOption, RiskLevel, SeriesStatus } from '@/types/businessIntelligence';
+import { ProductSearchPicker } from './ProductSearchPicker';
 import { ExtendedAnalyticsPanel, type ExtendedTab } from './ExtendedAnalyticsPanel';
 import { ChartCard, MetricInfo, MetricLabel } from './MetricInfo';
 import { ForecastEvaluationPanel } from './ForecastEvaluationPanel';
@@ -72,38 +72,6 @@ function RiskBadge({ risk }: { risk: RiskLevel | null }) {
   if (!risk || !riskLabels[risk]) return <span>No disponible</span>;
   return <Badge variant="outline" className="gap-1.5"><span aria-hidden="true" className="h-2 w-2 rounded-full" style={{ backgroundColor: riskColors[risk] }} />{riskLabels[risk]}</Badge>;
 }
-function ProductPicker({ selected, onSelect }: { selected: ProductOption | null; onSelect: (product: ProductOption) => void }) {
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<ProductOption[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(false);
-  const request = useRef(0);
-  useEffect(() => {
-    if (!query.trim()) { setResults([]); setBusy(false); setError(false); return; }
-    const current = ++request.current;
-    setBusy(true); setError(false);
-    const timer = setTimeout(() => {
-      void apiClient.searchBusinessIntelligenceProducts(query.trim()).then(response => {
-        if (current !== request.current) return;
-        if (!response.success || !response.data) throw new Error('Search unavailable');
-        setResults(response.data.products);
-      }).catch(() => { if (current === request.current) { setResults([]); setError(true); } })
-        .finally(() => { if (current === request.current) setBusy(false); });
-    }, 300);
-    return () => { clearTimeout(timer); };
-  }, [query]);
-
-  return <div className="space-y-2">
-    <label htmlFor="intelligence-product-search" className="text-sm font-medium">Producto</label>
-    <div className="relative"><Search aria-hidden="true" className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" /><Input id="intelligence-product-search" value={query} onChange={event => setQuery(event.target.value)} placeholder="Buscar por nombre o SKU…" className="pl-9" autoComplete="off" /></div>
-    {selected && <div className="rounded-md bg-muted/50 px-3 py-2 text-sm" aria-live="polite"><span className="font-medium">{selected.name}{selected.presentation ? ` · ${selected.presentation}` : ''}</span><span className="ml-2 text-xs text-muted-foreground">SKU: {selected.sku}</span></div>}
-    {query.trim() && <div className="max-h-56 overflow-auto rounded-md border" aria-label="Resultados de productos">
-      {busy ? <p className="p-3 text-sm text-muted-foreground">Buscando productos…</p> : error ? <p role="alert" className="p-3 text-sm text-destructive">No fue posible buscar productos.</p> : results.length ? results.map(product => <button type="button" key={product.id} onClick={() => { onSelect(product); setQuery(''); setResults([]); }} className="block w-full border-b px-3 py-2 text-left last:border-0 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="block font-medium">{product.name}{product.presentation ? ` · ${product.presentation}` : ''}</span><span className="text-xs text-muted-foreground">SKU: {product.sku}</span></button>) : <p className="p-3 text-sm text-muted-foreground">No se encontraron productos con SKU.</p>}
-    </div>}
-    {!selected && !query.trim() && <p className="text-sm text-muted-foreground">Busca y elige un producto para consultar sus datos.</p>}
-  </div>;
-}
-
 export function BusinessIntelligenceDashboard() {
   return <MlTestScenarioUiProvider><MlTestEpochBoundary><BusinessIntelligenceContent /></MlTestEpochBoundary></MlTestScenarioUiProvider>;
 }
@@ -264,7 +232,7 @@ function BusinessIntelligenceContent() {
         <div><h2 className="text-xl font-semibold">Pronóstico operativo</h2><p className="text-sm text-muted-foreground">Pronósticos operativos Ridge para horizontes acumulados de 7 y 14 días.</p><details className="mt-2 text-sm"><summary className="w-fit cursor-pointer font-medium">Sobre los modelos</summary><p className="mt-2 max-w-3xl text-muted-foreground">MA28 es un baseline estadístico de referencia. HistGradientBoosting (HGB) es un modelo histórico/experimental y no se utiliza para serving LIVE.</p></details></div>
         <ForecastDiagnosticsPanel onForecastModelsChange={setActiveForecastModels}
           onManualRequestFinished={() => setMlHistoryRefreshToken(value => value + 1)} />
-        <Card><CardHeader className="pb-3"><CardTitle>Pronóstico por producto</CardTitle><CardDescription>Consulta la demanda acumulada estimada para los próximos 7 o 14 días.</CardDescription></CardHeader><CardContent className="pt-0"><ProductPicker selected={selected} onSelect={chooseProduct} /></CardContent></Card>
+          <Card><CardHeader className="pb-3"><CardTitle>Pronóstico por producto</CardTitle><CardDescription>Consulta la demanda acumulada estimada para los próximos 7 o 14 días.</CardDescription></CardHeader><CardContent className="pt-0"><ProductSearchPicker id="intelligence-product-search" selected={selected} onSelect={chooseProduct} /></CardContent></Card>
         {!selected && <EmptyProductState />}
         {selected && <ForecastPanel product={selected} forecasts={forecastByHorizon} horizon={horizon} setHorizon={setHorizon} activeModels={activeForecastModels} onRetry={() => { apiClient.invalidateIntelligenceReads(); setDetailRetry(value => value + 1); }} />}
         <ForecastMlUpdateHistoryPanel refreshToken={mlHistoryRefreshToken} />
@@ -279,7 +247,7 @@ function BusinessIntelligenceContent() {
         <MlTestControlPanel />
       </section>}
       {tab === 'inventory' && <section id="intelligence-panel-inventory" role="tabpanel" aria-labelledby="intelligence-tab-inventory" tabIndex={0} className="mt-4 space-y-6">
-        <Card><CardContent className="p-5"><ProductPicker selected={selected} onSelect={chooseProduct} /></CardContent></Card>
+        <Card><CardContent className="p-5"><ProductSearchPicker id="intelligence-inventory-product-search" selected={selected} onSelect={chooseProduct} /></CardContent></Card>
         {!selected && <>
           {inventoryError && <ErrorPanel message="No se pudo cargar el inventario." retry={() => void loadInventory(true)} />}
           {inventoryState === 'loading' && <LoadingDetail label="Cargando ranking de inventario…" />}

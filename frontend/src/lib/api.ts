@@ -2,7 +2,7 @@ import axios, { AxiosInstance, AxiosError } from 'axios';
 import type { ForecastEvaluation } from '@/types/forecastEvaluation';
 import { ApiResponse, DemandForecastResponse, DemoV2RegisterData, DemoV3RegisterData } from '@/types';
 import type { AgentMessageRequest, AgentResponse, AgentConversationList, AgentConversationDetail } from '@/types/agent';
-import type { AnalyticsEnvelope, AssociationsAnalytics, AuthenticatedDiagnosticResult, BusinessHealthAnalytics, BusinessSummary, CertifiedForecastReplayEvidence, CustomerAnalyticsDetail, CustomersAnalytics, ForecastActiveModels, ForecastMlUpdateExecutionDetail, ForecastMlUpdateHistoryPage, ForecastMlUpdateProductsPage, ForecastMlUpdateRequestResult, ForecastMlUpdateStatus, ForecastResponse, HealthDiagnostic, InventorySummary, MlTestControlStatus, MlTestLifecycleResult, MlTestLifecycleStatus, MlTestScenarioAnalysisResult, ProductInventory, ProductOption, RelatedProductAnalytics, SalesAnalytics, SalesPeriod, SupplierAnalyticsDetail, SuppliersAnalytics } from '@/types/businessIntelligence';
+import type { AnalyticsEnvelope, AssociationsAnalytics, AuthenticatedDiagnosticResult, BusinessHealthAnalytics, BusinessSummary, CertifiedForecastReplayEvidence, CustomerAnalyticsDetail, CustomersAnalytics, ForecastActiveModels, ForecastMlUpdateExecutionDetail, ForecastMlUpdateHistoryPage, ForecastMlUpdateProductsPage, ForecastMlUpdateRequestResult, ForecastMlUpdateStatus, ForecastResponse, HealthDiagnostic, InventorySummary, MlTestActivity, MlTestControlStatus, MlTestLifecycleResult, MlTestLifecycleStatus, MlTestScenarioAnalysisResult, ProductInventory, ProductOption, RelatedProductAnalytics, SalesAnalytics, SalesPeriod, SupplierAnalyticsDetail, SuppliersAnalytics } from '@/types/businessIntelligence';
 import type { CustomerClustering } from '@/types/customerClustering';
 import type { SalesAnomalies } from '@/types/salesAnomalies';
 import { IntelligenceReadCache, type IntelligenceRevision } from './intelligenceReadCache';
@@ -82,6 +82,9 @@ class ApiClient {
   }
   async getMlTestLifecycleStatus(): Promise<AuthenticatedDiagnosticResult<MlTestLifecycleStatus>> {
     return this.diagnosticRead('/ml-test/status');
+  }
+  async getMlTestActivity(params: { limit?: number; cursor?: string } = {}): Promise<AuthenticatedDiagnosticResult<MlTestActivity>> {
+    return this.diagnosticRead('/ml-test/activity', params);
   }
   private async mlTestMutation(path: '/ml-test/checkpoint' | '/ml-test/restore', body: Record<string, never> | { mode: 'continue' | 'finish' }): Promise<AuthenticatedDiagnosticResult<MlTestLifecycleResult>> {
     try {
