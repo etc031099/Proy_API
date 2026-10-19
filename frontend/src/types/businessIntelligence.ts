@@ -185,11 +185,30 @@ export interface MlTestActivityOperation {
   kind: 'SALE_COMPLETED' | 'SALE_CANCELLED';
   status: 'completed' | 'cancelled';
 }
+export interface MlTestProductBaselineForecast {
+  status: string; reasonCode: string | null; modelFamily: string | null; activeModelStatus: string | null;
+  modelVersion: number | null; trainedDataVersion: string | null; units: number | null;
+  horizonDays: 7 | 14; dataVersion: string;
+}
+export type MlTestProductBaseline = { available: false } | {
+  available: true;
+  baselineRevision: string;
+  capturedRevision: string;
+  capturedAt: string | null;
+  stock: { onHand: number | null; incoming?: number | null; inventoryPosition?: number | null };
+  forecast7: MlTestProductBaselineForecast;
+  forecast14: MlTestProductBaselineForecast;
+  coverage: { daysCover: number | null; status: string | null; availabilityStatus: string | null; reasonCode: string | null };
+  risk: { level: string | null; status: string | null; reasonCodes: string[] };
+  recommendation: { reorderNow: boolean | null; recommendedQty: number | null; status: string | null;
+    availabilityStatus: string | null; reasonCode: string | null };
+};
 export interface MlTestActivityProduct {
   sku: string; name: string; saleCount: number; totalQuantity: number;
   cancellationCount: number; cancelledQuantity: number;
   latestActivityAt: string | null; latestActivityRevision: string;
   operationCount: number; operations: MlTestActivityOperation[];
+  baseline: MlTestProductBaseline;
 }
 export interface MlTestActivity {
   checkpointId: string; testCycleId: string | null; resetEpoch: string;

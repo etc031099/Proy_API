@@ -2,6 +2,7 @@
 
 const mongoose = require('mongoose');
 const config = require('../config/v3Operational');
+const { COLLECTION: PRODUCT_BASELINE_COLLECTION } = require('./mlTestProductBaselineService');
 const target = require('./mlTestTargetAuthorization');
 const access = require('./mlTestAccess');
 const fence = require('./mlTestFence');
@@ -157,6 +158,22 @@ function createMlTestActivity({ client = mongoose.connection.getClient(), db = m
       const offset = cursor ? grouped.products.findIndex(product => product.sku === cursor.sku) + 1 : 0;
       if (cursor && offset === 0) fail('ML_TEST_ACTIVITY_CURSOR_INVALID', 400);
       const products = grouped.products.slice(offset, offset + options.limit);
+      // Baselines are auxiliary LOCAL test data. Read only the current page's
+      // SKUs and pin every identity field to the same snapshot/cycle.
+      const baselineRows = !finished && products.length ? await db.collection(PRODUCT_BASELINE_COLLECTION).find({
+        ...scope, checkpointId, testCycleId: token.testCycleId, resetEpoch: token.resetEpoch,
+        sku: { $in: products.map(product => product.sku) },
+      }, { ...readOptions, projection: { _id: 0, sku: 1, baselineRevision: 1, capturedRevision: 1,
+        capturedAt: 1, stock: 1, forecast7: 1, forecast14: 1, coverage: 1, risk: 1, recommendation: 1 } })
+        .limit(options.limit).toArray() : [];
+      const baselineBySku = new Map(baselineRows.map(row => [row.sku, {
+        available: true, baselineRevision: revision(row.baselineRevision),
+        capturedRevision: revision(row.capturedRevision), capturedAt: iso(row.capturedAt),
+        stock: row.stock, forecast7: row.forecast7, forecast14: row.forecast14,
+        coverage: row.coverage, risk: row.risk, recommendation: row.recommendation,
+      }]));
+      const productsWithBaselines = products.map(product => ({ ...product,
+        baseline: baselineBySku.get(product.sku) || { available: false } }));
       const nextCursor = offset + products.length < grouped.products.length ? Buffer.from(JSON.stringify({
         checkpointId, testCycleId: token.testCycleId, resetEpoch: token.resetEpoch, upperRevision,
         sku: products[products.length - 1].sku })).toString('base64url') : null;
@@ -168,7 +185,7 @@ function createMlTestActivity({ client = mongoose.connection.getClient(), db = m
       if (finalControl?.state !== control.state || finalControl.activeCheckpointId !== control.activeCheckpointId
           || finalControl.lastCheckpointId !== control.lastCheckpointId) fail('ML_TEST_CYCLE_NOT_ACTIVE');
       return { checkpointId, testCycleId: token.testCycleId, resetEpoch: token.resetEpoch,
-        summary: { baselineRevision, currentRevision: upperRevision, ...grouped.summary }, products,
+        summary: { baselineRevision, currentRevision: upperRevision, ...grouped.summary }, products: productsWithBaselines,
         page: { limit: options.limit, nextCursor, operationsPerProduct: OPERATIONS_PER_PRODUCT } };
     } finally { await session.endSession(); }
   }

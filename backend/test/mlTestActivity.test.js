@@ -14,6 +14,12 @@ const scope = { businessId: config.businessId, scenarioId: config.scenarioId };
 const createSale = (n, lines, extra = {}) => ({ ...scope, revision: Long.fromNumber(n), eventOrdinal: 0,
   entityType: 'sale', operation: 'CREATE', entityKey: String(id(n)), effectiveAtUtc: new Date('2026-10-19T15:00:00Z'),
   projection: { initialStatus: 'completed', lines: lines.map(([sku, quantity]) => ({ sku, quantity })) }, ...extra });
+const productBaseline = (sku, extra = {}) => ({ ...scope, checkpointId, testCycleId: cycleId, resetEpoch: '5', sku,
+  baselineRevision: '173', capturedRevision: sku === 'B' ? '175' : '174', capturedAt: new Date('2026-10-19T15:00:00Z'),
+  stock: { onHand: 10 }, forecast7: { status: 'READY', units: 4.99, horizonDays: 7 },
+  forecast14: { status: 'READY', units: 10.43, horizonDays: 14 }, coverage: { daysCover: 8.25, status: 'AVAILABLE' },
+  risk: { level: 'MEDIUM', status: 'AVAILABLE', reasonCodes: [] },
+  recommendation: { recommendedQty: 12, reorderNow: false, status: 'AVAILABLE' }, ...extra });
 
 function field(row, path) { return path.split('.').reduce((value, key) => value?.[key], row); }
 function equals(a, b) { return a == null || b == null ? a === b : String(a) === String(b); }
@@ -38,6 +44,7 @@ function fixture(options = {}) {
       { ...scope, revision: Long.fromNumber(177), entityType: 'transaction', operation: 'CANCEL', entityKey: String(id(100)),
         projection: { type: 'sale' }, effectiveAtUtc: new Date('2026-10-19T16:00:00Z') },
       createSale(177, [['FOREIGN', 500]], { businessId: 'other' }), createSale(177, [['OTHER-SCENARIO', 500]], { scenarioId: 'other' })],
+    mltestproductbaselines: options.baselines || [],
     transactions: [{ _id: id(100), businessId: config.businessId, type: 'sale', status: 'cancelled', products: [{ productId: id(3), quantity: 2 }] },
       { _id: id(101), businessId: 'other', type: 'sale', status: 'cancelled', products: [{ sku: 'FOREIGN', quantity: 500 }] }],
     products: ['A', 'B', 'C'].map((sku, index) => ({ _id: id(index + 1), businessId: config.businessId, sku, name: 'Producto ' + sku })),
@@ -104,6 +111,36 @@ test('cancellation cannot resolve a transaction from another tenant', async () =
   const f = fixture(); const cancellation = f.tables.v3operationalchanges.find(row => row.operation === 'CANCEL');
   cancellation.entityKey = String(id(101));
   await assert.rejects(f.service.execute({ user }), { code: 'ML_TEST_ACTIVITY_REFERENCE_INVALID' });
+});
+
+test('activity includes only baselines matching the active tenant, scenario, checkpoint, cycle, epoch and SKU', async () => {
+  const f = fixture({ baselines: [productBaseline('A'), productBaseline('B'),
+    productBaseline('C', { resetEpoch: '4' }), productBaseline('A', { testCycleId: 'other-cycle' }),
+    productBaseline('A', { checkpointId: '33333333-3333-4333-8333-333333333333' }),
+    productBaseline('A', { businessId: 'other' }), productBaseline('A', { scenarioId: 'other' })] });
+  const result = await f.service.execute({ user });
+  const a = result.products.find(row => row.sku === 'A'); const b = result.products.find(row => row.sku === 'B');
+  const c = result.products.find(row => row.sku === 'C');
+  assert.equal(a.baseline.available, true); assert.equal(a.baseline.capturedRevision, '174');
+  assert.deepEqual(a.baseline.stock, { onHand: 10 }); assert.equal(a.baseline.forecast7.units, 4.99);
+  assert.equal(a.baseline.baselineRevision, '173'); assert.equal(b.baseline.capturedRevision, '175');
+  assert.deepEqual(c.baseline, { available: false });
+  const read = f.reads.find(row => row.name === 'mltestproductbaselines');
+  assert.equal(read.filter.businessId, config.businessId); assert.equal(read.filter.scenarioId, config.scenarioId);
+  assert.equal(read.filter.checkpointId, checkpointId); assert.equal(read.filter.testCycleId, cycleId);
+  assert.equal(read.filter.resetEpoch, '5'); assert.deepEqual(read.filter.sku, { $in: ['C', 'A', 'B'] });
+  assert.equal(read.readOptions.readConcern.level, 'snapshot');
+});
+
+test('missing baseline is unavailable and restored/new epoch responses never expose old baseline rows', async () => {
+  const missing = await fixture().service.execute({ user });
+  assert.ok(missing.products.every(row => row.baseline.available === false));
+  const restored = fixture({ rows: [], control: { state: 'NO_TEST', activeCheckpointId: null, testCycleId: null,
+    lastCheckpointId: checkpointId, restoreFinish: true, restoreId: 'receipt', finalizedAt: new Date() },
+  baselines: [productBaseline('A')] });
+  restored.tables.v3operationalrevisions[0].revision = Long.fromNumber(173);
+  const finish = await restored.service.verifyRestored({ user });
+  assert.equal(finish.status, 'EMPTY'); assert.equal(restored.reads.some(row => row.name === 'mltestproductbaselines'), false);
 });
 
 test('UI and assistant committed sales have identical observation semantics', async () => {

@@ -4,7 +4,7 @@ import { MlTestEpochBoundary } from '@/components/business-intelligence/MlTestEp
 import { MlTestScenarioUiProvider, useMlTestScenarioUiState } from '@/components/business-intelligence/MlTestScenarioUiContext';
 import { MlTestControlPanel } from '@/components/business-intelligence/MlTestControlPanel';
 import { apiClient } from '@/lib/api';
-import type { MlTestActivity, MlTestActivityProduct, MlTestLifecycleResult, ForecastMlUpdateStatus, ForecastResponse, MlTestControlStatus, MlTestLifecycleStatus, MlTestScenarioAnalysisResult, ProductInventory, ProductOption } from '@/types/businessIntelligence';
+import type { MlTestActivity, MlTestActivityProduct, MlTestLifecycleResult, MlTestProductBaseline, ForecastMlUpdateStatus, ForecastResponse, MlTestControlStatus, MlTestLifecycleStatus, MlTestScenarioAnalysisResult, ProductInventory, ProductOption } from '@/types/businessIntelligence';
 
 const products: ProductOption[] = [
   { id: 'a', sku: 'SKU-A', name: 'Producto A', presentation: null },
@@ -50,7 +50,19 @@ function activityProduct(sku: string, quantity = 2): MlTestActivityProduct {
   return { sku, name: products.find(row => row.sku === sku)?.name || 'Producto ' + sku,
     saleCount: 2, totalQuantity: quantity, cancellationCount: 0, cancelledQuantity: 0, latestActivityAt: '2026-10-19T15:00:00Z',
     latestActivityRevision: '174', operationCount: 2,
-    operations: [{ transactionId: 'sale-1', revision: '174', quantity, occurredAt: '2026-10-19T15:00:00Z', kind: 'SALE_COMPLETED', status: 'completed' }] };
+    operations: [{ transactionId: 'sale-1', revision: '174', quantity, occurredAt: '2026-10-19T15:00:00Z', kind: 'SALE_COMPLETED', status: 'completed' }],
+    baseline: { available: false } };
+}
+function productBaseline(capturedRevision = '174'): Extract<MlTestProductBaseline, { available: true }> {
+  return { available: true as const, baselineRevision: '173', capturedRevision, capturedAt: '2026-10-19T15:00:00Z',
+    stock: { onHand: 10, incoming: 0, inventoryPosition: 10 },
+    forecast7: { status: 'READY', reasonCode: null, modelFamily: 'RIDGE_REGRESSION', activeModelStatus: 'ACTIVE', modelVersion: 1,
+      trainedDataVersion: '83', units: 4.99, horizonDays: 7 as const, dataVersion: capturedRevision },
+    forecast14: { status: 'READY', reasonCode: null, modelFamily: 'RIDGE_REGRESSION', activeModelStatus: 'ACTIVE', modelVersion: 1,
+      trainedDataVersion: '83', units: 10.43, horizonDays: 14 as const, dataVersion: capturedRevision },
+    coverage: { daysCover: 8.25, status: 'AVAILABLE', availabilityStatus: 'AVAILABLE', reasonCode: null },
+    risk: { level: 'MEDIUM', status: 'AVAILABLE', reasonCodes: [] },
+    recommendation: { reorderNow: false, recommendedQty: 12, status: 'AVAILABLE', availabilityStatus: 'AVAILABLE', reasonCode: null } };
 }
 function activityData(skus: string[] = [], currentRevision = skus.length ? '174' : '173', epoch = '4'): MlTestActivity {
   return { checkpointId: 'checkpoint', testCycleId: 'cycle-demo', resetEpoch: epoch,
@@ -81,9 +93,8 @@ function BaselineProbe() {
 }
 async function openProduct(sku: string) {
   const label = screen.getByText(new RegExp(' · ' + sku + '$'));
-  const details = label.closest('details')!;
-  details.open = true; fireEvent(details, new Event('toggle'));
-  await waitFor(() => expect(within(screen.getByRole('region', { name: 'Estado actual ' + sku })).queryByText('Consultando métricas actuales…')).toBeNull());
+  fireEvent.click(label.closest('summary')!);
+  await waitFor(() => expect(within(screen.getByRole('region', { name: 'Impacto observado ' + sku })).queryByText('Consultando métricas actuales…')).toBeNull());
 }
 function restored(mode: 'continue' | 'finish', signals7 = 0, signals14 = 0) {
   const next = lifecycle({ state: mode === 'continue' ? 'TEST_ACTIVE' : 'NO_TEST', resetEpoch: '5',
@@ -121,13 +132,93 @@ describe('free local ML test activity', () => {
     expect(within(list).getAllByText(/2 ventas · 2 unidades/)).toHaveLength(2);
     expect(apiClient.getBusinessIntelligenceProductInventory).not.toHaveBeenCalled();
     await openProduct('SKU-A');
-    const current = screen.getByRole('region', { name: 'Estado actual SKU-A' });
-    expect(current.textContent).toContain('21'); expect(current.textContent).toContain('15 unidades'); expect(current.textContent).toContain('30 unidades');
-    expect(current.textContent).toContain('Estas métricas reflejan el estado actual');
-    expect(current.textContent).not.toMatch(/baseline|antes|→/i);
+    const current = screen.getByRole('region', { name: 'Impacto observado SKU-A' });
+    expect(current.textContent).toContain('No disponible → 21 unidades');
+    expect(current.textContent).toContain('No disponible → 15 unidades'); expect(current.textContent).toContain('No disponible → 30 unidades');
+    expect(current.textContent).toContain('Otros cambios del negocio ocurridos durante la prueba también pueden influir');
+    expect(current.textContent).not.toContain('174');
+    const productCard = screen.getByText(/ · SKU-A$/).closest('details')!;
+    expect(within(productCard).getByText('Detalles técnicos').closest('details')?.open).toBe(false);
     expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenCalledTimes(2);
     expect(apiClient.getBusinessIntelligenceForecast).not.toHaveBeenCalledWith('SKU-A', 1);
     expect(screen.getByText('Impacto global del ML')).toBeTruthy();
+  });
+
+  it('shows first-contact baseline before current LIVE metrics and keeps capture revision in technical details', async () => {
+    const data = activityData(['SKU-A']); data.products[0].baseline = productBaseline('175');
+    mockLocal(data); render(<MlTestControlPanel />); await loaded();
+    const initiallyCollapsed = screen.getByText(/ · SKU-A$/).closest('details')!;
+    expect(within(initiallyCollapsed).getByText('Detalles técnicos').closest('details')?.open).toBe(false);
+    await openProduct('SKU-A');
+    const impact = screen.getByRole('region', { name: 'Impacto observado SKU-A' });
+    expect(impact.textContent).toContain('Stock10 unidades → 21 unidades');
+    expect(impact.textContent).toContain('Pronóstico Ridge 7d4.99 unidades → 15 unidades');
+    expect(impact.textContent).toContain('Pronóstico Ridge 14d10.43 unidades → 30 unidades');
+    expect(impact.textContent).toContain('Cobertura8.25 días → 10 días');
+    expect(impact.textContent).toContain('RiesgoMEDIUM → LOW');
+    expect(impact.textContent).toContain('Cantidad para nivel objetivo / reposición12 unidades → 0 unidades');
+    expect(impact.textContent).toContain('Comparación entre el estado capturado justo antes del primer contacto');
+    const card = screen.getByText(/ · SKU-A$/).closest('details')!;
+    const technical = within(card).getByText('Detalles técnicos').closest('details')!;
+    fireEvent.click(within(technical).getByText('Detalles técnicos'));
+    expect(technical.textContent).toContain('Punto de restauración: rev 173');
+    expect(technical.textContent).toContain('Baseline del producto capturado en rev 175');
+    expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps independent baselines per SKU and one original baseline across repeated same-SKU sales', async () => {
+    const data = activityData(['SKU-A', 'SKU-B']);
+    data.products[0].baseline = productBaseline('174'); data.products[1].baseline = productBaseline('176');
+    data.products[0].saleCount = 3; data.products[0].operationCount = 3;
+    mockLocal(data); render(<MlTestControlPanel />); await loaded();
+    expect(screen.getByText(/3 ventas · 2 unidades/)).toBeTruthy();
+    await openProduct('SKU-A');
+    const cardA = screen.getByText(/ · SKU-A$/).closest('details')!;
+    const technicalA = within(cardA).getByText('Detalles técnicos').closest('details')!;
+    fireEvent.click(within(technicalA).getByText('Detalles técnicos'));
+    expect(technicalA.textContent).toContain('Baseline del producto capturado en rev 174');
+    await openProduct('SKU-B');
+    const cardB = screen.getByText(/ · SKU-B$/).closest('details')!;
+    const technicalB = within(cardB).getByText('Detalles técnicos').closest('details')!;
+    fireEvent.click(within(technicalB).getByText('Detalles técnicos'));
+    expect(technicalB.textContent).toContain('Baseline del producto capturado en rev 176');
+  });
+
+  it('does not invent unavailable baseline forecast values or display non-Ridge as LIVE', async () => {
+    const data = activityData(['SKU-A']); const base = productBaseline();
+    base.forecast7 = { ...base.forecast7, status: 'UNAVAILABLE', modelFamily: null, activeModelStatus: null, units: null };
+    data.products[0].baseline = base;
+    mockLocal(data);
+    vi.mocked(apiClient.getBusinessIntelligenceForecast).mockImplementation(async (_sku, horizon) => horizon === 7
+      ? ({ success: true, data: { ...forecast('SKU-A', 7, 22), modelFamily: 'HGB', method: 'HGB', activeModelStatus: 'ACTIVE' } })
+      : ({ success: true, data: forecast('SKU-A', 14, 30) }));
+    render(<MlTestControlPanel />); await loaded(); await openProduct('SKU-A');
+    const impact = screen.getByRole('region', { name: 'Impacto observado SKU-A' });
+    expect(impact.textContent).toContain('Pronóstico Ridge 7dNo disponible → No disponible');
+    expect(impact.textContent).toContain('Pronóstico Ridge 14d10.43 unidades → 30 unidades');
+  });
+
+  it('drops old product comparisons after restore and uses only the baseline returned for the new epoch', async () => {
+    const old = activityData(['SKU-A']); old.products[0].baseline = productBaseline('174');
+    mockLocal(old); render(<MlTestControlPanel />); await loaded(); await openProduct('SKU-A');
+    expect(screen.getByRole('region', { name: 'Impacto observado SKU-A' }).textContent).toContain('10 unidades → 21 unidades');
+
+    const nextCycle = lifecycle({ resetEpoch: '5', checkpoint: { status: 'READY', dataVersion: '190' } });
+    const fresh = activityData(['SKU-A'], '191', '5'); fresh.summary.baselineRevision = '190';
+    fresh.products[0].baseline = { ...productBaseline('191'), baselineRevision: '190', stock: { onHand: 8 } };
+    vi.mocked(apiClient.getMlTestControlStatus).mockResolvedValue({ httpStatus: 200, data: { ...allowed, ...nextCycle } });
+    vi.mocked(apiClient.getMlTestLifecycleStatus).mockResolvedValue({ httpStatus: 200, data: nextCycle });
+    vi.mocked(apiClient.getMlTestActivity).mockResolvedValue({ httpStatus: 200, data: fresh });
+    fireEvent.click(screen.getByRole('button', { name: 'Actualizar actividad' }));
+    await waitFor(() => expect(screen.getByText(/190 → 191/)).toBeTruthy());
+    await openProduct('SKU-A');
+    const impact = screen.getByRole('region', { name: 'Impacto observado SKU-A' });
+    expect(impact.textContent).toContain('8 unidades → 21 unidades');
+    const card = screen.getByText(/ · SKU-A$/).closest('details')!;
+    const technical = within(card).getByText('Detalles técnicos').closest('details')!;
+    fireEvent.click(within(technical).getByText('Detalles técnicos'));
+    expect(technical.textContent).toContain('Punto de restauración: rev 190');
+    expect(technical.textContent).toContain('Baseline del producto capturado en rev 191');
   });
 
   it('shows five collapsed products first, supports more/less and name/SKU filtering', async () => {

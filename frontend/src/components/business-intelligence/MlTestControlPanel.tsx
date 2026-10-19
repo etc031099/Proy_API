@@ -375,16 +375,45 @@ function ActivityProduct({ product }: { product: MlTestActivityProduct }) {
     void Promise.all([apiClient.getBusinessIntelligenceProductInventory(product.sku).catch(() => null),
       readForecastObservation(product.sku, 7), readForecastObservation(product.sku, 14)]).then(([response, seven, fourteen]) => {
       if (!active) return;
-      setInventory(response?.success && response.data?.product.sku === product.sku ? response.data : null);
+      setInventory(response?.success && response.data?.product.sku === product.sku
+        && response.data.mode === 'LIVE' && response.data.status === 'READY' ? response.data : null);
       setForecast({ 7: seven, 14: fourteen }); setLoaded(true);
     });
     return () => { active = false; };
   }, [loaded, open, product.sku]);
+  const baseline = product.baseline;
+  const baselineNumber = (value: number | null | undefined) => baseline.available && typeof value === 'number' && Number.isFinite(value) ? value : null;
+  const forecastBefore = (days: 7 | 14) => {
+    if (!baseline.available) return null;
+    const value = days === 7 ? baseline.forecast7 : baseline.forecast14;
+    return value.status === 'READY' && value.modelFamily === 'RIDGE_REGRESSION' && value.activeModelStatus === 'ACTIVE'
+      && typeof value.units === 'number' && Number.isFinite(value.units) ? value.units : null;
+  };
+  const forecastAfter = (days: 7 | 14) => forecast?.[days].state === 'AVAILABLE' ? forecast[days].units : null;
+  const metric = (name: string, before: number | string | null, after: number | string | null, suffix = '') =>
+    <div key={name}><dt className="text-muted-foreground">{name}</dt><dd>{before === null ? 'No disponible' : displayValue(before) + suffix} → {after === null ? 'No disponible' : displayValue(after) + suffix}</dd></div>;
+  const currentStock = typeof inventory?.stock.onHand === 'number' && Number.isFinite(inventory.stock.onHand) ? inventory.stock.onHand : null;
+  const currentCoverage = typeof inventory?.coverage.daysCover === 'number' && Number.isFinite(inventory.coverage.daysCover) ? inventory.coverage.daysCover : null;
+  const currentRisk = typeof inventory?.risk.level === 'string' && inventory.risk.level ? inventory.risk.level : null;
+  const currentRecommended = typeof inventory?.recommendation.recommendedQty === 'number' && Number.isFinite(inventory.recommendation.recommendedQty)
+    ? inventory.recommendation.recommendedQty : null;
   return <details className="rounded-md border p-3" onToggle={event => setOpen(event.currentTarget.open)}><summary className="cursor-pointer text-sm"><span className="font-medium">{product.name} · {product.sku}</span><span className="mt-1 block text-muted-foreground">{product.saleCount} ventas · {product.totalQuantity} unidades · {product.cancellationCount} cancelaciones · Última actividad: {formatDate(product.latestActivityAt)}</span></summary>
-    {open && <div className="mt-3 space-y-3"><div><h4 className="font-medium">Operaciones recientes</h4><ul className="space-y-1 text-xs">{product.operations.map((operation, index) => <li key={operation.revision + ':' + index}>{operation.kind === 'SALE_COMPLETED' ? 'Venta completada al registrar' : 'Cancelación de venta'} · {operation.quantity} unidades · {formatDate(operation.occurredAt)} · Revisión {operation.revision} · Ref. {operation.transactionId}</li>)}</ul>{product.operationCount > product.operations.length && <p className="text-xs text-muted-foreground">Se muestran las últimas {product.operations.length} de {product.operationCount} operaciones; los totales incluyen todas.</p>}</div>
-      <section aria-label={'Estado actual ' + product.sku}><h4 className="font-medium">Estado actual</h4><p className="text-xs text-muted-foreground">Estas métricas reflejan el estado actual del producto después de las operaciones detectadas.</p>
-        {!loaded ? <p>Consultando métricas actuales…</p> : <dl className="mt-2 grid gap-2 text-sm sm:grid-cols-2"><div><dt>Stock</dt><dd>{displayValue(inventory?.stock.onHand)}</dd></div>{([7, 14] as const).map(days => <div key={days}><dt>Pronóstico Ridge {days}d</dt><dd>{forecast?.[days].state === 'AVAILABLE' ? displayValue(forecast[days].units) + ' unidades' : 'No disponible'}</dd></div>)}<div><dt>Cobertura</dt><dd>{inventory?.coverage.daysCover == null ? 'No disponible' : displayValue(inventory.coverage.daysCover) + ' días'}</dd></div><div><dt>Riesgo</dt><dd>{inventory?.risk.level || 'No disponible'}</dd></div><div><dt>Cantidad para el nivel objetivo</dt><dd>{displayValue(inventory?.recommendation.recommendedQty)}</dd></div></dl>}
-      </section></div>}
+    <div className="mt-3 space-y-3"><section aria-label={'Impacto observado ' + product.sku}><h4 className="font-medium">Impacto observado</h4>
+        <p className="text-xs text-muted-foreground">Comparación entre el estado capturado justo antes del primer contacto de este producto en la prueba y su estado actual. Otros cambios del negocio ocurridos durante la prueba también pueden influir en las métricas, especialmente en los pronósticos.</p>
+        {!loaded ? <p>Consultando métricas actuales…</p> : <dl className="mt-2 grid gap-2 text-sm sm:grid-cols-2">
+          {metric('Stock', baselineNumber(baseline.available ? baseline.stock.onHand : null), currentStock, ' unidades')}
+          {metric('Pronóstico Ridge 7d', forecastBefore(7), forecastAfter(7), ' unidades')}
+          {metric('Pronóstico Ridge 14d', forecastBefore(14), forecastAfter(14), ' unidades')}
+          {metric('Cobertura', baselineNumber(baseline.available ? baseline.coverage.daysCover : null), currentCoverage, ' días')}
+          {metric('Riesgo', baseline.available ? baseline.risk.level : null, currentRisk)}
+          {metric('Cantidad para nivel objetivo / reposición', baselineNumber(baseline.available ? baseline.recommendation.recommendedQty : null), currentRecommended, ' unidades')}
+        </dl>}
+      </section>
+      <details className="rounded border px-2 py-1 text-xs"><summary className="cursor-pointer">Ver operaciones</summary><ul className="mt-2 space-y-1">{product.operations.map((operation, index) => <li key={operation.revision + ':' + index}>{operation.kind === 'SALE_COMPLETED' ? 'Venta completada al registrar' : 'Cancelación de venta'} · {operation.quantity} unidades · {formatDate(operation.occurredAt)} · Revisión {operation.revision} · Ref. {operation.transactionId}</li>)}</ul>{product.operationCount > product.operations.length && <p className="mt-1 text-muted-foreground">Se muestran las últimas {product.operations.length} de {product.operationCount} operaciones; los totales incluyen todas.</p>}</details>
+      <details className="rounded border px-2 py-1 text-xs"><summary className="cursor-pointer">Detalles técnicos</summary>{baseline.available
+        ? <p className="mt-2">Punto de restauración: rev {baseline.baselineRevision}. Baseline del producto capturado en rev {baseline.capturedRevision} · {formatDate(baseline.capturedAt)}.</p>
+        : <p className="mt-2">Baseline analítico del producto: No disponible.</p>}</details>
+    </div>
   </details>;
 }
 
