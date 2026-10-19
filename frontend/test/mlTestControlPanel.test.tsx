@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { useEffect, useState } from 'react';
 import { MlTestControlPanel } from '@/components/business-intelligence/MlTestControlPanel';
+import { MlTestScenarioUiProvider, useMlTestScenarioUiState, type MlTestRestoreVerification } from '@/components/business-intelligence/MlTestScenarioUiContext';
 import { apiClient } from '@/lib/api';
 import type { ForecastMlUpdateStatus, ForecastResponse, MlTestControlStatus, MlTestLifecycleStatus, MlTestScenarioAnalysisResult, ProductInventory } from '@/types/businessIntelligence';
 
@@ -47,6 +49,7 @@ const ridgeForecast = (horizonDays: 7 | 14, units: number): ForecastResponse => 
   horizons: { '1d': null, '7d': horizonDays === 7 ? units : null, '14d': horizonDays === 14 ? units : null }, observedSeries: [],
   forecastPeriod: { startDate: '2026-10-20', selectedHorizonDays: horizonDays, units },
 });
+const originalScrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>(done => { resolve = done; });
@@ -79,7 +82,77 @@ async function prepareChangedScenario() {
 }
 
 describe('ML test control panel', () => {
-  afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+  afterEach(() => {
+    cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals();
+    if (originalScrollIntoView) Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', originalScrollIntoView);
+    else Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView');
+  });
+
+  it.each([
+    ['COMPLETE', 'continue'], ['COMPLETE', 'finish'], ['FAILED', 'continue'],
+  ] as const)('%s %s verification scrolls its mounted result after both layout frames', async (phase, mode) => {
+    mockScenario();
+    const baseline = {} as MlTestRestoreVerification['baseline'];
+    const scroll = vi.fn(function (this: HTMLElement, options: ScrollIntoViewOptions) {
+      expect(options).toEqual({ behavior: 'smooth', block: 'start' });
+      expect(this.className).toContain('scroll-mt-24');
+      expect(screen.getByRole('heading', { name: phase === 'COMPLETE' ? 'Restauración completada' : 'No se pudo verificar la restauración' })).toBeTruthy();
+    });
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scroll });
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => { frames.push(callback); return frames.length; });
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {});
+
+    function TerminalResultPanel() {
+      const { setRestoreVerification, setRestoreScrollPending } = useMlTestScenarioUiState();
+      const [ready, setReady] = useState(false);
+      useEffect(() => {
+        setRestoreScrollPending(true);
+        setRestoreVerification({ phase, mode, scenario: 'NORMAL', baseline, message: phase === 'FAILED' ? 'Lectura no disponible' : undefined });
+        setReady(true);
+      }, [setRestoreScrollPending, setRestoreVerification]);
+      return ready ? <MlTestControlPanel /> : null;
+    }
+
+    render(<MlTestScenarioUiProvider><TerminalResultPanel /></MlTestScenarioUiProvider>);
+    expect(await screen.findByRole('heading', { name: phase === 'COMPLETE' ? 'Restauración completada' : 'No se pudo verificar la restauración' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: phase === 'COMPLETE' ? 'Restauración completada' : 'No se pudo verificar la restauración' }).parentElement?.parentElement?.className).toContain('scroll-mt-24');
+    expect(scroll).not.toHaveBeenCalled();
+
+    await act(async () => { frames.shift()?.(0); });
+    expect(scroll).not.toHaveBeenCalled();
+    await act(async () => { frames.shift()?.(0); });
+    expect(scroll).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not scroll during normal load or VERIFYING; FAILED scrolls only after the operation ends', async () => {
+    mockScenario();
+    const pendingRestore = deferred<{ httpStatus: number; data?: MlTestLifecycleStatus }>();
+    vi.spyOn(apiClient, 'restoreMlTestCheckpoint').mockReturnValue(pendingRestore.promise);
+    vi.stubGlobal('confirm', vi.fn(() => true));
+    const scroll = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scroll });
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => { frames.push(callback); return frames.length; });
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {});
+
+    render(<MlTestControlPanel />);
+    expect(await screen.findByText('Prueba activa')).toBeTruthy();
+    expect(scroll).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: /NORMAL/ }));
+    await screen.findByText(/Estado inicial observado/);
+    fireEvent.click(screen.getByRole('button', { name: 'Restaurar punto de restauración' }));
+    expect(await screen.findByRole('heading', { name: 'Restaurando punto de restauración…' })).toBeTruthy();
+    expect(scroll).not.toHaveBeenCalled();
+
+    pendingRestore.resolve({ httpStatus: 503 });
+    expect(await screen.findByRole('heading', { name: 'No se pudo verificar la restauración' })).toBeTruthy();
+    expect(scroll).not.toHaveBeenCalled();
+    await waitFor(() => expect(frames).toHaveLength(1));
+    await act(async () => { frames.shift()?.(0); });
+    await act(async () => { frames.shift()?.(0); });
+    expect(scroll).toHaveBeenCalledTimes(1);
+  });
 
   it('renders nothing without authorized LOCAL capability and does not query lifecycle', async () => {
     vi.spyOn(apiClient, 'getMlTestControlStatus').mockResolvedValue({ httpStatus: 200, data: denied });

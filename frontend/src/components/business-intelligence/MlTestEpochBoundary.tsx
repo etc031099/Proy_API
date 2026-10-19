@@ -12,14 +12,13 @@ export function MlTestEpochBoundary({ children }: { children: React.ReactNode })
   const [control, setControl] = useState<MlTestControlStatus | null>(null);
   const [unavailable, setUnavailable] = useState(false);
   const identityRef = useRef<string | null>(null);
-  const renderedIdentityRef = useRef<string | null>(null);
   const readingRef = useRef(false);
+  const refreshQueuedRef = useRef(false);
   const mountedRef = useRef(false);
-  const restoreWasVerifyingRef = useRef(restoreVerification?.phase === 'VERIFYING');
-  const scrolledRestoreRef = useRef<typeof restoreVerification>(null);
 
-  const refresh = useCallback(async () => {
-    if (document.visibilityState === 'hidden' || readingRef.current) return;
+  const refresh = useCallback(async function refreshControl() {
+    if (document.visibilityState === 'hidden') return;
+    if (readingRef.current) { refreshQueuedRef.current = true; return; }
     readingRef.current = true;
     try {
       const response = await apiClient.getMlTestControlStatus();
@@ -35,7 +34,13 @@ export function MlTestEpochBoundary({ children }: { children: React.ReactNode })
       if (!mountedRef.current) return;
       apiClient.invalidateIntelligenceReads();
       setUnavailable(true);
-    } finally { readingRef.current = false; }
+    } finally {
+      readingRef.current = false;
+      if (refreshQueuedRef.current && mountedRef.current) {
+        refreshQueuedRef.current = false;
+        void refreshControl();
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -48,36 +53,13 @@ export function MlTestEpochBoundary({ children }: { children: React.ReactNode })
       document.removeEventListener('visibilitychange', focus); };
   }, [refresh]);
 
-  // A terminal restore result may arrive before the epoch boundary's own
-  // 30-second refresh. Read the new control immediately so its keyed subtree
-  // remounts before we try to scroll to the result.
+  // A terminal restore result may arrive before the normal 30-second read.
+  // Refresh immediately so the existing epoch boundary can invalidate and
+  // remount its subtree; scrolling is owned by the result component itself.
   useEffect(() => {
     if (restoreVerification?.phase === 'COMPLETE' || restoreVerification?.phase === 'FAILED') void refresh();
   }, [operation, refresh, restoreVerification?.phase]);
 
-  useEffect(() => {
-    if (restoreVerification?.phase === 'VERIFYING') restoreWasVerifyingRef.current = true;
-    if (!control) return;
-
-    const identity = `${control.testCycleId ?? ''}:${control.resetEpoch}`;
-    // The control identity is set by refresh before React commits this effect,
-    // so keep a separate identity for the last committed subtree.
-    const lastRenderedIdentity = renderedIdentityRef.current;
-    renderedIdentityRef.current = identity;
-    const epochChanged = lastRenderedIdentity !== null && lastRenderedIdentity !== identity;
-    const terminal = restoreVerification?.phase === 'COMPLETE' || restoreVerification?.phase === 'FAILED';
-    const failedWithoutEpochChange = restoreVerification?.phase === 'FAILED' && operation === null
-      && restoreWasVerifyingRef.current;
-    if (!terminal || (!epochChanged && !failedWithoutEpochChange) || scrolledRestoreRef.current === restoreVerification) return;
-
-    scrolledRestoreRef.current = restoreVerification;
-    restoreWasVerifyingRef.current = false;
-    const frame = window.requestAnimationFrame(() => {
-      const target = document.getElementById('ml-test-restore-result') || document.getElementById('ml-test-controls');
-      target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [control, operation, restoreVerification]);
   if (unavailable) return <p role="status">No se pudo verificar el estado de prueba. Se volverá a consultar automáticamente.</p>;
   if (!control) return <p role="status">Comprobando estado de prueba…</p>;
   if (control.maintenance) return <div role="status" aria-live="polite" className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">

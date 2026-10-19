@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { LoaderCircle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -151,7 +151,11 @@ async function readScenarioSnapshot(cycle: { resetEpoch: string; testCycleId: st
 }
 
 export function MlTestControlPanel() {
-  const { restoreVerification, setRestoreVerification, operation, setOperation } = useMlTestScenarioUiState();
+  const { restoreVerification, setRestoreVerification, restoreScrollPending, setRestoreScrollPending, operation, setOperation } = useMlTestScenarioUiState();
+  const restoreResultRef = useRef<HTMLDivElement>(null);
+  const restorePhaseAtMountRef = useRef(restoreVerification?.phase ?? null);
+  const restoreWasVerifyingRef = useRef(restoreVerification?.phase === 'VERIFYING');
+  const restoreScrollHandledRef = useRef(false);
   const [view, setView] = useState<ViewState>('loading');
   const [status, setStatus] = useState<MlTestLifecycleStatus | null>(null);
   const [action, setAction] = useState<Action>(null);
@@ -167,6 +171,32 @@ export function MlTestControlPanel() {
   const [analysisErrors, setAnalysisErrors] = useState<Partial<Record<7 | 14, string>>>({});
   const [analysisRunning, setAnalysisRunning] = useState<7 | 14 | null>(null);
   const [analysisMessage, setAnalysisMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    const phase = restoreVerification?.phase;
+    if (phase === 'VERIFYING') restoreWasVerifyingRef.current = true;
+    if (view !== 'ready' || !restoreResultRef.current) return;
+    const terminal = phase === 'COMPLETE' || phase === 'FAILED';
+    const resultMountedAfterRestore = terminal && phase === restorePhaseAtMountRef.current && restoreScrollPending;
+    const failedWithoutEpochChange = phase === 'FAILED' && restoreWasVerifyingRef.current && operation === null && restoreScrollPending;
+    if (!terminal || (!resultMountedAfterRestore && !failedWithoutEpochChange) || restoreScrollHandledRef.current) return;
+
+    let secondFrame: number | null = null;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        const result = restoreResultRef.current;
+        if (!result) return;
+        result.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        restoreScrollHandledRef.current = true;
+        restoreWasVerifyingRef.current = false;
+        setRestoreScrollPending(false);
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame !== null) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [operation, restoreScrollPending, restoreVerification?.phase, setRestoreScrollPending, view]);
 
   const clearScenario = useCallback(() => {
     setScenario(null); setSnapshot(null); setCurrent(null); setScenarioError(null); setChangesObserved(false); setHasCheckedChanges(false);
@@ -207,7 +237,10 @@ export function MlTestControlPanel() {
     if (!window.confirm(confirmations[requestedAction])) return;
     const verificationTarget = requestedAction !== 'checkpoint' && snapshot && scenario
       ? { mode: requestedAction, scenario, baseline: snapshot } as const : null;
-    if (verificationTarget) setRestoreVerification({ ...verificationTarget, phase: 'VERIFYING' });
+    if (verificationTarget) {
+      setRestoreScrollPending(true);
+      setRestoreVerification({ ...verificationTarget, phase: 'VERIFYING' });
+    }
     setOperation(requestedAction === 'checkpoint' ? 'Creando punto de restauración…'
       : requestedAction === 'finish' ? 'Finalizando prueba y restaurando el punto…' : 'Restaurando punto de restauración…');
     setAction(requestedAction);
@@ -261,6 +294,7 @@ export function MlTestControlPanel() {
   const selectScenario = async (selected: Scenario) => {
     if (!status || status.state !== 'TEST_ACTIVE' || status.checkpoint?.status !== 'READY' || scenarioBusy) return;
     setRestoreVerification(null);
+    setRestoreScrollPending(false);
     clearScenario(); setScenario(selected); setScenarioBusy(true);
     try {
       const lifecycle = await apiClient.getMlTestLifecycleStatus();
@@ -519,7 +553,7 @@ export function MlTestControlPanel() {
         </div>}
       </CardContent>
     </Card>}
-    {restoreVerification && <Card id="ml-test-restore-result" aria-label="Verificación de restauración">
+    {restoreVerification && <Card ref={restoreResultRef} id="ml-test-restore-result" aria-label="Verificación de restauración" className="scroll-mt-24">
       <CardHeader><CardTitle className="text-base">{restoreVerification.phase === 'VERIFYING' ? 'Restaurando punto de restauración…' : restoreVerification.phase === 'COMPLETE' ? 'Restauración completada' : 'No se pudo verificar la restauración'}</CardTitle>
         <CardDescription>Escenario {restoreVerification.scenario}. La comprobación posterior usa nuevas lecturas y no reutiliza el snapshot como estado actual.</CardDescription></CardHeader>
       <CardContent className="space-y-3 text-sm">
@@ -536,7 +570,7 @@ export function MlTestControlPanel() {
                 {[7, 14].map(days => { const horizon = days as 7 | 14; const before = restoreVerification.baseline.forecast[horizon]; const after = restoreVerification.observed!.forecast[horizon]; const match = before.state === 'AVAILABLE' && after.state === 'AVAILABLE' ? sameValue(before.units, after.units) : null; return <div key={days}><dt className="text-muted-foreground">Pronóstico Ridge {days}d</dt><dd>Post-restore: {forecastLabel(after)} · Baseline esperado: {forecastLabel(before)} · {match === true ? 'Coincide' : match === false ? 'Difiere' : 'No se pudo verificar'}</dd></div>; })}
                 {[7, 14].map(days => { const horizon = days as 7 | 14; return verificationLine(`Modelo ACTIVE ${days}d`, activeVersion(restoreVerification.baseline, horizon) === null ? null : `v${activeVersion(restoreVerification.baseline, horizon)}`, activeVersion(restoreVerification.observed!, horizon) === null ? null : `v${activeVersion(restoreVerification.observed!, horizon)}`); })}
               </dl>
-              {restoreVerification.mode === 'continue' ? <div className="flex flex-wrap gap-2"><Button type="button" variant="outline" onClick={() => { const next = restoreVerification.scenario; setRestoreVerification(null); void selectScenario(next); }}>Repetir escenario</Button><Button type="button" variant="outline" onClick={() => setRestoreVerification(null)}>Elegir otro escenario</Button></div> : verificationResult(restoreVerification.baseline, restoreVerification.observed) === true ? <p>Prueba finalizada. El sistema volvió al punto inicial.</p> : <p role="alert">La prueba finalizó, pero el retorno al punto inicial no coincide completamente o contiene lecturas no disponibles.</p>}
+              {restoreVerification.mode === 'continue' ? <div className="flex flex-wrap gap-2"><Button type="button" variant="outline" onClick={() => { const next = restoreVerification.scenario; setRestoreVerification(null); setRestoreScrollPending(false); void selectScenario(next); }}>Repetir escenario</Button><Button type="button" variant="outline" onClick={() => { setRestoreVerification(null); setRestoreScrollPending(false); }}>Elegir otro escenario</Button></div> : verificationResult(restoreVerification.baseline, restoreVerification.observed) === true ? <p>Prueba finalizada. El sistema volvió al punto inicial.</p> : <p role="alert">La prueba finalizó, pero el retorno al punto inicial no coincide completamente o contiene lecturas no disponibles.</p>}
             </>}
       </CardContent>
     </Card>}
