@@ -73,7 +73,7 @@ test('authenticated admin from another tenant cannot read or mutate the authoriz
 test('checkpoint endpoint delegates to executor; rejects client tenant/scenario scope and empty-body contract is enforced', async () => {
   const executor = testExecutor();
   await withServer(createMlTestAdminRoutes({ authenticateMiddleware: fakeAuth, getExecutor: () => executor }), async base => {
-    for (const body of [{ businessId: 'foreign' }, { scenarioId: 'foreign' }, { writersPaused: true }, { localWritersPaused: true }]) {
+    for (const body of [{ businessId: 'foreign' }, { scenarioId: 'foreign' }, { writersPaused: true }, { localWritersPaused: true }, { timeoutMs: 1 }]) {
       const deniedScope = await fetch(`${base}/checkpoint`, { method: 'POST', headers: authHeader, body: JSON.stringify(body) });
       assert.equal(deniedScope.status, 400);
     }

@@ -7,16 +7,21 @@ const codeNames = new Set(['NoSuchTransaction', 'TransactionExceededLifetimeLimi
   'SnapshotTooOld', 'SnapshotUnavailable', 'CursorNotFound', 'WriteConflict', 'Interrupted', 'InterruptedAtShutdown',
   'NotWritablePrimary', 'PrimarySteppedDown', 'ExceededMemoryLimit', 'TransactionTooLargeForCache']);
 const labels = new Set(['TransientTransactionError', 'UnknownTransactionCommitResult', 'RetryableWriteError', 'NoWritesPerformed']);
-const phases = new Set(['QUIESCENCE', 'MANIFEST_CREATE', 'METADATA_READ', 'TENANT_SCOPE_READ', 'SOURCE_READ',
-  'CHUNK_WRITE', 'METADATA_VERIFY', 'MANIFEST_WRITE', 'VERIFY', 'FINALIZE', 'RECOVERY']);
+const phases = new Set(['QUIESCENCE', 'DRAIN', 'SNAPSHOT_READ', 'CHUNK_WRITE', 'VERIFY', 'FINALIZE',
+  'MANIFEST_CREATE', 'METADATA_READ', 'TENANT_SCOPE_READ', 'SOURCE_READ', 'METADATA_VERIFY', 'MANIFEST_WRITE', 'RECOVERY']);
 const sessionPhases = new Set(['NOT_OPEN', 'SNAPSHOT_OPEN', 'SNAPSHOT_CLOSED', 'FINALIZE_TRANSACTION', 'RECOVERY_TRANSACTION']);
-const metricKeys = ['totalMs', 'snapshotSessionMs', 'snapshotTransactionMs', 'chunkWriteMs', 'verifyMs',
-  'finalizeTransactionMs', 'bytesStreamed', 'maxChunkBytes', 'peakRssBytes'];
+const metricKeys = ['totalMs', 'budgetMs', 'snapshotSessionMs', 'snapshotTransactionMs', 'chunkWriteMs', 'verifyMs',
+  'finalizeTransactionMs', 'bytesStreamed', 'maxChunkBytes', 'peakRssBytes', 'remainingBudgetMs'];
 const uuid = value => typeof value === 'string' && /^[a-f0-9-]{36}$/i.test(value) ? value : null;
 function safeMetrics(value = {}) {
   if (!value || typeof value !== 'object') return {};
-  return Object.fromEntries(metricKeys.filter(key => Number.isFinite(value[key]) && value[key] >= 0)
+  const output = Object.fromEntries(metricKeys.filter(key => Number.isFinite(value[key]) && value[key] >= 0)
     .map(key => [key, Math.round(value[key])]));
+  if (value.phaseElapsedMs && typeof value.phaseElapsedMs === 'object') {
+    output.phaseElapsedMs = Object.fromEntries([...phases].filter(key => Number.isFinite(value.phaseElapsedMs[key]) && value.phaseElapsedMs[key] >= 0)
+      .map(key => [key, Math.round(value.phaseElapsedMs[key])]));
+  }
+  return output;
 }
 function failure(error, context = {}) {
   const codeName = codeNames.has(error?.codeName) ? error.codeName : null;
@@ -32,13 +37,24 @@ function failure(error, context = {}) {
     collection: COLLECTIONS.some(row => row.collection === context.collection) ? context.collection : null,
     sessionPhase: sessionPhases.has(context.sessionPhase) ? context.sessionPhase : null,
     durationMs: Number.isFinite(context.durationMs) && context.durationMs >= 0 ? Math.round(context.durationMs) : null,
+    budgetMs: Number.isFinite(error?.budgetMs) && error.budgetMs >= 0 ? Math.round(error.budgetMs) : null,
+    phaseElapsedMs: Number.isFinite(error?.phaseElapsedMs) && error.phaseElapsedMs >= 0 ? Math.round(error.phaseElapsedMs) : null,
+    remainingBudgetMs: Number.isFinite(error?.remainingBudgetMs) && error.remainingBudgetMs >= 0 ? Math.round(error.remainingBudgetMs) : null,
     name: names.has(error?.name) ? error.name : 'Error', code, codeName,
     labels: Array.isArray(error?.errorLabels) ? error.errorLabels.filter(label => labels.has(label)) : [], category
   };
 }
 const logFailure = record => console.warn(JSON.stringify(record));
+function logProgress(record) {
+  if (!record || !phases.has(record.phase)) return;
+  console.info(JSON.stringify({ event: 'ML_TEST_CHECKPOINT_PROGRESS',
+    checkpointId: uuid(record.checkpointId), phase: record.phase,
+    budgetMs: Number.isFinite(record.budgetMs) ? Math.max(0, Math.round(record.budgetMs)) : null,
+    elapsedMs: Number.isFinite(record.elapsedMs) ? Math.max(0, Math.round(record.elapsedMs)) : null,
+    remainingBudgetMs: Number.isFinite(record.remainingBudgetMs) ? Math.max(0, Math.round(record.remainingBudgetMs)) : null }));
+}
 function safeStoredFailure(value) {
   if (!value || typeof value !== 'object') return null;
   return failure({ name: value.name, code: value.code, codeName: value.codeName, errorLabels: value.labels }, value);
 }
-module.exports = { failure, safeStoredFailure, safeMetrics, logFailure };
+module.exports = { failure, safeStoredFailure, safeMetrics, logFailure, logProgress };

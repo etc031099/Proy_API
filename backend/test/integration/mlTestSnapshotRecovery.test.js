@@ -63,7 +63,7 @@ test('failed snapshot capture: preserved diagnostics/evidence and scoped, audite
     assert.equal(initial.state, 'FAILED'); assert.equal(initial.maintenance, true);
     assert.equal(initial.failureCode, 'CHECKPOINT_SNAPSHOT_TRANSACTION_FAILED');
     assert.equal(checkpoint.failureDiagnostics.code, 251); assert.equal(checkpoint.failureDiagnostics.codeName, 'NoSuchTransaction');
-    assert.equal(checkpoint.failureDiagnostics.phase, 'SOURCE_READ'); assert.equal(checkpoint.failureDiagnostics.collection, 'products');
+    assert.equal(checkpoint.failureDiagnostics.phase, 'SNAPSHOT_READ'); assert.equal(checkpoint.failureDiagnostics.collection, 'products');
     assert.equal(checkpoint.status, 'FAILED'); assert(chunksBefore > 0);
     assert(logs.some(line => line.includes('NoSuchTransaction'))); assert(!logs.some(line => line.includes('UNTRUSTED_MESSAGE')));
   });
@@ -186,6 +186,51 @@ test('production snapshot session pins one majority snapshot across collections 
   assert(changed); assert.equal(observed, 8); assert.equal((await db.collection('products').findOne({ _id: before._id })).stock, 999);
   assert.equal(result.dataVersion, '173');
 }));
+
+test('one capture deadline covers snapshot, chunk writes and verification; each phase timeout stays FAILED and recoverable',
+  { timeout: 30000 }, async t => fixture(async ({ client, db }) => {
+    for (const phase of ['SNAPSHOT_READ', 'CHUNK_WRITE', 'VERIFY']) await t.test(`timeout in ${phase}`, async () => {
+      let fakeNow = 1000, injected = false;
+      const wrapped = Object.create(db), original = db.collection.bind(db);
+      wrapped.collection = name => {
+        const collection = original(name);
+        if (phase === 'CHUNK_WRITE' && name === 'mltestcheckpointchunks') {
+          const insertOne = collection.insertOne.bind(collection);
+          collection.insertOne = async (...args) => {
+            const result = await insertOne(...args);
+            if (!injected) { injected = true; fakeNow += 240001; }
+            return result;
+          };
+        }
+        return collection;
+      };
+      const logs = [];
+      await assert.rejects(S.captureOperationalCheckpoint({ client, db: wrapped, scope,
+        now: () => fakeNow, logDiagnostic: row => logs.push(row), logProgress: row => {
+          if (phase !== 'CHUNK_WRITE' && row.phase === phase && !injected) { injected = true; fakeNow += 240001; }
+        } }), error => {
+        assert.equal(error.code, 'CHECKPOINT_OPERATION_TIMEOUT'); assert.equal(error.phase, phase); return true;
+      });
+      const control = await db.collection('mltestcontrols').findOne({ businessId: scope.businessId });
+      const checkpoint = await db.collection('mltestcheckpoints').findOne({ checkpointId: control.activeCheckpointId });
+      assert.equal(control.state, 'FAILED'); assert.equal(checkpoint.status, 'FAILED');
+      assert.equal(checkpoint.readyAt, null); assert.deepEqual(control.activeWriterIds || [], []);
+      assert.equal(logs[0].phase, phase); assert.equal(logs[0].budgetMs, 240000);
+      assert.equal(checkpoint.captureMetrics.budgetMs, 240000);
+      const admin = A.createMlTestAdminExecutor({ client, db, target: 'LOCAL_CERTIFICATION', auditDenied: () => {} });
+      const recovery = await admin.execute(req, 'ABORT_FAILED_CHECKPOINT');
+      assert.equal(recovery.state, 'NO_TEST'); assert.equal(recovery.status, 'FAILED_CHECKPOINT_ABORTED');
+      assert.equal((await F.capture(db)).state, 'NO_TEST');
+      // Prepare an independent next phase case with a fresh cycle and epoch.
+      if (phase !== 'VERIFY') {
+        await db.collection('mltestcontrols').updateOne({ businessId: scope.businessId }, { $set: {
+          state: 'NO_TEST', activeCheckpointId: null, lastCheckpointId: null, restoreId: null,
+          restoreLeaseUntil: null, restoreOwnerNonce: null, restoreHeartbeatNonce: null,
+          restoreFinish: false, activeWriterIds: []
+        } });
+      }
+    });
+  }));
 
 test('a lost recovery commit acknowledgement cannot overwrite its atomic success audit or break a safe replay', async () => fixture(async ({ client, db }) => {
   const checkpointId = randomUUID();

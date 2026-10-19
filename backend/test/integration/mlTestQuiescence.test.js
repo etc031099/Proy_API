@@ -78,7 +78,9 @@ test('operative checkpoint drains durable writers and excludes concurrent admiss
     await waitFor(db, 'CHECKPOINT_CREATING');
     let checkpoint;
     await t.test('admitted writer is still durable; no snapshot starts until it drains', async () => {
-      assert.equal(await db.collection('mltestcheckpoints').countDocuments({}), 0);
+      const creating = await db.collection('mltestcheckpoints').findOne({ status: 'CREATING' });
+      assert(creating, 'a recoverable CREATING manifest is persisted before waiting for the writer drain');
+      assert.equal(await db.collection('mltestcheckpointchunks').countDocuments({ checkpointId: creating.checkpointId }), 0);
       const status = await executor.execute({ user: admin, body: {}, query: {} }, 'STATUS');
       assert.equal(status.state, 'CHECKPOINT_CREATING'); assert.equal(status.quiescence.activeWriterCount, 1);
       assert.equal(status.quiescence.admissionClosed, true); assert.equal(status.quiescence.writersPaused, false);
