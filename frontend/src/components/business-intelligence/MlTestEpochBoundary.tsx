@@ -1,9 +1,8 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { apiClient } from '@/lib/api';
-
-export type MlTestControlStatus = { state: string; resetEpoch: string; testCycleId: string | null;
-  maintenance: boolean; cloudRestoreEnabled: false };
+import type { MlTestControlStatus } from '@/types/businessIntelligence';
+export type { MlTestControlStatus } from '@/types/businessIntelligence';
 // Slow, visible-tab-only read + immediate focus refresh. Remounting discards
 // component state and makes outstanding responses from the old tree harmless.
 export function MlTestEpochBoundary({ children }: { children: React.ReactNode }) {
@@ -35,6 +34,6 @@ export function MlTestEpochBoundary({ children }: { children: React.ReactNode })
   }, []);
   if (unavailable) return <p role="status">No se pudo verificar el estado de prueba. Se volverá a consultar automáticamente.</p>;
   if (!control) return <p role="status">Comprobando estado de prueba…</p>;
-  if (control.maintenance) return <p role="status">{control.state === 'RESTORING' ? 'Restableciendo prueba…' : 'Prueba bloqueada hasta recuperación administrativa.'}</p>;
+  if (control.maintenance) return <p role="status">Restauración en progreso. Las operaciones están temporalmente bloqueadas.</p>;
   return <div key={`${control.testCycleId ?? ''}:${control.resetEpoch}`}>{children}</div>;
 }

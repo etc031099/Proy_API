@@ -100,6 +100,9 @@ describe('business intelligence dashboard', () => {
     });
     vi.spyOn(apiClient, 'getForecastMlUpdateStatus').mockResolvedValue({ httpStatus: 200, data: { dataVersion: '83', closedThrough: '2026-10-16', horizons: [mlHorizon(7), mlHorizon(14)] } });
     vi.spyOn(apiClient, 'getForecastMlUpdateHistory').mockResolvedValue({ httpStatus: 200, data: { items: [], page: { limit: 20, nextCursor: null } } });
+    vi.spyOn(apiClient, 'getMlTestControlStatus').mockResolvedValue({ httpStatus: 200, data: { state: 'NO_TEST', resetEpoch: '0', testCycleId: null,
+      maintenance: false, cloudRestoreEnabled: false, capabilities: { destructiveMlTestControls: { allowed: false, target: null, reasonCode: 'ML_TEST_PRODUCTION_FORBIDDEN' } } } });
+    vi.spyOn(apiClient, 'getMlTestLifecycleStatus');
     vi.spyOn(apiClient, 'getCertifiedForecastReplayEvidence').mockResolvedValue({ httpStatus: 200, data: replayEvidenceFixture });
     vi.spyOn(apiClient, 'getForecastModelEvaluation').mockRejectedValue(new Error('Evaluation not part of these LIVE fixtures'));
   });

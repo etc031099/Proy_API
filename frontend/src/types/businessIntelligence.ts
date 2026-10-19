@@ -148,6 +148,34 @@ export interface AuthenticatedDiagnosticResult<T> {
   data?: T;
   code?: string;
 }
+export interface MlTestCapability {
+  allowed: boolean;
+  target: 'LOCAL' | null;
+  reasonCode: string | null;
+}
+export interface MlTestControlStatus {
+  state: string;
+  resetEpoch: string;
+  testCycleId: string | null;
+  maintenance: boolean;
+  cloudRestoreEnabled: boolean;
+  capabilities?: { destructiveMlTestControls?: MlTestCapability };
+}
+export interface MlTestLifecycleStatus extends Omit<MlTestControlStatus, 'capabilities'> {
+  checkpointId?: string | null;
+  activeCheckpointId?: string | null;
+  lastCheckpointId?: string | null;
+  checkpoint?: { checkpointId?: string; status?: string; dataVersion?: string | null; createdAt?: string | null; failureCode?: string | null } | null;
+  failureCode?: string | null;
+}
+export interface MlTestLifecycleResult extends MlTestLifecycleStatus {
+  status?: string;
+  restoreId?: string | null;
+  totalDocuments?: number;
+  totalBytes?: number;
+  totalChunks?: number;
+  idempotent?: boolean;
+}
 export type ForecastMlUpdateRequestStatus = 'REQUEST_ACCEPTED' | 'ALREADY_PENDING' | 'RUNNING';
 export interface ForecastMlUpdateRequestResult {
   requestStatus: ForecastMlUpdateRequestStatus;

@@ -27,7 +27,7 @@ describe('test epoch boundary', () => {
     expect(screen.getByText('Stock 50')).toBeTruthy();
     read.mockResolvedValue({ httpStatus: 200, data: control('2', 'RESTORING') });
     await act(async () => { window.dispatchEvent(new Event('focus')); });
-    expect(screen.queryByText('Stock 50')).toBeNull(); expect(screen.getByText('Restableciendo prueba…')).toBeTruthy();
+    expect(screen.queryByText('Stock 50')).toBeNull(); expect(screen.getByText('Restauración en progreso. Las operaciones están temporalmente bloqueadas.')).toBeTruthy();
     read.mockResolvedValue({ httpStatus: 200, data: control('2') });
     await act(async () => { vi.advanceTimersByTime(30000); }); expect(screen.getByText('Stock 50')).toBeTruthy();
   });
