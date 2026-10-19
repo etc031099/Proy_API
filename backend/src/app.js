@@ -31,22 +31,39 @@ const { createForecastMlUpdateRoutes } = require('./routes/forecastMlUpdate');
 const { createMlTestAdminRoutes } = require('./routes/mlTestAdmin');
 const createAgentRoutes = require('./routes/agent');
 const { startPolling } = require('./services/telegramService');
+const { initializeDatabaseBackedServices, databaseStorageStatus } = require('./services/databaseStartup');
 
 // Import middleware
 const { authenticate } = require('./middleware/auth');
 
 const app = express();
 
-// Connect to database
+// Atlas M0 can keep reads available while rejecting writes after its storage
+// quota is exhausted. Preserve the API process and health/read routes, but do
+// not start polling/workers when a startup write is blocked.
+let databaseStorageDegraded = false;
 connectDB().then(async () => {
-  const { ForecastMlUpdateEvent, ForecastMlUpdateState } = require('./models');
-  await Promise.all([ForecastMlUpdateEvent.init(), ForecastMlUpdateState.init()]);
-  await require('./services/forecastExecutionIndexes').provisionExecutionIndexes();
-  startPolling();
-  // Calendar closure can advance without a sale. This only refreshes durable
-  // eligibility; no model fit or commercial operation runs on startup.
-  setImmediate(() => require('./services/forecastMlUpdateCoordinator').refreshWatermarks()
-    .catch(() => console.warn(JSON.stringify({ event: 'ML_UPDATE_REFRESH_FAILED' }))));
+  await initializeDatabaseBackedServices({
+    initializeCollections: async () => {
+      const { ForecastMlUpdateEvent, ForecastMlUpdateState } = require('./models');
+      await ForecastMlUpdateEvent.init();
+      await ForecastMlUpdateState.init();
+    },
+    provisionIndexes: () => require('./services/forecastExecutionIndexes').provisionExecutionIndexes(),
+    // Calendar closure can advance without a sale. This refreshes durable
+    // eligibility only; it does not fit a model or run a commercial operation.
+    refreshWatermarks: () => require('./services/forecastMlUpdateCoordinator').refreshWatermarks(),
+    startPolling,
+    onStorageDegraded: ({ reasonCode, stage }) => {
+      databaseStorageDegraded = true;
+      console.warn(JSON.stringify({ event: reasonCode, stage }));
+    },
+    onRefreshFailure: () => console.warn(JSON.stringify({ event: 'ML_UPDATE_REFRESH_FAILED' }))
+  });
+}).catch(error => {
+  // Preserve the existing fail-fast behavior for unexpected startup failures.
+  console.error('Database startup initialization failed:', error);
+  process.exit(1);
 });
 
 // Trust proxy (important for rate limiting and getting real IP addresses)
@@ -102,12 +119,13 @@ const healthHandler = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: 'Server and database are ready',
+      message: databaseStorageDegraded ? 'Server and database are readable; storage writes are blocked' : 'Server and database are ready',
       timestamp: new Date().toISOString(),
       environment: process.env.NODE_ENV || 'development',
       version: '1.0.0',
       database: {
         ready: true,
+        ...databaseStorageStatus(databaseStorageDegraded),
         replicaSet: hello.setName || null,
         primary: true
       }
