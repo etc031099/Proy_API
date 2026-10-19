@@ -1,6 +1,6 @@
 const { verifyToken } = require('../utils/jwt');
 const { User } = require('../models');
-const ADMIN_ML_LIFECYCLE_PATH = /^\/api\/ml-test\/(?:checkpoint|restore|recover-failed-checkpoint|recover-stale-checkpoint|purge-failed-checkpoint-payloads)(?:\?|$)/;
+const ADMIN_ML_LIFECYCLE_PATH = /^\/api\/ml-test\/(?:checkpoint|restore|analyze|recover-failed-checkpoint|recover-stale-checkpoint|purge-failed-checkpoint-payloads)(?:\?|$)/;
 
 function shouldApplyBusinessWriterFence(method, businessId, originalUrl) {
   return !['GET', 'HEAD', 'OPTIONS'].includes(method)

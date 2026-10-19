@@ -175,12 +175,17 @@ function createForecastRidgeTrainingWorker({ registry = createForecastModelRegis
       });
       if (job.outcome) {
         times.ack = await acknowledge(job, claim);
-        return { status: job.outcome, modelVersion: job.candidateModelVersion, idempotent: true, performanceMs: times };
+        return { status: job.outcome, modelVersion: job.candidateModelVersion, idempotent: true,
+          trained: false, candidateCreated: false,
+          reasonCode: typeof job.failureCode === 'string' ? job.failureCode : null,
+          availableOrigins: Number.isSafeInteger(job.evaluation?.protocol?.availableOrigins)
+            ? job.evaluation.protocol.availableOrigins : null, performanceMs: times };
       }
       if (job.status === 'FAILED' && job.retryable === false) {
         throw Object.assign(new Error('Terminal training job'), { code: job.failureCode || 'TRAINING_FAILED' });
       }
       let result = job.preparedCandidate;
+      let trainingPerformed = false;
       if (!result) {
         await saveJob(job, claim, { status: 'TRAINING', failureCode: null },
           (currentJob, session) => audit(currentJob, 'RUNNING', session));
@@ -188,6 +193,7 @@ function createForecastRidgeTrainingWorker({ registry = createForecastModelRegis
         const journal = await exportJournal(inputDataVersion);
         await bootstrapBoundary('training');
         result = await runTraining({ ...key, inputDataVersion, observationsClosedThrough, journal, mode });
+        trainingPerformed = true;
         const validStatus = ['PASS', 'REJECTED', 'INSUFFICIENT_EVALUATION_HISTORY',
           'BOOTSTRAP_FROM_APPROVED_HISTORICAL_EVIDENCE'].includes(result.evaluationStatus);
         if (!validStatus || result.featureHash !== FEATURE_HASH || result.promotionPolicyHash !== POLICY_HASH
@@ -253,9 +259,14 @@ function createForecastRidgeTrainingWorker({ registry = createForecastModelRegis
         times.ack = await acknowledge(job, claim);
         log('ML_CANDIDATE_REJECTED', { jobId: String(job._id), horizonDays, dataVersion: inputDataVersion,
           outcome: job.outcome });
-        return { status: job.outcome, modelVersion: null, performanceMs: times };
+        return { status: job.outcome, modelVersion: null, trained: trainingPerformed,
+          candidateCreated: false,
+          reasonCode: 'INSUFFICIENT_EVALUATION_HISTORY',
+          availableOrigins: Number.isSafeInteger(result.checks?.protocol?.availableOrigins)
+            ? result.checks.protocol.availableOrigins : null, performanceMs: times };
       }
       let modelVersion = job.candidateModelVersion;
+      let candidateCreated = false;
       if (modelVersion == null) {
         const begin = Date.now();
         const candidate = await registry.createCandidateMetadata({ ...key,
@@ -278,6 +289,7 @@ function createForecastRidgeTrainingWorker({ registry = createForecastModelRegis
             await audit({ ...job, status: 'PERSISTING', candidateModelVersion: metadata.modelVersion }, 'RUNNING', session);
           } });
         modelVersion = candidate.modelVersion;
+        candidateCreated = true;
         job.candidateModelVersion = modelVersion;
         times.candidatePersistence = Date.now() - begin;
         log('ML_CANDIDATE_CREATED', { jobId: String(job._id), horizonDays,
@@ -314,7 +326,11 @@ function createForecastRidgeTrainingWorker({ registry = createForecastModelRegis
       Object.assign(job, finalized);
       times.ack = await acknowledge(job, claim);
       await jobModel.updateOne({ _id: job._id }, { $set: { 'metricsSummary.lifecycleMs': times } }).exec();
-      return { status: outcome, modelVersion, performanceMs: times };
+      return { status: outcome, modelVersion, trained: trainingPerformed, candidateCreated,
+        reasonCode: Array.isArray(result.checks?.reasons)
+          ? result.checks.reasons.find(reason => typeof reason === 'string' && /^[A-Z][A-Z0-9_:-]{0,119}$/.test(reason)) || null : null,
+        availableOrigins: Number.isSafeInteger(result.checks?.protocol?.availableOrigins)
+          ? result.checks.protocol.availableOrigins : null, performanceMs: times };
     } catch (error) {
       let code = codeOf(error);
       let canRetry = Boolean(retryable(error, code));

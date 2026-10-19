@@ -53,9 +53,9 @@ async function readStatus(user, db = mongoose.connection.db, { client, env = pro
 async function maintenanceGuard(req, res, next, db = mongoose.connection.db) {
   if (req.user?.businessId !== config.businessId
       || /^\/api\/intelligence\/test-control\/status(?:\?|$)/.test(req.originalUrl || '')
-      // Read-only status and the authenticated restore continuation remain
-      // reachable so an admin can observe and recover the maintenance state.
-      || /^\/api\/ml-test\/(?:status|restore|recover-failed-checkpoint|recover-stale-checkpoint|checkpoint-storage|purge-failed-checkpoint-payloads)(?:\?|$)/.test(req.originalUrl || '')) return next();
+      // Status, recovery, and local analysis reach their own lifecycle/epoch
+      // validation; normal application mutations remain blocked in maintenance.
+      || /^\/api\/ml-test\/(?:status|restore|analyze|recover-failed-checkpoint|recover-stale-checkpoint|checkpoint-storage|purge-failed-checkpoint-payloads)(?:\?|$)/.test(req.originalUrl || '')) return next();
   try {
     const status = await readStatus(req.user, db);
     if (!status.maintenance) return next();

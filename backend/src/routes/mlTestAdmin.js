@@ -5,14 +5,19 @@ const mongoose = require('mongoose');
 const { randomUUID } = require('node:crypto');
 const { authenticate, authorize } = require('../middleware/auth');
 const { createMlTestAdminExecutor } = require('../services/mlTestAdminExecutor');
+const { createMlTestLocalRidgeAnalysis } = require('../services/mlTestLocalRidgeAnalysis');
 
-const SAFE_CODE = /^(?:CHECKPOINT|RESTORE|ML_TEST|STALE_TEST|TEST)_[A-Z_]+$/;
+const SAFE_CODE = /^(?:CHECKPOINT|RESTORE|ML_TEST|STALE_TEST|STALE_FENCING|TEST)_[A-Z_]+$/;
 const fail = (code, status = 409) => { throw Object.assign(new Error(code), { code, httpStatus: status }); };
 const executorFor = (env = process.env) => createMlTestAdminExecutor({
   client: mongoose.connection.getClient(), db: mongoose.connection.db, target: 'LOCAL', env
 });
+const localAnalyzerFor = (env = process.env) => createMlTestLocalRidgeAnalysis({
+  client: mongoose.connection.getClient(), db: mongoose.connection.db, env
+});
 
-function createMlTestAdminRoutes({ authenticateMiddleware = authenticate, adminMiddleware = authorize('admin'), getExecutor = executorFor } = {}) {
+function createMlTestAdminRoutes({ authenticateMiddleware = authenticate, adminMiddleware = authorize('admin'),
+  getExecutor = executorFor, getLocalAnalyzer = localAnalyzerFor } = {}) {
   const router = express.Router();
   router.use(authenticateMiddleware, adminMiddleware);
 
@@ -41,6 +46,16 @@ function createMlTestAdminRoutes({ authenticateMiddleware = authenticate, adminM
       if (Object.keys(req.query || {}).length) fail('ML_TEST_REQUEST_INVALID', 400);
       const result = await getExecutor().execute(req, 'STATUS');
       return res.set('Cache-Control', 'no-store').json({ success: true, data: safeStatus(result) });
+    } catch (error) { return respondError(res, error); }
+  });
+
+  router.post('/analyze', async (req, res) => {
+    try {
+      if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)
+          || Object.keys(req.body).length !== 1 || ![7, 14].includes(req.body.horizonDays)
+          || Object.keys(req.query || {}).length) fail('ML_TEST_REQUEST_INVALID', 400);
+      const data = await getLocalAnalyzer().execute({ user: req.user, horizonDays: req.body.horizonDays });
+      return res.set('Cache-Control', 'no-store').json({ success: true, data });
     } catch (error) { return respondError(res, error); }
   });
 
@@ -129,4 +144,4 @@ function createMlTestAdminRoutes({ authenticateMiddleware = authenticate, adminM
   return router;
 }
 
-module.exports = { createMlTestAdminRoutes, executorFor };
+module.exports = { createMlTestAdminRoutes, executorFor, localAnalyzerFor };

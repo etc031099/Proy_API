@@ -50,12 +50,12 @@ function testExecutor() {
 }
 const authHeader = { 'x-test-user': 'admin', 'content-type': 'application/json' };
 
-test('only the five administrative lifecycle mutations bypass the ordinary business writer fence', () => {
+test('only the administrative lifecycle mutations bypass the ordinary business writer fence', () => {
   // Checkpoint is exempt from the writer fence in normal operation, but its
   // maintenance guard intentionally blocks starting another checkpoint while
   // one is already creating. The remaining administrative actions are allowed
   // through maintenance to recover or finish lifecycle work.
-  for (const route of ['checkpoint', 'restore', 'recover-failed-checkpoint', 'recover-stale-checkpoint', 'purge-failed-checkpoint-payloads']) {
+  for (const route of ['checkpoint', 'restore', 'analyze', 'recover-failed-checkpoint', 'recover-stale-checkpoint', 'purge-failed-checkpoint-payloads']) {
     assert.equal(shouldApplyBusinessWriterFence('POST', config.businessId, `/api/ml-test/${route}`), false, route);
     assert.equal(shouldApplyBusinessWriterFence('POST', config.businessId, `/api/ml-test/${route}?operation=1`), false, `${route} query`);
   }
@@ -78,7 +78,7 @@ test('real authenticate middleware passes lifecycle requests during maintenance 
   t.mock.method(fence, 'runCycle', async () => { fenceCalls += 1; throw new Error('normal writer fence invoked'); });
   const authorization = `Bearer ${generateToken({ id: admin._id })}`;
 
-  for (const route of ['restore', 'recover-failed-checkpoint', 'recover-stale-checkpoint', 'purge-failed-checkpoint-payloads']) {
+  for (const route of ['restore', 'analyze', 'recover-failed-checkpoint', 'recover-stale-checkpoint', 'purge-failed-checkpoint-payloads']) {
     let continued = false;
     let responseStatus = null;
     let responseBody = null;
@@ -88,6 +88,35 @@ test('real authenticate middleware passes lifecycle requests during maintenance 
     assert.equal(continued, true, `${route}: status=${responseStatus} code=${responseBody?.code || 'none'}`);
   }
   assert.equal(fenceCalls, 0);
+});
+
+test('local analyze endpoint accepts only horizonDays, returns sanitized shared-analysis result, and is admin-only', async () => {
+  const calls = [];
+  const analyzer = { execute: async input => { calls.push(input); return {
+    horizonDays: input.horizonDays, testCycleId: '11111111-1111-4111-8111-111111111111', resetEpoch: '5',
+    outcome: 'NOT_MATURE', trained: false, candidateCreated: false, promoted: false,
+    reasonCode: 'NOT_MATURE', requiredOrigins: 107, availableOrigins: null,
+    activeModelBefore: { modelVersion: 1, trainedDataVersion: '83', dataCutoff: '2026-10-15' },
+    activeModelAfter: { modelVersion: 1, trainedDataVersion: '83', dataCutoff: '2026-10-15' },
+    message: 'La evidencia del escenario aún debe completar su período de madurez.'
+  }; } };
+  await withServer(createMlTestAdminRoutes({ authenticateMiddleware: fakeAuth, getLocalAnalyzer: () => analyzer }), async base => {
+    for (const [headers, body, expected] of [
+      [{ 'content-type': 'application/json' }, { horizonDays: 7 }, 401],
+      [{ 'content-type': 'application/json', 'x-test-user': 'user' }, { horizonDays: 7 }, 403],
+      [authHeader, { horizonDays: 1 }, 400], [authHeader, { horizonDays: 7, force: true }, 400],
+      [authHeader, { horizonDays: 14, businessId: 'foreign' }, 400]
+    ]) {
+      const response = await fetch(`${base}/analyze`, { method: 'POST', headers, body: JSON.stringify(body) });
+      assert.equal(response.status, expected);
+    }
+    assert.equal((await fetch(`${base}/analyze?horizonDays=7`, { method: 'POST', headers: authHeader, body: JSON.stringify({ horizonDays: 7 }) })).status, 400);
+    const response = await fetch(`${base}/analyze`, { method: 'POST', headers: authHeader, body: JSON.stringify({ horizonDays: 14 }) });
+    const body = await response.json();
+    assert.equal(response.status, 200); assert.equal(body.data.outcome, 'NOT_MATURE');
+    assert.equal(body.data.requiredOrigins, 107); assert.equal(body.data.promoted, false);
+    assert.deepEqual(calls, [{ user: admin, horizonDays: 14 }]);
+  });
 });
 
 test('route admin authorization still rejects a normal authenticated user', () => {
