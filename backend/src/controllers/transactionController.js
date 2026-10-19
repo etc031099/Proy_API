@@ -289,6 +289,10 @@ const updateTransactionStatus = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
 
+  const mlTestBaselines = require('../services/mlTestProductBaselineService');
+  const baselinePlan = status === 'cancelled' ? await mlTestBaselines.prepareCancellation({
+    businessId: req.businessId, transactionId: id, historical: req.historicalContext
+  }) : null;
   const session = await mongoose.startSession();
   session.startTransaction({ ...(req.businessId === require('../config/v3Operational').businessId && !req.historicalContext ? { writeConcern: { w: 'majority' } } : {}) });
   let transaction;
@@ -319,6 +323,7 @@ const updateTransactionStatus = asyncHandler(async (req, res) => {
         { statusCode: 409 }
       );
     }
+    await mlTestBaselines.persist({ plan: baselinePlan, session });
 
     let creditCustomer = null;
     let creditBalance = null;

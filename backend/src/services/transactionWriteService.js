@@ -4,6 +4,7 @@ const { validatePaymentMethod, getExchangeRate } = require('./externalApiService
 const { toFiniteNumber } = require('../utils/numbers');
 const { applyStockChange, normalizeDate } = require('./inventoryService');
 const { recordV3Transaction } = require('./v3OperationalSnapshotService');
+const mlTestBaselines = require('./mlTestProductBaselineService');
 const TRANSACTION_CURRENCIES = ['PEN', 'USD', 'EUR'];
 // One business implementation for CRUD and actions. Caller-owned sessions never commit here.
 // Preview runs the same pricing/contact/credit validation without business writes.
@@ -29,12 +30,16 @@ const writeTransaction = async ({ input, businessId, historical = null, session:
     throw Object.assign(new Error('At least one product is required.'), { statusCode: 400, directResponse: true });
   }
 
+  // Read LOCAL test analytics before opening our own business transaction.
+  // Caller-owned sessions retain their existing transaction boundary.
+  const baselinePlan = await mlTestBaselines.prepareSale({ input, businessId, historical, preview });
   // Start a session for transaction
   const session = suppliedSession || await mongoose.startSession();
   const ownsSession = !suppliedSession;
 
   try {
     if (ownsSession) session.startTransaction({ ...(businessId === require('../config/v3Operational').businessId ? { writeConcern: { w: 'majority' } } : {}) });
+    await mlTestBaselines.persist({ plan: baselinePlan, session });
 
     // Validate contact based on transaction type
     let contact;

@@ -63,7 +63,7 @@ async function verifyRestored(client, db, checkpoint, scope) {
   return { dataVersion: actual.dataVersion, totalDocuments: actual.totalDocuments, totalBytes: actual.totalBytes };
 }
 async function restoreLocalCheckpoint({ client, db, checkpointId, restoreId, branch, scope,
-  finish = false, authorization, afterCollection, invalidateCaches = async () => {} }) {
+  finish = false, authorization, afterCollection, invalidateCaches = async () => {}, env = process.env }) {
   S.assertExecutionTarget(client, db, authorization); scope = M.authorizedScope(scope);
   const checkBudget = budget(LIMITS.restoreMs);
   if (!/^[a-f0-9-]{36}$/.test(restoreId || '') || !['NORMAL', 'OUTLIER', 'SHIFT'].includes(branch)) M.fail('RESTORE_REQUEST_INVALID');
@@ -120,6 +120,11 @@ async function restoreLocalCheckpoint({ client, db, checkpointId, restoreId, bra
       ...(!resume ? { $inc: { resetEpoch: Long.ONE } } : {}) },
       { session, returnDocument: 'after', promoteLongs: false });
       if (!changed) M.fail('RESTORE_CONTROL_BUSY');
+      // Auxiliary test analytics are outside the snapshot. Remove the old
+      // cycle's epochs atomically with the restore fence transition, never
+      // touching any checkpoint payload or operational collection.
+      await require('./mlTestProductBaselineService').clearCycle({ client, db, env, checkpointId,
+        testCycleId: initial.testCycleId, session });
       if (!resume) {
         const revision = await db.collection('v3operationalrevisions').findOne({ _id: scope.businessId }, { session, promoteLongs: false });
         const models = await db.collection('forecastmodelartifacts').find({ ...scope, status: 'ACTIVE' },

@@ -46,6 +46,10 @@ function createMlTestAdminExecutor({ client, db, target = 'CLOUD', env = process
     else if (target === 'LOCAL') authorization = await T.authorizeLocalTarget({ client, db, user: req.user, env });
     else if (target !== 'LOCAL_CERTIFICATION') fail('ML_TEST_TARGET_INVALID', 400);
     S.assertExecutionTarget(client, db, authorization);
+    if (target === 'LOCAL' && action === 'CREATE') {
+      if (!await require('./mlTestProductBaselineService').provision({ client, db, env }))
+        fail('ML_TEST_BASELINE_LOCAL_TARGET_REQUIRED', 503);
+    }
     // Explicit LOCAL administrative provisioning only; never Model.init/Atlas.
     await provisionLocalAudit(client, db, authorization);
     const token = await F.capture(db), actionId = randomUUID(), timestamp = new Date();
@@ -76,7 +80,7 @@ function createMlTestAdminExecutor({ client, db, target = 'CLOUD', env = process
           if (!control.restoreFinish) fail('ML_TEST_RESUME_CONTINUE_FIRST');
           // A failed capture has no certified source to restore: remain blocked.
         }
-        result = await R.restoreLocalCheckpoint({ client, db, scope, ...body, finish: action !== 'RESTORE', authorization });
+        result = await R.restoreLocalCheckpoint({ client, db, scope, ...body, finish: action !== 'RESTORE', authorization, env });
       }
       const after = await F.capture(db);
       await db.collection(AUDIT).updateOne({ actionId }, { $set: { result: 'SUCCEEDED', completedAt: new Date(),
