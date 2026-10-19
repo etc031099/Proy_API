@@ -22,6 +22,12 @@ const makeExecution = (overrides: Partial<ForecastMlUpdateExecution> = {}): Fore
     prediction: { status: 'COMPLETE', reasonCode: null, summary: counts },
     inventory: { status: 'COMPLETE', reasonCode: null, summary: counts } }, ...overrides,
 });
+const withoutCandidate = (status: ForecastMlUpdateExecution['status'], reasonCode: string | null = null) => makeExecution({
+  status, reasonCode, horizons: [7, 14].map(horizonDays => ({ horizonDays: horizonDays as 7 | 14,
+    activeVersionBefore: 1, activeVersionAfter: 1, candidateVersion: null, resultStatus: status,
+    promotionDecision: 'NOT_EVALUATED', promotionReason: reasonCode, availableOrigins: null, requiredOrigins: null,
+    trainingJobReference: null })),
+});
 const detail = (row: ForecastMlUpdateExecution = makeExecution()): ForecastMlUpdateExecutionDetail => ({
   ...row, stage: 'FINISHED', eligibility: 'ELIGIBLE', signalTypes: ['SALE_COMPLETED'],
   attempts: [{ runAttempt: 1, status: row.status, reasonCode: null, startedAt: row.startedAt,
@@ -41,7 +47,7 @@ const product: ForecastMlProductImpact = {
 };
 const ok = <T,>(data: T): AuthenticatedDiagnosticResult<T> => ({ httpStatus: 200, data });
 const historyPage = (items: ForecastMlUpdateExecution[], nextCursor: string | null = null): ForecastMlUpdateHistoryPage => ({
-  items, page: { limit: 20, nextCursor },
+  items, page: { limit: 5, nextCursor },
 });
 const productsPage = (items: ForecastMlProductImpact[], nextCursor: string | null = null): ForecastMlUpdateProductsPage => ({
   executionId, items, page: { limit: 25, nextCursor },
@@ -61,13 +67,15 @@ describe('forecast ML update history panel', () => {
       triggerSource: 'SCHEDULED', requestSource: 'SCHEDULED', status: 'NO_PENDING_WORK', availableOrigins: null, requiredOrigins: null });
     vi.mocked(apiClient.getForecastMlUpdateHistory).mockResolvedValue(ok(historyPage([makeExecution(), older])));
     render(<ForecastMlUpdateHistoryPanel />);
-    const card = await screen.findByText('92 / 107 orígenes maduros. El sistema requiere 107 orígenes maduros para una evaluación elegible.');
-    expect(card).toBeTruthy();
-    expect(screen.getByText('Manual')).toBeTruthy(); expect(screen.getByText('Automático')).toBeTruthy();
-    expect(screen.getAllByText((_, node) => node?.tagName === 'P' && Boolean(node.textContent?.includes('Revisión evaluada: 92')))).toHaveLength(2);
+    expect(apiClient.getForecastMlUpdateHistory).toHaveBeenCalledWith({ limit: 5 });
+    await screen.findAllByText('Modelo promovido');
+    expect(screen.getByText((_, node) => node?.tagName === 'SPAN' && Boolean(node.textContent?.startsWith('Manual')))).toBeTruthy();
+    expect(screen.getByText((_, node) => node?.tagName === 'SPAN' && Boolean(node.textContent?.startsWith('Automático')))).toBeTruthy();
+    expect(screen.getAllByRole('article').every(article => article.textContent?.includes('Revisión 92'))).toBe(true);
     expect(screen.getAllByText('v1 → v2')).toHaveLength(4);
     expect(apiClient.getForecastMlUpdateExecution).not.toHaveBeenCalled();
     fireEvent.click(screen.getAllByRole('button', { name: 'Ver detalle' })[0]);
+    expect(await screen.findByText('92 / 107 orígenes maduros. Se requieren 107 orígenes maduros para una evaluación elegible.')).toBeTruthy();
     expect(await screen.findByText(/Observaciones cerradas para esta ejecución:/)).toBeTruthy();
     expect(apiClient.getForecastMlUpdateExecution).toHaveBeenCalledWith(executionId);
   });
@@ -75,16 +83,16 @@ describe('forecast ML update history panel', () => {
   it('uses distinct state copy and does not collapse outcomes into “sin cambios”', async () => {
     const statuses = ['NOT_ELIGIBLE', 'EVALUATED_NO_PROMOTION', 'PROMOTED', 'PARTIAL', 'FAILED', 'INTERRUPTED', 'NO_PENDING_WORK', 'DEFERRED'] as const;
     vi.mocked(apiClient.getForecastMlUpdateHistory).mockResolvedValue(ok(historyPage(statuses.map((status, index) => makeExecution({
-      executionId: `11111111-1111-4111-8111-${String(index + 1).padStart(12, '0')}`, status,
+      executionId: `11111111-1111-4111-8111-${String(index + 1).padStart(12, '0')}`, status, horizons: [],
     })))));
     render(<ForecastMlUpdateHistoryPanel />);
-    expect(await screen.findByText('Se recibieron cambios, pero todavía no existe evidencia suficiente para evaluar o promover un nuevo modelo.')).toBeTruthy();
-    expect(screen.getByText('Se evaluó un candidato, pero no superó la política de promoción.')).toBeTruthy();
-    expect(screen.getByText('Se activó una nueva versión del modelo.')).toBeTruthy();
+    expect(await screen.findByText('La evidencia aún no es elegible.')).toBeTruthy();
+    expect(screen.getByText('Candidato evaluado; no se promovió.')).toBeTruthy();
+    expect(screen.getByText('Se activó una nueva versión.')).toBeTruthy();
     expect(screen.getByText('Los horizontes tuvieron resultados diferentes.')).toBeTruthy();
-    expect(screen.getByText('La ejecución no pudo completarse.')).toBeTruthy();
+    expect(screen.getByText('La ejecución requiere revisión.')).toBeTruthy();
     expect(screen.getByText('La ejecución quedó interrumpida.')).toBeTruthy();
-    expect(screen.getByText('Se revisó el sistema y no había trabajo pendiente.')).toBeTruthy();
+    expect(screen.getByText('No había trabajo nuevo por procesar.')).toBeTruthy();
     expect(screen.getByText('La solicitud quedó pendiente para una ejecución posterior.')).toBeTruthy();
   });
 
@@ -124,8 +132,8 @@ describe('forecast ML update history panel', () => {
     vi.mocked(apiClient.getForecastMlUpdateHistory).mockResolvedValue(ok(historyPage([noPromotion])));
     vi.mocked(apiClient.getForecastMlUpdateExecution).mockResolvedValue(ok(detail(noPromotion)));
     render(<ForecastMlUpdateHistoryPanel />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Ver detalle' }));
     expect(await screen.findByText('Orígenes maduros: No capturado.')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Ver detalle' }));
     expect(await screen.findByText('No aplica porque no se activó una nueva versión.')).toBeTruthy();
     expect(screen.getByText('El modelo activo no cambió.')).toBeTruthy();
   });
@@ -138,7 +146,94 @@ describe('forecast ML update history panel', () => {
     expect(screen.getByText(/pronósticos siguen disponibles/)).toBeTruthy();
     expect(screen.queryByText('private backend detail')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }));
-    expect(await screen.findByText('Manual')).toBeTruthy();
+    expect(await screen.findByText((_, node) => node?.tagName === 'SPAN' && Boolean(node.textContent?.startsWith('Manual')))).toBeTruthy();
     await waitFor(() => expect(apiClient.getForecastMlUpdateHistory).toHaveBeenCalledTimes(2));
+  });
+
+  it('filters by durable statuses and reason codes, not by displayed copy', async () => {
+    const rows = [
+      makeExecution(),
+      makeExecution({ executionId: '22222222-2222-4222-8222-222222222222', status: 'EVALUATED_NO_PROMOTION',
+        horizons: makeExecution().horizons.map(item => ({ ...item, activeVersionAfter: 1,
+          candidateVersion: 2, resultStatus: 'EVALUATED_NO_PROMOTION', promotionDecision: 'NOT_PROMOTED' })) }),
+      { ...withoutCandidate('NOT_ELIGIBLE', 'NOT_MATURE'), executionId: '33333333-3333-4333-8333-333333333333' },
+      { ...withoutCandidate('NO_PENDING_WORK', 'NO_PENDING_WORK'), executionId: '44444444-4444-4444-8444-444444444444' },
+      { ...withoutCandidate('FAILED', 'WORKER_FAILED'), executionId: '55555555-5555-4555-8555-555555555555' },
+    ];
+    vi.mocked(apiClient.getForecastMlUpdateHistory).mockResolvedValue(ok(historyPage(rows)));
+    render(<ForecastMlUpdateHistoryPanel />);
+    await screen.findByText('Modelo promovido');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Promovidos' }));
+    expect(screen.getAllByRole('article')).toHaveLength(1);
+    expect(screen.getByText('Modelo promovido')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Evaluados' }));
+    expect(screen.getAllByRole('article')).toHaveLength(2);
+    expect(screen.getByText('Modelo promovido')).toBeTruthy();
+    expect(screen.getByText('Evaluado · sin promoción')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'No elegibles' }));
+    expect(screen.getAllByRole('article')).toHaveLength(1);
+    expect(screen.queryByText('Modelo promovido')).toBeNull();
+    expect(screen.getByText('No elegible')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Sin trabajo' }));
+    expect(screen.getAllByRole('article')).toHaveLength(1);
+    expect(screen.queryByText('Modelo promovido')).toBeNull();
+    expect(screen.getByText('Sin trabajo pendiente')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Errores' }));
+    expect(screen.getAllByRole('article')).toHaveLength(1);
+    expect(screen.queryByText('Modelo promovido')).toBeNull();
+    expect(screen.getByText('Error')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Todos' }));
+    expect(screen.getAllByRole('article')).toHaveLength(5);
+
+    const unknown = { ...withoutCandidate('UNKNOWN', 'A message mentioning NOT_MATURE is not a reason code'),
+      executionId: '66666666-6666-4666-8666-666666666666' };
+    vi.mocked(apiClient.getForecastMlUpdateHistory).mockResolvedValue(ok(historyPage([unknown])));
+    fireEvent.click(screen.getByRole('button', { name: 'Actualizar historial' }));
+    await screen.findByText('No capturado');
+    fireEvent.click(screen.getByRole('button', { name: 'No elegibles' }));
+    expect(screen.getByText('No hay más ejecuciones que coincidan con este filtro.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Todos' }));
+    expect(screen.getByText('No capturado')).toBeTruthy();
+  });
+
+  it('uses the existing cursor, appends unique executions, keeps filter active and hides load more at the end', async () => {
+    const first = makeExecution();
+    const second = { ...withoutCandidate('NO_PENDING_WORK', 'NO_PENDING_WORK'), executionId: '22222222-2222-4222-8222-222222222222' };
+    vi.mocked(apiClient.getForecastMlUpdateHistory)
+      .mockResolvedValueOnce(ok(historyPage([first], 'cursor-1')))
+      .mockResolvedValueOnce(ok(historyPage([first, second])))
+      .mockResolvedValueOnce(ok(historyPage([second])));
+    render(<ForecastMlUpdateHistoryPanel />);
+    await screen.findByText('Modelo promovido');
+    fireEvent.click(screen.getByRole('button', { name: 'Sin trabajo' }));
+    expect(screen.getByText('No hay coincidencias entre los registros cargados.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Ver más' }));
+    expect(await screen.findByText('Sin trabajo pendiente')).toBeTruthy();
+    expect(apiClient.getForecastMlUpdateHistory).toHaveBeenNthCalledWith(2, { limit: 5, cursor: 'cursor-1' });
+    expect(screen.getAllByRole('article')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Sin trabajo' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryByRole('button', { name: 'Ver más' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Actualizar historial' }));
+    await waitFor(() => expect(apiClient.getForecastMlUpdateHistory).toHaveBeenCalledTimes(3));
+    expect(apiClient.getForecastMlUpdateHistory).toHaveBeenNthCalledWith(3, { limit: 5 });
+    expect(screen.getAllByRole('article')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Sin trabajo' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('expands only one execution at a time and leaves technical codes collapsed', async () => {
+    const other = { ...withoutCandidate('NO_PENDING_WORK', 'NO_PENDING_WORK'), executionId: '22222222-2222-4222-8222-222222222222' };
+    vi.mocked(apiClient.getForecastMlUpdateHistory).mockResolvedValue(ok(historyPage([makeExecution(), other])));
+    render(<ForecastMlUpdateHistoryPanel />);
+    const expanders = await screen.findAllByRole('button', { name: 'Ver detalle' });
+    fireEvent.click(expanders[0]);
+    await screen.findByRole('region', { name: 'Resultado ML por horizonte' });
+    expect(screen.getAllByText('v1 → v2').length).toBeGreaterThan(0);
+    expect(screen.getByText('Detalles técnicos').closest('details')?.open).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Ver detalle' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Ocultar detalle' })).toBeTruthy());
+    expect(screen.getAllByRole('button', { name: /detalle/ }).filter(button => button.getAttribute('aria-expanded') === 'true')).toHaveLength(1);
+    expect(apiClient.getForecastMlUpdateExecution).toHaveBeenCalledTimes(2);
   });
 });

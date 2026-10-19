@@ -27,6 +27,15 @@ const statusLabel: Record<string, string> = {
   PROMOTED: 'Promovido', PARTIAL: 'Parcial', FAILED: 'Fallido', INTERRUPTED: 'Interrumpido', DEFERRED: 'Diferido',
   REQUESTED: 'Solicitado', PENDING: 'Pendiente', RUNNING: 'En curso', UNKNOWN: 'No capturado',
 };
+type HistoryFilter = 'ALL' | 'EVALUATED' | 'PROMOTED' | 'NOT_ELIGIBLE' | 'NO_WORK' | 'ERRORS';
+const historyFilters: { id: HistoryFilter; label: string }[] = [
+  { id: 'ALL', label: 'Todos' }, { id: 'EVALUATED', label: 'Evaluados' }, { id: 'PROMOTED', label: 'Promovidos' },
+  { id: 'NOT_ELIGIBLE', label: 'No elegibles' }, { id: 'NO_WORK', label: 'Sin trabajo' }, { id: 'ERRORS', label: 'Errores' },
+];
+const nonEligibilityReasons = new Set(['NOT_MATURE', 'COOLDOWN_ACTIVE', 'DEBOUNCE_NOT_ELAPSED', 'PREVIOUS_FAILURE_NOT_RETRYABLE', 'NO_PROMOTION_INSUFFICIENT_HISTORY']);
+const errorReasons = new Set(['TRAINING_FAILED', 'TRAINING_TIMEOUT', 'STALE_FENCING_TOKEN', 'REGISTRY_CAS_CONFLICT',
+  'WORKER_FAILED', 'WORKER_CYCLE_TIMEOUT', 'EXECUTION_INTERRUPTED', 'PREFLIGHT_FAILED', 'ARTIFACT_INTEGRITY_FAILED',
+  'IMPACT_SCORING_FAILED', 'IMPACT_SCORING_INVALID', 'INVENTORY_IMPACT_INVALID']);
 const sourceLabel: Record<string, string> = { MANUAL: 'Manual', SCHEDULED: 'Automático', CLI: 'CLI', UNKNOWN: 'No capturado' };
 const safeText = (value: unknown) => typeof value === 'string' && value.length ? value : 'No capturado';
 const safeNumber = (value: unknown) => typeof value === 'number' && Number.isFinite(value)
@@ -45,27 +54,77 @@ const triggerLabel = (value: string) => sourceLabel[value] || 'No capturado';
 const friendlyStatus = (value: string) => statusLabel[value] || 'No capturado';
 const summaryNumber = (summary: Record<string, unknown> | null | undefined, key: string) => safeNumber(summary?.[key]);
 function horizon(rows: ForecastMlExecutionHorizon[], days: 7 | 14) { return rows.find(row => row.horizonDays === days); }
-function statusVariant(value: string): 'default' | 'destructive' | 'outline' {
-  return value === 'FAILED' ? 'destructive' : value === 'PROMOTED' ? 'default' : 'outline';
+function hasEvaluation(row: ForecastMlUpdateExecution) {
+  return row.status === 'EVALUATED_NO_PROMOTION' || row.status === 'PROMOTED'
+    || row.horizons.some(item => item.candidateVersion != null
+      || item.promotionDecision === 'PROMOTED' || item.promotionDecision === 'NOT_PROMOTED');
+}
+function isPromoted(row: ForecastMlUpdateExecution) {
+  return row.status === 'PROMOTED' || row.horizons.some(item => item.promotionDecision === 'PROMOTED'
+    || item.resultStatus === 'PROMOTED'
+    || (item.activeVersionBefore != null && item.activeVersionAfter != null && item.activeVersionAfter > item.activeVersionBefore));
+}
+function filterFor(row: ForecastMlUpdateExecution): Exclude<HistoryFilter, 'ALL'> | null {
+  if (row.status === 'FAILED' || errorReasons.has(row.reasonCode || '')
+    || row.horizons.some(item => item.resultStatus === 'FAILED' || errorReasons.has(item.promotionReason || ''))) return 'ERRORS';
+  if (isPromoted(row)) return 'PROMOTED';
+  if (hasEvaluation(row)) return 'EVALUATED';
+  if (row.status === 'NO_PENDING_WORK' || row.reasonCode === 'NO_PENDING_WORK') return 'NO_WORK';
+  if (row.status === 'NOT_ELIGIBLE' || nonEligibilityReasons.has(row.reasonCode || '')
+    || row.horizons.some(item => item.resultStatus === 'NOT_ELIGIBLE'
+      || nonEligibilityReasons.has(item.promotionReason || ''))) return 'NOT_ELIGIBLE';
+  return null;
+}
+function matchesFilter(row: ForecastMlUpdateExecution, filter: HistoryFilter) {
+  if (filter === 'ALL') return true;
+  const promoted = isPromoted(row);
+  if (promoted) return filter === 'PROMOTED' || filter === 'EVALUATED';
+  if (filter === 'EVALUATED') return hasEvaluation(row);
+  if (filter === 'NOT_ELIGIBLE') return row.status === 'NOT_ELIGIBLE' || nonEligibilityReasons.has(row.reasonCode || '')
+    || row.horizons.some(item => item.resultStatus === 'NOT_ELIGIBLE'
+      || nonEligibilityReasons.has(item.promotionReason || ''));
+  if (filter === 'NO_WORK') return row.status === 'NO_PENDING_WORK' || row.reasonCode === 'NO_PENDING_WORK';
+  if (filter === 'ERRORS') return row.status === 'FAILED' || errorReasons.has(row.reasonCode || '')
+    || row.horizons.some(item => item.resultStatus === 'FAILED' || errorReasons.has(item.promotionReason || ''));
+  return false;
+}
+function resultLabel(row: ForecastMlUpdateExecution) {
+  const category = filterFor(row);
+  if (category === 'PROMOTED') return 'Modelo promovido';
+  if (category === 'EVALUATED') return 'Evaluado · sin promoción';
+  if (category === 'NOT_ELIGIBLE') return 'No elegible';
+  if (category === 'NO_WORK') return 'Sin trabajo pendiente';
+  if (category === 'ERRORS') return 'Error';
+  return friendlyStatus(row.status);
+}
+function shortResult(row: ForecastMlUpdateExecution) {
+  const category = filterFor(row);
+  if (category === 'PROMOTED') return 'Se activó una nueva versión.';
+  if (category === 'EVALUATED') return 'Candidato evaluado; no se promovió.';
+  if (category === 'NOT_ELIGIBLE') return 'La evidencia aún no es elegible.';
+  if (category === 'NO_WORK') return 'No había trabajo nuevo por procesar.';
+  if (category === 'ERRORS') return 'La ejecución requiere revisión.';
+  return statusCopy[row.status] || 'Resultado no capturado.';
+}
+function resultVariant(row: ForecastMlUpdateExecution): 'default' | 'destructive' | 'outline' {
+  const category = filterFor(row);
+  return category === 'ERRORS' ? 'destructive' : category === 'PROMOTED' ? 'default' : 'outline';
 }
 function executionSummary(row: ForecastMlUpdateExecution) {
-  return <>
-    <div className="flex flex-wrap items-center gap-2"><Badge variant={statusVariant(row.status)}>{friendlyStatus(row.status)}</Badge>
-      <span className="text-sm text-muted-foreground">{triggerLabel(row.triggerSource)}</span>
-      <span className="text-sm text-muted-foreground">· Solicitud {localDate(row.requestedAt)}</span></div>
-    <p className="mt-2 text-sm">{statusCopy[row.status] || 'El estado de esta ejecución no está capturado.'}</p>
-    <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-4">
-      <p><span className="text-muted-foreground">Revisión evaluada: </span>{safeText(row.dataVersionEvaluated)}</p>
+  return <div className="min-w-0 space-y-1">
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+      <Badge variant={resultVariant(row)}>{resultLabel(row)}</Badge>
+      <span className="text-sm text-muted-foreground">{triggerLabel(row.triggerSource)} · {localDate(row.requestedAt)}</span>
+    </div>
+    <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
+      <span><span className="text-muted-foreground">Revisión </span>{safeText(row.dataVersionEvaluated)}</span>
       {[7, 14].map(days => {
         const item = horizon(row.horizons, days as 7 | 14);
-        return <p key={days}><span className="text-muted-foreground">{days}d: </span>{safeVersion(item?.activeVersionBefore)} → {safeVersion(item?.activeVersionAfter)}</p>;
+        return <span key={days}><span className="text-muted-foreground">{days}d </span>{safeVersion(item?.activeVersionBefore)} → {safeVersion(item?.activeVersionAfter)}</span>;
       })}
-      <p><span className="text-muted-foreground">Resultado: </span>{friendlyStatus(row.status)}</p>
     </div>
-    {row.availableOrigins == null || row.requiredOrigins == null
-      ? <p className="mt-2 text-xs text-muted-foreground">Orígenes maduros: No capturado.</p>
-      : <p className="mt-2 text-xs text-muted-foreground">{row.availableOrigins} / {row.requiredOrigins} orígenes maduros. El sistema requiere {row.requiredOrigins} orígenes maduros para una evaluación elegible.</p>}
-  </>;
+    <p className="truncate text-sm text-muted-foreground">{shortResult(row)}</p>
+  </div>;
 }
 
 export function ForecastMlUpdateHistoryPanel({ refreshToken = 0 }: { refreshToken?: number }) {
@@ -73,15 +132,24 @@ export function ForecastMlUpdateHistoryPanel({ refreshToken = 0 }: { refreshToke
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState(false);
+  const [filter, setFilter] = useState<HistoryFilter>('ALL');
+  const [expandedExecutionId, setExpandedExecutionId] = useState<string | null>(null);
   const requestId = useRef(0);
   const refresh = useCallback(async () => {
     const id = ++requestId.current;
     setLoading(true); setLoadingMore(false); setError(false); setPage(null);
+    setExpandedExecutionId(null);
     try {
-      const result = await apiClient.getForecastMlUpdateHistory({ limit: 20 });
+      const result = await apiClient.getForecastMlUpdateHistory({ limit: 5 });
       if (id !== requestId.current) return;
       if (!result.data) throw new Error('History unavailable');
-      setPage(result.data);
+      const seen = new Set<string>();
+      const items = result.data.items.filter(item => {
+        if (seen.has(item.executionId)) return false;
+        seen.add(item.executionId);
+        return true;
+      });
+      setPage({ ...result.data, items });
     } catch { if (id === requestId.current) setError(true); }
     finally { if (id === requestId.current) setLoading(false); }
   }, []);
@@ -95,35 +163,55 @@ export function ForecastMlUpdateHistoryPanel({ refreshToken = 0 }: { refreshToke
       const result = await apiClient.getForecastMlUpdateHistory({ limit: page.page.limit, cursor: page.page.nextCursor });
       if (id !== requestId.current) return;
       if (!result.data) throw new Error('History unavailable');
-      setPage(current => current ? { ...result.data!, items: [...current.items, ...result.data!.items] } : result.data!);
+      setPage(current => {
+        if (!current) return result.data!;
+        const seen = new Set(current.items.map(item => item.executionId));
+        const appended = result.data!.items.filter(item => {
+          if (seen.has(item.executionId)) return false;
+          seen.add(item.executionId);
+          return true;
+        });
+        return { ...result.data!, items: [...current.items, ...appended] };
+      });
     } catch { if (id === requestId.current) setError(true); }
     finally { if (id === requestId.current) setLoadingMore(false); }
   };
 
+  const loadedItems = page?.items || [];
+  const visibleItems = loadedItems.filter(row => matchesFilter(row, filter));
+  const noMorePages = !page?.page.nextCursor;
+
   return <Card role="region" aria-label="Historial de actualizaciones ML">
     <CardHeader><div className="flex flex-wrap items-start justify-between gap-3"><div>
       <CardTitle>Historial de actualizaciones ML</CardTitle>
-      <CardDescription>Revisiones y cambios de modelo registrados. La lista no vuelve a calcular impactos.</CardDescription>
+      <CardDescription>Registro de revisiones automáticas y manuales del modelo.</CardDescription>
     </div><Button type="button" size="sm" variant="outline" onClick={() => void refresh()} disabled={loading}>
       <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />Actualizar historial
     </Button></div></CardHeader>
     <CardContent className="space-y-3">
+      <div role="group" aria-label="Filtrar historial" className="flex flex-wrap gap-2">
+        {historyFilters.map(option => <Button key={option.id} type="button" size="sm" variant={filter === option.id ? 'default' : 'outline'}
+          aria-pressed={filter === option.id} onClick={() => setFilter(option.id)}>{option.label}</Button>)}
+      </div>
       {loading && <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />Cargando historial…</p>}
       {error && <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/40 p-3 text-sm">
         <span>No se pudo cargar una parte del historial. El estado del ML y los pronósticos siguen disponibles.</span>
         <Button type="button" variant="outline" size="sm" onClick={() => void refresh()}>Reintentar</Button>
       </div>}
-      {!loading && !error && page?.items.length === 0 && <p className="text-sm text-muted-foreground">Aún no hay ejecuciones históricas capturadas.</p>}
-      {page?.items.map(row => <ExecutionCard key={row.executionId} row={row} />)}
+      {!loading && !error && loadedItems.length === 0 && <p className="text-sm text-muted-foreground">Aún no hay ejecuciones históricas capturadas.</p>}
+      {!loading && !error && loadedItems.length > 0 && visibleItems.length === 0 && <p className="text-sm text-muted-foreground">
+        {noMorePages ? 'No hay más ejecuciones que coincidan con este filtro.' : 'No hay coincidencias entre los registros cargados.'}
+      </p>}
+      {visibleItems.map(row => <ExecutionCard key={row.executionId} row={row} expanded={expandedExecutionId === row.executionId}
+        onToggle={open => setExpandedExecutionId(current => open ? row.executionId : current === row.executionId ? null : current)} />)}
       {page?.page.nextCursor && <div className="flex justify-center"><Button type="button" variant="outline" onClick={() => void loadMore()} disabled={loadingMore}>
-        {loadingMore && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}{loadingMore ? 'Cargando…' : 'Cargar más'}
+        {loadingMore && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}{loadingMore ? 'Cargando…' : 'Ver más'}
       </Button></div>}
     </CardContent>
   </Card>;
 }
 
-function ExecutionCard({ row }: { row: ForecastMlUpdateExecution }) {
-  const [expanded, setExpanded] = useState(false);
+function ExecutionCard({ row, expanded, onToggle }: { row: ForecastMlUpdateExecution; expanded: boolean; onToggle: (open: boolean) => void }) {
   const [detail, setDetail] = useState<ForecastMlUpdateExecutionDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState(false);
@@ -138,14 +226,14 @@ function ExecutionCard({ row }: { row: ForecastMlUpdateExecution }) {
     finally { setDetailLoading(false); }
   };
   const toggle = () => {
-    if (expanded) { setExpanded(false); return; }
-    setExpanded(true);
+    if (expanded) { onToggle(false); return; }
+    onToggle(true);
     if (!detail) void loadDetail();
   };
   const id = `ml-execution-${row.executionId}`;
-  return <article className="rounded-lg border p-4">
+  return <article className="rounded-md border px-3 py-2.5">
     {executionSummary(row)}
-    <Button type="button" variant="ghost" size="sm" className="mt-3 px-2" aria-expanded={expanded} aria-controls={id} onClick={() => void toggle()}>
+    <Button type="button" variant="ghost" size="sm" className="mt-1 px-2" aria-expanded={expanded} aria-controls={id} onClick={() => void toggle()}>
       {expanded ? 'Ocultar detalle' : 'Ver detalle'}<ChevronDown className={`ml-2 h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} aria-hidden="true" />
     </Button>
     {expanded && <div id={id} className="mt-3 space-y-4 border-t pt-4">
@@ -161,6 +249,7 @@ function ExecutionDetail({ detail }: { detail: ForecastMlUpdateExecutionDetail }
   const promoted = detail.horizons.some(item => item.resultStatus === 'PROMOTED' || item.promotionDecision === 'PROMOTED');
   return <>
     <section aria-label="Resumen de ejecución" className="space-y-2"><h4 className="font-semibold">Resumen</h4>
+      <p className="text-sm text-muted-foreground">{statusCopy[detail.status] || 'El estado de esta ejecución no está capturado.'}</p>
       <div className="grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-4">
         <p>Ejecución: <span className="font-mono text-xs">{detail.executionId}</span></p><p>Origen: {triggerLabel(detail.triggerSource)}</p>
         <p>Solicitada: {localDate(detail.requestedAt)}</p><p>Inicio: {localDate(detail.startedAt)}</p><p>Fin: {localDate(detail.finishedAt)}</p>
