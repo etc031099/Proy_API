@@ -1,0 +1,68 @@
+{
+  "demoRunId": "cert-stable-2020",
+  "purpose": "REPLAY_ONLY",
+  "profile": "STABLE",
+  "seed": 2020,
+  "requiredOrigins": 107,
+  "policy": {
+    "numericPolicy": "M6.10A22-PROMOTION-v1",
+    "replayPolicy": "REPLAY-CAUSAL27-107-v1"
+  },
+  "level": "LEVEL_7_FULL_EVALUATION",
+  "liveImpact": {
+    "modifiesLive": false,
+    "modifiesRegistry": false,
+    "modifiesActive": false,
+    "promotesActive": false
+  },
+  "horizons": [
+    {
+      "horizonDays": 7,
+      "status": "PASS",
+      "metrics": {
+        "wape": 0.21821910661531238,
+        "mae": 2.7553986143126212,
+        "normalizedBias": 0.015203166728022906,
+        "relativeWapeImprovement": 0.07285079744035697
+      },
+      "globalChecks": {
+        "G1_POOLED_WAPE_5PCT": true,
+        "G2_POOLED_BIAS_10PCT": true,
+        "G3_POOLED_MACRO_MAE_110PCT": true
+      },
+      "reasons": [],
+      "selectedIdentity": "replay:cert-stable-2020:7d:v2",
+      "selectedState": "REPLAY_SELECTED"
+    },
+    {
+      "horizonDays": 14,
+      "status": "REJECTED",
+      "metrics": {
+        "wape": 0.16015837551541576,
+        "mae": 4.056983784638979,
+        "normalizedBias": 0.010429423363195635,
+        "relativeWapeImprovement": 0.13230439506009892
+      },
+      "globalChecks": {
+        "G1_POOLED_WAPE_5PCT": true,
+        "G2_POOLED_BIAS_10PCT": true,
+        "G3_POOLED_MACRO_MAE_110PCT": true
+      },
+      "reasons": [
+        "P_FOLD_CATA_MAE:F3:BEB-GAS-003"
+      ],
+      "candidateState": "REPLAY_REJECTED"
+    }
+  ],
+  "interpretation": {
+    "execution": "HISTORICAL_OFFLINE_REPLAY",
+    "isLiveState": false,
+    "requiredOriginsWasWeakened": false,
+    "explanations": [
+      "Este resultado es evidencia de un replay histórico/offline y no representa el estado LIVE.",
+      "El replay no modifica Registry ni ACTIVE; un PASS de replay no significa promoción LIVE.",
+      "14d fue rechazado aunque mejoró el WAPE global porque falló la protección focal P_FOLD_CATA_MAE:F3:BEB-GAS-003.",
+      "El requisito de 107 origins no se debilitó."
+    ]
+  }
+}

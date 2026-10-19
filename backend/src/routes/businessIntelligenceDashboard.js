@@ -4,6 +4,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { authenticate, checkBusinessAccess } = require('../middleware/auth');
 const { createV3BusinessIntelligenceDashboard } = require('../services/v3BusinessIntelligenceDashboard');
+const { getCertifiedStable2020Replay } = require('../services/forecastReplayCertificateService');
 
 const createBusinessIntelligenceDashboardRoutes = ({ service, authenticateMiddleware = authenticate,
   businessAccessMiddleware = checkBusinessAccess } = {}) => {
@@ -41,6 +42,13 @@ const createBusinessIntelligenceDashboardRoutes = ({ service, authenticateMiddle
   router.get('/health/diagnostics', endpoint('healthDiagnostic'));
   router.get('/inventory', endpoint('inventory'));
   router.get('/forecast/evaluation', endpoint('forecastEvaluation'));
+  router.get('/forecast/replay/certified-stable-2020', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    if (Object.keys(req.query || {}).length > 0) {
+      return res.status(400).json({ success: false, code: 'FORECAST_REPLAY_SELECTION_NOT_ALLOWED' });
+    }
+    return res.json({ success: true, data: getCertifiedStable2020Replay() });
+  });
   router.get('/forecast/models/active', endpoint('activeForecastModels'));
   router.get('/products/:sku/forecast', endpoint('forecast'));
   router.get('/products/:sku/inventory', endpoint('productInventory'));
