@@ -5,13 +5,11 @@ const mongoose = require('mongoose');
 const { randomUUID } = require('node:crypto');
 const { authenticate, authorize } = require('../middleware/auth');
 const { createMlTestAdminExecutor } = require('../services/mlTestAdminExecutor');
-const { CERTIFICATION } = require('../services/mlTestTargetAuthorization');
 
 const SAFE_CODE = /^(?:CHECKPOINT|RESTORE|ML_TEST|STALE_TEST|TEST)_[A-Z_]+$/;
 const fail = (code, status = 409) => { throw Object.assign(new Error(code), { code, httpStatus: status }); };
 const executorFor = (env = process.env) => createMlTestAdminExecutor({
-  client: mongoose.connection.getClient(), db: mongoose.connection.db, target: 'CLOUD', env,
-  certificationId: CERTIFICATION
+  client: mongoose.connection.getClient(), db: mongoose.connection.db, target: 'LOCAL', env
 });
 
 function createMlTestAdminRoutes({ authenticateMiddleware = authenticate, adminMiddleware = authorize('admin'), getExecutor = executorFor } = {}) {

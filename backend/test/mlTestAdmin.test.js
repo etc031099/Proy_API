@@ -57,6 +57,62 @@ test('approved internal cloud capability is tenant/host/database/object bound an
   assert.throws(() => T.authorizeCloudTarget({ client, db, user: { ...admin, role: 'user' }, env, certificationId: T.CERTIFICATION }), { httpStatus: 403 });
   // Only mock objects; no MongoClient/connect or cloud DB operation is invoked.
 });
+test('local target requires explicit opt-in, an exact database and a local rs0 replica set', async () => {
+  const T = require('../src/services/mlTestTargetAuthorization');
+  const S = require('../src/services/mlTestCheckpointService');
+  const client = { options: { hosts: [{ host: 'localhost', port: 27017 }], replicaSet: 'rs0' } };
+  const db = { databaseName: 'inventory_billing', client,
+    admin: () => ({ command: async command => {
+      assert.deepEqual(command, { hello: 1 });
+      return { setName: 'rs0', isWritablePrimary: true, me: 'localhost:27017', hosts: ['localhost:27017'] };
+    } }) };
+  const env = { NODE_ENV: 'development', ML_TEST_LOCAL_ENABLED: 'true', ML_TEST_LOCAL_EXPECTED_DATABASE: 'inventory_billing',
+    MONGODB_URI: 'mongodb://local-user:local-pass@localhost:27017/inventory_billing?replicaSet=rs0', MONGODB_REPLICA_SET: 'rs0' };
+  const capability = await T.authorizeLocalTarget({ client, db, user: admin, env });
+  assert.equal(T.authorized(client, db, capability), true);
+  assert.equal(T.cloudAuthorized(client, db, capability), false);
+  S.assertExecutionTarget(client, db, capability);
+  assert.equal(T.authorized(client, { ...db }, capability), false);
+});
+test('local-disabled executor rejects destructive actions before touching Mongo', async () => {
+  const noDb = new Proxy({}, { get: () => assert.fail('disabled local ML Test must not access Mongo') });
+  const executor = E.createMlTestAdminExecutor({ client: noDb, db: noDb, target: 'LOCAL', env: {} });
+  await assert.rejects(executor.execute({ user: admin, body: {} }, 'CREATE'), { code: 'ML_TEST_LOCAL_DISABLED' });
+});
+test('production cannot authorize local destructive operations even with a local URI and enabled flag', async () => {
+  const T = require('../src/services/mlTestTargetAuthorization');
+  const noDb = new Proxy({}, { get: () => assert.fail('production local-test guard must reject before database access') });
+  await assert.rejects(T.authorizeLocalTarget({ client: noDb, db: noDb, user: admin, env: {
+    NODE_ENV: 'production', ML_TEST_LOCAL_ENABLED: 'true', ML_TEST_LOCAL_EXPECTED_DATABASE: 'inventory_billing',
+    MONGODB_URI: 'mongodb://localhost:27017/inventory_billing?replicaSet=rs0', MONGODB_REPLICA_SET: 'rs0'
+  } }), { code: 'ML_TEST_LOCAL_DISABLED' });
+});
+test('Atlas/cloud URI is rejected for production checkpoint and restore even when local flag is accidentally enabled', async () => {
+  const remoteClient = { options: { srvHost: 'cluster.example.mongodb.net', replicaSet: 'rs0' } };
+  const remoteDb = { databaseName: 'inventory_billing', client: remoteClient,
+    admin: () => assert.fail('remote Mongo target must be rejected before replica-set probe') };
+  const env = { NODE_ENV: 'development', ML_TEST_LOCAL_ENABLED: 'true', ML_TEST_LOCAL_EXPECTED_DATABASE: 'inventory_billing',
+    MONGODB_URI: 'mongodb+srv://fixture:fixture@cluster.example.mongodb.net/inventory_billing', MONGODB_REPLICA_SET: 'rs0' };
+  const executor = E.createMlTestAdminExecutor({ client: remoteClient, db: remoteDb, target: 'LOCAL', env });
+  await assert.rejects(executor.execute({ user: admin, body: {} }, 'CREATE'), { code: 'ML_TEST_LOCAL_TARGET_INVALID' });
+  await assert.rejects(executor.execute({ user: admin, body: { checkpointId: randomUUID(), restoreId: randomUUID(), branch: 'NORMAL' } }, 'RESTORE'),
+    { code: 'ML_TEST_LOCAL_TARGET_INVALID' });
+});
+test('local URI, database, configured replica set and advertised replica members must all match', async () => {
+  const T = require('../src/services/mlTestTargetAuthorization');
+  const client = { options: { hosts: [{ host: 'atlas.example.net', port: 27017 }], replicaSet: 'rs0' } };
+  const db = { databaseName: 'inventory_billing', client, admin: () => assert.fail('invalid target must fail before hello') };
+  const env = { ML_TEST_LOCAL_ENABLED: 'true', ML_TEST_LOCAL_EXPECTED_DATABASE: 'inventory_billing',
+    MONGODB_URI: 'mongodb://atlas.example.net:27017/inventory_billing?replicaSet=rs0', MONGODB_REPLICA_SET: 'rs0' };
+  await assert.rejects(T.authorizeLocalTarget({ client, db, user: admin, env }), { code: 'ML_TEST_LOCAL_TARGET_INVALID' });
+  const localClient = { options: { hosts: [{ host: 'localhost', port: 27017 }], replicaSet: 'rs0' } };
+  const atlasMemberDb = { ...db, client: localClient,
+    admin: () => ({ command: async () => ({ setName: 'rs0', isWritablePrimary: true,
+      me: 'localhost:27017', hosts: ['cluster-shard-00.example.net:27017'] }) }) };
+  await assert.rejects(T.authorizeLocalTarget({ client: localClient, db: atlasMemberDb, user: admin,
+    env: { ...env, MONGODB_URI: 'mongodb://localhost:27017/inventory_billing?replicaSet=rs0' } }),
+  { code: 'ML_TEST_LOCAL_REPLICA_SET_REQUIRED' });
+});
 test('durable identity rejects stale manual/scheduled work in NO_TEST, accepts only current fresh identity', async () => {
   const cycle = randomUUID(), now = new Date('2026-10-18T18:00:00Z');
   const row = { state: 'NO_TEST', resetEpoch: BSON.Long.fromNumber(4), testCycleId: cycle, epochChangedAt: now };

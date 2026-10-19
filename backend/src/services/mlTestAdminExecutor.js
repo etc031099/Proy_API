@@ -34,13 +34,16 @@ function createMlTestAdminExecutor({ client, db, target = 'CLOUD', env = process
         || !/^[a-f0-9-]{36}$/.test(body.restoreId || '') || !['NORMAL', 'OUTLIER', 'SHIFT'].includes(body.branch))) fail('ML_TEST_REQUEST_INVALID', 400);
     if (['STATUS', 'STORAGE'].includes(action)) {
       if (target === 'CLOUD') T.assertCloudStatusTarget({ client, db, env });
+      else if (target === 'LOCAL') await T.assertLocalStatusTarget({ client, db, env });
       else if (target !== 'LOCAL_CERTIFICATION') fail('ML_TEST_TARGET_INVALID', 400);
       else S.assertExecutionTarget(client, db, null);
       return action === 'STORAGE' ? Storage.reportStorage(db, scope)
-        : readAdminStatus(db, scope, { cloudRestoreEnabled: T.cloudFlagEnabled(env) && certificationId === T.CERTIFICATION });
+        : readAdminStatus(db, scope, { cloudRestoreEnabled: target === 'CLOUD'
+          && T.cloudFlagEnabled(env) && certificationId === T.CERTIFICATION });
     }
     let authorization;
     if (target === 'CLOUD') authorization = T.authorizeCloudTarget({ client, db, user: req.user, env, certificationId });
+    else if (target === 'LOCAL') authorization = await T.authorizeLocalTarget({ client, db, user: req.user, env });
     else if (target !== 'LOCAL_CERTIFICATION') fail('ML_TEST_TARGET_INVALID', 400);
     S.assertExecutionTarget(client, db, authorization);
     // Explicit LOCAL administrative provisioning only; never Model.init/Atlas.
@@ -57,11 +60,11 @@ function createMlTestAdminExecutor({ client, db, target = 'CLOUD', env = process
         // together. Never rewrite that success in a later non-atomic step.
         result = await Recovery.abortFailedCheckpoint({ client, db, scope, authorization, actionId, actor: String(req.user._id),
           stale: action === 'ABORT_STALE_CHECKPOINT' });
-        return { ...result, cloudRestoreEnabled: T.authorized(client, db, authorization) };
+        return { ...result, cloudRestoreEnabled: T.cloudAuthorized(client, db, authorization) };
       }
       if (action === 'PURGE_FAILED_CHECKPOINT_PAYLOADS') return Storage.purgeFailedPayloads({ client, db, scope,
         authorization, actionId, actor: String(req.user._id) });
-      if (action === 'CREATE') result = await (target === 'CLOUD' ? S.captureOperationalCheckpoint : S.captureLocalCheckpoint)({ client, db, scope,
+      if (action === 'CREATE') result = await (target === 'LOCAL_CERTIFICATION' ? S.captureLocalCheckpoint : S.captureOperationalCheckpoint)({ client, db, scope,
         localWritersPaused: writersPaused === true, createdBy: String(req.user._id), authorization });
       else {
         if (!body.checkpointId || !body.restoreId || !body.branch) fail('ML_TEST_REQUEST_INVALID', 400);
@@ -79,7 +82,7 @@ function createMlTestAdminExecutor({ client, db, target = 'CLOUD', env = process
       await db.collection(AUDIT).updateOne({ actionId }, { $set: { result: 'SUCCEEDED', completedAt: new Date(),
         checkpointId: result.checkpointId || body.checkpointId || null, testCycleId: after.testCycleId, epoch: after.resetEpoch } },
       { writeConcern: { w: 'majority' } });
-      return { ...result, cloudRestoreEnabled: T.authorized(client, db, authorization) };
+      return { ...result, cloudRestoreEnabled: T.cloudAuthorized(client, db, authorization) };
     } catch (error) {
       const code = action === 'CREATE' ? S.codeOf(error)
         : /^(?:CHECKPOINT|RESTORE|ML_TEST|STALE_TEST)_[A-Z_]+$/.test(error.code || '') ? error.code : 'ML_TEST_OPERATION_FAILED';
