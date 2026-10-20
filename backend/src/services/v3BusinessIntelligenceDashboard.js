@@ -618,7 +618,7 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
           recommendedQty: finiteOrNull(row.recommendation?.recommendedQty), status: row.recommendation?.status || null,
           availabilityStatus: row.recommendation?.availabilityStatus || null,
           reasonCode: row.recommendation?.reasonCode || null },
-        risk: { level: row.risk?.level || null, reasonCodes: row.risk?.reasonCodes || [], status: row.risk?.status || null,
+        risk: { level: row.risk?.level || null, lowStock: row.risk?.lowStock ?? null, reasonCodes: row.risk?.reasonCodes || [], status: row.risk?.status || null,
           availabilityStatus: row.risk?.availabilityStatus || null, reasonCode: row.risk?.reasonCode || null },
         classification: { abc: row.classification?.abc || null, xyz: row.classification?.xyz || null } } };
     } catch (error) {

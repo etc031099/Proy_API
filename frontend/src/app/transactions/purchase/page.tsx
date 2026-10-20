@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { recordInventoryOperation } from '@/lib/inventoryImpactSnapshot';
 
 // Form validation schema
 const purchaseFormSchema = z.object({
@@ -152,7 +153,18 @@ export default function AddPurchasePage() {
         notes: data.notes,
       };
 
-      const response = await api.createTransaction(purchaseData);
+      const affectedProducts = data.products.flatMap(item => {
+        const product = products.find(candidate => candidate._id === item.productId);
+        return product?.sku ? [{ sku: product.sku, name: product.name, quantity: item.quantity }] : [];
+      });
+      const response = affectedProducts.length ? await recordInventoryOperation({
+        type: 'PURCHASE_CREATED', products: affectedProducts,
+        submit: () => api.createTransaction(purchaseData),
+        isSuccessful: result => result.success,
+        getMetadata: result => ({ operationId: typeof result.data?.transaction?._id === 'string' ? result.data.transaction._id : null,
+          occurredAt: typeof result.data?.transaction?.date === 'string' ? result.data.transaction.date : null,
+          reference: typeof result.data?.transaction?.invoiceNumber === 'string' ? result.data.transaction.invoiceNumber : null }),
+      }) : await api.createTransaction(purchaseData);
 
       if (response.success) {
         setSuccess('Purchase recorded successfully!');

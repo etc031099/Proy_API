@@ -86,12 +86,12 @@ const makeDashboard = ({ fail, partial = false, productPresent = true, supplierN
               demand: { expectedDaily: null, expectedUnitsNext1d: null, expectedUnitsNext7d: null, expectedUnitsNext14d: null },
               inventoryPolicy: { safetyStock: null, reorderPoint: null, status: 'PARTIAL', reasonCode: 'FORECAST_UNAVAILABLE' },
               recommendation: { shouldReorder: null, recommendedQty: null, status: 'PARTIAL', reasonCode: 'FORECAST_UNAVAILABLE' },
-              risk: { level: null, reasonCodes: [], status: 'PARTIAL', reasonCode: 'FORECAST_UNAVAILABLE' }, classification: { abc: 'A', xyz: 'X' } }] } }
+              risk: { level: null, lowStock: true, reasonCodes: [], status: 'PARTIAL', reasonCode: 'FORECAST_UNAVAILABLE' }, classification: { abc: 'A', xyz: 'X' } }] } }
             : { status: 'READY', metadata, data: { total: 1, items: [{ sku: 'SKU-1', productName: 'Producto uno',
             stock: { onHand: 1, incoming: 2, inventoryPosition: 3 }, coverage: { daysCover: 1.5, status: 'AVAILABLE' },
             demand: { expectedDaily: 2, expectedUnitsNext1d: null, expectedUnitsNext7d: 14, expectedUnitsNext14d: 28 },
             inventoryPolicy: { safetyStock: 3, reorderPoint: 5 }, recommendation: { shouldReorder: true, recommendedQty: 4 },
-            risk: { level: 'HIGH', reasonCodes: ['LOW_COVERAGE'] }, classification: { abc: 'A', xyz: 'X' } }] } };
+            risk: { level: 'HIGH', lowStock: false, reasonCodes: ['LOW_COVERAGE'] }, classification: { abc: 'A', xyz: 'X' } }] } };
           return { ...result, data: { ...result.data, inventorySummary } };
         }
         case 'get_supplier_intelligence': {
@@ -393,6 +393,7 @@ test('inventory detail exposes approved values without inventing preventive sema
   assert.equal(data.recommendation.recommendedQty, 4);
   assert.equal(data.recommendation.preventiveRecommendation, null);
   assert.equal(data.risk.level, 'HIGH');
+  assert.equal(data.risk.lowStock, false);
   assert.equal(data.availability, 'READY');
   assert.equal(data.freshness.mode, 'LIVE');
   const operation = calls.find(row => row.kind === 'get_inventory_intelligence');

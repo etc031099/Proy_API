@@ -570,6 +570,11 @@ class LiveInventorySupplierAdapter:
                 row["inventoryPolicy"].update({"reasonCode": "FORECAST_HORIZON_UNAVAILABLE"})
                 row["recommendation"].update({"reasonCode": "FORECAST_HORIZON_UNAVAILABLE"})
                 row["risk"].update({"reasonCode": "FORECAST_HORIZON_UNAVAILABLE"})
+            if valid_pair:
+                # Keep the direct approved Ridge horizons alongside the derived daily rate.
+                # _from_m66 replaces the demand mapping, so these must be restored explicitly.
+                row["demand"].update({"expectedUnitsNext7d": float(ridge7),
+                    "expectedUnitsNext14d": float(ridge14)})
             rows.append(row)
         known = sum(row["stock"]["onHand"] is not None for row in rows)
         abc_counts = {key: sum(row["classification"]["abc"] == key for row in rows) for key in ("A", "B", "C")}

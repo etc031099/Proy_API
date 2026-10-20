@@ -415,7 +415,7 @@ export interface ProductInventory {
   coverage: { daysCover: number | null; status: string | null; availabilityStatus?: string | null; reasonCode?: string | null };
   inventoryPolicy: { safetyStock: number | null; reorderPoint: number | null; status?: string | null; reasonCode?: string | null; safetyStockStatus?: string | null; reorderStatus?: string | null };
   recommendation: { reorderNow: boolean | null; preventiveRecommendation: boolean | null; recommendedQty: number | null; status?: string | null; availabilityStatus?: string | null; reasonCode?: string | null };
-  risk: { level: RiskLevel | null; reasonCodes: string[]; status?: string | null; availabilityStatus?: string | null; reasonCode?: string | null };
+  risk: { level: RiskLevel | null; lowStock?: boolean | null; reasonCodes: string[]; status?: string | null; availabilityStatus?: string | null; reasonCode?: string | null };
   classification: { abc: string | null; xyz: string | null };
 }
 export interface IntelligenceApiError { code: string; message: string; }

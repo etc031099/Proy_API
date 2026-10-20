@@ -64,7 +64,7 @@ def _context(*, version="1", stock=21, purchases=(), receives=(), cancelled=()):
             effectiveAtUtc=received_at,
             lineChanges=(SimpleNamespace(lineKey=line_key, receivedQty=qty),)))
     return SimpleNamespace(
-        snapshot=SimpleNamespace(metadata=SimpleNamespace(businessId="B1", scenarioId="minimarket-pasco-v3"),
+        snapshot=SimpleNamespace(metadata=SimpleNamespace(businessId="B1", scenarioId="minimarket-pasco-v3", testEpoch=None),
             purchases=list(purchases), transactionChanges=changes, closedSalesDays=[], sales=[]),
         context_hash=f"hash-{version}", data_version=version, as_of_date=date(2026, 10, 14),
         stock_by_sku={"SKU-1": stock}, stock_for=lambda **_kw: stock,
@@ -146,6 +146,18 @@ class M69F4DLiveInventorySupplierTests(unittest.TestCase):
         self.assertEqual(after_sale["items"][0]["stock"]["onHand"], 17)
         self.assertIsNone(after_sale["items"][0]["recommendation"]["recommendedQty"])
         self.assertEqual(after_sale["items"][0]["recommendation"]["status"], "LIVE_FORECAST_REQUIRED")
+
+    def test_inventory_exposes_direct_ridge_horizons_used_for_derived_daily_rate(self):
+        adapter = _adapter()
+        forecast_rows = [{"sku": "SKU-1", "expectedUnitsNext7d": 14.0,
+            "expectedUnitsNext14d": 28.0, "horizon7Status": "READY", "horizon14Status": "READY",
+            "modelVersion7": 1, "modelVersion14": 1}]
+        result, _ = adapter.inventory_data(_inventory_request(),
+            _context(version="ridge-pair", stock=21), forecast_rows=forecast_rows)
+        demand = result["items"][0]["demand"]
+        self.assertEqual(demand["expectedUnitsNext7d"], 14.0)
+        self.assertEqual(demand["expectedUnitsNext14d"], 28.0)
+        self.assertEqual(demand["expectedDaily"], 2.0)
 
     def test_receive_decreases_incoming_without_double_adding_stock(self):
         adapter = _adapter()
@@ -276,6 +288,10 @@ class M69F4DLiveInventorySupplierTests(unittest.TestCase):
         live = _context(version="6", stock=23, purchases=(purchase,))
         live.suppliers_by_key = {"S-NEW": {"entityKey": "S-NEW", "name": "Proveedor nuevo"}}
         adapter.static["suppliers"].append({"supplierCode": "S-NEW", "displayName": "Proveedor nuevo"})
+        inventory, _ = adapter.inventory_data(_inventory_request(), live)
+        self.assertEqual(inventory["items"][0]["stock"]["onHand"], 23)
+        self.assertEqual(inventory["items"][0]["stock"]["incoming"], 0)
+        self.assertEqual(inventory["items"][0]["stock"]["inventoryPosition"], 23)
         data, _ = adapter.supplier_data(_supplier_request(supplierCode="S-NEW"), live)
         row = data["items"][0]
         self.assertEqual(row["purchaseOrderCount"], 1)

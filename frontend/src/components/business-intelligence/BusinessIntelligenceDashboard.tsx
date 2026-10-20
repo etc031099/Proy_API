@@ -21,6 +21,7 @@ import { MlTestScenarioUiProvider, useMlTestScenarioUiState } from './MlTestScen
 import { AnalyticsErrorBoundary } from './AnalyticsErrorBoundary';
 import { MlTestEpochBoundary } from './MlTestEpochBoundary';
 import { ForecastImpactDetailCard, ForecastImpactSummaryCard, useForecastImpact } from './ForecastImpactPanel';
+import { InventoryImpactDetailCard, InventoryImpactSummaryCard, useInventoryImpact } from './InventoryImpactPanel';
 
 type TabKey = 'summary' | 'forecast' | 'inventory' | ExtendedTab;
 type LoadState = 'loading' | 'ready' | 'error';
@@ -91,6 +92,7 @@ function BusinessIntelligenceContent() {
   const [inventoryError, setInventoryError] = useState(false);
   const [selected, setSelected] = useState<ProductOption | null>(null);
   const forecastImpact = useForecastImpact();
+  const inventoryImpact = useInventoryImpact();
   const [horizon, setHorizon] = useState<Horizon>(7);
   const [forecastByHorizon, setForecastByHorizon] = useState<Partial<Record<RidgeHorizon, ForecastRead>>>({});
   const [activeForecastModels, setActiveForecastModels] = useState<ForecastActiveModel[] | null>(null);
@@ -201,6 +203,7 @@ function BusinessIntelligenceContent() {
             <MetricCard title="Compras pendientes" value={safeNumber(summary.inventory.pendingPurchasesCount)} />
           </div></section>
           <ForecastImpactSummaryCard impact={forecastImpact} onNavigate={target => setTab(target)} />
+          <InventoryImpactSummaryCard impact={inventoryImpact} onNavigate={() => setTab('inventory')} />
           <section aria-labelledby="analytics-techniques-title" className="space-y-3">
             <div><h2 id="analytics-techniques-title" className="inline text-lg font-semibold">Técnicas analíticas utilizadas</h2><span className="ml-2"><MetricInfo label="Machine Learning">Machine Learning permite aprender patrones a partir de datos, en lugar de depender únicamente de reglas definidas manualmente.</MetricInfo></span><p className="text-sm text-muted-foreground">3 técnicas de Machine Learning y 1 técnica de minería de patrones, elegidas según el problema.</p></div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -252,6 +255,7 @@ function BusinessIntelligenceContent() {
         <MlTestControlPanel />
       </section>}
       {tab === 'inventory' && <section id="intelligence-panel-inventory" role="tabpanel" aria-labelledby="intelligence-tab-inventory" tabIndex={0} className="mt-4 space-y-6">
+        <InventoryImpactDetailCard impact={inventoryImpact} />
         <Card><CardContent className="p-5"><ProductSearchPicker id="intelligence-inventory-product-search" selected={selected} onSelect={chooseProduct} /></CardContent></Card>
         {!selected && <>
           {inventoryError && <ErrorPanel message="No se pudo cargar el inventario." retry={() => void loadInventory(true)} />}

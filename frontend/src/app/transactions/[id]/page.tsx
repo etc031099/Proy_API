@@ -21,6 +21,7 @@ import {
 import { api } from '@/lib/api';
 import { openPrintDocument } from '@/lib/print-document';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { recordInventoryOperation } from '@/lib/inventoryImpactSnapshot';
 
 interface AddressValue {
   street?: string;
@@ -47,7 +48,7 @@ interface Transaction {
     phone: string;
     email: string;
     address?: string | AddressValue;
-  };
+  } | string;
 
   vendorId?: {
     _id: string;
@@ -55,15 +56,16 @@ interface Transaction {
     phone: string;
     email: string;
     address?: string | AddressValue;
-  };
+  } | string;
   products: Array<{
     productId: {
       _id: string;
       name: string;
       category: string;
       sku: string;
-    };
+    } | string;
     productName: string;
+    sku?: string | null;
     quantity: number;
     price: number;
     total: number;
@@ -88,7 +90,20 @@ export default function TransactionDetailPage({ params }: { params: Promise<{ id
     try {
       setCancelling(true);
       setError('');
-      const response = await api.updateTransactionStatus(transaction._id, 'cancelled');
+      const affectedProducts = transaction.type === 'sale' ? transaction.products.flatMap(item => {
+        const product = item.productId;
+        const sku = item.sku || (product && typeof product === 'object' ? product.sku : null);
+        return sku ? [{ sku, name: item.productName || (product && typeof product === 'object' ? product.name : '') || sku,
+          quantity: item.quantity }] : [];
+      }) : [];
+      const response = affectedProducts.length ? await recordInventoryOperation({
+        type: 'SALE_CANCELLED', products: affectedProducts,
+        submit: () => api.updateTransactionStatus(transaction._id, 'cancelled'),
+        isSuccessful: result => result.success,
+        getMetadata: result => ({ operationId: typeof result.data?.transaction?._id === 'string' ? result.data.transaction._id : transaction._id,
+          occurredAt: new Date().toISOString(),
+          reference: transaction.invoiceNumber || transaction._id.slice(-8) }),
+      }) : await api.updateTransactionStatus(transaction._id, 'cancelled');
       if (!response.success) {
         setError(response.message || t('transactions.cancelError'));
         return;
@@ -173,9 +188,11 @@ export default function TransactionDetailPage({ params }: { params: Promise<{ id
 
   const printReceipt = () => {
     if (!transaction) return;
+    const customer = transaction.customerId && typeof transaction.customerId === 'object' ? transaction.customerId : null;
+    const vendor = transaction.vendorId && typeof transaction.vendorId === 'object' ? transaction.vendorId : null;
     const contactName = transaction.type === 'sale'
-      ? transaction.customerId?.name || t('transactions.finalConsumer')
-      : transaction.vendorId?.name || t('transactions.unknownVendor');
+      ? customer?.name || transaction.customerName || t('transactions.finalConsumer')
+      : vendor?.name || transaction.vendorName || t('transactions.unknownVendor');
 
     openPrintDocument({
       title: t('transactions.receiptTitle'),
@@ -218,11 +235,12 @@ export default function TransactionDetailPage({ params }: { params: Promise<{ id
   const repeatSale = () => {
     if (!transaction || transaction.type !== 'sale') return;
     sessionStorage.setItem('repeat-sale', JSON.stringify({
-      customerId: transaction.customerId?._id || '',
-      customerName: transaction.customerId?.name || transaction.customerName || '',
+      customerId: transaction.customerId && typeof transaction.customerId === 'object' ? transaction.customerId._id : '',
+      customerName: transaction.customerId && typeof transaction.customerId === 'object'
+        ? transaction.customerId.name || transaction.customerName || '' : transaction.customerName || '',
       currency: transaction.currency || 'PEN',
       products: transaction.products.map((item) => ({
-        productId: item.productId._id,
+        productId: typeof item.productId === 'object' ? item.productId._id : item.productId,
         quantity: item.quantity,
         price: item.price
       }))
@@ -262,7 +280,9 @@ export default function TransactionDetailPage({ params }: { params: Promise<{ id
   }
 
   const contact = transaction.customerId || transaction.vendorId;
-  const contactAddress = formatAddress(contact?.address);
+  const contactDetails = contact && typeof contact === 'object' ? contact : null;
+  const contactName = contactDetails?.name || transaction.customerName || transaction.vendorName || null;
+  const contactAddress = formatAddress(contactDetails?.address);
   const transactionCurrency = transaction.currency || 'USD';
   const exchangeRate = transaction.exchangeRate ?? 1;
   const originalAmount = transaction.originalAmount ?? transaction.totalAmount;
@@ -389,7 +409,7 @@ export default function TransactionDetailPage({ params }: { params: Promise<{ id
         </Card>
 
         {/* Contact Information */}
-        {contact && (
+        {(contactDetails || contactName) && (
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -400,10 +420,10 @@ export default function TransactionDetailPage({ params }: { params: Promise<{ id
             <CardContent>
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
-                  <h3 className="font-semibold text-lg">{contact.name}</h3>
+                  <h3 className="font-semibold text-lg">{contactName}</h3>
                   <div className="space-y-1 text-sm text-muted-foreground">
-                    <p>{contact.phone}</p>
-                    <p>{contact.email}</p>
+                    {contactDetails?.phone && <p>{contactDetails.phone}</p>}
+                    {contactDetails?.email && <p>{contactDetails.email}</p>}
                     {contactAddress && <p>{contactAddress}</p>}
                   </div>
                 </div>
@@ -441,15 +461,15 @@ export default function TransactionDetailPage({ params }: { params: Promise<{ id
                     <TableCell>
                       <div>
                         <p className="font-medium">{item.productName}</p>
-                        {item.productId && (
+                        {item.productId && typeof item.productId === 'object' && (
                           <p className="text-sm text-muted-foreground">
                             ID: {item.productId._id}
                           </p>
                         )}
                       </div>
                     </TableCell>
-                    <TableCell>{item.productId?.sku || 'N/A'}</TableCell>
-                    <TableCell>{item.productId?.category || 'N/A'}</TableCell>
+                    <TableCell>{item.sku || (typeof item.productId === 'object' ? item.productId.sku : null) || 'N/A'}</TableCell>
+                    <TableCell>{typeof item.productId === 'object' ? item.productId.category || 'N/A' : 'N/A'}</TableCell>
                     <TableCell className="text-right">{item.quantity}</TableCell>
                     <TableCell className="text-right">{formatCurrency(item.price, transactionCurrency)}</TableCell>
                     <TableCell className="text-right font-medium">

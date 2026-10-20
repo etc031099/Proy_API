@@ -5,6 +5,7 @@ const mongoose = require('mongoose');
 const { Product, Contact, Transaction, CreditPayment, InventoryMovement } = require('../../src/models');
 const {
   createTransaction,
+  getTransaction,
   updateTransactionStatus
 } = require('../../src/controllers/transactionController');
 const { createCreditPayment } = require('../../src/controllers/creditPaymentController');
@@ -287,11 +288,24 @@ test('cancellation controller commits status, restored stock and reversed balanc
     type: 'sale', customerId: customer._id, customerName: customer.name,
     products: [{
       productId: product._id, productName: product.name,
-      quantity: 2, price: 10, total: 20
+      sku: 'C03-CANCEL-SKU', quantity: 2, price: 10, total: 20
     }],
     totalAmount: 20, currency: 'PEN', paymentMethod: 'credit',
     status: 'completed', businessId
   });
+
+  const beforeCancellation = await invokeController(getTransaction, {
+    businessId, params: { id: transaction._id }
+  });
+  const beforeDetails = beforeCancellation.body.data.transaction;
+  assert.equal(beforeDetails.customerId.name, customer.name);
+  assert.equal(beforeDetails.products[0].productName, product.name);
+  assert.equal(beforeDetails.products[0].sku, 'C03-CANCEL-SKU');
+  assert.equal(beforeDetails.products[0].productId.category, 'C03');
+  assert.equal(String(beforeDetails.products[0].productId._id), String(product._id));
+  assert.equal(beforeDetails.products[0].quantity, 2);
+  assert.equal(beforeDetails.products[0].price, 10);
+  assert.equal(beforeDetails.products[0].total, 20);
 
   const response = await invokeController(updateTransactionStatus, {
     businessId,
@@ -305,6 +319,16 @@ test('cancellation controller commits status, restored stock and reversed balanc
     Transaction.findById(transaction._id)
   ]);
   assert.equal(response.statusCode, 200);
+  const cancelledDetails = response.body.data.transaction;
+  assert.equal(cancelledDetails.status, 'cancelled');
+  assert.equal(cancelledDetails.customerId.name, customer.name);
+  assert.equal(cancelledDetails.products[0].productName, product.name);
+  assert.equal(cancelledDetails.products[0].sku, 'C03-CANCEL-SKU');
+  assert.equal(cancelledDetails.products[0].productId.category, 'C03');
+  assert.equal(String(cancelledDetails.products[0].productId._id), String(product._id));
+  assert.equal(cancelledDetails.products[0].quantity, 2);
+  assert.equal(cancelledDetails.products[0].price, 10);
+  assert.equal(cancelledDetails.products[0].total, 20);
   assert.equal(storedProduct.stock, 10);
   assert.equal(storedCustomer.currentBalance, 0);
   assert.equal(storedTransaction.status, 'cancelled');

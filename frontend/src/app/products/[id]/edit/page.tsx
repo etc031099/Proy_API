@@ -16,6 +16,7 @@ import { CreateProductData, Product, SupplierPrice } from '@/types';
 import { ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { recordInventoryOperation } from '@/lib/inventoryImpactSnapshot';
 
 export default function EditProductPage() {
   const router = useRouter();
@@ -131,10 +132,14 @@ export default function EditProductPage() {
       }
 
       if (formData.stock !== initialStock) {
-        const stockResponse = await apiClient.updateProductStock(productId, {
-          quantity: formData.stock,
-          operation: 'set'
-        });
+        const adjustmentSku = formData.sku?.trim();
+        const stockResponse = adjustmentSku ? await recordInventoryOperation({
+          type: 'INVENTORY_ADJUSTMENT',
+          products: [{ sku: adjustmentSku, name: formData.name, quantity: Math.abs(formData.stock - initialStock) }],
+          submit: () => apiClient.updateProductStock(productId, { quantity: formData.stock, operation: 'set' }),
+          isSuccessful: result => result.success,
+          getMetadata: () => ({ operationId: `${productId}:${Date.now()}`, reference: adjustmentSku }),
+        }) : await apiClient.updateProductStock(productId, { quantity: formData.stock, operation: 'set' });
         if (!stockResponse.success) {
           setError(stockResponse.message || 'Product details were updated, but stock could not be updated');
           return;

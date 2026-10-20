@@ -26,6 +26,7 @@ import { api } from '@/lib/api';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { publishForecastImpactSale } from '@/lib/forecastImpactChannel';
 import { readForecastImpactSnapshot, registerSaleWithImpact } from '@/lib/forecastImpactSnapshot';
+import { recordInventoryOperation } from '@/lib/inventoryImpactSnapshot';
 
 // Form validation schema
 const saleFormSchema = z.object({
@@ -203,29 +204,34 @@ export default function AddSalePage() {
         notes: data.notes,
       };
 
-      const response = await registerSaleWithImpact({
-        products: data.products.flatMap(item => {
+      const saleProducts = data.products.flatMap(item => {
           const product = products.find(candidate => candidate._id === item.productId);
           return product?.sku ? [{ sku: product.sku, name: product.name, quantity: item.quantity }] : [];
+        });
+      const response = await recordInventoryOperation({
+        type: 'SALE', products: saleProducts,
+        submit: () => registerSaleWithImpact({
+          products: saleProducts,
+          captureBefore: readForecastImpactSnapshot,
+          submit: () => api.createTransaction(saleData),
+          isSuccessful: result => result.success,
+          onSuccess: ({ response: result, baseline, products: affectedProducts }) => {
+            const saved = result.data?.transaction;
+            publishForecastImpactSale({
+              version: 2,
+              type: 'SALE_COMPLETED',
+              transactionId: typeof saved?._id === 'string' ? saved._id : null,
+              occurredAt: typeof saved?.date === 'string' ? saved.date : new Date().toISOString(),
+              hasCustomer: Boolean(customerId), customerRef: customerId || null, products: affectedProducts, baseline,
+              baselineUnavailable: baseline === null || !baseline.complete,
+              context: baseline?.context || { businessId: null, scenarioId: null, datasetVersion: null },
+            });
+          },
         }),
-        captureBefore: readForecastImpactSnapshot,
-        submit: () => api.createTransaction(saleData),
         isSuccessful: result => result.success,
-        onSuccess: ({ response: result, baseline, products: affectedProducts }) => {
-          const saved = result.data?.transaction;
-          publishForecastImpactSale({
-            version: 2,
-            type: 'SALE_COMPLETED',
-            transactionId: typeof saved?._id === 'string' ? saved._id : null,
-            occurredAt: typeof saved?.date === 'string' ? saved.date : new Date().toISOString(),
-            hasCustomer: Boolean(customerId),
-            customerRef: customerId || null,
-            products: affectedProducts,
-            baseline,
-            baselineUnavailable: baseline === null || !baseline.complete,
-            context: baseline?.context || { businessId: null, scenarioId: null, datasetVersion: null },
-          });
-        },
+        getMetadata: result => ({ operationId: typeof result.data?.transaction?._id === 'string' ? result.data.transaction._id : null,
+          occurredAt: typeof result.data?.transaction?.date === 'string' ? result.data.transaction.date : null,
+          reference: typeof result.data?.transaction?.invoiceNumber === 'string' ? result.data.transaction.invoiceNumber : null }),
       });
 
       if (response.success) {

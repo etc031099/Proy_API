@@ -129,14 +129,10 @@ const getTransactions = asyncHandler(async (req, res) => {
  * @access  Private
  */
 const getTransaction = asyncHandler(async (req, res) => {
-  const transaction = await Transaction.findOne({
+  const transaction = await populateTransactionDetails(Transaction.findOne({
     _id: req.params.id,
     businessId: req.businessId
-  })
-    .populate('customerId', 'name phone email address')
-    .populate('vendorId', 'name phone email address')
-    .populate('supplierId', 'name phone email address')
-    .populate('products.productId', 'name description category sku');
+  }));
 
   if (!transaction) {
     return res.status(404).json({
@@ -310,10 +306,14 @@ const updateTransactionStatus = asyncHandler(async (req, res) => {
 
     if (transaction.status === status) {
       await session.abortTransaction();
+      const populatedTransaction = await populateTransactionDetails(Transaction.findOne({
+        _id: transaction._id,
+        businessId: req.businessId
+      }));
       return res.status(200).json({
         success: true,
         message: `Transaction is already ${status}; no changes were applied`,
-        data: { transaction }
+        data: { transaction: populatedTransaction }
       });
     }
 
@@ -452,14 +452,27 @@ const updateTransactionStatus = asyncHandler(async (req, res) => {
       .catch(error => console.error('[Telegram] low-stock notification failed:', error.message));
   }
 
+  const populatedTransaction = await populateTransactionDetails(Transaction.findOne({
+    _id: transaction._id,
+    businessId: req.businessId
+  }));
+
   res.json({
     success: true,
     message: status === 'cancelled'
       ? 'Transaction cancelled and inventory reversed successfully'
       : 'Transaction status updated successfully',
-    data: { transaction }
+    data: { transaction: populatedTransaction }
   });
 });
+
+function populateTransactionDetails(query) {
+  return query
+    .populate('customerId', 'name phone email address')
+    .populate('vendorId', 'name phone email address')
+    .populate('supplierId', 'name phone email address')
+    .populate('products.productId', 'name description category sku');
+}
 
 /**
  * @desc    Get transaction summary/statistics
