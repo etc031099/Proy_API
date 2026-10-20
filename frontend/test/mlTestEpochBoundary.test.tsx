@@ -7,7 +7,7 @@ import { MlTestScenarioUiProvider, useMlTestScenarioUiState } from '@/components
 const control = (resetEpoch = '1', state = 'TEST_ACTIVE', testCycleId: string | null = 'cycle'): MlTestControlStatus => ({ resetEpoch, state,
   testCycleId, maintenance: state === 'RESTORING', cloudRestoreEnabled: false });
 describe('test epoch boundary', () => {
-  beforeEach(() => { vi.useFakeTimers(); });
+  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-20T12:00:00.000Z')); });
   afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
   it('epoch change invalidates cached BI and remounts forecast/inventory/history once; focus refresh without aggressive polling', async () => {
     const read = vi.spyOn(apiClient, 'getMlTestControlStatus').mockResolvedValue({ httpStatus: 200, data: control() });
@@ -17,11 +17,14 @@ describe('test epoch boundary', () => {
     let mounts = 0;
     function Content() { useEffect(() => { mounts++; }, []); return <p>Fresh BI</p>; }
     await act(async () => { render(<MlTestEpochBoundary><Content /></MlTestEpochBoundary>); });
+    // Initial status discovery does not remount the BI tree; only a later
+    // observed epoch transition does.
     expect(mounts).toBe(1); expect(read).toHaveBeenCalledTimes(1);
+    expect(invalidated).not.toHaveBeenCalled();
     await act(async () => { vi.advanceTimersByTime(29000); }); expect(read).toHaveBeenCalledTimes(1);
     read.mockResolvedValue({ httpStatus: 200, data: control('2') });
     await act(async () => { window.dispatchEvent(new Event('focus')); });
-    expect(invalidated).toHaveBeenCalledTimes(2); expect(mounts).toBe(2);
+    expect(invalidated).toHaveBeenCalledTimes(1); expect(mounts).toBe(2);
     expect(scroll).not.toHaveBeenCalled();
   });
   it('RESTORING hides all previous values and recovery remounts clean data', async () => {
@@ -48,16 +51,23 @@ describe('test epoch boundary', () => {
     read.mockResolvedValueOnce({ httpStatus: 200, data: control('2') });
     await act(async () => { window.dispatchEvent(new Event('focus')); });
     expect(screen.getByText('Tab actual: forecast')).toBeTruthy();
+    await act(async () => { vi.advanceTimersByTime(1000); });
     read.mockResolvedValue({ httpStatus: 200, data: control('3', 'NO_TEST', null) });
     await act(async () => { window.dispatchEvent(new Event('focus')); });
     expect(screen.getByText('Tab actual: forecast')).toBeTruthy();
   });
-  it('status error fails closed and unmount cancels refresh timers', async () => {
-    const read = vi.spyOn(apiClient, 'getMlTestControlStatus').mockResolvedValue({ httpStatus: 503 });
+  it('keeps the BI page available when test-control status is temporarily unavailable', async () => {
+    const read = vi.spyOn(apiClient, 'getMlTestControlStatus').mockResolvedValue({ httpStatus: 429, code: 'ANALYTICS_RATE_LIMITED' });
     vi.spyOn(apiClient, 'invalidateIntelligenceReads').mockImplementation(() => {});
-    let unmount!: () => void;
-    await act(async () => { ({ unmount } = render(<MlTestEpochBoundary><p>Private old value</p></MlTestEpochBoundary>)); });
-    expect(screen.queryByText('Private old value')).toBeNull();
-    unmount(); await act(async () => { vi.advanceTimersByTime(120000); }); expect(read).toHaveBeenCalledTimes(1);
+    const { unmount } = render(<MlTestEpochBoundary><p>BI principal</p></MlTestEpochBoundary>);
+    expect(screen.getByText('BI principal')).toBeTruthy();
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByRole('status').textContent).toContain('BI sigue disponible');
+    expect(read).toHaveBeenCalledTimes(1);
+    read.mockResolvedValue({ httpStatus: 200, data: control() });
+    await act(async () => { vi.advanceTimersByTime(30000); });
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('BI principal')).toBeTruthy();
+    unmount(); await act(async () => { vi.advanceTimersByTime(120000); }); expect(read).toHaveBeenCalledTimes(2);
   });
 });

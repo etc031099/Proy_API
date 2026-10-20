@@ -44,6 +44,7 @@ export class DemandForecastApiError extends Error {
 
 class ApiClient {
   private intelligenceSession: string | null = null;
+  private mlTestControlStatusPending: Promise<AuthenticatedDiagnosticResult<MlTestControlStatus>> | null = null;
   private intelligenceCache = new IntelligenceReadCache(async () => {
     const response = await this.instance.get('/intelligence/revision');
     const body = response.data as AnalyticsEnvelope<IntelligenceRevision>;
@@ -52,7 +53,10 @@ class ApiClient {
   });
   invalidateIntelligenceReads() { this.intelligenceCache.clear(); }
   async getIntelligenceRevision(): Promise<AnalyticsEnvelope<IntelligenceRevision>> {
-    return this.intelligenceRead('/intelligence/revision');
+    // Revision is the validator used by IntelligenceReadCache itself; wrapping
+    // it in that cache would validate a revision request with more revision
+    // requests and create needless traffic during operation snapshots.
+    return this.intelligenceRead('/intelligence/revision', undefined, false);
   }
   private intelligenceRead<T>(path: string, params?: object, versioned = true): Promise<T> {
     const session = this.getToken();
@@ -81,7 +85,11 @@ class ApiClient {
     return this.diagnosticRead('/intelligence/forecast/ml-update/status');
   }
   async getMlTestControlStatus(): Promise<AuthenticatedDiagnosticResult<MlTestControlStatus>> {
-    return this.diagnosticRead('/intelligence/test-control/status');
+    if (this.mlTestControlStatusPending) return this.mlTestControlStatusPending;
+    const request = this.diagnosticRead<MlTestControlStatus>('/intelligence/test-control/status');
+    this.mlTestControlStatusPending = request;
+    try { return await request; }
+    finally { if (this.mlTestControlStatusPending === request) this.mlTestControlStatusPending = null; }
   }
   async getMlTestLifecycleStatus(): Promise<AuthenticatedDiagnosticResult<MlTestLifecycleStatus>> {
     return this.diagnosticRead('/ml-test/status');

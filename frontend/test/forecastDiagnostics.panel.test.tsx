@@ -280,6 +280,7 @@ describe('forecast serving diagnostics panel', () => {
     ['1d no aprobado', ok(forecast)],
     ['política de promoción fallida', { httpStatus: 400, code: 'PROMOTION_POLICY_FAILED' }],
     ['respuesta 4xx', { httpStatus: 401, code: 'AUTH_REQUIRED' }],
+    ['rate limit', { httpStatus: 429, code: 'ANALYTICS_RATE_LIMITED' }],
     ['modelo funcionalmente no disponible', { httpStatus: 503, code: 'MODEL_UNAVAILABLE' }],
     ['contrato de features incompatible', { httpStatus: 503, code: 'FEATURE_CONTRACT_MISMATCH' }],
     ['integridad del artefacto inválida', { httpStatus: 503, code: 'ARTIFACT_HASH_MISMATCH' }],

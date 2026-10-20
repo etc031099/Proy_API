@@ -71,6 +71,28 @@ describe('revision-validated intelligence reads', () => {
     await apiClient.getCustomersAnalytics({ limit: 20, offset: 0 });
     expect(get.mock.calls.filter(([url]) => url === '/intelligence/customers')).toHaveLength(2);
   });
+  it('shares an in-flight test-control status read between the epoch boundary and ML test panel', async () => {
+    const instance = (apiClient as unknown as { instance: { get: (url: string, config?: unknown) => Promise<unknown> } }).instance;
+    localStorage.setItem('token', 'fictitious-test-control-session');
+    let finish!: (value: unknown) => void;
+    const get = vi.spyOn(instance, 'get').mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const first = apiClient.getMlTestControlStatus();
+    const second = apiClient.getMlTestControlStatus();
+    expect(get).toHaveBeenCalledTimes(1);
+    finish({ status: 200, data: { success: true, data: { state: 'NO_TEST', resetEpoch: '0', testCycleId: null, maintenance: false } } });
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { httpStatus: 200, data: { state: 'NO_TEST', resetEpoch: '0', testCycleId: null, maintenance: false } },
+      { httpStatus: 200, data: { state: 'NO_TEST', resetEpoch: '0', testCycleId: null, maintenance: false } },
+    ]);
+  });
+  it('reads the revision endpoint once instead of validating revision with revision reads', async () => {
+    const instance = (apiClient as unknown as { instance: { get: (url: string, config?: unknown) => Promise<unknown> } }).instance;
+    localStorage.setItem('token', 'fictitious-revision-session');
+    const get = vi.spyOn(instance, 'get').mockResolvedValue({ data: { success: true, data: initial } });
+    await apiClient.getIntelligenceRevision();
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledWith('/intelligence/revision', undefined);
+  });
   it('revisits Summary → Customers → Suppliers → Health → Customers → Suppliers without repeating analytic requests', async () => {
     const instance = (apiClient as unknown as { instance: { get: (url: string, config?: unknown) => Promise<unknown> } }).instance;
     localStorage.setItem('token', 'fictitious-navigation-session');
