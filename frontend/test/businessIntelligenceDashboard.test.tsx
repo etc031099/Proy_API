@@ -255,33 +255,66 @@ describe('business intelligence dashboard', () => {
     expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenCalledTimes(2);
   });
 
-  it('presents certified replay evidence separately without running replay or changing the LIVE horizon selector', async () => {
+  it('explains certified historical candidate evaluation separately from LIVE without running replay', async () => {
     vi.spyOn(apiClient, 'searchBusinessIntelligenceProducts').mockResolvedValue(success({ products: [productOption] }));
     vi.spyOn(apiClient, 'getBusinessIntelligenceForecast').mockResolvedValue(success(forecastFixture));
     render(<BusinessIntelligenceDashboard />);
     await openForecast();
-    const panel = await screen.findByRole('region', { name: 'Evidencia histórica de promoción' });
+    const panel = await screen.findByRole('region', { name: 'Evaluación histórica de candidato' });
     expect(apiClient.getCertifiedForecastReplayEvidence).toHaveBeenCalledTimes(1);
-    expect(within(panel).getByText(/Evaluación histórica y offline/)).toBeTruthy();
-    expect(within(panel).getByText('Aprobado en replay')).toBeTruthy();
-    expect(within(panel).getByText('Rechazado en replay')).toBeTruthy();
-    expect(within(panel).getByText(/Un aprobado en replay no equivale a una promoción LIVE/)).toBeTruthy();
-    expect(within(panel).getByText(/\+7[,.]29\s*%/)).toBeTruthy();
-    expect(within(panel).getByText(/\+13[,.]23\s*%/)).toBeTruthy();
-    expect(within(panel).getByText(/no cambia el Registry ni los modelos activos/)).toBeTruthy();
-    expect(within(panel).getByText(/mejoró las métricas globales, pero fue rechazado porque empeoró demasiado/)).toBeTruthy();
-    expect(within(panel).getByText(/Producto afectado/).parentElement?.textContent).toContain('BEB-GAS-003');
-    expect(within(panel).getByText('¿Por qué se rechazó?').closest('details')?.open).toBe(false);
-    const replayDetails = within(panel).getByText('Ver detalles técnicos').closest('details')!;
+    expect(within(panel).getByText(/Esta evaluación reproduce evidencia histórica cerrada/)).toBeTruthy();
+    expect(within(panel).getByText('107 orígenes maduros evaluados')).toBeTruthy();
+    expect(within(panel).getByText(/No significa 107 ventas/)).toBeTruthy();
+    expect(within(panel).getByText('APROBADO')).toBeTruthy();
+    expect(within(panel).getByText('RECHAZADO')).toBeTruthy();
+    expect(within(panel).getAllByText(/\+7[,.]29\s*%/)).toHaveLength(2);
+    expect(within(panel).getAllByText(/\+13[,.]23\s*%/)).toHaveLength(2);
+    expect(within(panel).getByText(/21[,.]82\s*%/)).toBeTruthy();
+    expect(within(panel).getByText(/16[,.]02\s*%/)).toBeTruthy();
+    expect(within(panel).getByText(/2[,.]76 unidades/)).toBeTruthy();
+    expect(within(panel).getByText(/4[,.]06 unidades/)).toBeTruthy();
+    expect(within(panel).getByText(/\+1[,.]52\s*%/)).toBeTruthy();
+    expect(within(panel).getByText(/\+1[,.]04\s*%/)).toBeTruthy();
+    expect(within(panel).getByText(/El candidato histórico superó las reglas exigidas/)).toBeTruthy();
+    expect(within(panel).getByText(/Aunque mejoró globalmente, fue rechazado porque falló una regla de seguridad/)).toBeTruthy();
+    expect(within(panel).getByText(/En el fold 3, el SKU/).textContent).toContain('BEB-GAS-003');
+    expect(within(panel).getByText(/Una mejora promedio no basta/)).toBeTruthy();
+    expect(within(panel).getByText(/Esta evaluación es histórica y aislada/)).toBeTruthy();
+    expect(within(panel).getByText(/No cambia ACTIVE ni Registry, no modifica ventas, stock o señales LIVE/)).toBeTruthy();
+    const technicalDetails = within(panel).getAllByText('Ver detalles técnicos').map((label) => label.closest('details')!);
+    expect(technicalDetails).toHaveLength(2);
+    const replayDetails = technicalDetails[1];
     expect(replayDetails.open).toBe(false);
-    fireEvent.click(within(panel).getByText('Ver detalles técnicos'));
-    expect(within(replayDetails).getByText(/Semilla reproducible/)).toBeTruthy();
+    const reason = within(replayDetails).getByText('P_FOLD_CATA_MAE:F3:BEB-GAS-003');
+    expect(reason.closest('details')?.open).toBe(false);
+    fireEvent.click(within(replayDetails).getByText('Ver detalles técnicos'));
+    expect(within(panel).getByText(/Semilla determinista/)).toBeTruthy();
     expect(within(replayDetails).getByText(/BEB-GAS-003/)).toBeTruthy();
     expect(within(replayDetails).getByText(/P_FOLD_CATA_MAE:F3:BEB-GAS-003/)).toBeTruthy();
+    expect(within(technicalDetails[0]).getByText('Candidato seleccionado en replay').parentElement?.textContent).toContain('replay:cert-stable-2020:7d:v2');
     expect(within(panel).queryByRole('button')).toBeNull();
     expect(screen.queryByRole('button', { name: /Pronóstico 1 día/ })).toBeNull();
     expect(screen.getByRole('button', { name: /Pronóstico 7 días/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Pronóstico 14 días/ })).toBeTruthy();
+  });
+
+  it('keeps a loading state, rejects a non-certificate response, and never invokes training or restore actions', async () => {
+    const pending = deferred<{ httpStatus: number; data?: CertifiedForecastReplayEvidence }>();
+    vi.spyOn(apiClient, 'getCertifiedForecastReplayEvidence').mockReturnValue(pending.promise);
+    const train = vi.spyOn(apiClient, 'analyzeMlTestScenario');
+    const manual = vi.spyOn(apiClient, 'requestForecastMlUpdate');
+    const checkpoint = vi.spyOn(apiClient, 'createMlTestCheckpoint');
+    const restore = vi.spyOn(apiClient, 'restoreMlTestCheckpoint');
+    vi.spyOn(apiClient, 'searchBusinessIntelligenceProducts').mockResolvedValue(success({ products: [productOption] }));
+    vi.spyOn(apiClient, 'getBusinessIntelligenceForecast').mockResolvedValue(success(forecastFixture));
+    render(<BusinessIntelligenceDashboard />);
+    await openForecast();
+    expect(await screen.findByText('Cargando evaluación histórica certificada…')).toBeTruthy();
+    pending.resolve({ httpStatus: 200, data: { ...replayEvidenceFixture, requiredOrigins: 106 } as unknown as CertifiedForecastReplayEvidence });
+    expect(await screen.findByText('La evaluación histórica certificada no está disponible.')).toBeTruthy();
+    expect(train).not.toHaveBeenCalled(); expect(manual).not.toHaveBeenCalled();
+    expect(checkpoint).not.toHaveBeenCalled(); expect(restore).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /Pronóstico 7 días/ })).toBeTruthy();
   });
 
   it('orders Prediction from current ML state to product forecast, history, replay, and local tests', async () => {
@@ -296,7 +329,7 @@ describe('business intelligence dashboard', () => {
     const orderedLabels = [
       'Estado del Machine Learning', 'Salud de los modelos LIVE',
       'Preparación para próxima evaluación', 'Pronóstico por producto',
-      'Historial de actualizaciones ML', 'Evidencia histórica de promoción',
+      'Historial de actualizaciones ML', 'Evaluación histórica de candidato',
       'Evidencia histórica y comparación de modelos', 'Pruebas del Machine Learning',
     ];
     const orderedNodes = orderedLabels.map(title => screen.getByText(title));
@@ -311,7 +344,7 @@ describe('business intelligence dashboard', () => {
     vi.spyOn(apiClient, 'getBusinessIntelligenceForecast').mockResolvedValue(success(forecastFixture));
     render(<BusinessIntelligenceDashboard />);
     await openForecast();
-    expect(await screen.findByText('La evidencia histórica no está disponible temporalmente.')).toBeTruthy();
+    expect(await screen.findByText('No se pudo cargar la evaluación histórica certificada.')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Pronóstico operativo' })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Pronóstico 7 días/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Pronóstico 14 días/ })).toBeTruthy();

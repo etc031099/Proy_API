@@ -20,6 +20,18 @@ describe('authenticated forecast diagnostics API', () => {
     expect((get.mock.calls[0][1] as { validateStatus: (status: number) => boolean }).validateStatus(401)).toBe(true);
   });
 
+  it('reads only the fixed certified historical replay endpoint without client seed or run selection', async () => {
+    const instance = (apiClient as unknown as { instance: { get: (path: string, config?: unknown) => Promise<unknown> } }).instance;
+    const get = vi.spyOn(instance, 'get').mockResolvedValue({ status: 200,
+      data: { success: true, data: { demoRunId: 'cert-stable-2020', purpose: 'REPLAY_ONLY', requiredOrigins: 107 } } });
+    await expect(apiClient.getCertifiedForecastReplayEvidence()).resolves.toMatchObject({ httpStatus: 200,
+      data: { demoRunId: 'cert-stable-2020', purpose: 'REPLAY_ONLY', requiredOrigins: 107 } });
+    expect(get).toHaveBeenCalledWith('/intelligence/forecast/replay/certified-stable-2020', expect.objectContaining({
+      timeout: 15_000, validateStatus: expect.any(Function),
+    }));
+    expect((get.mock.calls[0][1] as { params?: unknown }).params).toBeUndefined();
+  });
+
   it('gets Health diagnostics through the same shared client', async () => {
     const instance = (apiClient as unknown as { instance: { get: (path: string, config?: unknown) => Promise<unknown> } }).instance;
     const get = vi.spyOn(instance, 'get').mockResolvedValue({ status: 200, data: { success: true, data: { httpStatus: 200 } } });
