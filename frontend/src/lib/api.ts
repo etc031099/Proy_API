@@ -51,6 +51,9 @@ class ApiClient {
     return body.data;
   });
   invalidateIntelligenceReads() { this.intelligenceCache.clear(); }
+  async getIntelligenceRevision(): Promise<AnalyticsEnvelope<IntelligenceRevision>> {
+    return this.intelligenceRead('/intelligence/revision');
+  }
   private intelligenceRead<T>(path: string, params?: object, versioned = true): Promise<T> {
     const session = this.getToken();
     if (session !== this.intelligenceSession) { this.invalidateIntelligenceReads(); this.intelligenceSession = session; }

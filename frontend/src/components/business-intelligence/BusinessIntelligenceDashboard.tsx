@@ -19,6 +19,7 @@ import { MlTestControlPanel } from './MlTestControlPanel';
 import { MlTestScenarioUiProvider, useMlTestScenarioUiState } from './MlTestScenarioUiContext';
 import { AnalyticsErrorBoundary } from './AnalyticsErrorBoundary';
 import { MlTestEpochBoundary } from './MlTestEpochBoundary';
+import { ForecastImpactDetailCard, ForecastImpactSummaryCard, useForecastImpact } from './ForecastImpactPanel';
 
 type TabKey = 'summary' | 'forecast' | 'inventory' | ExtendedTab;
 type LoadState = 'loading' | 'ready' | 'error';
@@ -88,6 +89,7 @@ function BusinessIntelligenceContent() {
   const [summaryError, setSummaryError] = useState(false);
   const [inventoryError, setInventoryError] = useState(false);
   const [selected, setSelected] = useState<ProductOption | null>(null);
+  const forecastImpact = useForecastImpact();
   const [horizon, setHorizon] = useState<Horizon>(7);
   const [forecastByHorizon, setForecastByHorizon] = useState<Partial<Record<RidgeHorizon, ForecastRead>>>({});
   const [activeForecastModels, setActiveForecastModels] = useState<ForecastActiveModel[] | null>(null);
@@ -197,6 +199,7 @@ function BusinessIntelligenceContent() {
             <MetricCard title="Productos a reponer" value={safeNumber(summary.inventory.reorderCount)} help="Cantidad de productos para los que el motor recomienda reponer inventario." />
             <MetricCard title="Compras pendientes" value={safeNumber(summary.inventory.pendingPurchasesCount)} />
           </div></section>
+          <ForecastImpactSummaryCard impact={forecastImpact} onNavigate={target => setTab(target)} />
           <section aria-labelledby="analytics-techniques-title" className="space-y-3">
             <div><h2 id="analytics-techniques-title" className="inline text-lg font-semibold">Técnicas analíticas utilizadas</h2><span className="ml-2"><MetricInfo label="Machine Learning">Machine Learning permite aprender patrones a partir de datos, en lugar de depender únicamente de reglas definidas manualmente.</MetricInfo></span><p className="text-sm text-muted-foreground">3 técnicas de Machine Learning y 1 técnica de minería de patrones, elegidas según el problema.</p></div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -232,6 +235,7 @@ function BusinessIntelligenceContent() {
         <div><h2 className="text-xl font-semibold">Pronóstico operativo</h2><p className="text-sm text-muted-foreground">Pronósticos operativos Ridge para horizontes acumulados de 7 y 14 días.</p><details className="mt-2 text-sm"><summary className="w-fit cursor-pointer font-medium">Sobre los modelos</summary><p className="mt-2 max-w-3xl text-muted-foreground">MA28 es un baseline estadístico de referencia. HistGradientBoosting (HGB) es un modelo histórico/experimental y no se utiliza para serving LIVE.</p></details></div>
         <ForecastDiagnosticsPanel onForecastModelsChange={setActiveForecastModels}
           onManualRequestFinished={() => setMlHistoryRefreshToken(value => value + 1)} />
+        <ForecastImpactDetailCard impact={forecastImpact} />
           <Card><CardHeader className="pb-3"><CardTitle>Pronóstico por producto</CardTitle><CardDescription>Consulta la demanda acumulada estimada para los próximos 7 o 14 días.</CardDescription></CardHeader><CardContent className="pt-0"><ProductSearchPicker id="intelligence-product-search" selected={selected} onSelect={chooseProduct} /></CardContent></Card>
         {!selected && <EmptyProductState />}
         {selected && <ForecastPanel product={selected} forecasts={forecastByHorizon} horizon={horizon} setHorizon={setHorizon} activeModels={activeForecastModels} onRetry={() => { apiClient.invalidateIntelligenceReads(); setDetailRetry(value => value + 1); }} />}

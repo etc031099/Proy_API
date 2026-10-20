@@ -24,6 +24,8 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { publishForecastImpactSale } from '@/lib/forecastImpactChannel';
+import { readForecastImpactSnapshot, registerSaleWithImpact } from '@/lib/forecastImpactSnapshot';
 
 // Form validation schema
 const saleFormSchema = z.object({
@@ -201,7 +203,30 @@ export default function AddSalePage() {
         notes: data.notes,
       };
 
-      const response = await api.createTransaction(saleData);
+      const response = await registerSaleWithImpact({
+        products: data.products.flatMap(item => {
+          const product = products.find(candidate => candidate._id === item.productId);
+          return product?.sku ? [{ sku: product.sku, name: product.name, quantity: item.quantity }] : [];
+        }),
+        captureBefore: readForecastImpactSnapshot,
+        submit: () => api.createTransaction(saleData),
+        isSuccessful: result => result.success,
+        onSuccess: ({ response: result, baseline, products: affectedProducts }) => {
+          const saved = result.data?.transaction;
+          publishForecastImpactSale({
+            version: 2,
+            type: 'SALE_COMPLETED',
+            transactionId: typeof saved?._id === 'string' ? saved._id : null,
+            occurredAt: typeof saved?.date === 'string' ? saved.date : new Date().toISOString(),
+            hasCustomer: Boolean(customerId),
+            customerRef: customerId || null,
+            products: affectedProducts,
+            baseline,
+            baselineUnavailable: baseline === null || !baseline.complete,
+            context: baseline?.context || { businessId: null, scenarioId: null, datasetVersion: null },
+          });
+        },
+      });
 
       if (response.success) {
         setSuccess('Sale recorded successfully!');
@@ -213,7 +238,7 @@ export default function AddSalePage() {
       }
     } catch (err: unknown) {
       console.error('Error creating sale:', err);
-      const responseData = (err as any).response?.data;
+      const responseData = (err as { response?: { data?: { errors?: Array<{ message?: string }>; message?: string } } }).response?.data;
       const validationDetails = responseData?.errors
         ?.map((item: { message?: string }) => item.message)
         .filter(Boolean)

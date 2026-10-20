@@ -23,6 +23,7 @@ export default defineConfig({
       'test/demoV2Registration.test.tsx',
       'test/demoV3Registration.test.tsx',
       'test/businessIntelligenceDashboard.test.tsx',
+      'test/forecastImpact.test.tsx',
       'test/mlTestEpochBoundary.test.tsx',
       'test/mlTestControlPanel.test.tsx',
       'test/mlTestScenarioUiContext.test.tsx',
