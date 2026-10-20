@@ -30,6 +30,7 @@ export default defineConfig({
       'test/mlTestScenarioUiContext.test.tsx',
       'test/forecastEvaluation.test.tsx',
       'test/customerClustering.test.tsx',
+      'test/customerImpact.test.tsx',
       'test/salesAnomalies.test.tsx',
       'test/businessIntelligenceExtended.api.test.ts',
       'test/forecastDiagnostics.api.test.ts',

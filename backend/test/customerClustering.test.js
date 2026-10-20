@@ -13,9 +13,18 @@ const req = { user: { businessId: V3.businessId, _id: 'test' }, businessId: V3.b
 const query = value => ({ select() { return this; }, lean() { return this; }, sort() { return this; }, limit() { return this; }, maxTimeMS: async () => value });
 function fixture({ corrupt, fail = false } = {}) {
   const calls = [];
+  const customer = { _id: '507f1f77bcf86cd799439011', name: 'Cliente Uno', stableCode: 'CUS-01' };
   const models = { HistoricalScenario: { findOne: filter => query({ ...filter, status: 'completed', sourceSha256: V3.datasetSha256,
     metadata: { datasetVersion: V3.datasetVersion, referenceDate: V3.historicalCutoff, timezone: V3.timezone } }) },
-  Contact: { find: filter => { assert.equal(filter.businessId, V3.businessId); return query([{ _id: 'test-customer', name: 'Cliente Uno', stableCode: 'CUS-01' }]); } } };
+  Contact: {
+    find: filter => { assert.equal(filter.businessId, V3.businessId); return query([customer]); },
+    findOne: filter => {
+      assert.equal(filter.businessId, V3.businessId);
+      const matches = filter._id ? String(filter._id) === customer._id
+        : (filter.$or || []).some(condition => condition.stableCode === customer.stableCode);
+      return query(matches ? customer : null);
+    }
+  } };
   const snapshot = { metadata: { businessId: V3.businessId, scenarioId: V3.scenarioId, asOfDate: '2026-10-14', dataVersion: '3', snapshotVersion: 'v3-operational-snapshot-v2', snapshotHash: 'verified-hash' } };
   const mlClient = { intelligence: async (domain, payload) => {
     calls.push({ domain, payload });
@@ -50,6 +59,25 @@ test('current assignment uses tenant-resolved customer and verified skill RFM', 
   assert.equal(calls.length, 2);
   assert.deepEqual(calls[1].payload.assignmentRfm, { recency: 2, frequency: 4, monetary: 123.45 });
   assert.equal(calls[1].payload.assignmentAsOfDate, '2026-10-14');
+});
+test('current assignment resolves a Contact Mongo ObjectId to its canonical customerCode', async () => {
+  const { dashboard, calls } = fixture();
+  const result = await dashboard.customerClustering({ ...req, query: { customerRef: '507f1f77bcf86cd799439011' } });
+  assert.equal(result.data.assignments[0].customerRef, 'CUS-01');
+  assert.deepEqual(calls[1].payload.assignmentRfm, { recency: 2, frequency: 4, monetary: 123.45 });
+});
+test('clustering rejects a contact outside the authenticated tenant and does not call ML', async () => {
+  const { dashboard, calls } = fixture();
+  const result = await dashboard.customerClustering({ ...req, query: { customerRef: '507f191e810c19729de860ea' } });
+  assert.equal(result.error.code, 'CUSTOMER_NOT_FOUND');
+  assert.equal(result.error.httpStatus, 404);
+  assert.equal(calls.length, 0);
+});
+test('clustering rejects missing or non-identity references without name/email fallback', async () => {
+  const { dashboard, calls } = fixture();
+  const result = await dashboard.customerClustering({ ...req, query: { customerRef: 'Cliente Uno' } });
+  assert.equal(result.error.code, 'CUSTOMER_NOT_FOUND');
+  assert.equal(calls.length, 0);
 });
 test('tenant mismatch and invalid customer query fail safely', async () => {
   const { dashboard, service, calls } = fixture();

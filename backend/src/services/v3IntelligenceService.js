@@ -69,7 +69,7 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
       const model = type === 'product' ? getModels().Product : getModels().Contact;
       return model.find({ businessId: context.businessId, scenarioId: V3.scenarioId, isActive: true,
         ...(type === 'product' ? {} : { type: type === 'supplier' ? 'vendor' : 'customer' }) })
-        .select('_id name sku stableCode').sort({ _id: 1 }).limit(100).lean().maxTimeMS(5000);
+        .select('_id name sku stableCode stableKey').sort({ _id: 1 }).limit(100).lean().maxTimeMS(5000);
     }));
     return entities.get(key);
   };
@@ -89,9 +89,20 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
   const resolveEntity = async (type, reference, context, offset = 0) => {
     if (!await resolveContext(context)) throw new AgentError('AGENT_SKILL_NOT_ALLOWED');
     const rows = await rowsFor(type, context);
-    const code = rows.find(row => normalize(row.sku || row.stableCode || '') === normalize(reference));
+    let code = rows.find(row => normalize(row.sku || row.stableCode || row.stableKey || '') === normalize(reference));
+    if (!code && type === 'customer' && typeof reference === 'string') {
+      const objectIdMatch = /^OP-C-([a-f\d]{24})$/i.exec(reference);
+      const objectId = objectIdMatch?.[1] || (/^[a-f\d]{24}$/i.test(reference) ? reference : null);
+      const filter = { businessId: context.businessId, scenarioId: { $in: [V3.scenarioId, null] },
+        type: 'customer', isActive: true };
+      if (objectId) filter._id = objectId;
+      else filter.$or = [{ stableCode: reference }, { stableKey: reference }];
+      const contact = await getModels().Contact.findOne(filter).select('_id name stableCode stableKey').lean().maxTimeMS(5000);
+      if (contact) code = contact;
+    }
     const match = code ? { value: code, confidence: 'EXACT' } : rankEntities(rows, reference, offset, type === 'supplier');
-    const compact = row => ({ id: String(row._id), key: row.sku || row.stableCode, label: row.name, type });
+    const compact = row => ({ id: String(row._id), key: row.sku || row.stableCode || row.stableKey
+      || (type === 'customer' ? `OP-C-${String(row._id)}` : undefined), label: row.name, type });
     if (match.value) return { entity: compact(match.value), ...(type === 'product' ? { resolutionStatus: 'EXACT' } : {}) };
     if (match.confidence === 'HIGH_CONFIDENCE' && match.candidates.length === 1)
       return { entity: compact(match.candidates[0]), ...(type === 'product' ? { resolutionStatus: 'SINGLE_MATCH' } : {}) };
@@ -397,6 +408,19 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
   const customerClustering = async (context, { signal, customerRef } = {}) => {
     const binding = await resolveContext(context);
     if (!binding) throw new AgentError('AGENT_SKILL_NOT_ALLOWED');
+    let resolvedCustomerRef = customerRef;
+    if (customerRef && customerRef !== 'CONSUMER_FINAL') {
+      const notFound = () => { const error = unavailable(); error.functionalCode = 'CUSTOMER_NOT_FOUND'; return error; };
+      const objectIdMatch = /^OP-C-([a-f\d]{24})$/i.exec(customerRef);
+      const objectId = objectIdMatch?.[1] || (/^[a-f\d]{24}$/i.test(customerRef) ? customerRef : null);
+      const filter = { businessId: binding.businessId, scenarioId: { $in: [V3.scenarioId, null] },
+        type: 'customer', isActive: true };
+      if (objectId) filter._id = objectId;
+      else filter.$or = [{ stableCode: customerRef }, { stableKey: customerRef }];
+      const contact = await getModels().Contact.findOne(filter).select('_id stableCode stableKey').lean().maxTimeMS(5000);
+      if (!contact) throw notFound();
+      resolvedCustomerRef = contact.stableCode || contact.stableKey || `OP-C-${String(contact._id)}`;
+    }
     const payload = { requestId: context.requestId, dataMode: 'HISTORICAL', mode: 'clustering',
       context: { businessId: binding.businessId, scenarioId: binding.scenarioId,
         datasetVersion: binding.datasetVersion, datasetSha256: binding.datasetSha256,
@@ -405,7 +429,7 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
       // Raw RFM never comes from frontend parameters: the existing tenant-scoped
       // customer skill reads and verifies its historical/LIVE source first.
       const result = await execute({ context, signal, skill: { id: 'get_customer_intelligence', maxRecords: 1 },
-        args: { mode: 'detail', customerRef, limit: 1 } });
+        args: { mode: 'detail', customerRef: resolvedCustomerRef, limit: 1 } });
       const row = result.data?.items?.[0];
       if (!row) { const error = unavailable(); error.functionalCode = 'CUSTOMER_NOT_FOUND'; throw error; }
       const raw = row.rfm90d?.raw;

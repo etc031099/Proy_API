@@ -27,6 +27,8 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import { publishForecastImpactSale } from '@/lib/forecastImpactChannel';
 import { readForecastImpactSnapshot, registerSaleWithImpact } from '@/lib/forecastImpactSnapshot';
 import { recordInventoryOperation } from '@/lib/inventoryImpactSnapshot';
+import { registerCustomerSaleImpact } from '@/lib/customerImpactChannel';
+import type { CustomerImpactContext } from '@/lib/customerImpactSnapshot';
 
 // Form validation schema
 const saleFormSchema = z.object({
@@ -208,25 +210,37 @@ export default function AddSalePage() {
           const product = products.find(candidate => candidate._id === item.productId);
           return product?.sku ? [{ sku: product.sku, name: product.name, quantity: item.quantity }] : [];
         });
+      let customerImpactContext: CustomerImpactContext = { businessId: null, scenarioId: null, datasetVersion: null };
       const response = await recordInventoryOperation({
         type: 'SALE', products: saleProducts,
-        submit: () => registerSaleWithImpact({
-          products: saleProducts,
-          captureBefore: readForecastImpactSnapshot,
-          submit: () => api.createTransaction(saleData),
+        submit: () => registerCustomerSaleImpact({ customerMongoId: customerId || null,
+          displayName: customers.find(row => row._id === customerId)?.name || data.customerName?.trim() || 'Cliente',
+          getContext: () => customerImpactContext,
+          submit: () => registerSaleWithImpact({
+            products: saleProducts,
+            captureBefore: async products => {
+              const baseline = await readForecastImpactSnapshot(products);
+              customerImpactContext = baseline.context;
+              return baseline;
+            },
+            submit: () => api.createTransaction(saleData),
+            isSuccessful: result => result.success,
+            onSuccess: ({ response: result, baseline, products: affectedProducts }) => {
+              const saved = result.data?.transaction;
+              publishForecastImpactSale({
+                version: 2,
+                type: 'SALE_COMPLETED',
+                transactionId: typeof saved?._id === 'string' ? saved._id : null,
+                occurredAt: typeof saved?.date === 'string' ? saved.date : new Date().toISOString(),
+                hasCustomer: Boolean(customerId), customerRef: customerId || null, products: affectedProducts, baseline,
+                baselineUnavailable: baseline === null || !baseline.complete,
+                context: baseline?.context || { businessId: null, scenarioId: null, datasetVersion: null },
+              });
+            },
+          }),
           isSuccessful: result => result.success,
-          onSuccess: ({ response: result, baseline, products: affectedProducts }) => {
-            const saved = result.data?.transaction;
-            publishForecastImpactSale({
-              version: 2,
-              type: 'SALE_COMPLETED',
-              transactionId: typeof saved?._id === 'string' ? saved._id : null,
-              occurredAt: typeof saved?.date === 'string' ? saved.date : new Date().toISOString(),
-              hasCustomer: Boolean(customerId), customerRef: customerId || null, products: affectedProducts, baseline,
-              baselineUnavailable: baseline === null || !baseline.complete,
-              context: baseline?.context || { businessId: null, scenarioId: null, datasetVersion: null },
-            });
-          },
+          getMetadata: result => ({ transactionId: typeof result.data?.transaction?._id === 'string' ? result.data.transaction._id : null,
+            occurredAt: typeof result.data?.transaction?.date === 'string' ? result.data.transaction.date : null }),
         }),
         isSuccessful: result => result.success,
         getMetadata: result => ({ operationId: typeof result.data?.transaction?._id === 'string' ? result.data.transaction._id : null,
