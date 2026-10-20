@@ -22,9 +22,11 @@ export function SalesAnomalyTooltip({ active, payload }: { active?: boolean; pay
 }
 
 function anomalyDot(props: unknown) {
-  const { cx, cy, payload } = props as { cx?: number; cy?: number; payload?: DailySalesAnomaly };
-  if (!payload?.isAnomaly || cx === undefined || cy === undefined) return <g />;
-  return <g aria-label={`Comportamiento atípico ${payload.date}`}><path d={`M ${cx-4} ${cy-4} L ${cx+4} ${cy+4} M ${cx-4} ${cy+4} L ${cx+4} ${cy-4}`} stroke="#dc2626" strokeWidth={2} /></g>;
+  const { cx, cy, payload } = props as { cx?: number; cy?: number; payload: DailySalesAnomaly };
+  const key = `anomaly-dot-${payload.date}`;
+  if (cx === undefined || cy === undefined) return <g key={key} />;
+  if (!payload.isAnomaly) return <g key={key} />;
+  return <g key={key} aria-label={`Comportamiento atípico ${payload.date}`}><path d={`M ${cx-4} ${cy-4} L ${cx+4} ${cy+4} M ${cx-4} ${cy+4} L ${cx+4} ${cy-4}`} stroke="#dc2626" strokeWidth={2} /></g>;
 }
 
 export function SalesAnomalyPanel() {
