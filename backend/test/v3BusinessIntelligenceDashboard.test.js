@@ -479,7 +479,7 @@ test('snapshot and tenant failures are mapped to safe messages without internal 
 test('dashboard routes apply authentication before business access and analytics handlers', async () => {
   const router = createBusinessIntelligenceDashboardRoutes({
     service: Object.fromEntries(['revision', 'summary', 'sales', 'customers', 'customer', 'suppliers', 'supplier', 'associations', 'productRelated',
-      'health', 'healthDiagnostic', 'inventory', 'forecast', 'activeForecastModels', 'productInventory'].map(name => [name, async () => ({ data: {} })]))
+      'health', 'healthDiagnostic', 'inventory', 'forecast', 'activeForecastModels', 'productInventory', 'productOperationsList', 'productOperationDetail'].map(name => [name, async () => ({ data: {} })]))
   });
   assert.equal(router.stack[0].handle, authenticate);
   let status, body;
@@ -495,6 +495,9 @@ test('dashboard routes apply authentication before business access and analytics
   assert.equal(headers['Cache-Control'], 'no-store');
   await router.stack.find(layer => layer.route?.path === '/health/diagnostics').route.stack[0].handle(request(), res);
   assert.equal(headers['Cache-Control'], 'no-store');
+  await router.stack.find(layer => layer.route?.path === '/products/:sku/operations').route.stack[0].handle(request(), res);
+  assert.equal(headers['Cache-Control'], 'no-store');
+  assert.ok(router.stack.some(layer => layer.route?.path === '/products/:sku/operations/:operationId'));
 });
 
 test('sales API keeps the requested period and uses V3 business rankings without inventing margin', async () => {

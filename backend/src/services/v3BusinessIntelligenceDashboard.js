@@ -4,6 +4,7 @@ const { createHash, randomUUID } = require('node:crypto');
 const { V3, createV3IntelligenceService } = require('./v3IntelligenceService');
 const { artifactBytes } = require('./forecastModelRegistryService');
 const { isPlainObject } = require('../agents/contracts');
+const { createProductOperationHistoryService } = require('./productOperationHistoryService');
 
 const RIDGE_RECIPE_ID = 'RIDGE-CAUSAL27';
 const RIDGE_FEATURE_VERSION = 'RIDGE_CAUSAL27_V1';
@@ -48,6 +49,7 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
   const service = intelligenceService || createV3IntelligenceService({ models, clock });
   const getModels = () => models || require('../models');
   const registry = forecastRegistryService || require('./forecastModelRegistryService').createForecastModelRegistryService();
+  const productOperations = createProductOperationHistoryService({ models });
   const loadCatalogProducts = async (businessId, skus, fields) => {
     if (!skus.length) return new Map();
     const rows = await getModels().Product.find({ businessId, scenarioId: V3.scenarioId, isActive: true, sku: { $in: skus } })
@@ -629,6 +631,16 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
       return { error: safeError(error) };
     }
   };
+  const productOperationsList = async req => {
+    const prepared = await run(req); if (prepared.error) return { error: prepared.error };
+    try { return { data: await productOperations.list(req) }; }
+    catch (error) { return { error: productOperationError(error) }; }
+  };
+  const productOperationDetail = async req => {
+    const prepared = await run(req); if (prepared.error) return { error: prepared.error };
+    try { return { data: await productOperations.detail(req) }; }
+    catch (error) { return { error: productOperationError(error) }; }
+  };
   const forecastEvaluation = async req => {
     const prepared = await run(req, { frozen: true });
     if (prepared.error) return { error: prepared.error };
@@ -661,8 +673,19 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
     catch (error) { return { error: safeError(error) }; }
   };
   return Object.freeze({ revision, summary, inventory, sales, customers, customer, suppliers, supplier, associations, productRelated, health, healthDiagnostic, forecastEvaluation, activeForecastModels, customerClustering, salesAnomalies,
-    forecast: req => product(req, 'forecast'), productInventory: req => product(req, 'inventory') });
+    forecast: req => product(req, 'forecast'), productInventory: req => product(req, 'inventory'),
+    productOperationsList, productOperationDetail });
 };
+
+function productOperationError(error) {
+  const allowed = new Map([
+    ['INVALID_REQUEST', [400, 'La consulta del historial no es válida.']],
+    ['PRODUCT_NOT_FOUND', [404, 'No se encontró el producto u operación solicitada.']],
+    ['CURSOR_INVALID', [400, 'El cursor del historial no es válido.']],
+  ]);
+  const [httpStatus, message] = allowed.get(error?.code) || [503, 'No se pudo cargar el historial del producto.'];
+  return { code: allowed.has(error?.code) ? error.code : 'PRODUCT_OPERATION_HISTORY_UNAVAILABLE', httpStatus, message };
+}
 
 const finiteOrNull = value => Number.isFinite(value) ? value : null;
 function productIdentityFor(catalogProduct, sku, row = {}) {

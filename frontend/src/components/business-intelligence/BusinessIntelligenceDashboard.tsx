@@ -15,6 +15,7 @@ import { ForecastEvaluationPanel } from './ForecastEvaluationPanel';
 import { ForecastDiagnosticsPanel } from './ForecastDiagnosticsPanel';
 import { ForecastMlUpdateHistoryPanel } from './ForecastMlUpdateHistoryPanel';
 import { ForecastReplayEvidencePanel } from './ForecastReplayEvidencePanel';
+import { ProductOperationHistoryPanel } from './ProductOperationHistoryPanel';
 import { MlTestControlPanel } from './MlTestControlPanel';
 import { MlTestScenarioUiProvider, useMlTestScenarioUiState } from './MlTestScenarioUiContext';
 import { AnalyticsErrorBoundary } from './AnalyticsErrorBoundary';
@@ -292,6 +293,7 @@ function RankingTable({ rows, onSelect }: { rows: InventorySummary['items']; onS
   return <Card><CardHeader><CardTitle>Productos que requieren atención</CardTitle><CardDescription>Ranking entregado por la analítica de inventario; selecciona un producto para ver su detalle.</CardDescription></CardHeader><CardContent>{rows.length ? <div className="overflow-x-auto"><table className="w-full min-w-[700px] text-sm"><caption className="sr-only">Ranking de riesgo y reposición</caption><thead><tr className="border-b text-left text-muted-foreground">{['Producto', 'Stock', 'Cobertura', 'Riesgo', 'Reposición', 'Cantidad sugerida'].map(label => <th key={label} scope="col" className="px-3 py-3 font-medium">{label}</th>)}</tr></thead><tbody>{rows.map(row => <tr key={row.sku} className="border-b last:border-0"><td className="px-3 py-3"><button type="button" onClick={() => onSelect(row)} className="text-left font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{row.productName}{row.presentation ? <span className="block text-xs font-normal text-muted-foreground">{row.presentation}</span> : null}<span className="block text-xs font-normal text-muted-foreground">{row.sku}</span></button></td><td className="px-3 py-3">{safeNumber(row.stock)}</td><td className="px-3 py-3">{row.coverageDays === null ? 'No disponible' : `${safeNumber(row.coverageDays, 1)} días`}</td><td className="px-3 py-3"><RiskBadge risk={row.risk} /></td><td className="px-3 py-3">{row.reorderNow === null ? 'No disponible' : row.reorderNow ? 'Sí' : 'No'}</td><td className="px-3 py-3">{row.recommendedQty === null ? 'No disponible' : `${safeNumber(row.recommendedQty)} unidades`}</td></tr>)}</tbody></table></div> : <p className="rounded-md border border-dashed p-5 text-center text-sm text-muted-foreground">El análisis no devolvió productos en el ranking.</p>}</CardContent></Card>;
 }
 function ForecastPanel({ product, forecasts, horizon, setHorizon, activeModels, onRetry }: { product: ProductOption; forecasts: Partial<Record<RidgeHorizon, ForecastRead>>; horizon: Horizon; setHorizon: (horizon: Horizon) => void; activeModels: ForecastActiveModel[] | null; onRetry: () => void }) {
+  const [section, setSection] = useState<'forecast' | 'history' | 'explanation'>('forecast');
   const selectedRead = forecasts[horizon];
   const forecast = selectedRead?.data || forecasts[7]?.data || forecasts[14]?.data || null;
   const selectedUnits = forecast?.forecastPeriod?.selectedHorizonDays === horizon
@@ -308,6 +310,10 @@ function ForecastPanel({ product, forecasts, horizon, setHorizon, activeModels, 
     partial: point.status === 'PARTIAL' ? point.units : null,
     statusLabel: seriesLabels[point.status] }));
   return <div className="space-y-4"><div className="flex flex-wrap items-end justify-between gap-3"><div><h3 className="text-lg font-semibold">{product.name || product.sku}</h3><p className="text-sm text-muted-foreground">{product.presentation || 'Presentación no especificada'} · SKU: {product.sku}</p></div><p className="text-xs text-muted-foreground">{forecast ? freshnessLine(forecast) : 'Consultando horizontes Ridge…'}</p></div>
+    <nav aria-label="Secciones del producto" className="flex flex-wrap gap-2 border-b pb-2">{([['forecast', 'Pronóstico'], ['history', 'Historial de operaciones'], ['explanation', 'Explicación ML']] as const).map(([key, label]) => <Button key={key} type="button" variant={section === key ? 'default' : 'outline'} aria-pressed={section === key} onClick={() => setSection(key)}>{label}</Button>)}</nav>
+    {section === 'history' ? <ProductOperationHistoryPanel key={product.sku} sku={product.sku} />
+      : section === 'explanation' ? <Card><CardHeader><CardTitle>Cómo se relacionan las operaciones con Ridge</CardTitle><CardDescription>El historial muestra hechos persistidos; no atribuye promociones a una operación individual.</CardDescription></CardHeader><CardContent className="space-y-3 text-sm"><p><strong>Venta</strong> → evidencia de demanda para Ridge.</p><p><strong>Cancelación</strong> → corrección de evidencia previamente registrada.</p><p><strong>Compra o recepción</strong> → afecta inventario, no demanda observada.</p><p><strong>Ajuste</strong> → modifica inventario, no demanda observada.</p><p className="rounded-md bg-muted p-3">Evidencia → debounce → maduración → candidato → evaluación → promoción o rechazo. Los 107 origins son orígenes maduros de evaluación, no 107 ventas.</p><p>Una señal no garantiza reentrenamiento ni promoción inmediata; Ridge LIVE solo sirve 7 y 14 días.</p></CardContent></Card>
+      : <>
       <div className="grid gap-4 sm:grid-cols-2">{horizons.map(days => {
         const entry = forecasts[days];
         const data = entry?.data;
@@ -345,6 +351,7 @@ function ForecastPanel({ product, forecasts, horizon, setHorizon, activeModels, 
         {!historical && forecast.baselineUnits != null && <div><dt>Baseline estadístico MA28</dt><dd>{safeNumber(forecast.baselineUnits, 2)} unidades; solo referencia, no sustituye el modelo.</dd></div>}
       </dl></details>
     </> : <Card role="status"><CardContent className="p-5 text-sm text-muted-foreground">El pronóstico no está disponible para este período.</CardContent></Card>}
+      </>}
   </div>;
 }
 function ProductInventoryPanel({ inventory }: { inventory: ProductInventory }) {

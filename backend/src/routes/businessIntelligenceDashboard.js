@@ -15,7 +15,7 @@ const createBusinessIntelligenceDashboardRoutes = ({ service, authenticateMiddle
     keyGenerator: req => `${req.user.businessId}:${req.user._id}`,
     message: { success: false, code: 'ANALYTICS_RATE_LIMITED', message: 'Demasiadas consultas de analítica. Inténtalo más tarde.' } });
   const endpoint = method => async (req, res) => {
-    if (['revision', 'forecast', 'activeForecastModels', 'healthDiagnostic'].includes(method)) res.set('Cache-Control', 'no-store');
+    if (['revision', 'forecast', 'activeForecastModels', 'healthDiagnostic', 'productOperationsList', 'productOperationDetail'].includes(method)) res.set('Cache-Control', 'no-store');
     const result = await dashboard[method](req);
     if (result.error) return res.status(result.error.httpStatus).json({ success: false,
       code: result.error.code, message: result.error.message,
@@ -63,6 +63,8 @@ const createBusinessIntelligenceDashboardRoutes = ({ service, authenticateMiddle
     replayRead(req => getCertifiedReplayOrigin(req.params.origin, req.query)));
   router.get('/forecast/models/active', endpoint('activeForecastModels'));
   router.get('/products/:sku/forecast', endpoint('forecast'));
+  router.get('/products/:sku/operations', endpoint('productOperationsList'));
+  router.get('/products/:sku/operations/:operationId', endpoint('productOperationDetail'));
   router.get('/products/:sku/inventory', endpoint('productInventory'));
   return router;
 };

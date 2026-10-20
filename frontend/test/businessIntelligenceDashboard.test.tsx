@@ -100,6 +100,10 @@ describe('business intelligence dashboard', () => {
     });
     vi.spyOn(apiClient, 'getForecastMlUpdateStatus').mockResolvedValue({ httpStatus: 200, data: { dataVersion: '83', closedThrough: '2026-10-16', horizons: [mlHorizon(7), mlHorizon(14)] } });
     vi.spyOn(apiClient, 'getForecastMlUpdateHistory').mockResolvedValue({ httpStatus: 200, data: { items: [], page: { limit: 20, nextCursor: null } } });
+    vi.spyOn(apiClient, 'getProductOperations').mockResolvedValue({ httpStatus: 200, data: {
+      product: { sku: 'PAN-FRE-001', name: 'Pan francés' }, items: [], limit: 20, hasMore: false, nextCursor: null,
+      filters: { type: 'ALL', from: null, to: null },
+    } });
     vi.spyOn(apiClient, 'getMlTestControlStatus').mockResolvedValue({ httpStatus: 200, data: { state: 'NO_TEST', resetEpoch: '0', testCycleId: null,
       maintenance: false, cloudRestoreEnabled: false, capabilities: { destructiveMlTestControls: { allowed: false, target: null, reasonCode: 'ML_TEST_PRODUCTION_FORBIDDEN' } } } });
     vi.spyOn(apiClient, 'getMlTestLifecycleStatus');
@@ -212,6 +216,18 @@ describe('business intelligence dashboard', () => {
     expect(screen.getByText('Día cerrado sin ventas')).toBeTruthy();
     expect(screen.getByText('Dato faltante')).toBeTruthy();
     expect(screen.getByText('Día parcial')).toBeTruthy();
+  });
+
+  it('loads product operations only after opening the internal history tab', async () => {
+    vi.spyOn(apiClient, 'searchBusinessIntelligenceProducts').mockResolvedValue(success({ products: [productOption] }));
+    vi.spyOn(apiClient, 'getBusinessIntelligenceForecast').mockResolvedValue(success(forecastFixture));
+    render(<BusinessIntelligenceDashboard />);
+    await openForecast();
+    expect(apiClient.getProductOperations).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Historial de operaciones' }));
+    expect(await screen.findByText('No hay operaciones para los filtros seleccionados.')).toBeTruthy();
+    expect(apiClient.getProductOperations).toHaveBeenCalledWith('PAN-FRE-001', { type: 'ALL', limit: 20 }, expect.any(AbortSignal));
+    expect(screen.getByRole('button', { name: 'Pronóstico' }).getAttribute('aria-pressed')).toBe('false');
   });
 
   it('shows LIVE Ridge metadata for 7/14, keeps 7d selected initially, and never requests a one-day forecast', async () => {

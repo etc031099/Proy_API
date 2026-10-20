@@ -420,6 +420,33 @@ export interface ProductInventory {
 }
 export interface IntelligenceApiError { code: string; message: string; }
 
+export type ProductOperationType = 'SALE' | 'SALE_CANCELLED' | 'PURCHASE_CREATED' | 'PURCHASE_RECEIVED' | 'INVENTORY_ADJUSTMENT';
+export type ProductOperationFilter = 'ALL' | ProductOperationType;
+export interface ProductOperationHistoryItem {
+  operationId: string; sourceId: string; type: ProductOperationType; occurredAt: string; quantity: number | null;
+  reference: string | null; customer: string | null; supplier: string | null;
+  relationQuality: 'DIRECT_ID' | 'DIRECT_REVISION' | 'LIMITED_LEGACY';
+  ridgeImpact: { status: 'persisted' | 'not_found' | 'not_applicable'; horizons: Array<{
+    horizonDays: 7 | 14; eventType: 'SALE_COMPLETED' | 'SALE_CANCELLED'; dataVersion: string;
+    occurredAt: string | null; historicalCorrection: boolean;
+  }> };
+  inventoryImpact: { status: 'persisted' | 'not_found'; movementType: string | null;
+    quantityDelta: number | null; stockBefore: number | null; stockAfter: number | null };
+}
+export interface ProductOperationHistoryPage {
+  product: { sku: string; name: string }; items: ProductOperationHistoryItem[]; limit: number;
+  hasMore: boolean; nextCursor: string | null; filters: { type: ProductOperationFilter; from: string | null; to: string | null };
+}
+export interface ProductOperationDetail {
+  operation: ProductOperationHistoryItem;
+  facts: { product: { sku: string; name: string }; quantity: number | null; reference: string | null;
+    customer: string | null; supplier: string | null; status: string | null; receiptKey: string | null };
+  inventoryMovements: Array<{ movementType: string; quantityDelta: number; stockBefore: number; stockAfter: number; occurredAt: string }>;
+  ridgeEvidence: ProductOperationHistoryItem['ridgeImpact'];
+  traceability: { revision: string | null; eventOrdinal: number | null; eventKey: string | null; effectiveAtUtc: string | null;
+    entityType: string | null; entityKey: string | null; operation: string | null; relationQuality: ProductOperationHistoryItem['relationQuality'] };
+}
+
 export type SalesPeriod = 'TODAY' | 'LAST_7_DAYS' | 'LAST_30_DAYS';
 export interface AnalyticsMoney { value: number | null; currency: string | null; }
 export interface AnalyticsMeta extends Omit<IntelligenceFreshness, 'mode'> {

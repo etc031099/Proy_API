@@ -2,7 +2,7 @@ import axios, { AxiosInstance, AxiosError } from 'axios';
 import type { ForecastEvaluation } from '@/types/forecastEvaluation';
 import { ApiResponse, DemandForecastResponse, DemoV2RegisterData, DemoV3RegisterData } from '@/types';
 import type { AgentMessageRequest, AgentResponse, AgentConversationList, AgentConversationDetail } from '@/types/agent';
-import type { AnalyticsEnvelope, AssociationsAnalytics, AuthenticatedDiagnosticResult, BusinessHealthAnalytics, BusinessSummary, CertifiedForecastReplayEvidence, CustomerAnalyticsDetail, CustomersAnalytics, ForecastActiveModels, ForecastMlUpdateExecutionDetail, ForecastMlUpdateHistoryPage, ForecastMlUpdateProductsPage, ForecastMlUpdateRequestResult, ForecastMlUpdateStatus, ForecastResponse, HealthDiagnostic, InventorySummary, MlTestActivity, MlTestControlStatus, MlTestLifecycleResult, MlTestLifecycleStatus, MlTestScenarioAnalysisResult, ProductInventory, ProductOption, RelatedProductAnalytics, SalesAnalytics, SalesPeriod, SupplierAnalyticsDetail, SuppliersAnalytics } from '@/types/businessIntelligence';
+import type { AnalyticsEnvelope, AssociationsAnalytics, AuthenticatedDiagnosticResult, BusinessHealthAnalytics, BusinessSummary, CertifiedForecastReplayEvidence, CustomerAnalyticsDetail, CustomersAnalytics, ForecastActiveModels, ForecastMlUpdateExecutionDetail, ForecastMlUpdateHistoryPage, ForecastMlUpdateProductsPage, ForecastMlUpdateRequestResult, ForecastMlUpdateStatus, ForecastResponse, HealthDiagnostic, InventorySummary, MlTestActivity, MlTestControlStatus, MlTestLifecycleResult, MlTestLifecycleStatus, MlTestScenarioAnalysisResult, ProductInventory, ProductOperationDetail, ProductOperationFilter, ProductOperationHistoryPage, ProductOption, RelatedProductAnalytics, SalesAnalytics, SalesPeriod, SupplierAnalyticsDetail, SuppliersAnalytics } from '@/types/businessIntelligence';
 import type { CustomerClustering } from '@/types/customerClustering';
 import type { SalesAnomalies } from '@/types/salesAnomalies';
 import { IntelligenceReadCache, type IntelligenceRevision } from './intelligenceReadCache';
@@ -62,11 +62,11 @@ class ApiClient {
     const normalized = Object.entries(params || {}).filter(([, value]) => value !== undefined).sort(([a], [b]) => a.localeCompare(b));
     return this.intelligenceCache.read(JSON.stringify([path, normalized]), load, versioned);
   }
-  private async diagnosticRead<T>(path: string, params?: object): Promise<AuthenticatedDiagnosticResult<T>> {
+  private async diagnosticRead<T>(path: string, params?: object, signal?: AbortSignal): Promise<AuthenticatedDiagnosticResult<T>> {
     try {
       // Same Axios instance/interceptors as all dashboard requests; validateStatus
       // keeps 401 visible to this panel rather than triggering the global redirect.
-      const response = await this.instance.get(path, { ...(params ? { params } : {}), timeout: 15_000, validateStatus: () => true });
+      const response = await this.instance.get(path, { ...(params ? { params } : {}), ...(signal ? { signal } : {}), timeout: 15_000, validateStatus: () => true });
       const body = response.data as { success?: unknown; data?: T; code?: unknown } | undefined;
       const code = typeof body?.code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(body.code) ? body.code : undefined;
       return { httpStatus: response.status,
@@ -88,6 +88,12 @@ class ApiClient {
   }
   async getMlTestActivity(params: { limit?: number; cursor?: string } = {}): Promise<AuthenticatedDiagnosticResult<MlTestActivity>> {
     return this.diagnosticRead('/ml-test/activity', params);
+  }
+  async getProductOperations(sku: string, params: { type?: ProductOperationFilter; from?: string; to?: string; limit?: number; cursor?: string } = {}, signal?: AbortSignal): Promise<AuthenticatedDiagnosticResult<ProductOperationHistoryPage>> {
+    return this.diagnosticRead(`/intelligence/products/${encodeURIComponent(sku)}/operations`, params, signal);
+  }
+  async getProductOperationDetail(sku: string, operationId: string, signal?: AbortSignal): Promise<AuthenticatedDiagnosticResult<ProductOperationDetail>> {
+    return this.diagnosticRead(`/intelligence/products/${encodeURIComponent(sku)}/operations/${encodeURIComponent(operationId)}`, undefined, signal);
   }
   private async mlTestMutation(path: '/ml-test/checkpoint' | '/ml-test/restore', body: Record<string, never> | { mode: 'continue' | 'finish' }): Promise<AuthenticatedDiagnosticResult<MlTestLifecycleResult>> {
     try {
