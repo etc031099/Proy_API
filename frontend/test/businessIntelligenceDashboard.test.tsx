@@ -277,7 +277,7 @@ describe('business intelligence dashboard', () => {
     expect(within(panel).getByText(/\+1[,.]04\s*%/)).toBeTruthy();
     expect(within(panel).getByText(/El candidato histórico superó las reglas exigidas/)).toBeTruthy();
     expect(within(panel).getByText(/Aunque mejoró globalmente, fue rechazado porque falló una regla de seguridad/)).toBeTruthy();
-    expect(within(panel).getByText(/En el fold 3, el SKU/).textContent).toContain('BEB-GAS-003');
+    expect(within(panel).getByText(/En el fold con clave F3, el SKU/).textContent).toContain('BEB-GAS-003');
     expect(within(panel).getByText(/Una mejora promedio no basta/)).toBeTruthy();
     expect(within(panel).getByText(/Esta evaluación es histórica y aislada/)).toBeTruthy();
     expect(within(panel).getByText(/No cambia ACTIVE ni Registry, no modifica ventas, stock o señales LIVE/)).toBeTruthy();
@@ -292,7 +292,7 @@ describe('business intelligence dashboard', () => {
     expect(within(replayDetails).getByText(/BEB-GAS-003/)).toBeTruthy();
     expect(within(replayDetails).getByText(/P_FOLD_CATA_MAE:F3:BEB-GAS-003/)).toBeTruthy();
     expect(within(technicalDetails[0]).getByText('Candidato seleccionado en replay').parentElement?.textContent).toContain('replay:cert-stable-2020:7d:v2');
-    expect(within(panel).queryByRole('button')).toBeNull();
+    expect(within(panel).getByRole('button', { name: 'Explorar evidencia' }).getAttribute('aria-expanded')).toBe('false');
     expect(screen.queryByRole('button', { name: /Pronóstico 1 día/ })).toBeNull();
     expect(screen.getByRole('button', { name: /Pronóstico 7 días/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Pronóstico 14 días/ })).toBeTruthy();

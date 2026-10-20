@@ -5,6 +5,7 @@ const rateLimit = require('express-rate-limit');
 const { authenticate, checkBusinessAccess } = require('../middleware/auth');
 const { createV3BusinessIntelligenceDashboard } = require('../services/v3BusinessIntelligenceDashboard');
 const { getCertifiedStable2020Replay } = require('../services/forecastReplayCertificateService');
+const { getCertifiedReplayOrigins, getCertifiedReplayOrigin } = require('../services/forecastReplayDetailService');
 
 const createBusinessIntelligenceDashboardRoutes = ({ service, authenticateMiddleware = authenticate,
   businessAccessMiddleware = checkBusinessAccess } = {}) => {
@@ -49,6 +50,17 @@ const createBusinessIntelligenceDashboardRoutes = ({ service, authenticateMiddle
     }
     return res.json({ success: true, data: getCertifiedStable2020Replay() });
   });
+  const replayRead = read => (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    try { return res.json({ success: true, data: read(req) }); }
+    catch (error) {
+      return res.status(error.httpStatus === 400 ? 400 : 503).json({ success: false,
+        code: error.httpStatus === 400 ? 'FORECAST_REPLAY_SELECTION_INVALID' : 'FORECAST_REPLAY_EVIDENCE_UNAVAILABLE' });
+    }
+  };
+  router.get('/forecast/replay/certified-stable-2020/origins', replayRead(req => getCertifiedReplayOrigins(req.query)));
+  router.get('/forecast/replay/certified-stable-2020/origins/:origin',
+    replayRead(req => getCertifiedReplayOrigin(req.params.origin, req.query)));
   router.get('/forecast/models/active', endpoint('activeForecastModels'));
   router.get('/products/:sku/forecast', endpoint('forecast'));
   router.get('/products/:sku/inventory', endpoint('productInventory'));

@@ -31,6 +31,7 @@ export default defineConfig({
       'test/salesAnomalies.test.tsx',
       'test/businessIntelligenceExtended.api.test.ts',
       'test/forecastDiagnostics.api.test.ts',
+      'test/forecastReplayOrigins.test.tsx',
       'test/forecastDiagnostics.panel.test.tsx',
       'test/forecastMlUpdate.api.test.ts',
       'test/forecastMlUpdate.panel.test.tsx',

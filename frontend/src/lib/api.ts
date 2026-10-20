@@ -549,6 +549,17 @@ class ApiClient {
     return this.diagnosticRead('/intelligence/forecast/models/active');
   }
 
+  async getCertifiedForecastReplayOrigins(selection: { horizonDays: 7 | 14; fold?: import('@/types/businessIntelligence').ReplayFoldKey; page?: number }): Promise<AuthenticatedDiagnosticResult<import('@/types/businessIntelligence').ReplayOriginsPage>> {
+    const query = new URLSearchParams({ horizonDays: String(selection.horizonDays) });
+    if (selection.fold) query.set('fold', selection.fold);
+    if (selection.page) query.set('page', String(selection.page));
+    return this.diagnosticRead(`/intelligence/forecast/replay/certified-stable-2020/origins?${query}`);
+  }
+
+  async getCertifiedForecastReplayOrigin(origin: string, horizonDays: 7 | 14): Promise<AuthenticatedDiagnosticResult<import('@/types/businessIntelligence').ReplayOriginDetail>> {
+    return this.diagnosticRead(`/intelligence/forecast/replay/certified-stable-2020/origins/${encodeURIComponent(origin)}?horizonDays=${horizonDays}`);
+  }
+
   async getCertifiedForecastReplayEvidence(): Promise<AuthenticatedDiagnosticResult<CertifiedForecastReplayEvidence>> {
     return this.diagnosticRead('/intelligence/forecast/replay/certified-stable-2020');
   }

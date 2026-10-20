@@ -137,6 +137,31 @@ export interface CertifiedForecastReplayEvidence {
   }>;
   interpretation: { execution: 'HISTORICAL_OFFLINE_REPLAY'; isLiveState: false; requiredOriginsWasWeakened: false; explanations: string[] };
 }
+export type ReplayFoldKey = 'F2' | 'F3' | 'VALIDATION';
+export interface ReplayMetrics {
+  rows: number; actual_units: number; mae: number; wape: number | null;
+  bias_units: number; normalized_bias: number | null;
+}
+export interface ReplayOriginMetadata {
+  demoRunId: 'cert-stable-2020'; purpose: 'REPLAY_ONLY'; requiredOrigins: 107;
+  reference: 'MA28'; horizonDays: 7 | 14; status: 'PASS' | 'REJECTED';
+  certificateSha256: string;
+  policy: { numericPolicy: string; replayPolicy: string; numericPolicySha256: string };
+}
+export interface ReplayOriginsPage extends ReplayOriginMetadata {
+  totalOrigins: number; total: number; page: number; pageSize: number; totalPages: number;
+  folds: Array<{ order: number; key: ReplayFoldKey; startOrigin: string; endOrigin: string; origins: number }>;
+  items: Array<{ origin: string; fold: ReplayFoldKey; sampleCount: number; candidateMae: number; baselineMae: number }>;
+  globalChecks: Record<string, boolean>; reasons: string[]; allCheckCount: number; passedCheckCount: number;
+  focalEvidence: null | { horizonDays: 14; fold: 'F3'; sku: string; ruleKey: string;
+    support: { origins: number; uniqueDayUnits: number; sufficient: boolean };
+    candidateMae: number; baselineMae: number; ratio: number; threshold: number; operator: '<='; passed: boolean };
+}
+export interface ReplayOriginDetail extends ReplayOriginMetadata {
+  origin: string; fold: ReplayFoldKey; sampleCount: number;
+  actualUnits: number; candidateUnits: number; baselineUnits: number;
+  candidate: ReplayMetrics; baseline: ReplayMetrics;
+}
 export interface HealthDiagnostic {
   httpStatus: number;
   dependencyStatus: { inventory: string; forecast: string; supplier: string; healthAssembly: string };

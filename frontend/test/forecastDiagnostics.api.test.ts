@@ -4,6 +4,16 @@ import { apiClient } from '@/lib/api';
 describe('authenticated forecast diagnostics API', () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it('reads paged certified origins and fixed-certificate detail through authentication, without executing replay', async () => {
+    const instance = (apiClient as unknown as { instance: { get: (path: string, config?: unknown) => Promise<unknown> } }).instance;
+    const get = vi.spyOn(instance, 'get').mockResolvedValue({ status: 200, data: { success: true, data: { purpose: 'REPLAY_ONLY' } } });
+    await apiClient.getCertifiedForecastReplayOrigins({ horizonDays: 14, fold: 'F3', page: 2 });
+    expect(get.mock.calls[0][0]).toBe('/intelligence/forecast/replay/certified-stable-2020/origins?horizonDays=14&fold=F3&page=2');
+    await apiClient.getCertifiedForecastReplayOrigin('2026-05-18', 14);
+    expect(get.mock.calls[1][0]).toBe('/intelligence/forecast/replay/certified-stable-2020/origins/2026-05-18?horizonDays=14');
+    expect(get.mock.calls[0][1]).toMatchObject({ timeout: 15_000, validateStatus: expect.any(Function) });
+  });
+
   it('reads local test activity through the authenticated client with only cursor pagination', async () => {
     const instance = (apiClient as unknown as { instance: { get: (path: string, config?: unknown) => Promise<unknown> } }).instance;
     const get = vi.spyOn(instance, 'get').mockResolvedValue({ status: 200, data: { success: true, data: { products: [] } } });

@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { apiClient } from '@/lib/api';
 import type { CertifiedForecastReplayEvidence } from '@/types/businessIntelligence';
+import { ForecastReplayOriginsExplorer } from './ForecastReplayOriginsExplorer';
 
 type ReplayState = 'loading' | 'ready' | 'error' | 'unavailable';
 
@@ -33,7 +34,7 @@ function isExpectedCertificate(value: CertifiedForecastReplayEvidence): boolean 
 function focalFailure(evidence: CertifiedForecastReplayEvidence['horizons'][number]): { fold: string; sku: string } | null {
   for (const reason of evidence.reasons) {
     const match = /^P_FOLD_CATA_MAE:(F\d+):([A-Za-z0-9._-]+)$/.exec(reason);
-    if (match) return { fold: match[1].slice(1), sku: match[2] };
+    if (match) return { fold: match[1], sku: match[2] };
   }
   return null;
 }
@@ -63,7 +64,7 @@ function ReplayHorizonCard({ evidence, numericPolicy, replayPolicy }: { evidence
         ? <p className="rounded-md border border-emerald-600/20 bg-emerald-600/5 p-3 text-sm">El candidato histórico superó las reglas exigidas para este horizonte.</p>
         : <div className="space-y-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
           <p>Aunque mejoró globalmente, fue rechazado porque falló una regla de seguridad en un producto prioritario.</p>
-          {focal && <p>En el fold {focal.fold}, el SKU <strong>{focal.sku}</strong> incumplió el límite MAE exigido para productos prioritarios.</p>}
+          {focal && <p>En el fold con clave {focal.fold}, el SKU <strong>{focal.sku}</strong> incumplió el límite MAE exigido para productos prioritarios.</p>}
           {!focal && <p>Una protección focal adicional impidió aceptar el candidato.</p>}
         </div>}
       <details className="rounded-md border p-3 text-sm">
@@ -105,6 +106,7 @@ function ReplayDecisionSummary({ evidence }: { evidence: CertifiedForecastReplay
 export function ForecastReplayEvidencePanel() {
   const [state, setState] = useState<ReplayState>('loading');
   const [evidence, setEvidence] = useState<CertifiedForecastReplayEvidence | null>(null);
+  const [exploring, setExploring] = useState(false);
 
   useEffect(() => {
     let current = true;
@@ -155,6 +157,11 @@ export function ForecastReplayEvidencePanel() {
         </dl>
         <p className="mt-3 text-xs text-muted-foreground">Los resultados son de replay y no corresponden a versiones LIVE. Un aprobado histórico no implica promoción real.</p>
       </details>
+      <button type="button" aria-expanded={exploring} aria-controls="certified-replay-explorer"
+        className="rounded-md border px-4 py-2 text-sm font-medium" onClick={() => setExploring(value => !value)}>
+        {exploring ? 'Cerrar explorador de evidencia' : 'Explorar evidencia'}
+      </button>
+      {exploring && <div id="certified-replay-explorer"><ForecastReplayOriginsExplorer /></div>}
     </>}
   </section>;
 }
