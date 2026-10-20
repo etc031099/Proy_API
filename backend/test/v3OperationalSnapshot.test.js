@@ -2,6 +2,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const Revision = require('../src/models/V3OperationalRevision');
 const Change = require('../src/models/V3OperationalChange');
 const {
@@ -49,8 +51,46 @@ test('sale projection preserves stable lines and never invents missing cost', ()
 test('purchase projection marks current immediate stock receipt and does not claim pending receipt', () => {
   const input = { _id: 't2', type: 'purchase', date: new Date('2026-10-13T18:00:00Z'), currency: 'PEN', totalAmount: 8,
     vendorId: 's1', products: [{ productId: 'p1', sku: 'SKU-1', quantity: 2, price: 4, costPrice: 4, total: 8 }] };
-  assert.equal(transactionProjection(input).receiptEvidence, 'IMMEDIATE_PURCHASE');
+  const immediate = transactionProjection(input);
+  assert.equal(immediate.receiptEvidence, 'IMMEDIATE_PURCHASE');
+  assert.equal(immediate.contractVersion, null);
+  assert.equal(immediate.fulfillmentMode, null);
+  assert.equal(immediate.initialStatus, null);
   assert.equal(transactionProjection({ ...input, status: 'pending' }).receiptEvidence, 'NONE');
+});
+
+test('LIVE section builder restores nullable defaults omitted by persisted immediate-purchase projections', () => {
+  const fixturePath = path.join(__dirname, '..', '..', 'ml', 'tests', 'fixtures', 'v3-immediate-purchase-snapshot.json');
+  const snapshot = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
+  const projection = transactionProjection({ _id: 'LIVE-PO-IMMEDIATE-1', type: 'purchase',
+    date: new Date('2026-10-14T17:00:00.000Z'), currency: 'PEN', status: 'completed', vendorId: 'supplier-id',
+    products: [{ productId: 'product-id', productKey: 'base.P1', sku: 'P1', quantity: 3, price: 1.5, total: 4.5 }] },
+  { stableCode: 'S1' });
+  // This is the shape already persisted in the operational journal before the
+  // projection fix; buildSnapshotSections is the production snapshot path.
+  delete projection.contractVersion;
+  delete projection.fulfillmentMode;
+  delete projection.initialStatus;
+  const sections = buildSnapshotSections([{
+    eventKey: '1:0:purchase:LIVE-PO-IMMEDIATE-1:CREATE',
+    effectiveAtUtc: new Date('2026-10-14T17:00:00.000Z'),
+    revision: '1', entityType: 'purchase', entityKey: 'LIVE-PO-IMMEDIATE-1', operation: 'CREATE', projection,
+  }], '2026-10-14', '2026-10-13', [], new Date('2026-10-14T18:00:00.000Z'));
+  assert.deepEqual(sections.purchases[0], snapshot.purchases[0]);
+
+  const finalSnapshot = { ...snapshot, purchases: sections.purchases };
+  const expected = snapshot.metadata.snapshotHash;
+  const hashInput = structuredClone(finalSnapshot);
+  delete hashInput.metadata.snapshotHash;
+  delete hashInput.metadata.capturedAtUtc;
+  delete hashInput.metadata.payloadBytes;
+  assert.equal(logicalHash(hashInput), expected);
+
+  const legacyOmission = structuredClone(hashInput);
+  delete legacyOmission.purchases[0].contractVersion;
+  delete legacyOmission.purchases[0].fulfillmentMode;
+  delete legacyOmission.purchases[0].initialStatus;
+  assert.notEqual(logicalHash(legacyOmission), expected);
 });
 
 test('snapshot delta excludes pre-cutoff and future events and applies cancellation only as of its event time', () => {

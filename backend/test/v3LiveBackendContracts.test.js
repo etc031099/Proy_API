@@ -49,7 +49,9 @@ test('deferred purchase CREATE is marked for snapshot contract v2 while immediat
   assert.equal(deferred.initialStatus, 'pending');
   assert.equal(deferred.receiptEvidence, 'NONE');
   const immediate = transactionProjection({ ...tx, status: 'completed', purchaseLifecycle: null }, { stableCode: 'SUP-01' });
-  assert.equal(Object.hasOwn(immediate, 'contractVersion'), false);
+  assert.equal(immediate.contractVersion, null);
+  assert.equal(immediate.fulfillmentMode, null);
+  assert.equal(immediate.initialStatus, null);
   assert.equal(immediate.receiptEvidence, 'IMMEDIATE_PURCHASE');
 });
 

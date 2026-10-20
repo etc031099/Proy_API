@@ -148,7 +148,7 @@ class M69F3LiveContextTests(unittest.TestCase):
         # This catches Python/JavaScript ordering drift, not just self-consistency.
         self.assertEqual(
             snapshot.metadata.snapshotHash,
-            "9760fa99e2445ef7631a5c8fe1f30c1542c70d3dcac3d9647466d268a5d4edd9",
+            "d9def1a0eb72c5e507506e716f8cf36a844e41046f966beae3eec67ed4cb0054",
         )
         with self.assertRaises(ValidationError):
             snapshot.metadata.dataVersion = "99"

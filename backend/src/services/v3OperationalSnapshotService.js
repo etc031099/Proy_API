@@ -371,6 +371,9 @@ function transactionProjection(tx, contact = null, productIdentities = []) {
     purchaseKey: idOf(tx._id), supplierKey: contact?.stableCode || contact?.stableKey || `OP-S-${idOf(tx.vendorId || tx.supplierId)}`,
     orderedAtUtc: new Date(tx.date).toISOString(), currency: tx.currency || 'PEN', status: tx.status || 'completed',
     receiptEvidence: tx.status === 'pending' ? 'NONE' : 'IMMEDIATE_PURCHASE', promisedAtUtc: null,
+    // Pydantic model_dump(exclude_none=False) retains these optional v2 fields
+    // as null for v1/immediate purchases; include them before hashing too.
+    contractVersion: null, fulfillmentMode: null, initialStatus: null,
     lines: products.map(line => ({ lineKey: line.lineKey, productKey: line.productKey, sku: line.sku,
       quantityOrdered: line.quantity, purchaseUnitCostCents: line.unitPriceCents, lineTotalCents: line.lineTotalCents }))
   };
@@ -395,7 +398,18 @@ function buildSnapshotSections(changes, asOfDate, closedThrough, visibleProducts
     if (['product', 'customer', 'supplier'].includes(row.entityType)) {
       catalogChanges.push({ ...common, operation: row.operation, projection: row.projection });
     } else if (row.entityType === 'sale' && row.operation === 'CREATE') sales.push(row.projection);
-    else if (row.entityType === 'purchase' && row.operation === 'CREATE') purchases.push(row.projection);
+    else if (row.entityType === 'purchase' && row.operation === 'CREATE') {
+      const projection = row.projection || {};
+      // Older immediate-purchase journal rows predate the nullable v2 fields.
+      // Python's schema serialization includes them as null, so normalize the
+      // persisted projection at the LIVE snapshot boundary without changing v2.
+      purchases.push(projection.receiptEvidence === 'IMMEDIATE_PURCHASE' ? {
+        ...projection,
+        contractVersion: projection.contractVersion ?? null,
+        fulfillmentMode: projection.fulfillmentMode ?? null,
+        initialStatus: projection.initialStatus ?? null,
+      } : projection);
+    }
     else if (row.entityType === 'transaction' && ['CANCEL', 'RECEIVE'].includes(row.operation)) {
       const projection = row.projection || {};
       const transactionKey = projection.transactionKey || row.entityKey;

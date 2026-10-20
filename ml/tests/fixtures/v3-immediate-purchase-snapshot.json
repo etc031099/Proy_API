@@ -1,0 +1,81 @@
+{
+  "metadata": {
+    "snapshotVersion": "v3-operational-snapshot-v1",
+    "contractVersion": "1",
+    "businessId": "MINIMARKET-PASCO-V3",
+    "scenarioId": "minimarket-pasco-v3",
+    "historicalDatasetVersion": "minimarket-pasco-v3-seed2026-v1",
+    "historicalDatasetSha256": "a90b913b6ee83174165b39eaab1526525b3aacc53cae1abe6c3f5a54a469cac8",
+    "historicalCutoff": "2026-10-12",
+    "deltaStart": "2026-10-13",
+    "timezone": "America/Lima",
+    "operationalDate": "2026-10-14",
+    "asOfDate": "2026-10-14",
+    "capturedAtUtc": "2026-10-14T20:00:00.000Z",
+    "dataThroughUtc": "2026-10-14T18:00:00.000Z",
+    "observationsClosedThrough": "2026-10-13",
+    "dataVersion": "1",
+    "completeness": "COMPLETE",
+    "counts": {
+      "catalogChanges": 0,
+      "sales": 0,
+      "purchases": 1,
+      "transactionChanges": 0,
+      "stockStates": 1,
+      "closedSalesDays": 1
+    },
+    "costCoverage": {
+      "knownSaleLines": 0,
+      "unknownSaleLines": 0
+    },
+    "availabilityCoverage": "UNKNOWN",
+    "snapshotHash": "4385a08b355d66faa5c4a46a8df539fcdf5f388c600bfa58e7663a84a66a7433",
+    "payloadBytes": 1681
+  },
+  "catalogChanges": [],
+  "sales": [],
+  "purchases": [
+    {
+      "purchaseKey": "LIVE-PO-IMMEDIATE-1",
+      "supplierKey": "S1",
+      "orderedAtUtc": "2026-10-14T17:00:00.000Z",
+      "currency": "PEN",
+      "status": "completed",
+      "receiptEvidence": "IMMEDIATE_PURCHASE",
+      "promisedAtUtc": null,
+      "contractVersion": null,
+      "fulfillmentMode": null,
+      "initialStatus": null,
+      "lines": [
+        {
+          "lineKey": "LIVE-PO-IMMEDIATE-1:0",
+          "productKey": "base.P1",
+          "sku": "P1",
+          "quantityOrdered": 3,
+          "purchaseUnitCostCents": 150,
+          "lineTotalCents": 450
+        }
+      ]
+    }
+  ],
+  "transactionChanges": [],
+  "stockStates": [
+    {
+      "productKey": "base.P1",
+      "sku": "P1",
+      "onHand": 3,
+      "stockBasis": "MONGO_LEDGER"
+    }
+  ],
+  "closedSalesDays": [
+    {
+      "productKey": "base.P1",
+      "localDate": "2026-10-13",
+      "unitsSold": 0,
+      "completeness": "COMPLETE",
+      "availability": "UNKNOWN",
+      "availableHours": null,
+      "onHandUsableAtOrigin": null
+    }
+  ]
+}
