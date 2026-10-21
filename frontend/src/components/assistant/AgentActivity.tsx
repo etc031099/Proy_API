@@ -31,7 +31,7 @@ export function AgentActivity({ response }: { response?: AgentResponse }) {
   if (!response) return <aside aria-label="Actividad multiagente" className="rounded-xl border bg-card p-5 min-w-0">
     <h2 className="font-semibold">Actividad multiagente</h2>
     <p className="mt-3 text-sm text-muted-foreground">Después de cada consulta verás los agentes participantes, las skills y el consumo real.</p>
-    <p className="mt-3 text-sm">Coordinador · Operaciones · Analista</p>
+    <p className="mt-3 text-sm">Coordinador · Especialistas de consulta · Operaciones</p>
     <p className="mt-2 text-sm text-muted-foreground">Solo intervienen los agentes necesarios.</p>
   </aside>;
   const u = response.usage;
@@ -42,6 +42,7 @@ export function AgentActivity({ response }: { response?: AgentResponse }) {
   const participants = Array.isArray(response.participants) ? response.participants : [];
   const actions = Array.isArray(response.actions) ? response.actions : [];
   const evidence = Array.isArray(response.evidence) ? response.evidence : [];
+  const confirmedAction = response.pendingAction?.status === 'EXECUTED' ? response.pendingAction : null;
   return <aside aria-label="Actividad multiagente" className="rounded-xl border bg-card p-5 min-w-0 space-y-5 break-words">
     <h2 className="font-semibold">Actividad de esta respuesta</h2>
     {u.totalLlmCalls === 0 && <p className="rounded-lg bg-emerald-500/10 p-3 text-sm font-medium">Respuesta determinística · 0 tokens IA</p>}
@@ -58,6 +59,7 @@ export function AgentActivity({ response }: { response?: AgentResponse }) {
       <div><dt>Agentes</dt><dd>{Array.isArray(response.participants) ? participants.length : '—'}</dd></div>
       <div><dt>Llamadas IA</dt><dd>{u.totalLlmCalls}</dd></div>
       <div><dt>Skills ejecutadas</dt><dd>{u.totalSkillCalls}</dd></div>
+      {confirmedAction && <div><dt>Acciones confirmadas</dt><dd>1</dd></div>}
       <div><dt>Tokens totales</dt><dd>{metric(u.totalTokens)}</dd></div>
       <div><dt>Latencia total</dt><dd>{(response.latencyMs / 1000).toFixed(2)} s</dd></div>
     </dl>
@@ -105,12 +107,20 @@ export function AgentActivity({ response }: { response?: AgentResponse }) {
         </details>
       </div>)}
     </section>}
-    <section><h3 className="font-medium">Acciones realizadas</h3><ul className="mt-2 space-y-2 text-sm">
+    {confirmedAction && <section aria-label="Acciones confirmadas" className="space-y-2 text-sm">
+      <h3 className="font-medium">Acciones confirmadas</h3>
+      <p>Operations · {confirmedAction.action === 'create_sale' ? 'Registrar venta'
+        : confirmedAction.action === 'create_purchase' ? 'Registrar compra' : confirmedAction.summary}</p>
+      <p>{confirmedAction.action} · Ejecutada</p>
+      <p className="text-muted-foreground">Acción del gateway de Operations; no es una skill de consulta.</p>
+    </section>}
+    <section><h3 className="font-medium">Skills de consulta</h3><ul className="mt-2 space-y-2 text-sm">
       {actions.map((a, i) => <li key={`${a.skillId}-${i}`}>
         {a.status === 'SUCCEEDED' ? '✓' : '•'} {labels[a.skillId] || 'Consultó datos del sistema'}
         <span className="block text-xs text-muted-foreground break-all">{a.skillId} · {a.status === 'SUCCEEDED' ? 'Completada' : 'No completada'}</span>
       </li>)}
-      {!actions.length && <li className="text-muted-foreground">{Array.isArray(response.actions) ? 'Sin skills ejecutadas.' : 'Acciones no registradas en esta respuesta.'}</li>}
+      {!actions.length && <li className="text-muted-foreground">{confirmedAction ? 'No se ejecutaron skills de consulta para esta acción.'
+        : Array.isArray(response.actions) ? 'Sin skills ejecutadas.' : 'Acciones no registradas en esta respuesta.'}</li>}
     </ul></section>
     <section><h3 className="font-medium">Fuentes de datos utilizadas</h3><ul className="mt-2 space-y-3 text-sm">
       {response.contextProvenance?.sourceType === 'candidate_snapshot' && <li className="border-l-2 pl-3">

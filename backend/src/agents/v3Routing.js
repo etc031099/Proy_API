@@ -1167,8 +1167,7 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
     if (row.skillId === 'get_inventory_intelligence' && args.mode === 'detail' && intent === 'replenishment') delete args.flag;
     return { ...row, requestedIntent: intent, agent: agentForTask(row.skillId, args), args };
   }) };
-  if (plan.tasks.some(row => ['procurement', 'associations'].includes(row.agent))
-    && new Set(plan.tasks.map(row => row.agent)).size > 2)
+  if (new Set(plan.tasks.map(row => row.agent)).size > 2)
     return { answer: 'Indica como máximo dos dominios relacionados por consulta.', clarification: true,
       intent: 'v3_clarification', agent: 'coordinator' };
   for (let taskIndex = 0; taskIndex < plan.tasks.length; taskIndex++) {
@@ -1316,7 +1315,7 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
         const product = scope.selectedProduct?.key;
         v3Views.push({ kind: 'forecast', title: 'Horizonte no disponible', subtitle: message, metrics: [], items: [],
           note: 'Ridge LIVE está aprobado únicamente para 7 y 14 días.' });
-        return { answer: answers.join('\n\n'), intent: 'v3_intelligence', agent: 'analyst', v3Views,
+        return { answer: answers.join('\n\n'), intent: 'v3_intelligence', agent: 'forecast', v3Views,
           suggestions: [7, 14].map(days => ({ label: `Consultar ${days} días`, message: product ? `pronóstico de ${product} próximos ${days} días` : `pronóstico próximos ${days} días` })) };
       }
     }

@@ -43,6 +43,32 @@ beforeEach(() => {
   vi.mocked(apiClient.getAgentConversation).mockResolvedValue({ success: true, data: detail });
   vi.mocked(apiClient.deleteAgentConversation).mockResolvedValue({ success: true, data: { deleted: true } });
 });
+it('A6 legacy Analyst history still loads and renders without new generation', async () => {
+  const legacy: AgentResponse = { ...response, agent: 'analyst', answer: 'Explicación histórica conservada.',
+    participants: [{ ...response.participants[0], agentId: 'analyst' }] };
+  vi.mocked(apiClient.getAgentConversation).mockResolvedValue({ success: true, data: { ...detail,
+    messages: [detail.messages[0], { ...detail.messages[1], text: legacy.answer, response: legacy }] } });
+  render(<AssistantPage />);
+  await screen.findByText(legacy.answer);
+  expect(screen.getByRole('heading', { name: /Analista \(compatibilidad\)/ })).toBeTruthy();
+  expect(apiClient.sendAgentMessage).not.toHaveBeenCalled();
+});
+
+it('A6 restored durable execution is visible as a confirmed action, not a fabricated skill', async () => {
+  const executed: AgentResponse = { ...response, actions: [], evidence: [],
+    participants: [{ ...response.participants[0], skillCalls: 0 }], usage: { ...response.usage, totalSkillCalls: 0 },
+    pendingAction: { pendingActionId: '33333333-3333-4333-8333-333333333333', action: 'create_sale', summary: 'Venta',
+      status: 'EXECUTED', requiresConfirmation: true, expiresAt: '2099-01-01T00:00:00Z', fields: {},
+      result: { id: 'restored-operation', type: 'sale', total: 15.06, currency: 'PEN' } } };
+  vi.mocked(apiClient.getAgentConversation).mockResolvedValue({ success: true, data: { ...detail,
+    messages: [detail.messages[0], { ...detail.messages[1], response: executed }] } });
+  render(<AssistantPage />);
+  await screen.findByText('create_sale · Ejecutada');
+  const activity = within(screen.getByLabelText('Actividad multiagente'));
+  expect(activity.queryByText('Sin skills ejecutadas.')).toBeNull();
+  expect(activity.getByText('Skills ejecutadas').nextElementSibling?.textContent).toBe('0');
+  expect(apiClient.sendAgentMessage).not.toHaveBeenCalled();
+});
 for (const expired of [false, true]) it(`restores food choices from history, expired=${expired}`, async () => {
   vi.mocked(apiClient.getAgentConversation).mockResolvedValue({ success: true, data: { ...detail, messages: [
     detail.messages[0], { ...detail.messages[1], response: { ...response, suggestionsExpiresAt: expired ? 0 : Date.now() + 120000,

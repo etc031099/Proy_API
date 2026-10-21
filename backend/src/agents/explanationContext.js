@@ -64,7 +64,7 @@ function explainPrevious(message, value, context) {
     if (!selected) return clarify('¿A cuál te refieres? Elige una entidad de la respuesta anterior por nombre u ordinal.');
     entries = [{ ...lists[0], facts: selected.facts }];
   }
-  return { intent: 'explain_previous', agent: 'analyst', answer: [
+  return { intent: 'explain_previous', agent: 'coordinator', answer: [
     'La respuesta se basa en estos hechos de la consulta anterior (no son una lectura nueva):',
     ...entries.map(row => `${row.facts}\n${notes[row.skillId]}`),
     ...(saved.responseType === 'FALLBACK_FACTS' ? ['La interpretación anterior no estuvo disponible o completa; solo puedo explicar los hechos que sí se obtuvieron.'] : [])

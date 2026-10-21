@@ -11,7 +11,7 @@ const { publicResponse } = require('../src/services/agentHistoryProjection');
 const { createMlServiceClient } = require('../src/services/mlServiceClient');
 const query = '¿Qué productos debería reponer esta semana y por qué?';
 const BINDING = { ...V3, operationalDate: '2026-10-15' };
-const I = 'get_inventory_intelligence', F = 'get_product_forecast', S = 'get_supplier_intelligence';
+const I = 'get_inventory_intelligence', F = 'get_product_forecast';
 const req = { businessId: V3.businessId, user: { _id: '507f1f77bcf86cd799439011', businessId: V3.businessId, role: 'user', isActive: true } };
 const chain = value => ({ select() { return this; }, sort() { return this; }, limit() { return this; }, lean() { return this; }, maxTimeMS() { return Promise.resolve(value); } });
 const product = { _id: '507f1f77bcf86cd799439012', sku: 'PAN-FRE-001', name: 'Pan francés' };
@@ -44,7 +44,7 @@ function fixture({ partial = false, failInventory = false, invalidQty = false } 
     } } });
   const neutralProvider = createNeutralProvider({ provider: 'mock', model: 'fixture', generate: async input => {
     providerCalls++; const compact = JSON.parse(input.messages[1].content);
-    assert.deepEqual(compact.evidence.map(row => row.skillId), [I, F, S]);
+    assert.deepEqual(compact.evidence.map(row => row.skillId), [I, F]);
     return { text: JSON.stringify({ observations: [{ evidenceRefs: ['E1'], interpretation: 'El inventario requiere revisión.',
       advisoryRecommendation: 'Revisa las necesidades antes de comprar.' }], limitations: [] }), usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 } };
   } });
@@ -53,26 +53,26 @@ function fixture({ partial = false, failInventory = false, invalidQty = false } 
   return { calls, events, snapshots, providerCalls: () => providerCalls,
     run: message => runtime.handle(req, { message, conversationId: randomUUID() }) };
 }
-test('J2C exact replenishment plan uses real backend adapter, all three skills, scoped forecast and one mock generation', async () => {
+test('A6 replenishment uses Inventory and Forecast without an implicit supplier fan-out', async () => {
   const plan = buildGroundedPlan(query, BINDING);
-  assert.equal(plan.route, 'GROUNDED_LLM'); assert.deepEqual(plan.skills, [I, F, S]);
+  assert.equal(plan.route, 'GROUNDED_LLM'); assert.deepEqual(plan.skills, [I, F]);
   assert.deepEqual(plan.tasks[0].args, { limit: 3, mode: 'recommendations' });
   const f = fixture(), result = await f.run(query);
-  assert.deepEqual(f.calls.map(row => row.domain), ['inventory', 'forecast', 'suppliers']);
+  assert.deepEqual(f.calls.map(row => row.domain), ['inventory', 'forecast']);
   assert.deepEqual(f.calls[1].payload.skus, [product.sku]); assert.equal(f.providerCalls(), 1);
   assert.ok(f.calls.every(row => row.payload.context.businessId === V3.businessId && row.payload.context.asOfDate === '2026-10-15'));
   assert.equal(result.pendingAction, undefined);
 });
-test('J2C real LIVE partial shape keeps null recommendation, verified stock and supplier facts without synthesis', async () => {
+test('A6 real LIVE partial shape keeps null recommendation and verified stock without inventing supplier facts', async () => {
   const f = fixture({ partial: true }), result = await f.run(query);
   assert.equal(result.actions.find(row => row.skillId === I).status, 'SUCCEEDED');
-  assert.match(result.answer, /21/); assert.match(result.answer, /Proveedor ficticio/);
+  assert.match(result.answer, /21/); assert.doesNotMatch(result.answer, /Proveedor ficticio/);
   assert.equal(f.providerCalls(), 0); assert.equal(result.usage.totalTokens, 0); assert.equal(result.pendingAction, undefined);
 });
-test('J2C inventory failure skips dependent forecast but retains independent supplier facts and sanitized cause', async () => {
+test('A6 inventory failure skips dependent forecast and does not fetch an unrelated supplier', async () => {
   const f = fixture({ failInventory: true }), result = await f.run(query);
-  assert.deepEqual(f.calls.map(row => row.domain), ['inventory', 'suppliers']);
-  assert.match(result.answer, /Proveedor ficticio/); assert.equal(f.providerCalls(), 0); assert.equal(result.pendingAction, undefined);
+  assert.deepEqual(f.calls.map(row => row.domain), ['inventory']);
+  assert.doesNotMatch(result.answer, /Proveedor ficticio/); assert.equal(f.providerCalls(), 0); assert.equal(result.pendingAction, undefined);
   assert.ok(result.grounded.failures.some(row => row.skillId === I && row.code === 'ARTIFACT_UNAVAILABLE'));
   assert.ok(publicResponse(result).grounded.failures.some(row => row.code === 'ARTIFACT_UNAVAILABLE'));
   assert.doesNotMatch(JSON.stringify(result), /private details/);

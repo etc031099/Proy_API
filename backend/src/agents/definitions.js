@@ -62,7 +62,7 @@ const AGENTS = deepFreeze([
     limits: { ...TOKEN_BUDGETS.operations, maxSkillCalls: EXECUTION_LIMITS.maxSkillCalls, maxLlmCalls: EXECUTION_LIMITS.maxLlmCalls }
   },
   {
-    id: 'analyst', version: '1.0.0', status: 'LEGACY_ACTIVE', displayName: 'Analista (compatibilidad)', role: 'Generalista de negocio durante la transición multiagente.',
+    id: 'analyst', version: '1.0.0', status: 'LEGACY_ACTIVE', displayName: 'Analista (compatibilidad)', role: 'Síntesis narrativa con evidencia, salud global y compatibilidad histórica.',
     allowedActionSkills: [],
     description: 'Interpreta agregados, rankings y resultados estructurados del forecast existente.',
     responsibilities: ['Agregados y resumen del negocio', 'Rankings', 'Forecast y reposición', 'Interpretación de resultados'],

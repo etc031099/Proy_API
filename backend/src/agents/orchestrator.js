@@ -214,7 +214,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, neutralProv
           ? { intent: 'out_of_domain', agent: 'coordinator', answer: OUT_OF_DOMAIN_ANSWER }
           : !securityPlan && v3Service ? await execution.runAgent('coordinator', async () =>
             ((!composite || require('./compositeRouting').groundedCoversComposite(message))
-              && !require('./specialistRouting').specialistPlan(message, state.v3Context)
+              && !require('./specialistRouting').specialistPlan(message, state.v3Context || {})
               && await require('./grounded').handleGrounded({ message, context, service: v3Service, run, execution }))
             || require('./v3Routing').handleV3({ message, state, context, service: v3Service, run, commit, execution,
               onPublicResult: (skillId, result, args, responseMode) => {

@@ -78,6 +78,7 @@ const handleGrounded = async ({ message, context, service, run, execution }) => 
   if (!binding) return null;
   const plan = buildGroundedPlan(message, binding);
   if (plan.clarificationQuestion) return { answer: plan.clarificationQuestion, clarification: true, intent: 'grounded_clarification', agent: 'coordinator' };
+  const responseAgent = plan.tasks.length === 1 ? plan.tasks[0].agent : 'coordinator';
   const results = [], facts = [], failures = [];
   let incomplete = false;
   for (const task of plan.tasks) {
@@ -114,7 +115,7 @@ const handleGrounded = async ({ message, context, service, run, execution }) => 
     const diagnostic = safeGroundedDiagnostic({ validationReason: error?.message === 'GROUNDED_CONTEXT_TOO_LARGE'
       ? 'CONTEXT_BUDGET_EXCEEDED' : 'CONTEXT_BUILD_FAILED' });
     logGroundedValidation(diagnostic);
-    return { intent: plan.responseIntent, agent: 'analyst',
+    return { intent: plan.responseIntent, agent: responseAgent,
       answer: `No pude preparar un contexto de análisis seguro; se conservan los hechos obtenidos.\n\n${facts.map(fact => fact.split('\n').slice(0, 2).join('\n')).join('\n')}`,
       grounded: { route: plan.route, responseIntent: plan.responseIntent, domains: plan.domains, skills: plan.skills,
         failures, responseDiagnostic: diagnostic } };
@@ -125,7 +126,7 @@ const handleGrounded = async ({ message, context, service, run, execution }) => 
   if (plan.responseIntent === 'sales_evolution' && !salesComparisonAvailable(businessResult)) {
     grounded.interpretationMode = 'DETERMINISTIC_LIMITATION';
     const answer = salesEvolutionLimitation(businessResult, plan);
-    return { intent: plan.responseIntent, agent: 'analyst', grounded,
+    return { intent: plan.responseIntent, agent: responseAgent, grounded,
       answer: [answer, ...renderLimitations(compact.allowedLimitations.map(row => row.code))].join('\n\n') };
   }
   // Keep fallback readable; full structured evidence remains in activity.
@@ -167,7 +168,7 @@ const handleGrounded = async ({ message, context, service, run, execution }) => 
     logGroundedValidation(grounded.responseDiagnostic);
   }
   const synthesisFailed = grounded.responseDiagnostic?.validationResult === 'REJECTED';
-  return { intent: plan.responseIntent, agent: 'analyst', grounded,
+  return { intent: plan.responseIntent, agent: grounded.responseDiagnostic ? 'analyst' : responseAgent, grounded,
     answer: (synthesisFailed ? [...notes, answer || 'No hay datos suficientes.'] : [answer || 'No hay datos suficientes.', ...notes]).join('\n\n') };
 };
 module.exports = { handleGrounded };

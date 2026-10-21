@@ -8,7 +8,9 @@ const labels: Record<string, string> = { name: 'Nombre', sku: 'SKU', price: 'Pre
   resultingStock: 'Stock resultante', minStockLevel: 'Stock mínimo', category: 'Categoría', costPrice: 'Costo', description: 'Descripción',
   total: 'Total', paymentMethod: 'Pago', contact: 'Cliente / Proveedor', supplierCosts: 'Proveedor y precio de compra' };
 const statuses = { PENDING: 'Pendiente', CONFIRMED: 'Confirmada', EXECUTED: 'Ejecutada', CANCELLED: 'Cancelada', EXPIRED: 'Expirada', FAILED: 'Fallida' };
-export function PendingActionCard({ action, conversationId, disabled = false }: { action: PendingActionPreview; conversationId: string; disabled?: boolean }) {
+export function PendingActionCard({ action, conversationId, disabled = false, onActionChange }: {
+  action: PendingActionPreview; conversationId: string; disabled?: boolean; onActionChange?: (action: PendingActionPreview) => void;
+}) {
   const [current, setCurrent] = useState(action);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -32,6 +34,7 @@ export function PendingActionCard({ action, conversationId, disabled = false }: 
       const result = await apiClient.decideAgentAction(current.pendingActionId, conversationId, decision);
       if (!result.data) throw new Error();
       setCurrent(result.data);
+      onActionChange?.(result.data);
     } catch { setError('No se pudo confirmar el estado. Puedes reintentar la misma confirmación sin crear otra acción.'); }
     finally { lock.current = false; setBusy(false); }
   }

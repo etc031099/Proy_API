@@ -22,7 +22,7 @@ const classifyGrounded = message => {
   if (/promocion/.test(text) && /convendr|recom|lanzar/.test(text)) return result('promotion', [B, F, M, I]);
   if (/client/.test(text) && /reten|prioriz|recuper/.test(text)) return result('customer_retention', [C]);
   if (/repon|reposicion/.test(text) && /proveedor/.test(text) && /conviene|deberia|prioriz|recomiend/.test(text))
-    return result('inventory_priorities', [I, F, S]);
+    return result('inventory_priorities', [I, S]);
   if (/stock|inventario/.test(text) && /demanda/.test(text) && /preocup|prioriz|recomiend/.test(text))
     return result('inventory_demand_priorities', [I, F]);
   if (/proveedor/.test(text) && /recom|elegir|conviene|prioriz/.test(text) && !/ventas|forecast|stock/.test(text))
@@ -39,7 +39,7 @@ const classifyGrounded = message => {
   if (/vende bien/.test(text) && /poco stock/.test(text)) return result('sales_stock_opportunity', [B, I]);
   if (/potencial/.test(text) && /quiebre/.test(text)) return result('stockout_opportunity', [B, I, F]);
   if (((/prioriz|recomiend/.test(text) && /inventario|repon|reposicion/.test(text)) || /(?:debo|deberia).*repon.*por que/.test(text))
-    && !/^que deberia reponer$/.test(text)) return result('inventory_priorities', [I, F, S]);
+    && !/^que deberia reponer$/.test(text)) return result('inventory_priorities', [I, F]);
   if (/mejorar.*ventas|estrategia.*ventas|conclusiones.*ventas|(?:interpreta|analiza).*ventas/.test(text)) return result('sales_advice', [B]);
   if (/implica|interpreta|conclusiones/.test(text) && /wape|hgb|ma28|modelo|metrica/.test(text))
     return result('ml_interpretation', [F]);
@@ -74,8 +74,10 @@ const buildGroundedPlan = (message, binding) => {
     if (skillId === S) args = { ...args, mode: 'summary', ...parsed.period, ...(sku ? { productRef: sku } : {}) };
     if (skillId === M) args = { ...args, mode: 'rules' }; // serving enforces the approved frozen artifact
     if (skillId === H) args = { ...args, ...parsed.period };
-    return { skillId, agent: V3_SKILLS[skillId].agents[0], args };
+    return { skillId, agent: require('./specialistRouting').agentForTask(skillId, args), args };
   });
+  if (new Set(tasks.map(task => task.agent)).size > 2) return { ...classification, tasks: [],
+    clarificationQuestion: 'Indica como máximo dos dominios relacionados para este análisis; no consultaré todos los módulos sin priorización.' };
   return deepFreeze({ ...classification, tasks });
 };
 module.exports = { classifyGrounded, buildGroundedPlan };

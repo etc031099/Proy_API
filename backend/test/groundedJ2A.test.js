@@ -17,7 +17,7 @@ const binding = { ...V3, operationalDate: '2026-10-15' };
 const req = { businessId: V3.businessId, user: { _id: '507f1f77bcf86cd799439011', businessId: V3.businessId, role: 'user', isActive: true } };
 const cases = [
   ['Analiza ventas, inventario y forecast y dime qué debería priorizar.', [B, I, F]],
-  ['¿Qué productos recomiendas reponer esta semana y por qué?', [I, F, S]],
+  ['¿Qué productos recomiendas reponer esta semana y por qué?', [I, F]],
   ['¿Qué productos tienen buen potencial pero riesgo de quiebre?', [B, I, F]],
   ['¿Qué estrategia recomendarías según mis ventas y margen?', [B]],
   ['Resume el estado del negocio como si se lo explicaras al dueño.', [H]],
@@ -95,6 +95,11 @@ for (const [message, skills] of cases) test(`J2A grounded plan -> skills -> comp
   const plan = buildGroundedPlan(message, binding);
   assert.equal(plan.route, 'GROUNDED_LLM'); assert.deepEqual(plan.skills, skills);
   const f = fixture(), result = await f.run(message);
+  if (plan.clarificationQuestion) {
+    assert.equal(plan.tasks.length, 0); assert.equal(result.requiresClarification, true);
+    assert.equal(f.calls.length, 0); assert.equal(result.usage.totalSkillCalls, 0); zero(result);
+    assert.equal(result.answer, plan.clarificationQuestion); return;
+  }
   assert.equal(result.code, null); assert.deepEqual(f.calls.map(row => row.skillId), skills); zero(result);
   assert.equal(result.grounded.route, 'GROUNDED_LLM');
   const compact = buildGroundedContext({ question: message, plan, binding, results: f.calls });
@@ -125,7 +130,7 @@ test('J2F business forecast language stays inside the business domain', () => {
 
 test('J2A inventory prioritization is not sales-only; retention uses explicit AT_RISK, never spend as churn', async () => {
   const f = fixture(), result = await f.run('¿Qué debería priorizar en inventario?');
-  assert.deepEqual(result.grounded.skills, [I, F, S]); assert.ok(f.calls.every(row => row.skillId !== B));
+  assert.deepEqual(result.grounded.skills, [I, F]); assert.ok(f.calls.every(row => row.skillId !== B && row.skillId !== S));
   const c = fixture(), retained = await c.run('¿Qué clientes debería intentar retener?');
   assert.equal(c.calls[0].args.segment, 'AT_RISK'); assert.equal(c.calls[0].args.metric, 'recency');
   assert.match(retained.answer, /señales distintas/); assert.match(retained.answer, /no hay una probabilidad/);
@@ -163,15 +168,11 @@ test('J2A context privacy, exact null/minimum/risk/RFM fields, unrelated domains
   assert.ok(contextMetrics(huge).bytes <= MAX_CONTEXT_BYTES);
 });
 
-test('J2A projected evidence remains parseable, scoped to cutoff/revision and marks new products exploratory', async () => {
-  const f = fixture(); await f.run(cases[12][0]);
+test('A6 broad new-product analysis requests prioritization instead of querying three unrelated domains', async () => {
+  const f = fixture(); const result = await f.run(cases[12][0]);
   const plan = buildGroundedPlan(cases[12][0], binding);
-  const compact = buildGroundedContext({ question: cases[12][0], plan, binding, results: f.calls });
-  assert.equal(compact.noHistoricalSkuData, true);
-  const basket = compact.evidence.find(row => row.skillId === M);
-  assert.equal(basket.scope.mode, 'FROZEN'); assert.equal(basket.scope.frozenCutoff, '2026-10-12');
-  assert.equal(compact.evidence.find(row => row.skillId === I).scope.dataVersion, '4');
-  assert.equal(JSON.parse(JSON.stringify(compact)).contractVersion, 'grounded-v3-context-v2');
+  assert.equal(plan.noHistoricalSkuData, true); assert.equal(plan.tasks.length, 0);
+  assert.equal(result.requiresClarification, true); assert.equal(f.calls.length, 0); zero(result);
 });
 
 test('J2A oversize evidence is explicitly omitted as a whole object and null margins stay null', () => {
@@ -235,8 +236,8 @@ for (const failure of ['401', '429', 'timeout', '5xx', 'malformed']) test(`J2A f
 test('J2A missing later domain retains previous verified facts and never invokes synthesis', async () => {
   let calls = 0;
   const f = fixture({ failSkill: I, neutralProvider: mockedProvider(() => { calls++; assert.fail('incomplete context'); }) });
-  const result = await f.run(cases[0][0]); zero(result);
-  assert.equal(calls, 0); assert.match(result.answer, /Ventas/); assert.match(result.answer, /datos suficientes/);
+  const result = await f.run('¿Qué producto vende bien pero tiene poco stock?'); zero(result);
+  assert.equal(calls, 0); assert.match(result.answer, /Pan francés.*100 unidades/); assert.match(result.answer, /datos suficientes/);
 });
 
 test('J2A cost config is versioned, respects effective date, unknowns and disjoint cached input', () => {

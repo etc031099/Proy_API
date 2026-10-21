@@ -14,22 +14,23 @@ import { assistantDisplayText, isTechnicalAgentQuestion } from '@/lib/assistantP
 import { useAuth } from '@/contexts/AuthContext';
 import { activeConversationKey, readActiveConversation, writeActiveConversation } from '@/lib/agentHistory';
 import { apiClient, AgentApiError, agentErrorMessage } from '@/lib/api';
-import type { AgentMessageRequest, AgentResponse, AgentConversationList, HistoryPagination } from '@/types/agent';
+import type { AgentMessageRequest, AgentResponse, AgentConversationList, HistoryPagination, PendingActionPreview } from '@/types/agent';
 
 const suggestions = ['Muéstrame los productos con stock bajo', '¿Cuánto vendimos este mes?',
   '¿Cuáles son los productos más vendidos?', '¿Qué productos debería reponer?',
   'Resume cómo está mi negocio y qué debería vigilar'];
 interface Message { id: number | string; role: 'user' | 'assistant'; text: string; response?: AgentResponse; status?: string }
 
-function MessageBody({ message: m, question, disabled, busy, onSelect, onActivity }: {
+function MessageBody({ message: m, question, disabled, busy, onSelect, onActivity, onActionChange }: {
   message: Message; question: string; disabled: boolean; busy: boolean;
   onSelect: (message: string) => void; onActivity: (response: AgentResponse) => void;
+  onActionChange: (action: PendingActionPreview) => void;
 }) {
   return <>
     <p className="whitespace-pre-wrap break-words text-sm">{assistantDisplayText(m.text, m.response, question)}</p>
     {m.response?.v3Views?.length ? <V3ResponseCards views={m.response.v3Views} response={m.response} technical={isTechnicalAgentQuestion(question, m.response)} disabled={disabled} onSelect={onSelect} />
       : m.response && <ActionSuggestions response={m.response} disabled={disabled} onSelect={onSelect} />}
-    {m.response?.pendingAction && <PendingActionCard action={m.response.pendingAction} conversationId={m.response.conversationId} disabled={busy} />}
+    {m.response?.pendingAction && <PendingActionCard action={m.response.pendingAction} conversationId={m.response.conversationId} disabled={busy} onActionChange={onActionChange} />}
     {m.status === 'failed' && <p className="text-xs text-muted-foreground">Consulta no completada.</p>}
     {m.status === 'pending' && <p className="text-xs text-muted-foreground">No hay un resultado confirmado para esta consulta.</p>}
     {m.response && <button className="mt-3 text-xs underline underline-offset-4" onClick={() => onActivity(m.response!)}>
@@ -181,7 +182,13 @@ export default function AssistantPage() {
             <AssistantResponseBoundary key={`${conversationId || 'new'}-${m.id}`}>
               <MessageBody message={m} question={[...messages.slice(0, index)].reverse().find(previous => previous.role === 'user')?.text || ''}
                 disabled={loading || historyBusy || m !== messages[messages.length - 1]}
-                busy={loading || historyBusy} onSelect={message => void send(message)} onActivity={setActivity} />
+                busy={loading || historyBusy} onSelect={message => void send(message)} onActivity={setActivity}
+                onActionChange={action => {
+                  setMessages(current => current.map(message => message.id === m.id && message.response?.pendingAction?.pendingActionId === action.pendingActionId
+                    ? { ...message, response: { ...message.response, pendingAction: action } } : message));
+                  setActivity(current => current?.pendingAction?.pendingActionId === action.pendingActionId
+                    ? { ...current, pendingAction: action } : current);
+                }} />
             </AssistantResponseBoundary>
           </article>)}
           {loading && <p role="status" className="text-sm">Consultando el asistente… El servicio puede tardar unos segundos en activarse.</p>}

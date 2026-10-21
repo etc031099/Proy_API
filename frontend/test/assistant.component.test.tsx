@@ -28,6 +28,35 @@ const response: AgentResponse = {
 beforeEach(() => { send.mockReset(); localStorage.clear(); vi.mocked(apiClient.listAgentConversations).mockResolvedValue({ success: true,
   data: { items: [], pagination: { page: 1, limit: 10, total: 0, totalPages: 1 } } }); });
 function submit(text = 'stock bajo') { fireEvent.change(screen.getByLabelText('Tu consulta'), { target: { value: text } }); fireEvent.click(screen.getByRole('button', { name: 'Enviar' })); }
+it.each(['create_sale', 'create_purchase'] as const)('A6 %s confirmation refreshes activity without counting a write as a skill', async action => {
+  const pending: NonNullable<AgentResponse['pendingAction']> = { pendingActionId: '33333333-3333-4333-8333-333333333333',
+    action, summary: 'Revisar operación', fields: { currency: 'PEN', total: 15.06 }, requiresConfirmation: true,
+    expiresAt: '2099-01-01T00:00:00Z', status: 'PENDING' };
+  send.mockResolvedValue({ success: true, data: { ...response, pendingAction: pending, actions: [], evidence: [],
+    participants: [{ ...response.participants[0], skillCalls: 0 }], usage: { ...response.usage, totalSkillCalls: 0 } } });
+  vi.mocked(apiClient.decideAgentAction).mockResolvedValue({ success: true, data: { ...pending, status: 'EXECUTED',
+    result: { id: 'operation-id', type: action === 'create_sale' ? 'sale' : 'purchase', total: 15.06, currency: 'PEN' } } });
+  render(<AssistantPage />); submit(action === 'create_sale' ? 'vende 1 producto' : 'compra 1 producto');
+  fireEvent.click(await screen.findByRole('button', { name: 'Confirmar' }));
+  await screen.findByText(`${action} · Ejecutada`);
+  const activity = within(screen.getByLabelText('Actividad multiagente'));
+  expect(activity.getByText(/Operations · Registrar/)).toBeTruthy();
+  expect(activity.getByText('No se ejecutaron skills de consulta para esta acción.')).toBeTruthy();
+  expect(activity.queryByText('Sin skills ejecutadas.')).toBeNull();
+  expect(activity.getByText('Respuesta determinística · 0 tokens IA')).toBeTruthy();
+  expect(activity.getByText('Skills ejecutadas').nextElementSibling?.textContent).toBe('0');
+  expect(activity.getByText('Llamadas IA').nextElementSibling?.textContent).toBe('0');
+  expect(apiClient.decideAgentAction).toHaveBeenCalledTimes(1);
+});
+
+it('A6 pending or cancelled previews never claim a confirmed action', () => {
+  const pending: NonNullable<AgentResponse['pendingAction']> = { pendingActionId: '33333333-3333-4333-8333-333333333333',
+    action: 'create_sale', summary: 'Venta pendiente', fields: {}, requiresConfirmation: true, expiresAt: '2099-01-01T00:00:00Z', status: 'PENDING' };
+  const view = render(<AgentActivity response={{ ...response, pendingAction: pending }} />);
+  expect(screen.queryByRole('region', { name: 'Acciones confirmadas' })).toBeNull();
+  view.rerender(<AgentActivity response={{ ...response, pendingAction: { ...pending, status: 'CANCELLED' } }} />);
+  expect(screen.queryByRole('region', { name: 'Acciones confirmadas' })).toBeNull();
+});
 it.each([
   'No hay una señal de anomalía evaluable para el agregado diario con la evidencia disponible. No se puede concluir si hubo o no anomalías.',
   'Hoy no hay ventas registradas para evaluar anomalías. Isolation Forest necesita actividad de ventas en el agregado diario para poder realizar la evaluación.'

@@ -25,6 +25,7 @@ require('./v3BusinessIntelligenceDashboard.test');
 require('./demandForecastService.test');
 require('./transactionsRoutes.test');
 require('./agents.test');
+require('./architectureClosure.test');
 require('./agentSkills.test');
 require('./forecastAnalytics.test');
 require('./forecastTemporalHardening.test');
