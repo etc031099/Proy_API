@@ -56,6 +56,20 @@ test('clarification is normal success preserving conversationId', async t => {
   const { data } = await res.json(); assert.equal(data.conversationId, conversationId); assert.equal(data.requiresClarification, true);
 });
 
+test('A4.4 messages envelope preserves the public requested forecast intent after product selection', async t => {
+  const answer = 'El pronóstico de Coca-Cola Sabor Original 500 ml utiliza Ridge LIVE con el modelo ACTIVE v1 y featureVersion RIDGE_CAUSAL27_V1. El horizonte consultado es de 14 días.';
+  const post = await setup(t, { orchestrator: { async handle() {
+    return { ...response, answer, requestedIntent: 'model_status', actions: [{ skillId: 'get_product_forecast' }],
+      v3Views: [{ kind: 'forecast', title: 'Pronóstico', metrics: [], items: [] }], systemPrompt: 'must not leak' };
+  } } });
+  const res = await post({ message: 'BEB-GAS-001', conversationId });
+  assert.equal(res.status, 200);
+  const { data } = await res.json();
+  assert.equal(data.requestedIntent, 'model_status');
+  assert.equal(data.answer, answer);
+  assert.equal(data.systemPrompt, undefined);
+});
+
 test('HTTP transports safe candidate choices and accepts single digit selection', async t => {
   const { publicResponse } = require('../src/services/agentHistoryProjection');
   const suggestions = [{ label: '1. Foods A — FOOD-A', message: 'Opción 1', internalId: 'private' }];

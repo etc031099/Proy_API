@@ -474,7 +474,13 @@ it('A4.3 selecting a product preserves the technical answer and card detail from
       ] }] }] } });
   render(<AssistantPage />); submit(question);
   fireEvent.click(await screen.findByRole('button', { name: 'Coca-Cola Sabor Original 500 ml' }));
-  await screen.findByText(answer);
+  const directAnswer = await screen.findByText(answer);
+  expect(directAnswer.textContent).toContain('Ridge LIVE');
+  expect(directAnswer.textContent).toContain('ACTIVE v1');
+  expect(directAnswer.textContent).toContain('RIDGE_CAUSAL27_V1');
+  expect(directAnswer.textContent).toContain('14 días');
+  const forecastCard = screen.getByRole('region', { name: 'Pronóstico 14 días' });
+  expect(directAnswer.compareDocumentPosition(forecastCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(screen.getByText('Feature version: RIDGE_CAUSAL27_V1')).toBeTruthy();
   expect(screen.getByText('Revisión: 173')).toBeTruthy();
   expect(send).toHaveBeenCalledTimes(2);

@@ -87,7 +87,7 @@ const createAgentMessagesHandler = ({ enabled, orchestrator, history } = {}) => 
     const result = history ? await history.send(req, input, key) : await runtime.handle(req, input);
     if (result.code && !['AGENT_CLARIFICATION_REQUIRED', 'AGENT_UNSUPPORTED_QUERY'].includes(result.code)) return fail(result.code);
     // Explicit public envelope: never serialize provider responses or internal prompts.
-    const fields = ['requestId', 'conversationId', 'answer', 'intent', 'agent', 'synthesisStatus', 'synthesisDiagnostic', 'participants', 'actions', 'evidence',
+    const fields = ['requestId', 'conversationId', 'answer', 'intent', 'requestedIntent', 'agent', 'synthesisStatus', 'synthesisDiagnostic', 'participants', 'actions', 'evidence',
       'usage', 'requiresClarification', 'clarificationQuestion', 'latencyMs', 'pendingAction', 'suggestions', 'suggestionsEntityType', 'suggestionsExpiresAt',
       'suggestionsPagination', 'contextProvenance', 'v3Views'];
     const data = Object.fromEntries(fields.filter(key => result[key] !== undefined).map(key => [key, result[key]]));

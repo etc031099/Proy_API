@@ -139,6 +139,19 @@ test('P0 persistence/detail preserves composite conclusions, participants and nu
   assert.equal(f.messages.length, 2);
 });
 
+test('A4.4 history detail preserves technical forecast intent and its direct answer after a SKU-only follow-up', async () => {
+  const f = fixture();
+  const answer = 'El pronóstico de Coca-Cola Sabor Original 500 ml utiliza Ridge LIVE con el modelo ACTIVE v1 y featureVersion RIDGE_CAUSAL27_V1. El horizonte consultado es de 14 días.';
+  f.runtime.handle = async auth => ({ ...response(auth.agentConversationId), answer, requestedIntent: 'model_status', agent: 'forecast',
+    actions: [{ skillId: 'get_product_forecast', agentId: 'forecast', status: 'SUCCEEDED', durationMs: 1 }],
+    v3Views: [{ kind: 'forecast', title: 'Pronóstico', metrics: [], items: [] }] });
+  const sent = await f.service.send(req(), { message: 'BEB-GAS-001' });
+  const detail = await f.service.get(req(), sent.conversationId, 1, 10);
+  const restored = detail.messages.find(row => row.role === 'assistant').response;
+  assert.equal(restored.requestedIntent, 'model_status');
+  assert.equal(restored.answer, answer);
+});
+
 test('list/detail pagination is scoped, chronological and never invokes the orchestrator', async () => {
   const f = fixture();
   for (let i = 0; i < 12; i++) await f.service.send(req(), { message: `Consulta ${i}` });
