@@ -93,7 +93,7 @@ describe('forecast ML evidence and operative method', () => {
     const forecast = vi.spyOn(apiClient, 'getBusinessIntelligenceForecast');
     render(<BusinessIntelligenceDashboard />);
     fireEvent.click(await screen.findByRole('tab', { name: 'Predicción' }));
-    expect(screen.getByRole('heading', { name: 'Pronóstico operativo' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Pronóstico Ridge LIVE' })).toBeTruthy();
     expect(await screen.findByText('Baseline estadístico de referencia')).toBeTruthy();
     expect(forecast).not.toHaveBeenCalled();
     expect(screen.getAllByRole('tab')).toHaveLength(8);
@@ -123,7 +123,7 @@ describe('forecast ML evidence and operative method', () => {
     const historyError = await screen.findByRole('alert');
     expect(historyError.textContent).toMatch(/pronósticos siguen disponibles/);
     expect(await screen.findByText('Ensamblado Health')).toBeTruthy();
-    expect(screen.getByText('Pronósticos operativos Ridge para horizontes acumulados de 7 y 14 días.')).toBeTruthy();
+    expect(screen.getByText(/En LIVE, Ridge se utiliza para 7 y 14 días cuando el registry proporciona un artefacto ACTIVE aprobado\. MA28 se conserva como baseline estadístico; 1 día no tiene fallback\./)).toBeTruthy();
     const historical = screen.getByText('Evidencia histórica y comparación de modelos').closest('details');
     expect(historical?.open).toBe(false);
     expect(screen.getByText(/No corresponde al modelo LIVE utilizado actualmente/)).toBeTruthy();

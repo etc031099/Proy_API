@@ -196,7 +196,7 @@ describe('forecast serving diagnostics panel', () => {
     await screen.findByText('Ridge · 7 días');
     await revealModelDetails();
     await screen.findByText(/ACTIVE_POINTER_MISSING/);
-    expect(screen.getByText('Resumen del ML')).toBeTruthy();
+    expect(screen.getByText('Estado del Machine Learning')).toBeTruthy();
     expect(onForecastModelsChange).toHaveBeenCalledWith(forecast.models);
     expect(vi.mocked(apiClient.getForecastModelDiagnostics)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(apiClient.getHealthDiagnostics)).toHaveBeenCalledTimes(1);
