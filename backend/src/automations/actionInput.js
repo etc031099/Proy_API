@@ -31,11 +31,14 @@ const extractionSchema = schema({
   paymentMethod: { ...string(20), enum: ['cash', 'credit', 'card', 'bank_transfer', 'wallet', 'other'] },
   product: schema(require('./skills').getActionSkill('create_product').inputSchema.properties, [])
 }, ['action']);
+// One command grammar for admission and extraction. A sales noun or future
+// infinitive alone is never a write; the command must lead the utterance.
+const saleCommand = /^(?:(?:quiero|quisiera)\s+)?(?:vende|vender|(?:registra(?:r)?|crea(?:r)?|anota(?:r)?)(?:\s+(?:una|la))?\s+venta)\b/i;
 const actionIntent = message => {
   const value = normalize(message.trim());
   if (/^(?:(?:crea(?:r)?|configura|registra|quiero)(?: una)? alerta\b|avisame\b)/.test(value)) return 'create_stock_alert_rule';
   if (/^(?:crea(?:r)?|agrega|anade|registra)(?: un)? producto\b/.test(value) || /^(?:agrega|anade)\s+/.test(value)) return 'create_product';
-  if (/^(?:(?:quiero|quisiera) )?(?:vende|vender|registra(?:r)?(?: una)? venta)\b/.test(value)) return 'create_sale';
+  if (saleCommand.test(value)) return 'create_sale';
   if (/^(?:(?:quiero|quisiera) )?(?:compre|comprar|compra|compr|pedir|prepara(?:r)?(?: una)? compra|registra(?:r)?(?: una)? compra)\b/.test(value)) return 'create_purchase';
   return null;
 };
@@ -44,6 +47,10 @@ const money = text => /(?:USD|d[oó]lares|\$)/i.test(text) ? 'USD' : /(?:EUR|eur
 function parseAction(message, action) {
   message = require('../agents/supplierReference').supplierLanguage(message);
   if (action === 'create_stock_alert_rule') return parseStockRule(message);
+  // Feed every admitted sale spelling through the same existing quantity and
+  // product parser (including direct JSON validation), not a second pipeline.
+  if (action === 'create_sale' && saleCommand.test(message.trim()))
+    message = message.trim().replace(saleCommand, 'vende');
   message = message.replace(/\b(uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|veinte|treinta|cincuenta|cien)\b(?=\s+(?:unidades?\b|de\b))/gi,
     word => String(quantityWords[word.toLowerCase()]));
   const tail = message.trim().slice(commandLength(message));

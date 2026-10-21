@@ -70,6 +70,36 @@ class ProvisionalAnomalyTests(unittest.TestCase):
         self.assertEqual(before["modelIdentity"], after["modelIdentity"])
         self.assertEqual(after["inference"]["prediction"], -1 if after["inference"]["anomalyScore"] < -.5 else 1)
 
+    def test_oct21_provisional_open_day_only_uses_that_days_completed_sales(self):
+        # Read-only fixture reproduction, not a claim about production tickets.
+        adapter = _adapter(); adapter.root = ROOT
+
+        def context(sale_date):
+            live = self.live(sale_date=sale_date)
+            live.as_of_date = date(2026, 10, 21)
+            live.snapshot.metadata.operationalDate = date(2026, 10, 21)
+            live.snapshot.metadata.capturedAtUtc = datetime(2026, 10, 21, 15, tzinfo=timezone.utc)
+            live.snapshot.metadata.observationsClosedThrough = date(2026, 10, 20)
+            return live
+
+        with patch("ml.src.sales_isolation_forest_v3.IsolationForest.fit", side_effect=AssertionError("fit forbidden")), \
+             patch("ml.src.sales_isolation_forest_v3.WeeklyLogResiduals.fit", side_effect=AssertionError("fit forbidden")), \
+             patch("ml.src.sales_isolation_forest_v3.train", side_effect=AssertionError("train forbidden")):
+            empty, _ = adapter.provisional_anomaly(context(date(2026, 10, 20)))
+            self.assertEqual(empty["localDate"], "2026-10-21")
+            self.assertEqual(empty["status"], "NOT_EVALUABLE")
+            self.assertEqual(empty["reason"], "NO_TICKETS")
+            self.assertEqual(empty["aggregate"], {"revenuePEN": 0, "units": 0, "tickets": 0, "averageTicketPEN": None})
+            self.assertIsNone(empty["modelInput"]); self.assertIsNone(empty["inference"])
+            current, _ = adapter.provisional_anomaly(context(date(2026, 10, 21)))
+            self.assertEqual(current["status"], "EVALUATED")
+            self.assertIsNone(current["reason"])
+            self.assertEqual(current["aggregate"]["tickets"], 1)
+            self.assertEqual(current["aggregate"]["units"], 2)
+            self.assertEqual(current["modelInput"]["weekday"], 3)
+            self.assertTrue(all(np.isfinite(current["modelInput"][name]) for name in FEATURES))
+            self.assertEqual(current["modelIdentity"], empty["modelIdentity"])
+
     def live(self, **kw):
         live = _live_context(business_id=BUSINESS_ID, **kw)
         live.snapshot.metadata.scenarioId = SCENARIO_ID

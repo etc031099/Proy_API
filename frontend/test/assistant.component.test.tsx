@@ -29,6 +29,25 @@ beforeEach(() => { send.mockReset(); localStorage.clear(); vi.mocked(apiClient.l
   data: { items: [], pagination: { page: 1, limit: 10, total: 0, totalPages: 1 } } }); });
 function submit(text = 'stock bajo') { fireEvent.change(screen.getByLabelText('Tu consulta'), { target: { value: text } }); fireEvent.click(screen.getByRole('button', { name: 'Enviar' })); }
 it.each([
+  'No hay una señal de anomalía evaluable para el agregado diario con la evidencia disponible. No se puede concluir si hubo o no anomalías.',
+  'Hoy no hay ventas registradas para evaluar anomalías. Isolation Forest necesita actividad de ventas en el agregado diario para poder realizar la evaluación.'
+])('shows human non-evaluable anomaly conclusion before the technical card: %s', async answer => {
+  const noTickets = answer.startsWith('Hoy no hay ventas');
+  send.mockResolvedValue({ success: true, data: { ...response, agent: 'sales', answer,
+    actions: [{ ...response.actions[0], skillId: 'get_business_analytics', agentId: 'sales' }],
+    v3Views: [{ kind: 'business', title: 'Señal provisional de ventas', metrics: [
+      { label: 'Estado', value: 'No evaluable' }, { label: 'Score de atipicidad (no probabilidad)', value: 'No disponible' },
+      ...(noTickets ? [{ label: 'Motivo', value: 'No hay tickets registrados hoy' }] : [])
+    ], items: [], note: 'Artefacto histórico congelado; no confirma fraude ni clasifica transacciones individuales.' }] } });
+  render(<AssistantPage />); submit('se detectaron transacciones anomalas?');
+  const conclusion = await screen.findByText(answer);
+  const card = screen.getByRole('heading', { name: 'Señal provisional de ventas' });
+  expect(conclusion.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+  expect(screen.getByText('No evaluable')).not.toBeNull();
+  expect(screen.queryByText('NOT_EVALUABLE')).toBeNull();
+  if (noTickets) expect(screen.getByText('No hay tickets registrados hoy')).not.toBeNull();
+});
+it.each([
   'La parte externa está fuera del ámbito del sistema. Respondo la parte del negocio. Ventas: S/ 500.00.',
   'La consulta compuesta contiene partes que no puedo relacionar con seguridad. Indícalas por separado.',
   'Inventario disponible. Proveedores: servicio no disponible. Se conservan los hechos obtenidos.'

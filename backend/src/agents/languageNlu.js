@@ -86,7 +86,8 @@ function highPrecisionMessage(message, { allowImplicitReference = false } = {}) 
     .replace(/^(?:crees?|considera)\s+que\s+/, '')
     .replace(/^(?:masomenos|mas o menos)\s+/, '');
   const quantityForecast = read.match(/^(?:cuanto|(?:en )?que cantidad)\s+(?:(?:crees?|considera)\s+que\s+)?(?:(?:se\s+)?(?:vendera|venderia|venda|vendamos|venderemos|vendere|salga|saldra)|se espera vender)\s+(?:de\s+)?(.+)$/)
-    || read.match(/^cuanto\s+(.+?)\s+voy a vender(\s+.*)?$/);
+    || read.match(/^cuanto\s+(.+?)\s+voy a vender(\s+.*)?$/)
+    || read.match(/^se espera vender\s+(.+)$/);
   const subjectForecast = read.match(/^(.+?)\s+(?:cuanto|en que cantidad)\s+(?:(?:crees?|considera)\s+que\s+)?(?:se\s+)?(?:vendera|venderia|venda|salga|saldra)(\s+.*)?$/);
   const forecastReference = quantityForecast ? `${quantityForecast[1]}${quantityForecast[2] || ''}`
     : subjectForecast ? `${subjectForecast[1]}${subjectForecast[2] || ''}` : null;

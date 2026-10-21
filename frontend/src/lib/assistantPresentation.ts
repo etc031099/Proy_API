@@ -20,6 +20,12 @@ const directInventory = (text: string) => {
 // The specialist conclusion is user facing; the V3 scenario dump is repeated in cards/activity.
 export const assistantDisplayText = (text: string, response?: AgentResponse, question = '') => {
   const skills = response?.actions?.map(action => action.skillId) || [];
+  // Keep the server's provisional conclusion above its compact technical card.
+  // Presentation only: never infer anomaly state from a missing score.
+  if (skills.includes('get_business_analytics') && response?.v3Views?.some(view => view.kind === 'business')) {
+    const anomalyConclusion = text.match(/^(?:Hoy no hay ventas registradas para evaluar anomalías|No hay una señal de anomalía evaluable|(?:No se observó|Se observó) una señal de anomalía)[^\n]*/i)?.[0];
+    if (anomalyConclusion) return anomalyConclusion;
+  }
   const hasInventory = skills.includes('get_inventory_intelligence') || response?.v3Views?.some(view => view?.kind === 'inventory');
   const hasForecast = skills.includes('get_product_forecast') || response?.v3Views?.some(view => view?.kind === 'forecast');
   if (response?.v3Views?.length && (hasInventory || hasForecast)) {

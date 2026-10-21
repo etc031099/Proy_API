@@ -6,7 +6,8 @@ const { resolveOperationalPeriod } = require('./intentRouting');
 // existing authenticated services. Explicit writes stay with Operations.
 const commercialPlan = (message, memory, binding) => {
   const text = normalize(message).replace(/\bq\b/g, 'que');
-  if (/^(?:registra|registrar|vende|vender|crea|crear|compra|comprar|actualiza|elimina|borra)\b/.test(text)
+  if (require('../automations/actionInput').actionIntent(message)
+    || /^(?:actualiza|elimina|borra)\b/.test(text)
     || /\s+y\s+/.test(text)) return null;
   const make = (skillId, args) => ({ tasks: [{ skillId,
     agent: skillId === 'get_business_analytics' ? 'sales' : 'customers', args: { limit: 5, ...args } }] });

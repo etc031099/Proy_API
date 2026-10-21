@@ -4,7 +4,8 @@
 const normalizeProductReference = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
   .toLowerCase().replace(/^[\s"'«»“”¿?¡!]+|[\s"'«»“”¿?¡!.,;:]+$/g, '').trim().replace(/\s+/g, ' ')
   .replace(/^(?:(?:de|del|el|la|los|las|un|una)\s+)+/, '')
-  .replace(/\bpanes\b/g, 'pan').replace(/\bfranceses\b/g, 'frances');
+  .replace(/\bpanes\b/g, 'pan').replace(/\bfranceses\b/g, 'frances')
+  .replace(/\bcoca[ -]*colas?\b/g, 'coca cola');
 const isContextualProductReference = value => /^(?:(?:ese|esa|este|esta)(?: mism[oa])?|eso|lo|la|el anterior|la anterior|el mismo|la misma|su)(?: (?:mism[oa] )?(?:producto|articulo|item|pronostico|forecast|estimacion|prediccion))?$/.test(
   String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[¿?¡!.]/g, '').trim());
 const extractProductReference = message => {

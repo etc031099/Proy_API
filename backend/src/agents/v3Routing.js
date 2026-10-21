@@ -227,6 +227,10 @@ const routeV3 = (message, state, binding) => {
   message = require('./languageNlu').highPrecisionMessage(message);
   const { isOutOfDomain, OUT_OF_DOMAIN_ANSWER } = require('./domainGate');
   if (isOutOfDomain(message)) return { clarificationQuestion: OUT_OF_DOMAIN_ANSWER };
+  // The authenticated action wrapper owns resolver -> preview -> confirmation.
+  // Even a direct READ-runtime call must never reinterpret an admitted write.
+  if (require('../automations/actionInput').actionIntent(message)) return { specialist: 'operations',
+    clarificationQuestion: 'Las operaciones requieren resolver el producto y revisar un preview antes de confirmar. No se ejecutó ninguna operación.' };
   const text = clean(message), memory = state || {};
   if (/\b(?:que|cuanto) comprara\b/.test(text))
     return { clarificationQuestion: 'No hay un modelo que prediga las compras futuras de una persona. Puedo consultar su historial observado o el pronóstico operativo por producto.' };
@@ -684,8 +688,11 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
     else note = `K-Means no supervisado sobre Recency, Frequency y Monetary; muestra pequeña (n=${d.sampleCount ?? '—'}), exploratoria y entrenada al ${d.trainingCutoff || result.metadata.asOf}.${d.assignmentAsOfDate ? ` La asignación individual usa RFM disponible al ${d.assignmentAsOfDate}.` : ''} No se incluyen probabilidades.`;
   } else if (skillId === 'get_business_analytics' && args.mode === 'provisional') {
     kind = 'business'; title = 'Señal provisional de ventas'; subtitle = `Isolation Forest · ${d.localDate || result.metadata.asOf}`;
-    metrics.push({ label: 'Estado', value: d.status || 'no disponible' },
-      { label: 'Score de atipicidad (no probabilidad)', value: displayNumber(d.inference?.anomalyScore) });
+    metrics.push({ label: 'Estado', value: d.status === 'NOT_EVALUABLE' ? 'No evaluable'
+      : d.status === 'EVALUATED' ? 'Evaluado' : 'No disponible' },
+      { label: 'Score de atipicidad (no probabilidad)', value: Number.isFinite(d.inference?.anomalyScore) ? displayNumber(d.inference.anomalyScore) : 'No disponible' });
+    if (d.status === 'NOT_EVALUABLE' && d.reason === 'NO_TICKETS')
+      metrics.push({ label: 'Motivo', value: 'No hay tickets registrados hoy' });
     note = 'Evaluación del agregado diario con artefacto histórico congelado; no identifica fraude ni una transacción individual.';
   } else if (skillId === 'get_business_analytics' && args.mode === 'anomalies') {
     kind = 'business'; title = 'Días de ventas atípicos'; subtitle = `Isolation Forest · histórico congelado al ${d.analysisCutoff || result.metadata.asOf}`;
@@ -905,9 +912,14 @@ const renderV3 = (skillId, result, args, responseMode = null) => {
     return `${heading}\n${lines.join('\n')}`;
   }
   if (skillId === 'get_business_analytics' && args.mode === 'provisional') {
-    return `Señal provisional de Isolation Forest: ${d.status === 'EVALUATED' ? d.inference?.prediction === -1
-      ? 'se detectó una señal de anomalía en el agregado diario.' : 'el agregado diario no fue marcado como atípico.'
-      : 'no evaluable con la evidencia actual.'} Artefacto histórico congelado, sin reentrenamiento. No es una confirmación ni una probabilidad de fraude; no clasifica transacciones individuales.`;
+    const conclusion = d.status === 'NOT_EVALUABLE' && d.reason === 'NO_TICKETS'
+      ? 'Hoy no hay ventas registradas para evaluar anomalías. Isolation Forest necesita actividad de ventas en el agregado diario para poder realizar la evaluación.'
+      : d.status === 'EVALUATED' && d.inference?.prediction === -1
+      ? 'Se observó una señal de anomalía en el agregado diario según el artefacto histórico disponible.'
+      : d.status === 'EVALUATED' && d.inference?.prediction === 1
+        ? 'No se observó una señal de anomalía en el agregado diario según el artefacto histórico disponible.'
+        : 'No hay una señal de anomalía evaluable para el agregado diario con la evidencia disponible. No se puede concluir si hubo o no anomalías.';
+    return `${conclusion} Isolation Forest usa un artefacto histórico congelado, sin reentrenamiento. No es una confirmación ni una probabilidad de fraude; no clasifica transacciones individuales.`;
   }
   if (skillId === 'get_business_analytics' && args.mode === 'anomalies') {
     const lines = [`Isolation Forest no supervisado · ${d.analysisDays ?? '—'} días evaluados · ${d.anomalyCount ?? '—'} señales atípicas (${percent(d.anomalyRate)}) · estabilidad Jaccard ${num(d.stability?.jaccardMean)}.`];
