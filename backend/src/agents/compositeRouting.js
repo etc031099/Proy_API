@@ -2,7 +2,7 @@
 const { normalize, isOutOfDomain } = require('./domainGate');
 // Split only independent request starts. Product conjunctions (pan y leche),
 // comparisons, and "y por qué" remain owned by their existing domain router.
-const splitRequests = message => String(message).split(/(?:\s+y\s+|[?.!]\s+adem[aá]s,?\s*)(?=[¿]?(?:(?:luego|despues|después|ademas|además)\s+)?(?:en\s+(?:q|qu[eé])\s+cantidad\b|q\b|que\b|qué\b|cual(?:es)?\b|quien(?:es)?\b|cu[aá]nt[oa]s?\b|stock\b|inventario\b|ventas\b|clientes\b|proveedores\b|productos\b|salud\b|margen\b|pron[oó]stico\b|forecast\b|dime\b|dame\b|cu[eé]ntame\b|recomi[eé]ndame\b|explicame\b|precio\b|capital\b|de esos\b|predice\b))/i)
+const splitRequests = message => String(message).split(/(?:\s+y\s+|[?.!]\s+adem[aá]s,?\s*)(?=[¿]?(?:(?:luego|despues|después|ademas|además)\s+)?(?:en\s+(?:q|qu[eé])\s+cantidad\b|q\b|qu[eé](?=\s|$)|cual(?:es)?\b|quien(?:es)?\b|cu[aá]nt[oa]s?\b|stock\b|inventario\b|ventas\b|clientes\b|proveedores\b|productos\b|salud\b|margen\b|pron[oó]stico\b|forecast\b|dime\b|dame\b|cu[eé]ntame\b|recomi[eé]ndame\b|explicame\b|precio\b|capital\b|de esos\b|predice\b))/i)
   .map(part => part.trim().replace(/^(?:primero|luego|despu[eé]s|adem[aá]s)\s+(?=dime|dame|stock|ventas)/i, ''));
 const writeClause = message => {
   const source = normalize(message);
@@ -42,6 +42,8 @@ function compositePlan(message, memory, binding, route) {
       && plans.every(plan => !plan?.clarificationQuestion || plan.semanticFallback === true)
   };
   const tasks = plans.flatMap(plan => plan.tasks);
+  if (tasks.some(row => ['sales', 'customers'].includes(row.agent))
+    && new Set(tasks.map(row => row.agent)).size > 2) return clarify();
   const specialistPair = tasks.length === 2 && tasks.some(task => task.agent === 'inventory') && tasks.some(task => task.agent === 'forecast');
   if (specialistPair && (!tasks[0].args.productRef || !tasks[1].args.productRef
     || normalize(tasks[0].args.productRef) !== normalize(tasks[1].args.productRef))) return clarify();

@@ -146,11 +146,20 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
           inertia: raw.metrics?.inertia }, clusters: raw.clusters.map(row => ({ cluster: row.cluster, name: row.name,
           size: row.size, silhouetteMean: row.silhouetteMean })),
         assignments: assignments.slice(0, 20).map(row => ({ customerRef: row.customerRef, customerName: labels.get(row.customerRef),
+          recency: row.recency ?? null, frequency: row.frequency ?? null, monetary: row.monetary ?? null, rfmSegment: row.rfmSegment ?? null,
           status: row.status, ...(row.cluster !== undefined ? { cluster: row.cluster, clusterName: row.clusterName } : {}) })),
         assignmentAsOfDate: raw.assignmentAsOfDate, assignmentSource: raw.assignmentSource,
         limitations: raw.limitations };
       if ((args.clusterFilter || args.clusterId !== undefined) && !selectedCluster) data.requestedClusterFound = false;
       return frozenMetadata(data);
+    }
+    if (domain === 'business' && args.mode === 'provisional') {
+      // Reuse the validated dashboard inference. No parallel model or fit.
+      if (args.startDate || args.endDate || args.productRef || args.categoryRef || args.subcategoryRef)
+        throw new AgentError('AGENT_INVALID_SKILL_ARGS');
+      const data = await salesAnomalyProvisional(invocation.context, { signal: invocation.signal });
+      return { status: data.status === 'EVALUATED' ? 'READY' : 'NO_DATA', data,
+        metadata: { domain, asOf: data.localDate, dataVersion: String(data.revision), returnedCount: 1, totalMatches: 1 } };
     }
     if (domain === 'business' && args.mode === 'anomalies') {
       if (Boolean(args.startDate) !== Boolean(args.endDate)) throw new AgentError('AGENT_INVALID_SKILL_ARGS');

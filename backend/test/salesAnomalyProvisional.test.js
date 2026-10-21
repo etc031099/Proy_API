@@ -42,6 +42,31 @@ test('current-day provisional endpoint uses exactly one authorized snapshot and 
   assert.equal(response.data.modelIdentity.threshold, -.5); assert.equal(response.data.revision, '184');
   assert.deepEqual(counts(), { calls: 1, snapshots: 1 });
 });
+
+test('A5.1 Sales reuses the provisional contract through its read skill, without another model call', async () => {
+  const { service, counts } = fixture();
+  const { createAgentOrchestrator } = require('../src/agents/orchestrator');
+  const runtime = createAgentOrchestrator({ neutralProvider: null, dependencies: { v3Service: service } });
+  const result = await runtime.handle({ user: { _id: '507f1f77bcf86cd799439011', businessId: V3.businessId,
+    role: 'user', isActive: true } }, { message: '¿Hubo transacciones anómalas?' });
+  assert.equal(result.code, null, result.answer); assert.equal(result.agent, 'sales');
+  assert.deepEqual(result.participants.map(row => row.agentId).sort(), ['coordinator', 'sales']);
+  assert.match(result.answer, /agregado diario/); assert.match(result.answer, /histórico congelado/);
+  assert.match(result.answer, /No es una confirmación ni una probabilidad de fraude/);
+  assert.equal(result.usage.totalLlmCalls, 0); assert.deepEqual(counts(), { calls: 1, snapshots: 1 });
+});
+
+test('A5.1 provisional non-evaluable state is not replaced by a zero score', async () => {
+  const context = { businessId: V3.businessId, userId: 'test', requestId: 'a51-provisional' };
+  const { service } = fixture({ corrupt: body => { Object.assign(body.data, { status: 'NOT_EVALUABLE', reason: 'NO_TICKETS',
+    inference: null, modelInput: null, aggregate: { revenuePEN: 0, units: 0, tickets: 0, averageTicketPEN: null } }); return body; } });
+  const result = await service.executeAssistant({ context, signal: new AbortController().signal,
+    skill: { id: 'get_business_analytics', maxRecords: 5 }, args: { mode: 'provisional' } });
+  assert.equal(result.status, 'NO_DATA'); assert.equal(result.data.inference, null); assert.equal(result.data.reason, 'NO_TICKETS');
+  await assert.rejects(service.executeAssistant({ context, signal: new AbortController().signal,
+    skill: { id: 'get_business_analytics', maxRecords: 5 }, args: { mode: 'provisional', productRef: 'BEB-GAS-001' } }),
+  { code: 'AGENT_INVALID_SKILL_ARGS' });
+});
 test('date/tenant parameters and mismatched authenticated business are rejected before ML', async () => {
   const { dashboard, service, counts } = fixture();
   for (const query of [{ asOf: '2026-10-19' }, { businessId: 'OTHER' }, { scenarioId: 'OTHER' }])

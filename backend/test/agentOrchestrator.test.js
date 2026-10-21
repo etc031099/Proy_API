@@ -529,9 +529,9 @@ test('P2B READ zero/weak supplier clarifies and numeric 2 never substitutes 1', 
 for (const [query, skillId, agent] of [
   ['Muéstrame los productos con stock bajo', 'get_low_stock_products', 'operations'],
   ['Muéstrame las últimas transacciones', 'get_recent_transactions', 'operations'],
-  ['¿Cuánto vendimos este mes?', 'get_sales_summary', 'operations'],
-  ['¿Cuáles son los productos más vendidos?', 'get_top_selling_products', 'analyst'],
-  ['¿Qué productos se venden más?', 'get_top_selling_products', 'analyst'],
+  ['¿Cuánto vendimos este mes?', 'get_sales_summary', 'sales'],
+  ['¿Cuáles son los productos más vendidos?', 'get_top_selling_products', 'sales'],
+  ['¿Qué productos se venden más?', 'get_top_selling_products', 'sales'],
   ['¿Qué productos debería reponer?', 'get_replenishment_candidates', 'analyst']
 ]) test(`deterministic ${skillId} uses zero Gemini calls and real evidence`, async () => {
   const f = fixture(); const result = await f.run(query);

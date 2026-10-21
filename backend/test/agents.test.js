@@ -33,7 +33,7 @@ test('registry preserves legacy identities and keeps only unimplemented speciali
   assert.equal(getAgentDefinition('analyst').llmPolicy.preferredMode, 'hybrid');
   assert.equal(getAgentDefinition('analyst').status, 'LEGACY_ACTIVE');
   assert.deepEqual(PLANNED_SPECIALIST_IDS.map(id => getAgentDefinition(id).displayName),
-    ['Ventas', 'Clientes', 'Compras y proveedores', 'Productos relacionados']);
+    ['Compras y proveedores', 'Productos relacionados']);
   assert.deepEqual(getAgentDefinition('operations').allowedActionSkills,
     ['create_product', 'create_sale', 'create_purchase', 'create_inventory_alert', 'create_stock_alert_rule']);
   for (const id of PLANNED_SPECIALIST_IDS) {

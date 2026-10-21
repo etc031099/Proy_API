@@ -696,7 +696,7 @@ const routeDeterministically = (message, memory = {}, now = new Date(), conversa
   }
   let plan;
   if (isLowStockQuery(inventoryText)) plan = { intent: 'low_stock', agent: 'operations' };
-  else if (/transacciones.*(ultim|recient|completad|pendient|cancelad)|(ultim|recient).*transacciones/.test(text)
+  else if (/transacciones.*(ultim|recient|completad|pendient|cancelad)|(ultim|recient).*transacciones|ventas recientes|ultimas ventas/.test(text)
     || /\b(?:ultimas compras|compras (?:pendientes|canceladas))\b|\bdame \d+ compras recientes\b/.test(text)
     || /^dame movimientos de ventas y compras[?!.]*$/.test(text.trim())
     || /\btransacciones\b/.test(text) && explicitPeriod
@@ -746,6 +746,10 @@ const routeDeterministically = (message, memory = {}, now = new Date(), conversa
     if (/producto\s+\S+/.test(text) && !/\b(ese|este) producto\b|\bsu producto\b/.test(text)) return clarify('¿A qué producto te refieres? Puedes indicarme su SKU o elegirlo de la lista anterior.');
     if (memory.lastEntity) plan.selector = { productId: memory.lastEntity.id };
     else return clarify('¿A qué producto te refieres? Puedes indicarme su SKU o elegirlo de la lista anterior.');
+  }
+  if (['sales_summary', 'product_sales_summary', 'top_selling_products'].includes(plan.intent)) plan.agent = 'sales';
+  if (plan.intent === 'recent_transactions' && /ventas|\bsale\b/.test(text) && !/compras/.test(text)) {
+    plan.agent = 'sales'; plan.type = 'sale';
   }
   if (plan.intent === 'top_selling_products') {
     const continuesPeriod = /^(y ahora|ahora|y tambien|tambien)\b/.test(text) && memory.lastPeriodExplicit === true;

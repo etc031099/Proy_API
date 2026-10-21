@@ -6,6 +6,7 @@ const REQUESTED_INTENTS = Object.freeze(['replenishment', 'stock', 'coverage', '
 const requestedIntent = value => REQUESTED_INTENTS.includes(value) ? value : null;
 const agentForTask = (skillId, args = {}) => skillId === 'get_inventory_intelligence' ? 'inventory'
   : skillId === 'get_product_forecast' && args.mode !== 'evaluation' && !args.asOfDate ? 'forecast'
+    : skillId === 'get_business_analytics' ? 'sales' : skillId === 'get_customer_intelligence' ? 'customers'
     : V3_SKILLS[skillId]?.agents[0];
 
 const resolveSpecialistReference = (reference, memory = {}) => {
@@ -43,8 +44,9 @@ const sharedProductPlan = (message, memory = {}) => {
 
 // A bounded deterministic route. Historical and broader composite analyses retain
 // their existing path. No raw user question is persisted for continuation.
-const specialistPlan = (message, memory = {}) => {
-  return sharedProductPlan(message, memory) || singleSpecialistPlan(message, memory);
+const specialistPlan = (message, memory = {}, binding = {}) => {
+  return sharedProductPlan(message, memory) || singleSpecialistPlan(message, memory)
+    || require('./commercialSpecialistRouting').commercialPlan(message, memory, binding);
 };
 const singleSpecialistPlan = (message, memory = {}, implicitReference = false) => {
   message = require('./languageNlu').highPrecisionMessage(message, { allowImplicitReference: implicitReference || Boolean(memory.selectedProduct) });

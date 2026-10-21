@@ -204,7 +204,7 @@ function nluPlan(v, message, memory, binding) {
     case 'REPLENISHMENT': return ref ? make('get_inventory_intelligence', { mode: 'detail', metric: 'reorder', productRef: ref }, 'replenishment')
       : contextual && !global ? clarification('MISSING_CONTEXT') : make('get_inventory_intelligence', { mode: 'rank', metric: 'reorder', flag: 'should_reorder' }, 'replenishment');
     case 'SALES_SUMMARY': return make('get_business_analytics', { mode: 'summary', metric: v.metric || 'revenue', ...period.period });
-    case 'SALES_EVOLUTION': return { groundedQuestion: `¿Cómo han evolucionado las ventas? ${message}` };
+    case 'SALES_EVOLUTION': return make('get_business_analytics', { mode: 'compare', metric: v.metric || 'revenue', ...period.period });
     case 'TOP_SELLING_PRODUCTS': return make('get_business_analytics', { mode: 'rank', entityType: 'product', metric: v.metric || 'units', ...period.period });
     case 'FORECAST':
     case 'FORECAST_MODEL_STATUS':

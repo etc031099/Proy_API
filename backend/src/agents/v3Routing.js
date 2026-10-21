@@ -243,7 +243,8 @@ const routeV3 = (message, state, binding) => {
   if (/^(?:quien gano el partido de ayer|cual es la capital de japon|escribeme una historia(?: de .+)?|que laptop me recomiendas)$/.test(text.replace(/[¿?¡!.]/g, '').trim())) return null;
   if (/^(?:vende|vender|compra|comprar|prepara(?:r)? (?:una )?compra|crea|crear|avisa|avisame|actualiza|ajusta|confirma|confirmar|confirmo|hazlo|correcto|cancela|cancelar|si hazlo|procede|adelante|no lo hagas|no hagas nada|mejor no)\b/.test(text)
     || /^el segundo$/.test(text)) return null;
-  const specialist = specialistPlan(message, memory);
+  if (/ventas recientes|ultimas ventas|transacciones recientes/.test(text)) return null; // existing scoped transaction executor
+  const specialist = specialistPlan(message, memory, binding);
   if (specialist) return specialist;
   const groundedPlan = require('./groundedRouting').buildGroundedPlan(message, binding);
   if (groundedPlan) return groundedPlan;
@@ -676,9 +677,16 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
     for (const cluster of d.clusters || []) items.push({ type: 'category', key: `cluster-${cluster.cluster}`, label: cluster.name,
       metrics: [{ label: 'Cluster', value: cluster.cluster }, { label: 'Clientes', value: cluster.size }] });
     for (const row of d.assignments || []) items.push({ type: 'customer', key: row.customerRef, label: row.customerName || row.customerRef,
-      secondaryLabel: row.customerRef, metrics: [{ label: 'Asignación', value: row.status === 'INSUFFICIENT_HISTORY' ? 'historia insuficiente' : `Cluster ${row.cluster}: ${row.clusterName || ''}` }] });
+      secondaryLabel: row.customerRef, metrics: [{ label: 'Asignación', value: row.status === 'INSUFFICIENT_HISTORY' ? 'historia insuficiente' : row.cluster == null ? 'no disponible' : `Cluster ${row.cluster}: ${row.clusterName || ''}` },
+        { label: 'Recencia (RFM)', value: displayNumber(row.recency) }, { label: 'Frecuencia (RFM)', value: displayNumber(row.frequency) },
+        { label: 'Valor monetario (RFM)', value: Number.isFinite(row.monetary) ? displayMoney(row.monetary * 100) : 'no disponible' }] });
     if (d.requestedClusterFound === false) note = 'No existe un cluster con ese nombre o número en el artifact aprobado; no se infirió una asignación.';
     else note = `K-Means no supervisado sobre Recency, Frequency y Monetary; muestra pequeña (n=${d.sampleCount ?? '—'}), exploratoria y entrenada al ${d.trainingCutoff || result.metadata.asOf}.${d.assignmentAsOfDate ? ` La asignación individual usa RFM disponible al ${d.assignmentAsOfDate}.` : ''} No se incluyen probabilidades.`;
+  } else if (skillId === 'get_business_analytics' && args.mode === 'provisional') {
+    kind = 'business'; title = 'Señal provisional de ventas'; subtitle = `Isolation Forest · ${d.localDate || result.metadata.asOf}`;
+    metrics.push({ label: 'Estado', value: d.status || 'no disponible' },
+      { label: 'Score de atipicidad (no probabilidad)', value: displayNumber(d.inference?.anomalyScore) });
+    note = 'Evaluación del agregado diario con artefacto histórico congelado; no identifica fraude ni una transacción individual.';
   } else if (skillId === 'get_business_analytics' && args.mode === 'anomalies') {
     kind = 'business'; title = 'Días de ventas atípicos'; subtitle = `Isolation Forest · histórico congelado al ${d.analysisCutoff || result.metadata.asOf}`;
     metrics.push({ label: 'Días analizados', value: d.analysisDays ?? 'no disponible' }, { label: 'Señales atípicas en el histórico', value: d.anomalyCount ?? 'no disponible' },
@@ -889,12 +897,17 @@ const renderV3 = (skillId, result, args, responseMode = null) => {
     else if (Array.isArray(d.assignments) && d.assignments.length) {
       lines.push(...d.assignments.map(row => row.status === 'INSUFFICIENT_HISTORY'
         ? `${row.customerName || row.customerRef}: historial insuficiente; no se asignó cluster.`
-        : `${row.customerName || row.customerRef} (${row.customerRef}): cluster ${row.cluster} · ${row.clusterName || 'asignación exploratoria'}.`));
+        : `${row.customerName || row.customerRef} (${row.customerRef}): cluster ${num(row.cluster)} · ${row.clusterName || 'asignación exploratoria'}. RFM: recencia ${num(row.recency)}, frecuencia ${num(row.frequency)}, valor monetario ${Number.isFinite(row.monetary) ? money(row.monetary * 100) : 'no disponible'}.`));
       if (d.assignmentAsOfDate) lines.push(`Asignación individual basada en RFM disponible al ${d.assignmentAsOfDate}; el entrenamiento del modelo permanece en ${d.trainingCutoff || date}.`);
     } else if (args.clusterFilter || args.clusterId !== undefined) lines.push('No hay asignaciones disponibles para ese filtro.');
-    lines.push(`Modelo exploratorio entrenado al ${d.trainingCutoff || date}; variables RFM: Recency, Frequency, Monetary. No se generan probabilidades.`);
+    lines.push(`RFM describe Recency, Frequency y Monetary; K-Means es una asignación distinta mediante el artefacto congelado entrenado al ${d.trainingCutoff || date}. No se reentrena ni predice churn; no se generan probabilidades.`);
     const explanation = mlExplanation(args.concept); if (explanation && args.concept !== 'kmeans') lines.push(explanation);
     return `${heading}\n${lines.join('\n')}`;
+  }
+  if (skillId === 'get_business_analytics' && args.mode === 'provisional') {
+    return `Señal provisional de Isolation Forest: ${d.status === 'EVALUATED' ? d.inference?.prediction === -1
+      ? 'se detectó una señal de anomalía en el agregado diario.' : 'el agregado diario no fue marcado como atípico.'
+      : 'no evaluable con la evidencia actual.'} Artefacto histórico congelado, sin reentrenamiento. No es una confirmación ni una probabilidad de fraude; no clasifica transacciones individuales.`;
   }
   if (skillId === 'get_business_analytics' && args.mode === 'anomalies') {
     const lines = [`Isolation Forest no supervisado · ${d.analysisDays ?? '—'} días evaluados · ${d.anomalyCount ?? '—'} señales atípicas (${percent(d.anomalyRate)}) · estabilidad Jaccard ${num(d.stability?.jaccardMean)}.`];
@@ -1139,6 +1152,12 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
   for (let taskIndex = 0; taskIndex < plan.tasks.length; taskIndex++) {
     const current = plan.tasks[taskIndex], refs = current.args.productRefs?.split('|')
       || (current.args.productRef ? [current.args.productRef] : []);
+    if (current.args.customerRef) {
+      const resolution = await service.resolveEntity('customer', current.args.customerRef, context);
+      if (!resolution.entity) return candidateView({ ...resolution, type: 'customer',
+        query: current.args.customerRef, taskIndex }, plan.tasks, 'customerRef');
+      current.args.customerRef = resolution.entity.key; scope.selectedCustomer = resolution.entity;
+    }
     for (let index = 0; index < refs.length; index++) {
       const ref = refs[index];
       if (isContextualProductReference(ref)) {

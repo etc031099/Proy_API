@@ -12,7 +12,8 @@ const rows = require('../../../data/minimarket-pasco-v3/products.json').catalog.
     businessId: V3.businessId, scenarioId: V3.scenarioId, isActive: true, currency: 'PEN', stock: 21,
     supplierPrices: [{ supplierId: id(500), purchasePrice: 2 }] }));
 const matches = (row, filter) => Object.entries(filter).every(([key, value]) => key === '$or'
-  ? value.some(branch => matches(row, branch)) : value instanceof RegExp ? value.test(String(row[key])) : String(row[key]) === String(value));
+  ? value.some(branch => matches(row, branch)) : value instanceof RegExp ? value.test(String(row[key]))
+    : value?.$in ? value.$in.includes(row[key]) : String(row[key]) === String(value));
 function query(value) {
   let fields;
   const project = row => fields && row && typeof row === 'object'

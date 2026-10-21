@@ -66,3 +66,4 @@ require('./v3LiveBackendContracts.test');
 require('./forecastRidgeFeatureInputs.test');
 require('./salesAnomalyProvisional.test');
 require('./inventoryForecastAgents.test');
+require('./salesCustomersAgents.test');

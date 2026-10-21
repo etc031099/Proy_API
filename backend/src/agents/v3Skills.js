@@ -1,11 +1,11 @@
 'use strict';
 
 const V3_SKILLS = Object.freeze({
-  get_business_analytics: { domain: 'business', agents: ['analyst'], modes: ['summary', 'compare', 'rank', 'anomalies'], metrics: ['units', 'revenue', 'gross_margin', 'tickets'] },
+  get_business_analytics: { domain: 'business', agents: ['analyst', 'sales'], modes: ['summary', 'compare', 'rank', 'anomalies', 'provisional'], metrics: ['units', 'revenue', 'gross_margin', 'tickets'] },
   get_inventory_intelligence: { domain: 'inventory', agents: ['operations', 'analyst', 'inventory'], modes: ['summary', 'detail', 'rank', 'recommendations'], metrics: ['stockout_risk', 'low_stock', 'overstock', 'slow_moving', 'abc_a', 'az', 'single_source_critical', 'reorder'] },
   get_product_forecast: { domain: 'forecast', agents: ['analyst', 'forecast'], modes: ['detail', 'compare', 'rank', 'summary', 'method', 'evaluation'] },
   get_cross_sell_recommendations: { domain: 'cross-sell', agents: ['analyst'], modes: ['recommend', 'rules', 'summary'] },
-  get_customer_intelligence: { domain: 'customers', agents: ['analyst'], modes: ['detail', 'rank', 'preferences', 'activity', 'summary', 'clustering'], metrics: ['spend', 'tickets', 'recency', 'gross_margin'] },
+  get_customer_intelligence: { domain: 'customers', agents: ['analyst', 'customers'], modes: ['detail', 'rank', 'preferences', 'activity', 'summary', 'clustering'], metrics: ['spend', 'tickets', 'recency', 'gross_margin'] },
   get_supplier_intelligence: { domain: 'suppliers', agents: ['analyst'], modes: ['detail', 'rank', 'summary', 'alternatives', 'dependency'], metrics: ['spend', 'orders', 'lead_time', 'late_share', 'dependency', 'fastestLeadTime', 'punctuality', 'delays', 'productCoverage', 'exclusiveProducts'] },
   get_business_health: { domain: 'health', agents: ['analyst'] }
 });

@@ -10,7 +10,6 @@ const { routeV3 } = require('../src/agents/v3Routing');
 const { validateSkillArgs } = require('../src/agents/contracts');
 const { createDeepSeekProvider, readDeepSeekConfig } = require('../src/agents/providers/deepseekProvider');
 const { fixture, productFind } = require('./helpers/j2sProductFixture');
-const { fixture: groundedFixture, synthesisFor } = require('./helpers/j2nGroundedFixture');
 const { Product } = require('../src/models');
 const { publicResponse } = require('../src/services/agentHistoryProjection');
 const binding = { operationalDate: '2026-10-15', asOfDate: '2026-10-15' };
@@ -33,7 +32,7 @@ test('J4 dataset has >=400 independent utterances and every intent', () => {
   assert.deepEqual([...new Set(dataset.map(row => row.intent))].sort(), [...language.INTENTS].sort());
 });
 const skillFor = { INVENTORY_LOOKUP: 'get_inventory_intelligence', LOW_STOCK: 'get_inventory_intelligence', REPLENISHMENT: 'get_inventory_intelligence',
-  SALES_SUMMARY: 'get_business_analytics', TOP_SELLING_PRODUCTS: 'get_business_analytics', FORECAST: 'get_product_forecast',
+  SALES_SUMMARY: 'get_business_analytics', SALES_EVOLUTION: 'get_business_analytics', TOP_SELLING_PRODUCTS: 'get_business_analytics', FORECAST: 'get_product_forecast',
   CUSTOMERS_AT_RISK: 'get_customer_intelligence', CUSTOMER_VALUE: 'get_customer_intelligence', CUSTOMER_ACTIVITY: 'get_customer_intelligence',
   SUPPLIER_PERFORMANCE: 'get_supplier_intelligence', CROSS_SELL: 'get_cross_sell_recommendations', BUSINESS_HEALTH: 'get_business_health',
   INVENTORY_FORECAST: 'get_inventory_intelligence', FORECAST_MODEL_STATUS: 'get_product_forecast', FORECAST_METHOD: 'get_product_forecast' };
@@ -60,7 +59,6 @@ for (const row of dataset) test(`J4 language corpus ${row.intent}: ${row.message
     if (row.intent === 'LOW_STOCK') assert.equal(result.tasks[0].args.flag, 'low_stock');
     if (row.intent === 'REPLENISHMENT') assert.equal(result.tasks[0].args.flag, 'should_reorder');
   } else if (row.intent === 'OUT_OF_DOMAIN') assert.equal(result.outOfDomain, true);
-  else if (row.intent === 'SALES_EVOLUTION') assert.ok(result.groundedQuestion);
   else if (row.intent === 'PRODUCT_SEARCH' && productQuery) assert.equal(result.lookup, productQuery);
   else assert.ok(result.clarificationQuestion, JSON.stringify(result));
 });
@@ -231,20 +229,13 @@ test('J4 contextual entity stays server-side, invented entity is rejected', asyn
   assert.deepEqual(f.calls.at(-1).payload.skus, ['ABA-ACE-001']);
   assert.doesNotMatch(f.requests[0].messages[1].content, /ABA-ACE-001|Primor|supplierPrices|dataVersion/);
 });
-test('J4 semantic -> grounded can take two bounded calls with separate accounting', async t => {
-  t.mock.method(console, 'info', () => {});
-  const f = groundedFixture({ transport: ({ body, value: synthesis }) => body.max_tokens === 300
-    ? envelope(JSON.stringify(value('SALES_EVOLUTION'))) : envelope(JSON.stringify(synthesis)) });
-  // Existing fixture enforces 500 tokens for synthesis, so use an explicit shared adapter.
-  const requests = []; const neutralProvider = createDeepSeekProvider({ env: { DEEPSEEK_API_KEY: 'offline-only' },
-    fetchImpl: async (_url, opts) => { const body = JSON.parse(opts.body); requests.push(body);
-      return envelope(JSON.stringify(body.max_tokens === 300 ? value('SALES_EVOLUTION') : synthesisFor(JSON.parse(body.messages[1].content)))); } });
-  const { createAgentOrchestrator } = require('../src/agents/orchestrator');
-  const runtime = createAgentOrchestrator({ neutralProvider, dependencies: { v3Service: f.service }, clock: () => new Date('2026-10-15T17:00:00Z') });
-  const r = await runtime.handle(f.req, { message: 'qué cambios comerciales me dirías que vigile', conversationId: randomUUID() });
-  assert.equal(requests.length, 2, r.answer); assert.equal(r.usage.totalLlmCalls, 2); assert.equal(r.semanticClassification.calls, 1);
-  assert.equal(r.groundedAnswer.calls, 1); assert.equal(r.groundedAnswer.accepted, true);
-  assert.equal(r.grounded.responseDiagnostic.validationResult, 'ACCEPTED'); assert.equal(r.usage.totalTokens, 700);
+test('A5.1 semantic sales evolution uses Sales compare once instead of legacy synthesis', async () => {
+  const f = semanticFixture('SALES_EVOLUTION');
+  const r = await f.run('qué cambios comerciales me dirías que vigile');
+  assert.equal(f.requests.length, 1, r.answer); assert.equal(r.usage.totalLlmCalls, 1);
+  assert.equal(r.semanticClassification.calls, 1); assert.equal(r.usage.totalTokens, 350);
+  assert.equal(r.agent, 'sales'); assert.equal(f.calls[0].payload.mode, 'compare');
+  assert.ok(!r.participants.some(row => row.agentId === 'analyst'));
 });
 test('J4 sports times still OOD; valid business temporal intent preserved', () => {
   for (const m of ['quien juega mañana', 'quién ganó ayer', 'de q equipo eres hincha?']) assert.equal(isOutOfDomain(m), true);

@@ -19,14 +19,16 @@ const OPERATIONS_FAMILIES = Object.freeze(['sales', 'transactions', 'inventory',
 const ANALYST_FAMILIES = Object.freeze(ALL_SKILL_FAMILIES.filter(family => !['operational_writes', 'destructive_ml'].includes(family)));
 const plannedSpecialists = SPECIALIST_IDS.map(id => {
   const contract = SPECIALIST_CONTRACTS[id];
-  const active = ['inventory', 'forecast'].includes(id);
+  const active = ['inventory', 'forecast', 'sales', 'customers'].includes(id);
   return {
     id, version: '1.0.0', status: active ? 'ACTIVE' : 'PLANNED', displayName: contract.displayName, role: contract.role,
     description: contract.role, responsibilities: [contract.role], capabilities: { readOnly: true, canRead: true, canWrite: false },
     allowedSkillFamilies: contract.families,
     prohibitedSkillFamilies: ALL_SKILL_FAMILIES.filter(family => !contract.families.includes(family)),
-    // Only the two implemented READ specialists receive a skill. No provider calls.
-    allowedSkills: id === 'inventory' ? ['get_inventory_intelligence'] : id === 'forecast' ? ['get_product_forecast'] : [],
+    // Implemented specialists use existing READ executors; never action tools.
+    allowedSkills: id === 'inventory' ? ['get_inventory_intelligence'] : id === 'forecast' ? ['get_product_forecast']
+      : id === 'customers' ? ['get_customer_intelligence'] : id === 'sales'
+        ? ['get_business_analytics', 'get_recent_transactions', 'get_sales_summary', 'get_product_sales_summary', 'get_top_selling_products'] : [],
     allowedActionSkills: [], llmPolicy: { preferredMode: 'deterministic-first', providerEnabled: false },
     limits: { maxInputTokens: 0, responseTargetTokens: 0, providerMaxOutputTokens: 0, maxSkillCalls: active ? EXECUTION_LIMITS.maxSkillCalls : 0, maxLlmCalls: 0 }
   };

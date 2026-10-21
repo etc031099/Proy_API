@@ -59,19 +59,19 @@ const SKILLS = deepFreeze([
     schema({ ...product, productIds: text(125) }, [], ['productId', 'sku', 'productIds']), 5, 'OPERATIONAL', 'Product identity, stock, minimum, price and currency; bounded list lookup accepts at most five comma-separated ObjectIds'),
   entry('get_low_stock_products', 'Consulta productos bajo su stock mínimo.', both,
     schema({ limit: limit(20), offset: { type: 'integer', minimum: 0, maximum: 40 } }), 20, 'OPERATIONAL', 'Product identity, stock and minimum stock'),
-  entry('get_recent_transactions', 'Consulta transacciones recientes con filtros explícitos.', ['operations'],
+  entry('get_recent_transactions', 'Consulta transacciones recientes con filtros explícitos.', ['operations', 'sales'],
     schema({ ...period, type: { ...text(8), enum: ['sale', 'purchase'] },
       status: { ...text(9), enum: ['completed', 'pending', 'cancelled'] }, limit: limit(20) }), 20, 'FINANCIAL', 'Transaction identity, type, date, status, amount and currency'),
-  entry('get_sales_summary', 'Resume ventas completadas en un periodo.', both,
+  entry('get_sales_summary', 'Resume ventas completadas en un periodo.', [...both, 'sales'],
     schema(period, ['startDate', 'endDate']), 1, 'FINANCIAL', 'Completed sales count and units; amountsByCurrency in native transaction currencies, inclusive UTC period'),
   entry('get_business_summary', 'Obtiene agregados del negocio con periodo explícito.', ['analyst'],
     schema({ period: { ...text(7), enum: ['current', 'latest'] } }), 1, 'FINANCIAL', 'Current active/low-stock counts and completed monthly sales/purchases, native currencies kept separate; no profit or inventory valuation'),
   entry('get_supplier_products', 'Consulta productos con ofertas configuradas para un proveedor activo.', ['operations'],
     schema({ supplierRef: text(100), productRef: text(100), limit: limit(5), offset: { type: 'integer', minimum: 0, maximum: 10000 } }, ['supplierRef']),
     5, 'FINANCIAL', 'Tenant-scoped supplier offer list with configured prices, active state and bounded pagination'),
-  entry('get_top_selling_products', 'Clasifica productos por unidades vendidas completadas.', ['analyst'],
+  entry('get_top_selling_products', 'Clasifica productos por unidades vendidas completadas.', ['analyst', 'sales'],
     schema({ ...period, limit: limit(10) }), 10, 'OPERATIONAL', 'Product identity and completed units sold, descending; optional date range, otherwise all completed history'),
-  entry('get_product_sales_summary', 'Resume ventas completadas de un producto.', both,
+  entry('get_product_sales_summary', 'Resume ventas completadas de un producto.', [...both, 'sales'],
     schema({ ...product, ...period }, ['startDate', 'endDate'], ['productId', 'sku']), 1, 'FINANCIAL', 'Product units sold and amount with period and currency'),
   entry('get_demand_forecast', 'Consulta el forecast histórico existente sin modificarlo.', ['analyst'],
     schema({ productId: id }), 60, 'OPERATIONAL', 'ML readiness, model metadata, anchor and existing forecast/recommendation values'),
@@ -111,6 +111,8 @@ const validateSkillInvocation = invocation => {
     || args?.horizonDays !== undefined && ![7, 14].includes(args.horizonDays))) {
     throw new AgentError('AGENT_SKILL_NOT_ALLOWED');
   }
+  if (agentId === 'sales' && skillId === 'get_recent_transactions' && args?.type !== 'sale')
+    throw new AgentError('AGENT_SKILL_NOT_ALLOWED');
   return Object.freeze({ agent, skill, args: validateSkillArgs(skill.inputSchema, args), context });
 };
 
