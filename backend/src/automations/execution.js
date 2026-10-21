@@ -4,6 +4,7 @@ const { randomUUID, isTraceId, PENDING_TTL_MS, scopeOf, bindingOf, fail, zeroUsa
 const { validateActionInvocation } = require('./skills');
 const { createActionExecutors } = require('./executors');
 const { createActionRepository } = require('./repository');
+const diagnostics = require('./actionDiagnostics');
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
 const hashArgs = args => createHash('sha256').update(JSON.stringify(canonical(args))).digest('hex');
@@ -18,16 +19,20 @@ const createActionService = ({ repository = createActionRepository(), executors 
     const started = performance.now();
     const afterCommit = [];
     const row = await repository.transition(context, id, decision, clock, async (stored, session) => {
+      diagnostics.phase('PRECONDITION_REVALIDATION');
       const { skill, args } = validateActionInvocation({ agentId: 'operations', skillId: stored.actionSkillId, args: stored.validatedArgs, context });
+      diagnostics.limit(skill.timeoutMs);
       if (hashArgs(args) !== stored.argsHash) fail('ACTION_CONFLICT');
       if (stored.preview.snapshot && stored.snapshotHash !== hashArgs(stored.preview.snapshot)) fail('ACTION_CONFLICT');
       if (skill.requiresConfirmation && (!confirmedByHuman || context.actorType !== 'USER')) fail('ACTION_CONFIRMATION_REQUIRED');
       if (!executors[skill.id]) fail('ACTION_NOT_ALLOWED');
-      const result = await executors[skill.id].execute(deepFreeze(structuredClone(args)), context, session,
-        stored.pendingActionId, stored.preview.snapshot, callback => afterCommit.push(callback));
+      const result = await diagnostics.observe('EXECUTOR', 'NONE', () => executors[skill.id].execute(deepFreeze(structuredClone(args)), context, session,
+        stored.pendingActionId, stored.preview.snapshot, callback => afterCommit.push(callback)));
       // Do not use Promise.race for writes: a timed-out promise could still commit a mutation.
       // This deadline is checked before the atomic commit and rolls back late work.
-      if (performance.now() - started > skill.timeoutMs) fail('ACTION_EXECUTION_FAILED');
+      const durationMs = performance.now() - started;
+      diagnostics.budget(durationMs, skill.timeoutMs);
+      if (durationMs > skill.timeoutMs) fail('ACTION_EXECUTION_FAILED');
       return result;
     });
     if (row.status === 'EXPIRED') fail('ACTION_EXPIRED');
@@ -57,7 +62,7 @@ const createActionService = ({ repository = createActionRepository(), executors 
       if (!row || row.actionSkillId !== skillId || row.argsHash !== hashArgs(safeArgs)) fail('ACTION_CONFLICT');
       return validated.skill.requiresConfirmation ? view(row) : transition(context, row.pendingActionId, 'confirm');
     },
-    confirmPendingAction: (context, id) => transition(context, id, 'confirm', true),
+    confirmPendingAction: (context, id) => diagnostics.run(id, () => transition(context, id, 'confirm', true)),
     cancelPendingAction: (context, id) => transition(context, id, 'cancel'),
     async get(context, id) { scopeOf(context); if (!isTraceId(id)) fail('ACTION_VALIDATION_FAILED'); const row = await repository.get(context, id); if (!row) fail('ACTION_NOT_ALLOWED');
       return view(row.status === 'PENDING' && new Date(row.expiresAt) <= clock() ? { ...row, status: 'EXPIRED' } : row); },

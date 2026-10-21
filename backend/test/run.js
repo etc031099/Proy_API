@@ -47,6 +47,7 @@ require('./agentSynthesis.test');
 require('./agentMessages.test');
 require('./agentHistory.test');
 require('./automations.test');
+require('./actionDiagnostics.test');
 require('./actionInput.test');
 require('./guidedActions.test');
 require('./stockAlertRules.test');

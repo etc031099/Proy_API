@@ -3,11 +3,21 @@ const PendingAction = require('../models/PendingAction');
 const Conversation = require('../models/AgentConversation');
 const { scopeOf, bindingOf, fail, ActionError } = require('./contracts');
 const { writeAudit } = require('./audit');
+const diagnostics = require('./actionDiagnostics');
 const filterFor = context => ({ ...scopeOf(context), ...bindingOf(context) });
 const atomic = async (operation, startSession = () => mongoose.startSession(), transactionOptions = {}) => {
-  const session = await startSession();
-  try { session.startTransaction({ maxCommitTimeMS: 10000, ...transactionOptions }); const result = await operation(session); await session.commitTransaction(); return result; }
-  catch (error) { if (session.inTransaction()) { try { await session.abortTransaction(); } catch { /* Preserve uncertain-commit classification. */ } } throw error; }
+  const session = await diagnostics.observe('SESSION_START', 'MONGO', startSession);
+  try { session.startTransaction({ maxCommitTimeMS: 10000, ...transactionOptions }); const result = await operation(session);
+    await diagnostics.observe('COMMIT', 'MONGO', () => session.commitTransaction()); return result; }
+  catch (error) {
+    diagnostics.failure(error);
+    if (session.inTransaction()) {
+      try { await diagnostics.observe('ROLLBACK', 'MONGO', () => session.abortTransaction());
+        diagnostics.rollback(error.hasErrorLabel?.('UnknownTransactionCommitResult') ? 'UNCERTAIN' : 'CONFIRMED'); }
+      catch { diagnostics.rollback('FAILED'); /* Preserve uncertain-commit classification. */ }
+    } else diagnostics.rollback('UNCERTAIN');
+    throw error;
+  }
   finally { try { await session.endSession(); } catch { /* Cleanup must not overwrite a committed result. */ } }
 };
 const createActionRepository = ({ pendingModel = PendingAction, conversationModel = Conversation,
@@ -32,7 +42,7 @@ const createActionRepository = ({ pendingModel = PendingAction, conversationMode
   async transition(context, id, decision, clock, execute) {
     try {
       return await transaction(async session => {
-        const row = await PendingAction.findOne({ ...filterFor(context), pendingActionId: id }).session(session).maxTimeMS(5000);
+        const row = await diagnostics.observe('ACTION_LOAD', 'MONGO', () => PendingAction.findOne({ ...filterFor(context), pendingActionId: id }).session(session).maxTimeMS(5000));
         if (!row) fail('ACTION_NOT_ALLOWED');
         if (row.status === 'EXECUTED') { if (decision !== 'confirm') fail('ACTION_ALREADY_EXECUTED'); return row.toObject(); }
         if (row.status === 'CANCELLED') fail('ACTION_CANCELLED');
@@ -43,12 +53,12 @@ const createActionRepository = ({ pendingModel = PendingAction, conversationMode
         else if (decision === 'cancel') row.status = 'CANCELLED';
         else {
           row.status = 'CONFIRMED'; row.confirmedAt = row.requiresConfirmation ? now : undefined;
-          await row.save({ session });
+          await diagnostics.observe('ACTION_PERSIST', 'MONGO', () => row.save({ session }));
           row.result = await execute(row.toObject(), session);
           row.executedAt = clock(); row.status = 'EXECUTED';
         }
-        await row.save({ session });
-        await audit(row, context, row.status, clock(), session);
+        await diagnostics.observe('ACTION_PERSIST', 'MONGO', () => row.save({ session }));
+        await diagnostics.observe('AUDIT', 'MONGO', () => audit(row, context, row.status, clock(), session));
         return row.toObject();
       }, context.businessId === require('../config/v3Operational').businessId ? { writeConcern: { w: 'majority' } } : {});
     } catch (error) {
@@ -59,11 +69,11 @@ const createActionRepository = ({ pendingModel = PendingAction, conversationMode
       if (error instanceof ActionError && ['ACTION_NOT_ALLOWED', 'ACTION_CANCELLED', 'ACTION_EXPIRED', 'ACTION_CONFLICT', 'ACTION_ALREADY_EXECUTED'].includes(error.code)) throw error;
       const code = error instanceof ActionError ? error.code : error.code === 11000 ? 'ACTION_CONFLICT' : 'ACTION_EXECUTION_FAILED';
       // Business writes were rolled back. A separate short unit records a safe failure, fail-closed if audit is unavailable.
-      try { await transaction(async session => {
+      try { await diagnostics.withoutTracking(() => transaction(async session => {
         const row = await PendingAction.findOne({ ...filterFor(context), pendingActionId: id, status: 'PENDING' }).session(session);
         if (!row) return; row.status = 'FAILED'; row.errorCode = code; await row.save({ session });
         await audit(row, context, 'FAILED', clock(), session, code);
-      }); } catch { /* No raw database error is logged or exposed. */ }
+      })); } catch { /* No raw database error is logged or exposed. */ }
       fail(code);
     }
   }

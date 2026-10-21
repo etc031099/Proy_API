@@ -12,7 +12,7 @@ const ActionAudit = require('../../src/models/ActionAudit');
 const Outbox = require('../../src/models/ActionDomainEvent');
 const Conversation = require('../../src/models/AgentConversation');
 const { createActionContext } = require('../../src/automations/contracts');
-const { createActionService } = require('../../src/automations/execution');
+const { createActionService, hashArgs } = require('../../src/automations/execution');
 const { createActionRepository } = require('../../src/automations/repository');
 const { createActionExecutors } = require('../../src/automations/executors');
 const { resolveReference } = require('../../src/automations/actionInput');
@@ -363,6 +363,107 @@ test('cash sale preview is read-only and confirmation uses canonical price, move
   assert.deepEqual((await service.confirmPendingAction(context(), pending.pendingActionId)).result, result.result);
   assert.equal(await Transaction.countDocuments({ _id: tx._id, businessId }), 1);
 });
+test('A5.3.1 three-product decimal-price preview confirms once with the same persisted snapshot', async () => {
+  const products = await Promise.all([
+    newProduct({ price: 3.5, stock: 14 }), newProduct({ price: 2.56, stock: 8 }), newProduct({ price: 4.5, stock: 13 })
+  ]);
+  const args = { products: products.map((p, i) => ({ productId: String(p._id), quantity: i === 2 ? 2 : 1 })),
+    paymentMethod: 'cash', currency: 'PEN' };
+  const pending = await prepare('create_sale', args);
+  assert.equal(pending.status, 'PENDING'); assert.equal(pending.fields.total, 15.06);
+  const stored = await PendingAction.findOne({ businessId, pendingActionId: pending.pendingActionId }).lean();
+  assert.equal(stored.status, 'PENDING');
+  assert.equal(stored.conversationId, conversationId);
+  assert.equal(stored.argsHash, hashArgs(stored.validatedArgs));
+  assert.equal(stored.snapshotHash, hashArgs(stored.preview.snapshot));
+  const done = await service.confirmPendingAction(context(), pending.pendingActionId);
+  assert.equal(done.status, 'EXECUTED'); assert.equal(done.result.total, 15.06);
+  assert.deepEqual(await Promise.all(products.map(async p => (await Product.findById(p._id)).stock)), [13, 7, 11]);
+  assert.deepEqual((await service.confirmPendingAction(context(), pending.pendingActionId)).result, done.result);
+  assert.equal(await Transaction.countDocuments({ _id: done.result.id, businessId }), 1);
+  assert.equal(await InventoryMovement.countDocuments({ businessId, transactionId: done.result.id }), 3);
+});
+
+const threeProductSale = async (target = service) => {
+  const products = [];
+  for (const price of [3.5, 2.56, 4.5]) products.push(await newProduct({ price }));
+  const pending = await prepare('create_sale', { products: products.map((p, i) => ({ productId: String(p._id), quantity: i === 2 ? 2 : 1 })), currency: 'PEN' }, target);
+  return { products, pending };
+};
+
+test('A5.3.1 concurrent three-product confirmations commit exactly one sale', async () => {
+  const { products, pending } = await threeProductSale();
+  const results = await Promise.allSettled([1, 2].map(() => service.confirmPendingAction(context(), pending.pendingActionId)));
+  assert.ok(results.some(row => row.status === 'fulfilled'));
+  for (const row of results) if (row.status === 'rejected') assert.equal(row.reason.code, 'ACTION_CONFLICT');
+  const done = await service.confirmPendingAction(context(), pending.pendingActionId);
+  assert.deepEqual(await Promise.all(products.map(async p => (await Product.findById(p._id)).stock)), [19, 19, 18]);
+  assert.equal(await Transaction.countDocuments({ businessId, 'products.productId': products[0]._id }), 1);
+  assert.equal(await InventoryMovement.countDocuments({ businessId, transactionId: done.result.id }), 3);
+  assert.equal(await ActionAudit.countDocuments({ businessId, actionId: pending.pendingActionId, status: 'EXECUTED' }), 1);
+});
+
+for (const state of ['CANCELLED', 'EXPIRED']) test(`A5.3.1 ${state} three-product sale cannot confirm`, async () => {
+  const { products, pending } = await threeProductSale();
+  if (state === 'CANCELLED') await service.cancelPendingAction(context(), pending.pendingActionId);
+  else await PendingAction.updateOne({ businessId, pendingActionId: pending.pendingActionId }, { $set: { expiresAt: new Date(0) } });
+  await assert.rejects(service.confirmPendingAction(context(), pending.pendingActionId), { code: `ACTION_${state}` });
+  assert.deepEqual(await Promise.all(products.map(async p => (await Product.findById(p._id)).stock)), [20, 20, 20]);
+  assert.equal(await Transaction.countDocuments({ businessId, 'products.productId': products[0]._id }), 0);
+});
+
+test('A5.3.1 changed third-line stock rolls back every line and keeps the pending action', async () => {
+  const { products, pending } = await threeProductSale();
+  await Product.updateOne({ _id: products[2]._id, businessId }, { $set: { stock: 1 } });
+  await assert.rejects(service.confirmPendingAction(context(), pending.pendingActionId), { code: 'ACTION_CONFLICT' });
+  assert.deepEqual(await Promise.all(products.map(async p => (await Product.findById(p._id)).stock)), [20, 20, 1]);
+  assert.equal((await service.get(context(), pending.pendingActionId)).status, 'PENDING');
+  assert.equal(await InventoryMovement.countDocuments({ businessId, productId: { $in: products.map(p => p._id) } }), 0);
+  assert.equal(await Outbox.countDocuments({ businessId, actionId: pending.pendingActionId }), 0);
+});
+
+test('A5.3.1 V3 gateway confirms the three-product sale inside the real writer fence', async () => {
+  const config = require('../../src/config/v3Operational');
+  const fence = require('../../src/services/mlTestFence');
+  const { HistoricalScenario, V3OperationalRevision, V3OperationalChange, ForecastMlUpdateEvent, ForecastMlUpdateState } = require('../../src/models');
+  const v3Models = [HistoricalScenario, V3OperationalRevision, V3OperationalChange, ForecastMlUpdateEvent, ForecastMlUpdateState];
+  const db = mongoose.connection.db;
+  const tenant = config.businessId;
+  const v3Context = createActionContext(req(tenant), { conversationId: randomUUID() });
+  // Only the dedicated local *_test database is connected by this suite.
+  assert.equal(await db.collection('mltestcontrols').countDocuments({ businessId: tenant }), 0);
+  for (const model of [...v3Models, Product, Conversation, PendingAction]) {
+    assert.equal(await model.countDocuments({ ...(model === V3OperationalRevision ? { _id: tenant } : { businessId: tenant }) }), 0);
+  }
+  for (const model of v3Models) { await model.createCollection(); await model.init(); }
+  try {
+    await fence.runCycle(async () => {
+      await HistoricalScenario.create({ businessId: tenant, scenarioId: config.scenarioId, sourceSha256: config.sourceSha256,
+        status: 'completed', metadata: { datasetVersion: config.datasetVersion, referenceDate: config.historicalCutoff, timezone: config.timezone } });
+      await V3OperationalRevision.create({ _id: tenant, revision: 173n, bootstrapStatus: 'VERIFIED',
+        historicalDatasetVersion: config.datasetVersion, historicalDatasetSha256: config.sourceSha256 });
+      await Conversation.create({ businessId: tenant, userId, conversationId: v3Context.conversationId, title: 'Synthetic V3', lastMessageAt: new Date() });
+    });
+    const products = [];
+    for (const [i, price] of [3.5, 2.56, 4.5].entries()) products.push(await fence.runCycle(() => Product.create({
+      businessId: tenant, name: `Synthetic V3 ${i}`, sku: `V3-HOTFIX-${i}`, price, currency: 'PEN', stock: [14, 8, 13][i], category: 'Test' })));
+    const pending = await fence.runCycle(() => service.prepare({ context: v3Context, externalRequestId: randomUUID(), skillId: 'create_sale',
+      args: { products: products.map((p, i) => ({ productId: String(p._id), quantity: i === 2 ? 2 : 1 })), currency: 'PEN', paymentMethod: 'cash' } }));
+    const done = await fence.runCycle(() => service.confirmPendingAction(v3Context, pending.pendingActionId));
+    assert.equal(done.status, 'EXECUTED'); assert.equal(done.result.total, 15.06);
+    assert.deepEqual(await Promise.all(products.map(async p => (await Product.findById(p._id)).stock)), [13, 7, 11]);
+    assert.equal(String((await V3OperationalRevision.findById(tenant)).revision), '174');
+    assert.equal(await ForecastMlUpdateEvent.countDocuments({ businessId: tenant }), 2);
+    assert.deepEqual((await fence.runCycle(() => service.confirmPendingAction(v3Context, pending.pendingActionId))).result, done.result);
+  } finally {
+    // Fixture cleanup bypasses model fencing only in this isolated test database.
+    for (const model of [...v3Models, Product, Conversation, PendingAction, Transaction, ActionAudit, Outbox, InventoryMovement]) {
+      await model.collection.deleteMany(model === V3OperationalRevision ? { _id: tenant } : { businessId: tenant });
+    }
+    await db.collection('mltestcontrols').deleteMany({ businessId: tenant });
+  }
+});
+
 test('sale insufficient stock rejected before PendingAction', async () => {
   const p = await newProduct({ stock: 1 }), before = await counts();
   await assert.rejects(prepare('create_sale', saleArgs(p)), { code: 'ACTION_VALIDATION_FAILED' });

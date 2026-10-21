@@ -5,6 +5,7 @@ const { toFiniteNumber } = require('../utils/numbers');
 const { applyStockChange, normalizeDate } = require('./inventoryService');
 const { recordV3Transaction } = require('./v3OperationalSnapshotService');
 const mlTestBaselines = require('./mlTestProductBaselineService');
+const diagnostics = require('../automations/actionDiagnostics');
 const TRANSACTION_CURRENCIES = ['PEN', 'USD', 'EUR'];
 // One business implementation for CRUD and actions. Caller-owned sessions never commit here.
 // Preview runs the same pricing/contact/credit validation without business writes.
@@ -17,7 +18,7 @@ const writeTransaction = async ({ input, businessId, historical = null, session:
     ? normalizeDate(historical.date, 'transaction date')
     : new Date();
   const resolveExchangeRate = async (base, target) => {
-    if (!historical) return getExchangeRate({ base, target });
+    if (!historical) return diagnostics.exchangeRate(base !== target, () => getExchangeRate({ base, target }));
     if (base === target) return { rate: 1 };
     const rate = toFiniteNumber(historical.exchangeRates?.[`${base}/${target}`], {
       field: `Historical exchange rate ${base}/${target}`,
@@ -42,6 +43,7 @@ const writeTransaction = async ({ input, businessId, historical = null, session:
     await mlTestBaselines.persist({ plan: baselinePlan, session });
 
     // Validate contact based on transaction type
+    diagnostics.phase('PRECONDITION_REVALIDATION', 'MONGO');
     let contact;
     if (type === 'sale') {
       if (customerId) {
@@ -86,6 +88,7 @@ const writeTransaction = async ({ input, businessId, historical = null, session:
     let subtotal = 0;
 
     for (const [itemIndex, item] of products.entries()) {
+      diagnostics.phase('PRECONDITION_REVALIDATION', 'MONGO');
       const itemQuantity = toFiniteNumber(item.quantity, {
         field: 'Product quantity',
         min: 1,
@@ -153,7 +156,7 @@ const writeTransaction = async ({ input, businessId, historical = null, session:
         product.stock = toFiniteNumber(toFiniteNumber(product.stock, { field: 'Current stock', min: 0, integer: true })
           + (type === 'sale' ? -itemQuantity : itemQuantity), { field: 'Resulting stock', min: 0, integer: true });
         previewProducts.set(String(product._id), product);
-      } else await applyStockChange({
+      } else await diagnostics.observe('STOCK_UPDATE', 'MONGO', () => applyStockChange({
         product,
         quantityDelta: type === 'sale' ? -itemQuantity : itemQuantity,
         type,
@@ -165,7 +168,7 @@ const writeTransaction = async ({ input, businessId, historical = null, session:
           ? `${historical.sourceEventId}:inventory:${itemIndex}`
           : null,
         session
-      });
+      }));
       if (type === 'sale') lowStockNotifications.push({ product, previousStock });
 
       const sourcePrice = type === 'sale' ? canonicalSalePrice : canonicalPurchaseCost;
@@ -285,9 +288,9 @@ const writeTransaction = async ({ input, businessId, historical = null, session:
       if (ownsSession) await session.abortTransaction();
       return { snapshot, transactionData };
     }
-    const [transaction] = await Transaction.create([transactionData], { session });
-    if (!historical) await recordV3Transaction({ businessId, session, transaction, contact, productIdentities: analyticsProductIdentities,
-      operation: 'CREATE', effectiveAtUtc: transactionDate });
+    const [transaction] = await diagnostics.observe('TRANSACTION_PERSIST', 'MONGO', () => Transaction.create([transactionData], { session }));
+    if (!historical) await diagnostics.observe('JOURNAL', 'MONGO', () => recordV3Transaction({ businessId, session, transaction, contact, productIdentities: analyticsProductIdentities,
+      operation: 'CREATE', effectiveAtUtc: transactionDate }));
     if (ownsSession) await session.commitTransaction();
     return { transaction, snapshot, lowStockNotifications, transactionData };
   } catch (error) {

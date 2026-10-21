@@ -8,6 +8,7 @@ const { redact } = require('../services/agentHistoryProjection');
 const { countLabel, units, money, ruleNote } = require('../utils/assistantFormatting');
 const { writeTransaction } = require('../services/transactionWriteService');
 const ActionDomainEvent = require('../models/ActionDomainEvent');
+const diagnostics = require('./actionDiagnostics');
 const recordEvents = (context, actionId, entityId, types, session) => ActionDomainEvent.create(types.map(type => ({
   businessId: context.businessId, actionId, entityId: String(entityId), type
 })), { session, ordered: true });
@@ -32,7 +33,8 @@ const transactionExecutor = type => ({
       if (error.statusCode === 400 || error.statusCode === 404 || error.code === 'ACTION_CONFLICT') fail('ACTION_CONFLICT');
       throw error;
     }
-    await recordEvents(context, actionId, result.transaction._id, [type === 'sale' ? 'SALE_CREATED' : 'PURCHASE_CREATED', 'INVENTORY_CHANGED'], session);
+    await diagnostics.observe('DOMAIN_EVENTS', 'MONGO', () => recordEvents(context, actionId, result.transaction._id,
+      [type === 'sale' ? 'SALE_CREATED' : 'PURCHASE_CREATED', 'INVENTORY_CHANGED'], session));
     if (type === 'sale' && onCommitted) {
       for (const { product, previousStock } of result.lowStockNotifications || []) {
         onCommitted(() => require('../services/telegramService').notifyLowStock(context.businessId, product, previousStock));
