@@ -24,16 +24,29 @@ function DisplayItem({ item, onSelect, disabled, rank }: { item: V3DisplayItem; 
   </Button></li>;
 }
 
-export function V3ResponseCards({ views, response, disabled, onSelect }: {
-  views: V3DisplayView[]; response: AgentResponse; disabled: boolean; onSelect: (message: string) => void;
+export function V3ResponseCards({ views, response, technical, disabled, onSelect }: {
+  views: V3DisplayView[]; response: AgentResponse; technical: boolean; disabled: boolean; onSelect: (message: string) => void;
 }) {
+  const skills = response.actions?.map(action => action.skillId) || [];
   return <div className="mt-3 min-w-0 space-y-3" aria-label="Resultados de inteligencia V3">
     {views.map((view, index) => {
       const metrics = Array.isArray(view.metrics) ? view.metrics : [];
       const items = Array.isArray(view.items) ? view.items : [];
-      return <section key={`${view.kind}-${index}`} className="min-w-0 rounded-lg border bg-card p-3 sm:p-4" aria-label={view.title}>
-      <h3 className="break-words font-semibold">{view.title}</h3>
-      {view.subtitle && <p className="mt-1 break-words text-sm text-muted-foreground">{view.subtitle}</p>}
+      const inventoryDetail = view.kind === 'inventory' && skills.includes('get_inventory_intelligence') && items.length === 1;
+      const forecastDetail = view.kind === 'forecast' && skills.includes('get_product_forecast') && items.length === 1;
+      const readyForecast = forecastDetail && items[0].metrics?.some(metric => metric.label === 'Estado' && metric.value === 'READY');
+      const compactMetrics = (item: V3DisplayItem) => {
+        if (technical) return item.metrics || [];
+        if (inventoryDetail) return item.metrics.filter(metric => ['Stock', 'Cobertura', 'Riesgo', 'Cantidad sugerida'].includes(metric.label));
+        if (forecastDetail && readyForecast) return item.metrics.filter(metric => ['Modelo ACTIVE', 'Estado'].includes(metric.label));
+        return item.metrics || [];
+      };
+      const heading = inventoryDetail ? 'Datos clave'
+        : forecastDetail ? `Pronóstico ${items[0].metrics?.find(metric => metric.label.startsWith('Unidades esperadas'))?.label.split('·').at(-1)?.trim() || ''}`.trim()
+          : view.title;
+      return <section key={`${view.kind}-${index}`} className="min-w-0 rounded-lg border bg-card p-3 sm:p-4" aria-label={heading}>
+      <h3 className="break-words font-semibold">{heading}</h3>
+      {view.subtitle && !(forecastDetail && readyForecast && !technical) && <p className="mt-1 break-words text-sm text-muted-foreground">{view.subtitle}</p>}
       {!!metrics.length && <dl className="mt-3 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
         {metrics.map(metric => <div key={metric.label} className="min-w-0 rounded-md bg-muted/50 p-2">
           <dt className="text-xs text-muted-foreground">{metric.label}</dt>
@@ -41,9 +54,10 @@ export function V3ResponseCards({ views, response, disabled, onSelect }: {
         </div>)}
       </dl>}
       {items.length > 0 && <ol className="mt-3 min-w-0 list-none space-y-2">
-        {items.map((item, itemIndex) => <DisplayItem key={`${item.type}-${item.key}-${itemIndex}`} item={item} rank={itemIndex + 1} disabled={disabled} onSelect={onSelect} />)}
+        {items.map((item, itemIndex) => <DisplayItem key={`${item.type}-${item.key}-${itemIndex}`}
+          item={{ ...item, metrics: compactMetrics(item) }} rank={itemIndex + 1} disabled={disabled} onSelect={onSelect} />)}
       </ol>}
-      {view.note && !!(metrics.length || items.length)
+      {view.note && !!(metrics.length || items.length) && !(forecastDetail && readyForecast && !technical)
         && <p className="mt-3 break-words text-xs text-muted-foreground">{view.note}</p>}
       {!metrics.length && !items.length && <p className="mt-2 break-words text-sm text-muted-foreground">
         {view.note || 'No hay datos para los filtros solicitados.'}</p>}

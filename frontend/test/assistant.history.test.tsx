@@ -4,6 +4,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import AssistantPage from '@/app/assistant/page';
 import { apiClient } from '@/lib/api';
 import { activeConversationKey, clearActiveConversations } from '@/lib/agentHistory';
+import { assistantDisplayText } from '@/lib/assistantPresentation';
 import type { AgentConversationDetail, AgentResponse } from '@/types/agent';
 vi.mock('@/components/ProtectedRoute', () => ({ ProtectedRoute: ({ children }: { children: ReactNode }) => <>{children}</> }));
 vi.mock('@/components/Layout', () => ({ Layout: ({ children }: { children: ReactNode }) => <main>{children}</main> }));
@@ -158,7 +159,9 @@ it('logout cleanup removes active UUIDs only, leaving unrelated storage alone', 
 
 it('P0 restores persisted nullable inventory metrics alongside forecast and direct answers after reload', async () => {
   const composite = { ...response, agent: 'coordinator' as const,
-    answer: 'Sí, debes reponer Coca-Cola. Se esperan 108.27 unidades en 14 días.',
+    answer: 'Sí, debes reponer Coca-Cola.\n\nEscenario V3 · detalle redundante.\n\nSe esperan 108.27 unidades de Coca-Cola en los próximos 14 días según Ridge LIVE ACTIVE. Modelo v1 · ACTIVE · featureVersion CAUSAL27.',
+    actions: [{ skillId: 'get_inventory_intelligence', agentId: 'inventory', status: 'SUCCEEDED', durationMs: 1 },
+      { skillId: 'get_product_forecast', agentId: 'forecast', status: 'SUCCEEDED', durationMs: 1 }],
     participants: ['coordinator', 'inventory', 'forecast'].map(agentId => ({ ...response.participants[0], agentId })),
     v3Views: [
       { kind: 'inventory', title: 'Inventario', metrics: [{ label: 'Críticos', value: null }, { label: 'Requieren reposición', value: null }], items: [] },
@@ -166,14 +169,19 @@ it('P0 restores persisted nullable inventory metrics alongside forecast and dire
     ] } as AgentResponse;
   vi.mocked(apiClient.getAgentConversation).mockResolvedValue({ success: true, data: { ...detail,
     messages: [...detail.messages, { ...detail.messages[1], id: 'composite', text: composite.answer, response: composite }] } });
+  expect(assistantDisplayText(composite.answer, composite, 'consulta normal')).toContain('Sí, debes reponer Coca-Cola.');
   const mounted = render(<AssistantPage />);
-  await screen.findByText(composite.answer);
+  await waitFor(() => expect(apiClient.getAgentConversation).toHaveBeenCalledWith(id, 1));
+  await screen.findByRole('region', { name: 'Inventario' });
+  await waitFor(() => expect(screen.getByRole('log').textContent).toContain('Sí, debes reponer Coca-Cola.'));
+  expect(screen.getByRole('log').textContent).toContain('Se esperan 108.27 unidades de Coca-Cola');
+  expect(screen.getByRole('log').textContent).not.toContain('Escenario V3 · detalle redundante');
   expect(screen.getAllByText('No disponible')).toHaveLength(2);
   expect(screen.getByRole('region', { name: 'Inventario' })).toBeTruthy();
   expect(screen.getByRole('region', { name: 'Pronóstico' })).toBeTruthy();
-  expect(screen.getByText(response.answer)).toBeTruthy();
+  expect(screen.getByRole('log').textContent).toContain('Sí, debes reponer Coca-Cola.');
   mounted.unmount(); render(<AssistantPage />);
-  await screen.findByText(composite.answer);
+  await waitFor(() => expect(screen.getByRole('log').textContent).toContain('Sí, debes reponer Coca-Cola.'));
   expect(apiClient.sendAgentMessage).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Nueva conversación' }));
   expect(screen.getByLabelText('Tu consulta').hasAttribute('disabled')).toBe(false);
@@ -185,11 +193,12 @@ it('P0 auto-restores the real persisted incident shape with empty browser storag
     { ...item, conversationId: id2, title: 'Conversación anterior' }], pagination: { page: 1, limit: 10, total: 2, totalPages: 1 } } });
   vi.mocked(apiClient.getAgentConversation).mockImplementation(async target => ({ success: true, data: target === id ? brokenDetail : detail }));
   const mounted = render(<AssistantPage />);
-  await screen.findByText(incidentResponse.answer);
+  await screen.findByRole('region', { name: 'Inteligencia de inventario' });
+  expect(screen.getByText(/Resumen de inventario\./)).toBeTruthy();
   expect(screen.getAllByText('No disponible')).toHaveLength(2);
   expect(screen.getByText('80')).toBeTruthy(); expect(screen.getByText('17')).toBeTruthy();
   mounted.unmount(); localStorage.clear(); render(<AssistantPage />);
-  await screen.findByText(incidentResponse.answer);
+  await screen.findByRole('region', { name: 'Inteligencia de inventario' });
   fireEvent.click(screen.getByRole('button', { name: 'Nueva conversación' }));
   fireEvent.click(screen.getByRole('button', { name: 'Conversaciones' }));
   fireEvent.click(screen.getByRole('button', { name: /Conversación anterior.*2 mensajes/ }));
@@ -237,12 +246,12 @@ for (const [agent, answer] of [
     items: [{ type: 'product' as const, key: 'BEB-GAS-001', label: 'Coca-Cola Sabor Original 500 ml',
       metrics: [{ label: 'Dato parcial', value: null }] }] }] };
   vi.mocked(apiClient.getAgentConversation).mockResolvedValue({ success: true, data: { ...detail,
-    messages: [{ ...detail.messages[1], text: answer, response: specialized }] } });
+    messages: [{ ...detail.messages[1], text: answer, response: { ...specialized, actions: [{ skillId: agent === 'inventory' ? 'get_inventory_intelligence' : 'get_product_forecast', agentId: agent, status: 'SUCCEEDED', durationMs: 1 }] } }] } });
   render(<AssistantPage />);
-  const conclusion = await screen.findByText(answer);
-  const card = screen.getByRole('region', { name: 'Evidencia del especialista' });
+  const conclusion = await screen.findByText(new RegExp(answer.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  const card = screen.getByRole('region', { name: agent === 'inventory' ? 'Datos clave' : 'Pronóstico' });
   expect(conclusion.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(screen.getByText('Dato parcial: No disponible')).toBeTruthy();
+  expect(card).toBeTruthy();
 });
 
 it('P0 a partial view with absent legacy collections keeps its answer and a controlled empty state', async () => {
@@ -250,7 +259,7 @@ it('P0 a partial view with absent legacy collections keeps its answer and a cont
   vi.mocked(apiClient.getAgentConversation).mockResolvedValue({ success: true, data: { ...detail,
     messages: [{ ...detail.messages[1], response: partial }] } });
   render(<AssistantPage />);
-  await screen.findByText(response.answer);
+  await screen.findByRole('region', { name: 'Vista antigua' });
   expect(screen.getByRole('region', { name: 'Vista antigua' })).toBeTruthy();
   expect(screen.getByText('No hay datos para los filtros solicitados.')).toBeTruthy();
 });

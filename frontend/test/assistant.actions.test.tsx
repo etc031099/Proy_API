@@ -15,6 +15,24 @@ it('candidate text fallback remains in API while cards avoid duplicate visible l
   expect(assistantDisplayText(text, response)).toBe('Encontré 2 coincidencias.\nMostrando 1–1.');
   expect(assistantDisplayText(text)).toBe(text);
 });
+it('A4.2 keeps Inventory and Forecast conclusions while removing repeated V3 dumps', () => {
+  const inventory = 'Sí, debes reponer Coca-Cola Sabor Original 500 ml. La posición es 14 frente al punto de reorden 57. Cobertura: 1.8 días; riesgo: alto. Cantidad sugerida por el servicio: 102 unidades.';
+  const forecast = 'Se esperan 107.3 unidades de Coca-Cola Sabor Original 500 ml en los próximos 14 días según Ridge LIVE ACTIVE. Modelo v1 · ACTIVE · featureVersion RIDGE_CAUSAL27_V1.';
+  const raw = `${inventory}\n\nEscenario V3 · datos operativos al 20/10/2026.\n1. fila larga de evidencia\n\n${forecast}\n\nEscenario V3 · datos operativos al 20/10/2026.\n1. fila Ridge extensa`;
+  const result = assistantDisplayText(raw, { actions: [{ skillId: 'get_inventory_intelligence' }, { skillId: 'get_product_forecast' }],
+    v3Views: [{ note: '', metrics: [], items: [] }] } as unknown as AgentResponse, 'Para Coca-Cola, ¿debo reponerla y cuánto se espera vender en 14 días?');
+  expect(result).toContain(inventory);
+  expect(result).toContain('Se esperan 107.3 unidades');
+  expect(result).not.toContain('featureVersion');
+  expect(result).not.toContain('Escenario V3');
+  expect(result.match(/Se esperan 107\.3 unidades/g)).toHaveLength(1);
+});
+it('A4.2 keeps technical lineage for a question about the active model', () => {
+  const text = 'Para Coca-Cola, la autoridad es Ridge LIVE. Modelo v1 · ACTIVE · featureVersion RIDGE_CAUSAL27_V1.\n\nEscenario V3 · detalle técnico';
+  const displayed = assistantDisplayText(text, { actions: [{ skillId: 'get_product_forecast' }], v3Views: [{ note: '', metrics: [], items: [] }] } as unknown as AgentResponse,
+    '¿Qué featureVersion y modelo está usando?');
+  expect(displayed).toBe(text);
+});
 for (const quantity of [0, 1, 2]) it(`card quantity ${quantity} uses natural grammar and money`, () => {
   const { container } = render(<PendingActionCard action={{ ...pending, action: 'create_sale',
     fields: { currency: 'PEN', total: 58.9, productId: 'bbbbbbbbbbbbbbbbbbbbbbbb' },

@@ -5,6 +5,7 @@ import AssistantPage from '@/app/assistant/page';
 import { apiClient, AgentApiError } from '@/lib/api';
 import type { AgentResponse } from '@/types/agent';
 import { AgentActivity } from '@/components/assistant/AgentActivity';
+import { V3ResponseCards } from '@/components/assistant/V3ResponseCards';
 vi.mock('@/components/ProtectedRoute', () => ({ ProtectedRoute: ({ children }: { children: ReactNode }) => <>{children}</> }));
 vi.mock('@/components/Layout', () => ({ Layout: ({ children }: { children: ReactNode }) => <main>{children}</main> }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'user-a', businessId: 'business-a' } }) }));
@@ -353,12 +354,13 @@ it('shows final fallback model, physical attempts and partial known usage withou
 
 it('renders compact V3 inventory results with a full product label and clickable ranked selection', async () => {
   send.mockResolvedValueOnce({ success: true, data: { ...response, answer: 'Sí, debes reponer Inca Kola Original 1.5 L.',
+    actions: [{ skillId: 'get_inventory_intelligence', agentId: 'inventory', status: 'SUCCEEDED', durationMs: 1 }],
     v3Views: [{ kind: 'inventory', title: 'Inteligencia de inventario', metrics: [], note: 'Corte V3', items: [
       { type: 'product', key: 'BEB-GAS-015', label: 'Inca Kola Original 1.5 L', secondaryLabel: 'BEB-GAS-015', selectMessage: 'BEB-GAS-015',
         metrics: [{ label: 'Stock', value: 5 }, { label: 'Riesgo', value: 'CRITICAL' }, { label: 'Cantidad sugerida', value: 10 }] }
     ] }], suggestionsEntityType: 'product' } }).mockResolvedValueOnce({ success: true, data: response });
   render(<AssistantPage />); submit('productos críticos');
-  expect(await screen.findByRole('region', { name: 'Inteligencia de inventario' })).toBeTruthy();
+  expect(await screen.findByRole('region', { name: 'Datos clave' })).toBeTruthy();
   expect(screen.getByText('Inca Kola Original 1.5 L')).toBeTruthy();
   expect(screen.getByText(/Riesgo: Crítico/)).toBeTruthy(); expect(screen.getByText(/Cantidad sugerida: 10/)).toBeTruthy();
   expect(screen.getByText('Sí, debes reponer Inca Kola Original 1.5 L.')).toBeTruthy();
@@ -411,6 +413,52 @@ it('shows one useful empty-state message without repeating the unavailable-data 
   expect(within(screen.getByRole('region', { name: 'Compras observadas juntas' })).queryByText('0', { exact: true })).toBeNull();
   expect(screen.queryByText('No hay datos para los filtros solicitados.')).toBeNull();
   expect(screen.queryByText('raw duplicate')).toBeNull();
+});
+
+it('A4.2 shows neutral compact detail for normal Inventory and Ridge questions while Activity retains agent identities', () => {
+  const composite = { ...response, actions: [
+    { skillId: 'get_inventory_intelligence', agentId: 'inventory', status: 'SUCCEEDED', durationMs: 1 },
+    { skillId: 'get_product_forecast', agentId: 'forecast', status: 'SUCCEEDED', durationMs: 1 }
+  ], participants: [
+    ...response.participants, { ...response.participants[0], agentId: 'inventory' as const },
+    { ...response.participants[0], agentId: 'forecast' as const }
+  ], v3Views: [
+    { kind: 'inventory', title: 'Inventario · Coca-Cola Original', metrics: [], items: [{ type: 'product', key: 'BEB-GAS-001', label: 'Coca-Cola Original', metrics: [
+      { label: 'Stock', value: 14 }, { label: 'Cobertura', value: '1.8 días' }, { label: 'Riesgo', value: 'HIGH' },
+      { label: 'Cantidad sugerida', value: 102 }, { label: 'Entradas', value: 0 }, { label: 'Motivo', value: 'CAUSAL27' }
+    ] }] },
+    { kind: 'forecast', title: 'Pronóstico · Coca-Cola Original', subtitle: 'Ridge LIVE · autoridad ACTIVE · CAUSAL27 · 7 y 14 días aprobados', metrics: [], note: '1 día no aprobado.',
+      items: [{ type: 'product', key: 'BEB-GAS-001', label: 'Coca-Cola Original', metrics: [
+        { label: 'Unidades esperadas · 14 días', value: 107.3 }, { label: 'Estado', value: 'READY' },
+        { label: 'Estado del modelo', value: 'ACTIVE' }, { label: 'Modelo ACTIVE', value: 'v1' },
+        { label: 'Feature version', value: 'RIDGE_CAUSAL27_V1' }, { label: 'Revisión', value: 173 },
+        { label: 'Observaciones cerradas hasta', value: '2026-10-20' }
+      ] }] }
+  ] } as unknown as AgentResponse;
+  const onSelect = vi.fn();
+  render(<>
+    <V3ResponseCards views={composite.v3Views!} response={composite} technical={false} disabled={false} onSelect={onSelect} />
+    <AgentActivity response={composite} />
+  </>);
+  expect(screen.getByRole('region', { name: 'Datos clave' })).toBeTruthy();
+  expect(screen.getByRole('region', { name: 'Pronóstico 14 días' })).toBeTruthy();
+  expect(screen.queryByRole('heading', { name: 'Inventario · Coca-Cola Original' })).toBeNull();
+  expect(screen.queryByText('Entradas: 0')).toBeNull(); expect(screen.queryByText(/Feature version/)).toBeNull();
+  expect(screen.queryByText('1 día no aprobado.')).toBeNull();
+  expect(screen.getAllByText('Inventario').length).toBeGreaterThan(0);
+  expect(screen.getAllByText('Pronóstico').length).toBeGreaterThan(0);
+  expect(screen.getByText('Modelo ACTIVE: v1')).toBeTruthy();
+  expect(screen.queryByText('107,3')).toBeNull();
+});
+
+it('A4.2 technical forecast question can keep model version, feature version, and data revision', () => {
+  const technical = { ...response, actions: [{ skillId: 'get_product_forecast', agentId: 'forecast', status: 'SUCCEEDED', durationMs: 1 }],
+    v3Views: [{ kind: 'forecast', title: 'Pronóstico · Producto', metrics: [], items: [{ type: 'product', key: 'SKU-1', label: 'Producto', metrics: [
+      { label: 'Modelo ACTIVE', value: 'v1' }, { label: 'Feature version', value: 'RIDGE_CAUSAL27_V1' }, { label: 'Revisión', value: 173 }
+    ] }] }] } as unknown as AgentResponse;
+  const { container } = render(<V3ResponseCards views={technical.v3Views!} response={technical} technical onSelect={vi.fn()} disabled={false} />);
+  expect(container.textContent).toContain('Feature version: RIDGE_CAUSAL27_V1');
+  expect(container.textContent).toContain('Revisión: 173');
 });
 
 it('selection while a write preview is visible never calls action confirmation', async () => {
