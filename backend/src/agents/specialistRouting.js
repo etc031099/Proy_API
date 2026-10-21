@@ -8,6 +8,16 @@ const agentForTask = (skillId, args = {}) => skillId === 'get_inventory_intellig
   : skillId === 'get_product_forecast' && args.mode !== 'evaluation' && !args.asOfDate ? 'forecast'
     : V3_SKILLS[skillId]?.agents[0];
 
+const resolveSpecialistReference = (reference, memory = {}) => {
+  if (isContextualProductReference(reference)) return memory.selectedProduct?.key || null;
+  const hint = reference?.match(/^(?:ese|esa|este|esta)(?: mism[oa])?\s+(.+)$/i)?.[1]
+    || reference?.match(/^(?:la |el )?(.+?)\s+que\s+(?:elegimos|seleccionamos)$/i)?.[1];
+  if (!hint || /^(?:semana|mes|ano|dia)$/.test(hint)) return reference;
+  const selected = memory.selectedProduct;
+  const ranked = selected && require('../automations/entityResolution').rankEntities([{ _id: selected.id, sku: selected.key, name: selected.label }], hint);
+  return (ranked?.value || ranked?.confidence === 'HIGH_CONFIDENCE') ? selected.key : hint;
+};
+
 // A shared explicit anchor or one active product may serve this bounded pair.
 // Independent products, historical analysis and WRITE stay with their routers.
 const sharedProductPlan = (message, memory = {}) => {
@@ -37,7 +47,7 @@ const specialistPlan = (message, memory = {}) => {
   return sharedProductPlan(message, memory) || singleSpecialistPlan(message, memory);
 };
 const singleSpecialistPlan = (message, memory = {}, implicitReference = false) => {
-  message = require('./languageNlu').highPrecisionMessage(message, { allowImplicitReference: implicitReference });
+  message = require('./languageNlu').highPrecisionMessage(message, { allowImplicitReference: implicitReference || Boolean(memory.selectedProduct) });
   const text = message.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[¿?¡!]/g, '').trim();
   // A conjunction between model attributes is not a second business request.
   const intentText = text.replace(/\bmodelo\s+y\s+version\b/g, 'modelo version');
@@ -62,12 +72,8 @@ const singleSpecialistPlan = (message, memory = {}, implicitReference = false) =
   if (model && !ref) ref = message.match(/\bpara\s+(.+?)[?.!]*$/i)?.[1];
   if (model && !ref) ref = memory.selectedProduct?.key;
   const contextual = isContextualProductReference(ref);
-  const hint = ref?.match(/^(?:ese|esa|este|esta)(?: mism[oa])?\s+(.+)$/i)?.[1];
-  if (!contextual && hint && !/^(?:semana|mes|ano|dia)$/.test(hint)) {
-    const selected = memory.selectedProduct;
-    const ranked = selected && require('../automations/entityResolution').rankEntities([{ _id: selected.id, sku: selected.key, name: selected.label }], hint);
-    ref = (ranked?.value || ranked?.confidence === 'HIGH_CONFIDENCE') ? selected.key : hint;
-  }
+  ref = resolveSpecialistReference(ref, memory);
+  if (forecast && !ref && /^pronostico (?:en|para|durante|de aqui)\b/.test(text)) ref = memory.selectedProduct?.key;
   if (contextual || !ref && /\bsu\b|ese producto|este producto|^y |cuantos? dias de cobertura/.test(text)) {
     ref = memory.selectedProduct?.key;
     if (!ref) return { clarificationQuestion: '¿A qué producto te refieres? Indica su nombre o selecciona una opción vigente.' };
@@ -91,4 +97,4 @@ const singleSpecialistPlan = (message, memory = {}, implicitReference = false) =
     ...(replenishment ? { metric: 'reorder' } : {}) }, replenishment ? 'replenishment' : coverage ? 'coverage' : 'stock');
 };
 
-module.exports = { specialistPlan, sharedProductPlan, agentForTask, requestedIntent };
+module.exports = { specialistPlan, sharedProductPlan, agentForTask, requestedIntent, resolveSpecialistReference };

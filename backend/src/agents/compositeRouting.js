@@ -2,7 +2,7 @@
 const { normalize, isOutOfDomain } = require('./domainGate');
 // Split only independent request starts. Product conjunctions (pan y leche),
 // comparisons, and "y por qué" remain owned by their existing domain router.
-const splitRequests = message => String(message).split(/(?:\s+y\s+|[?.!]\s+adem[aá]s,?\s*)(?=[¿]?(?:(?:luego|despues|después|ademas|además)\s+)?(?:q\b|que\b|qué\b|cual(?:es)?\b|quien(?:es)?\b|cu[aá]nt[oa]s?\b|stock\b|inventario\b|ventas\b|clientes\b|proveedores\b|productos\b|salud\b|margen\b|pron[oó]stico\b|forecast\b|dime\b|dame\b|cu[eé]ntame\b|recomi[eé]ndame\b|explicame\b|precio\b|capital\b|de esos\b|predice\b))/i)
+const splitRequests = message => String(message).split(/(?:\s+y\s+|[?.!]\s+adem[aá]s,?\s*)(?=[¿]?(?:(?:luego|despues|después|ademas|además)\s+)?(?:en\s+(?:q|qu[eé])\s+cantidad\b|q\b|que\b|qué\b|cual(?:es)?\b|quien(?:es)?\b|cu[aá]nt[oa]s?\b|stock\b|inventario\b|ventas\b|clientes\b|proveedores\b|productos\b|salud\b|margen\b|pron[oó]stico\b|forecast\b|dime\b|dame\b|cu[eé]ntame\b|recomi[eé]ndame\b|explicame\b|precio\b|capital\b|de esos\b|predice\b))/i)
   .map(part => part.trim().replace(/^(?:primero|luego|despu[eé]s|adem[aá]s)\s+(?=dime|dame|stock|ventas)/i, ''));
 const writeClause = message => {
   const source = normalize(message);
@@ -36,7 +36,11 @@ function compositePlan(message, memory, binding, route) {
   const external = parts.filter(isOutOfDomain), business = parts.filter(part => !isOutOfDomain(part));
   if (!business.length) return { outOfDomain: true };
   const plans = business.map(part => route(part, memory, binding));
-  if (plans.some(plan => !plan?.tasks?.length || plan.route || plan.tasks.some(task => task.fromPrevious))) return clarify();
+  if (plans.some(plan => !plan?.tasks?.length || plan.route || plan.tasks.some(task => task.fromPrevious))) return {
+    ...clarify(), semanticFallback: parts.length === 2 && business.length === 2
+      && business.every(require('./languageNlu').likelySpecialistQuery)
+      && plans.every(plan => !plan?.clarificationQuestion || plan.semanticFallback === true)
+  };
   const tasks = plans.flatMap(plan => plan.tasks);
   const specialistPair = tasks.length === 2 && tasks.some(task => task.agent === 'inventory') && tasks.some(task => task.agent === 'forecast');
   if (specialistPair && (!tasks[0].args.productRef || !tasks[1].args.productRef

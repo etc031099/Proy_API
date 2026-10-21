@@ -2,6 +2,9 @@
 // Independent editorial utterances. No generated accent/punctuation variants.
 // Labels are offline semantic oracles, not predictions measured on a real LLM.
 const groups = {
+  INVENTORY_FORECAST: ['¿Necesito reposición de cocinero y cuánta demanda habrá en 14 días?'],
+  FORECAST_MODEL_STATUS: ['Consulta la versión técnica de cocinero'],
+  FORECAST_METHOD: ['Describe cómo se obtiene la estimación de demanda'],
   TOP_SELLING_PRODUCTS: [
     'q mas se vende?', 'q productos se vende mas?', 'q producto vendo mas?', 'q es lo q mas sale?',
     'q cosa sale mas', 'lo q mas vendo', 'mis productos top', 'q producto se mueve más', 'cual compran mas',

@@ -965,18 +965,7 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
   const language = require('./languageNlu');
   if (/^(?:pan|primor)[?!.]*$/i.test(message.trim()) && !memory.pending && !memory.selectedProduct)
     plan = { clarificationQuestion: '¿Quieres consultar stock, pronóstico, productos relacionados o preparar una venta de ese producto?' };
-  if (execution?.hasSemanticProvider() && language.fallbackDecision(message, plan, memory)) {
-    const legacy = deterministicProbe?.();
-    if (legacy && !['search_product', 'ambiguous_query', 'unsupported'].includes(legacy.intent)) return null;
-    plan = await language.semanticPlan({ message, memory, binding, execution });
-    memory.pending = null; memory.ranking = null;
-    if (saved) commit({ v3Context: { ...memory } });
-    if (plan.semanticAction) return { answer: 'La venta necesita selección y preview antes de confirmar.',
-      intent: 'semantic_sale_proposal', agent: 'coordinator', clarification: true, semanticAction: plan.semanticAction };
-    if (plan.outOfDomain) return { answer: require('./domainGate').OUT_OF_DOMAIN_ANSWER, intent: 'out_of_domain', agent: 'coordinator' };
-    if (plan.groundedQuestion) return require('./grounded').handleGrounded({ message: plan.groundedQuestion, context, service, run, execution });
-  }
-  const publicNote = plan?.publicNote;
+  let publicNote = plan?.publicNote;
   let responseMode = plan?.responseMode || null;
   let productResolution;
   const rawChoice = message.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
@@ -1009,6 +998,23 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
     ...(scope.selectedProduct ? { lastEntity: { id: scope.selectedProduct.id, sku: scope.selectedProduct.key, name: scope.selectedProduct.label },
       selectedProductReference: { id: scope.selectedProduct.id, sku: scope.selectedProduct.key, name: scope.selectedProduct.label } }
       : Object.hasOwn(scope, 'selectedProduct') ? { lastEntity: null, recentEntities: [], selectedProductReference: null } : {}) });
+  let nluAttempted = false;
+  const legacyOwnsFallback = () => {
+    if (!language.fallbackDecision(message, plan, scope)) return false;
+    const legacy = deterministicProbe?.();
+    const coarseActiveIntent = (['demand_forecast', 'replenishment_candidates'].includes(legacy?.intent)
+      || legacy?.intent === 'replenishment_budget_required' && plan?.semanticFallback === true
+        && !/\b(?:costo|precio|presupuesto|soles|pagar|barato|proveedor)\b/.test(clean(message)))
+      && language.likelySpecialistQuery(message);
+    return legacy && !['search_product', 'ambiguous_query', 'unsupported'].includes(legacy.intent) && !coarseActiveIntent;
+  };
+  const useSemanticFallback = async () => {
+    if (nluAttempted || !execution?.hasSemanticProvider() || !language.fallbackDecision(message, plan, scope) || legacyOwnsFallback()) return;
+    nluAttempted = true;
+    plan = await language.semanticPlan({ message, memory: scope, binding, execution });
+    scope.pending = null; scope.ranking = null; save();
+    responseMode = plan.responseMode || null; publicNote = plan.publicNote;
+  };
   if (memory.pending && /^(?:ver mas|siguiente|anterior)$/.test(clean(message))) {
     const offset = Math.max(0, memory.pending.offset + (clean(message) === 'anterior' ? -5 : 5));
     const resolution = await service.resolveEntity(memory.pending.type, memory.pending.query, context, offset);
@@ -1033,6 +1039,28 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
     if (selected.type === 'product') productResolution = { status: 'CONTEXT_MATCH', sku: selected.key,
       candidateCount: candidates.length, resumedSkillId: plan.tasks[memory.pending?.taskIndex || 0].skillId };
   } else if (choiceLike && !plan?.clarificationQuestion) return { answer: 'Elige una entidad de la lista vigente o indica su nombre/código.', clarification: true, intent: 'v3_selection', agent: 'coordinator' };
+  if (!selected && !choiceLike && legacyOwnsFallback()) return null;
+  // Candidate/ordinal continuations win first. Bare references also get their
+  // normal entity resolution before any last-resort language interpretation.
+  if (!selected && !choiceLike && plan?.tasks) {
+    for (const current of plan.tasks) {
+      const ref = current.args.productRef;
+      if (!ref || !language.suspiciousProductReference(ref)) continue;
+      const resolution = await service.resolveEntity('product', ref, context);
+      if (resolution.entity) {
+        current.args = { ...current.args, productRef: resolution.entity.key };
+        scope.selectedProduct = resolution.entity;
+        resolvedReferences.set(normalize(ref), resolution.entity.key);
+        resolvedProductRefs.add(resolution.entity.key);
+        productResolution = { status: resolution.resolutionStatus || 'SINGLE_MATCH', sku: resolution.entity.key };
+      } else if (resolution.candidates?.length) return candidateView({ ...resolution, type: 'product', query: ref,
+        taskIndex: plan.tasks.indexOf(current) }, plan.tasks, 'productRef');
+    }
+  }
+  if (!selected && !choiceLike && !plan?.lookup) await useSemanticFallback();
+  if (!plan && language.likelySpecialistQuery(message)) plan = {
+    clarificationQuestion: '¿Deseas consultar existencias, reposición o un pronóstico? Indica el producto y el horizonte si corresponde.'
+  };
   if (!plan) return null;
   // A new explicit request replaces the visible selection list, while the active
   // product remains available for an unambiguous cross-domain pronoun within TTL.
@@ -1084,8 +1112,13 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
       }
       if (resolution.candidates?.length) return candidateView(resolution, [task(type === 'product' ? 'get_inventory_intelligence' : type === 'customer' ? 'get_customer_intelligence' : 'get_supplier_intelligence', { mode: 'detail', [`${type}Ref`]: plan.lookup })], `${type}Ref`);
     }
+    if (plan.lookup) await useSemanticFallback();
     if (plan.lookup) return candidateView({ type: 'product', query: plan.lookup, candidates: [] }, [], 'productRef');
   }
+  if (plan.semanticAction) return { answer: 'La venta necesita selección y preview antes de confirmar.',
+    intent: 'semantic_sale_proposal', agent: 'coordinator', clarification: true, semanticAction: plan.semanticAction };
+  if (plan.outOfDomain) return { answer: require('./domainGate').OUT_OF_DOMAIN_ANSWER, intent: 'out_of_domain', agent: 'coordinator' };
+  if (plan.groundedQuestion) return require('./grounded').handleGrounded({ message: plan.groundedQuestion, context, service, run, execution });
   if (plan.clarificationQuestion) {
     if (plan.specialist) { scope.pending = null; scope.ranking = null; save(); }
     const response = () => ({ answer: plan.clarificationQuestion, clarification: true, intent: 'v3_clarification', agent: plan.specialist || 'coordinator',

@@ -30,7 +30,9 @@ function fixture({ now = Date.now, memoryTtl, productRows = rows, contactRows = 
     metadata: { datasetVersion: V3.datasetVersion, referenceDate: V3.referenceDate, timezone: V3.timezone } };
   const service = createV3IntelligenceService({ clock: () => new Date('2026-10-15T17:00:00Z'),
     models: { HistoricalScenario: { findOne: () => query(scenario) }, Product: { find: filter => {
-      catalogReads.push(filter); return query(productRows.filter(row => matches(row, filter))); } }, Contact: { find: filter => query(contactRows.filter(row => matches(row, filter))) } },
+      catalogReads.push(filter); return query(productRows.filter(row => matches(row, filter))); } }, Contact: {
+      find: filter => query(contactRows.filter(row => matches(row, filter))),
+      findOne: filter => query(contactRows.find(row => matches(row, filter)) || null) } },
     snapshotBuilder: async ({ businessId, asOfDate }) => ({ mode: 'LIVE', dataVersion: '0', snapshot: { metadata: {
       snapshotVersion: 'v3-operational-snapshot-v2', businessId, scenarioId: V3.scenarioId, asOfDate, dataVersion: '0', snapshotHash: 'f'.repeat(64) } } }),
     mlClient: { intelligence: async (domain, payload) => {

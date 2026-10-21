@@ -16,13 +16,14 @@ const req = (businessId = V3.businessId) => ({ user: { _id: '507f1f77bcf86cd7994
 const clock = () => new Date('2026-10-20T17:00:00Z');
 const sku = 'BEB-GAS-001';
 const query = rows => ({ select() { return this; }, sort() { return this; }, limit() { return this; }, lean() { return this; }, maxTimeMS() { return Promise.resolve(rows); } });
-function fixture({ reorder = true, throughActions = false } = {}) {
+function fixture({ reorder = true, throughActions = false, neutralProvider } = {}) {
   const calls = [], scopes = [];
   const products = [{ _id: '507f1f77bcf86cd799439012', sku, name: 'Coca-Cola Sabor Original 500 ml' },
     { _id: '507f1f77bcf86cd799439013', sku: 'BEB-GAS-002', name: 'Coca-Cola Sin Azúcar 500 ml' }];
   const models = { HistoricalScenario: { findOne: () => query({ businessId: V3.businessId, scenarioId: V3.scenarioId,
     status: 'completed', sourceSha256: V3.datasetSha256, metadata: { datasetVersion: V3.datasetVersion, referenceDate: V3.referenceDate, timezone: V3.timezone } }) },
-    Product: { find: filter => { assert.equal(filter.businessId, V3.businessId); return query(products); } } };
+    Product: { find: filter => { assert.equal(filter.businessId, V3.businessId); return query(products); } },
+    Contact: { find: () => query([]), findOne: () => query(null) } };
   const forecastRegistryService = { getActiveModelArtifact: async scope => {
     scopes.push(scope); return { artifactData: Buffer.from('approved-test-artifact'), metadata: { ...scope, status: 'ACTIVE',
       modelFamily: 'RIDGE_REGRESSION', recipeId: 'RIDGE-CAUSAL27', modelVersion: 1, featureVersion: 'RIDGE_CAUSAL27_V1', trainedDataVersion: '83', dataCutoff: '2026-10-15' } };
@@ -52,7 +53,7 @@ function fixture({ reorder = true, throughActions = false } = {}) {
     lookups.push(args[1]); return service.resolveEntity(...args);
   } };
   const runtime = () => {
-    const agent = createAgentOrchestrator({ memory: createConversationMemory(), clock, dependencies: { v3Service: observedService, clock } });
+    const agent = createAgentOrchestrator({ memory: createConversationMemory(), clock, neutralProvider, dependencies: { v3Service: observedService, clock } });
     const denied = () => assert.fail('A read must never prepare or execute an action');
     return throughActions ? withActionAssistant(agent, { prepare: denied, get: denied, confirmPendingAction: denied,
       cancelPendingAction: denied }, { clock: Date.now }) : agent;
@@ -60,6 +61,187 @@ function fixture({ reorder = true, throughActions = false } = {}) {
   return { runtime: runtime(), restart: runtime, service, calls, scopes, lookups };
 }
 const ids = result => result.participants.map(row => row.agentId);
+
+const nluValue = (intent, patch = {}) => ({ intent, productQuery: null, metric: null, period: null, quantity: null,
+  horizonDays: null, needsClarification: false, clarificationReason: null, ...patch });
+function semanticFixture(value = nluValue('AMBIGUOUS', { needsClarification: true, clarificationReason: 'MISSING_INTENT' }), { text, failure = false } = {}) {
+  const requests = [];
+  const provider = require('../src/agents/providers/deepseekProvider').createDeepSeekProvider({ env: { DEEPSEEK_API_KEY: 'offline-only' },
+    fetchImpl: async (_url, options) => {
+      requests.push(JSON.parse(options.body));
+      if (failure) throw Error('offline diagnostic failure');
+      return { ok: true, status: 200, json: async () => ({ model: 'deepseek-flash',
+        choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: text ?? JSON.stringify(value) } }],
+        usage: { prompt_tokens: 100, completion_tokens: 30, total_tokens: 130 } }) };
+    } });
+  return { ...fixture({ throughActions: true, neutralProvider: provider }), requests, provider };
+}
+
+for (const [question, domains, technical] of [
+  ['y esta en q cantidad se venderia en 2 semanas', ['forecast']],
+  ['esta coca cola necesita reposicion? y en q cantidad se vendera de aqui a dos semanas?', ['inventory', 'forecast']],
+  ['q modelo esta usando eso?', ['forecast'], true],
+  ['esta misma cuanto venderia en dos semanas', ['forecast']],
+  ['¿Considera que debería reponer este producto?', ['inventory']],
+  ['¿En qué cantidad se vendería durante las próximas dos semanas?', ['forecast']],
+  ['¿Cuánto cree que se venderá Coca-Cola Sabor Original 500 ml de aquí a 14 días?', ['forecast']],
+  ['¿Ya debería reponerla y cuánto cree que se venda en 14 días?', ['inventory', 'forecast']],
+  ['Ahora dime si ya debería reponerla.', ['inventory']],
+  ['¿Cuánto vendería la Coca-Cola que elegimos en dos semanas?', ['forecast']]
+]) test(`A4.6 clear context and cloud language remain deterministic with DeepSeek available: ${question}`, async () => {
+  const f = semanticFixture(), conversationId = randomUUID();
+  await f.runtime.handle(req(), { message: `pronóstico de ${sku} en 14 días`, conversationId });
+  const result = await f.runtime.handle(req(), { message: question, conversationId });
+  assert.equal(result.requiresClarification, false, result.answer);
+  assert.deepEqual(f.calls.slice(1).map(row => row.domain), domains);
+  assert.deepEqual(f.calls.slice(1).map(row => row.payload.skus), domains.map(() => [sku]));
+  assert.equal(f.requests.length, 0); assert.equal(result.usage.totalLlmCalls, 0);
+  assert.ok(!ids(result).includes('analyst')); assert.ok(!f.lookups.includes('aqui'));
+  if (domains.includes('forecast')) assert.equal(f.calls.at(-1).payload.horizonDays, 14);
+  if (technical) { assert.equal(result.requestedIntent, 'model_status'); assert.match(result.answer, /ACTIVE v1.*RIDGE_CAUSAL27_V1/); }
+});
+
+for (const choice of [sku, 'la primera nomás', '1']) test(`A4.6 exact/ordinal pending forecast resolves before NLU: ${choice}`, async () => {
+  const f = semanticFixture(), conversationId = randomUUID();
+  const first = await f.runtime.handle(req(), { message: '¿Cuánto venderemos de Coca-Cola en 14 días?', conversationId });
+  assert.equal(first.requiresClarification, true);
+  const result = await f.runtime.handle(req(), { message: choice, conversationId });
+  assert.equal(result.agent, 'forecast'); assert.equal(result.actions.length, 1);
+  assert.equal(f.requests.length, 0); assert.equal(result.usage.totalLlmCalls, 0);
+  assert.equal(result.pendingAction, undefined);
+});
+
+for (const [message, intent, patch, domains] of [
+  ['¿A cuánto podría ascender la salida de Coca-Cola en 14 días?', 'FORECAST', { productQuery: 'Coca-Cola', horizonDays: 14 }, ['forecast']],
+  ['Valora si las existencias de Coca-Cola serán suficientes para seguir atendiendo', 'REPLENISHMENT', { productQuery: 'Coca-Cola' }, ['inventory']],
+  ['Valora la reposición individual de Coca-Cola y cuánto potencial de salida tendría en 14 días', 'INVENTORY_FORECAST', { productQuery: 'Coca-Cola', horizonDays: 14 }, ['inventory', 'forecast']]
+]) test(`A4.6 final structured fallback dispatches facts only through active skills: ${intent}`, async () => {
+  const f = semanticFixture(nluValue(intent, patch)), conversationId = randomUUID();
+  const first = await f.runtime.handle(req(), { message, conversationId });
+  assert.equal(f.requests.length, 1, JSON.stringify({ answer: first.answer, intent: first.intent, lookups: f.lookups })); assert.equal(first.requiresClarification, true, first.answer);
+  assert.equal(f.calls.length, 0);
+  const state = snapshot(await f.runtime.getContextSnapshot(req(), conversationId));
+  assert.equal(state.v3Context.pending.query, 'Coca-Cola');
+  const restarted = f.restart(); await restarted.restoreContext(req(), conversationId, state);
+  const result = await restarted.handle(req(), { message: sku, conversationId });
+  assert.equal(f.requests.length, 1, 'selection must not classify a second time');
+  assert.equal(result.usage.totalLlmCalls, 0);
+  assert.deepEqual(f.calls.map(row => row.domain), domains);
+  assert.equal(result.actions.length, domains.length);
+  assert.ok(!ids(result).includes('analyst'));
+  if (domains.includes('forecast')) assert.match(result.answer, /108.27 unidades.*14 días/);
+  if (domains.includes('inventory')) assert.match(result.answer, /Stock actual: 14 unidades/);
+  const projected = require('../src/services/agentHistoryProjection').publicResponse(first);
+  assert.equal(projected.semanticClassification.calls, 1); assert.equal(projected.usage.totalLlmCalls, 1);
+  assert.equal(projected.usage.totalTokens, 130); assert.equal(projected.semanticClassification.accepted, true);
+  const coordinator = first.participants.find(row => row.agentId === 'coordinator');
+  assert.equal(coordinator.llmCalls, 1); assert.ok(!ids(first).includes('analyst'));
+});
+
+test('A4.6 NLU classifies an elliptical reference but server context chooses the SKU, horizon and lineage', async () => {
+  const f = semanticFixture(nluValue('FORECAST_MODEL_STATUS')), conversationId = randomUUID();
+  await f.runtime.handle(req(), { message: `pronóstico de ${sku} en 14 días`, conversationId });
+  const result = await f.runtime.handle(req(), { message: 'Detalla la identidad técnica de esa estimación', conversationId });
+  assert.equal(f.requests.length, 1, JSON.stringify({ answer: result.answer, intent: result.intent, lookups: f.lookups })); assert.equal(result.requestedIntent, 'model_status');
+  assert.match(result.answer, /ACTIVE v1.*RIDGE_CAUSAL27_V1.*14 días/);
+  assert.deepEqual(f.calls.at(-1).payload.skus, [sku]);
+  const context = JSON.parse(f.requests[0].messages[1].content).context;
+  assert.equal(context.hasActiveProduct, true); assert.equal(context.lastProductTask.horizonDays, 14);
+  assert.equal(context.lastProductTask.requestedIntent, 'forecast');
+  assert.doesNotMatch(JSON.stringify(context), /BEB-GAS|Coca|businessId|scenario|userId|snapshot|stock/);
+  assert.equal(result.usage.totalLlmCalls, 1); assert.equal(result.participants.find(row => row.agentId === 'forecast').skillCalls, 1);
+});
+
+test('A4.6 ambiguous pending context is described but cannot be selected by NLU', async () => {
+  const f = semanticFixture(nluValue('FORECAST', { horizonDays: 14 })), conversationId = randomUUID();
+  await f.runtime.handle(req(), { message: '¿Debo reponer Coca-Cola?', conversationId });
+  const result = await f.runtime.handle(req(), { message: '¿A cuánto podría ascender la salida de esa en 14 días?', conversationId });
+  assert.equal(f.requests.length, 1); assert.equal(result.requiresClarification, true); assert.equal(f.calls.length, 0);
+  const context = JSON.parse(f.requests[0].messages[1].content).context;
+  assert.equal(context.hasActiveProduct, false); assert.equal(context.pending.entityType, 'product');
+  assert.deepEqual(context.pending.requestedIntents, ['replenishment']);
+});
+
+for (const invalid of [
+  { ...nluValue('FORECAST'), stock: 999 },
+  nluValue('FORECAST', { productQuery: 'INVENTADO-999' }),
+  nluValue('FORECAST', { horizonDays: 7 }),
+  nluValue('FORECAST', { needsClarification: true }),
+  nluValue('DELETE_ALL'),
+  { ...nluValue('FORECAST'), tasks: [{ skillId: 'train' }] }
+]) test(`A4.6 invalid NLU cannot invent fields, targets, horizons or commands: ${JSON.stringify(invalid)}`, async () => {
+  const f = semanticFixture(invalid);
+  const result = await f.runtime.handle(req(), { message: '¿A cuánto podría ascender la salida de Coca-Cola en 14 días?' });
+  assert.equal(f.requests.length, 1); assert.equal(f.calls.length, 0); assert.equal(result.requiresClarification, true);
+  assert.equal(result.semanticClassification.accepted, false);
+});
+
+for (const options of [{ failure: true }, { text: 'not json' }]) test(`A4.6 provider uncertainty fails safely after one attempt: ${JSON.stringify(options)}`, async () => {
+  const f = semanticFixture(undefined, options);
+  const result = await f.runtime.handle(req(), { message: '¿A cuánto podría ascender la salida de Coca-Cola en 14 días?' });
+  assert.equal(f.requests.length, 1); assert.equal(f.calls.length, 0); assert.equal(result.requiresClarification, true);
+});
+
+test('A4.6 truly ambiguous meaning asks for clarification and does not execute an interpretation', async () => {
+  const f = semanticFixture();
+  const result = await f.runtime.handle(req(), { message: '¿Debo actuar sobre esas existencias o revisar la salida?' });
+  assert.equal(f.requests.length, 1); assert.equal(result.requiresClarification, true); assert.equal(f.calls.length, 0);
+});
+
+test('A4.6 compound schema rejects fan-out, distinct explicit SKUs and WRITE mixtures', () => {
+  const { validateNlu } = require('../src/agents/languageNlu');
+  for (const message of [
+    'Stock de BEB-GAS-001 y forecast de BEB-GAS-002 en 14 días',
+    'stock de Coca-Cola y forecast en 14 días y ventas de hoy',
+    'stock de Coca-Cola y vende 2 unidades',
+    'stock de Coca-Cola y confirma la compra'
+  ]) assert.throws(() => validateNlu(JSON.stringify(nluValue('INVENTORY_FORECAST')), message), { code: 'NLU_SCHEMA_INVALID' });
+  assert.equal(require('../src/agents/compositeRouting').writeClause('cuánto se espera vender en 14 días'), false);
+  assert.equal(require('../src/agents/compositeRouting').writeClause('vende 2 Coca-Cola'), true);
+});
+
+test('A4.6 an uncertain sufficiency question uses one NLU and the active inventory skill', async () => {
+  const f = semanticFixture(nluValue('REPLENISHMENT')), conversationId = randomUUID();
+  await f.runtime.handle(req(), { message: `pronóstico de ${sku} en 14 días`, conversationId });
+  const result = await f.runtime.handle(req(), { message: '¿Me alcanzará el stock considerando lo que se espera vender?', conversationId });
+  assert.equal(f.requests.length, 1); assert.equal(result.agent, 'inventory');
+  assert.equal(result.actions.length, 1); assert.match(result.answer, /Stock actual: 14 unidades/);
+  assert.deepEqual(f.calls.at(-1).payload.skus, [sku]); assert.equal(result.pendingAction, undefined);
+});
+
+test('A4.6 methodology NLU remains distinct from numerical forecast and uses the existing method skill', async () => {
+  const f = semanticFixture(nluValue('FORECAST_METHOD'));
+  const result = await f.runtime.handle(req(), { message: 'Describe cómo se obtiene la estimación de demanda' });
+  assert.equal(f.requests.length, 1); assert.equal(result.agent, 'forecast');
+  assert.equal(result.requestedIntent, 'method'); assert.equal(result.actions[0].skillId, 'get_product_forecast');
+  assert.match(result.answer, /Ridge Regression/); assert.equal(f.calls.length, 0);
+});
+
+test('A4.6 NLU cannot ignore a different explicit entity in favor of the active product', () => {
+  const { nluPlan, validateNlu } = require('../src/agents/languageNlu');
+  const plan = nluPlan(nluValue('FORECAST'), '¿A cuánto ascendería la salida de Pepsi en 14 días?',
+    { selectedProduct: { key: sku }, lastFamily: 'get_product_forecast' }, { operationalDate: '2026-10-20' });
+  assert.ok(plan.clarificationQuestion); assert.equal(plan.tasks, undefined);
+  assert.throws(() => validateNlu(JSON.stringify(nluValue('FORECAST', { productQuery: 'aqui' })),
+    'cuánto saldría de aqui a dos semanas'), { code: 'NLU_SCHEMA_INVALID' });
+});
+
+test('A4.6 execution enforces one NLU call even if a caller attempts another', async () => {
+  const f = semanticFixture(), execution = createAgentExecution({ context: createAgentRequestContext(req()),
+    neutralProvider: f.provider, dependencies: { v3Service: f.service } });
+  try {
+    await execution.generateSemantic({ maxTokens: 300, temperature: 0, messages: [{ role: 'user', content: 'offline test' }] });
+    await assert.rejects(execution.generateSemantic({ messages: [] }), { code: 'AGENT_INVALID_REQUEST' });
+    assert.equal(f.requests.length, 1);
+  } finally { execution.finish(); }
+});
+
+test('A4.6 an unavailable NLU leaves uncertain active-domain language as a safe clarification', async () => {
+  const f = fixture({ throughActions: true });
+  const result = await f.runtime.handle(req(), { message: '¿A cuánto podría ascender la salida en 14 días?' });
+  assert.equal(result.requiresClarification, true); assert.equal(f.calls.length, 0);
+  assert.equal(result.usage.totalLlmCalls, 0);
+});
 
 for (const question of [
   'debo reponer coca cola o todavia aguanta?',

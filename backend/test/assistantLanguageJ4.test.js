@@ -35,17 +35,20 @@ test('J4 dataset has >=400 independent utterances and every intent', () => {
 const skillFor = { INVENTORY_LOOKUP: 'get_inventory_intelligence', LOW_STOCK: 'get_inventory_intelligence', REPLENISHMENT: 'get_inventory_intelligence',
   SALES_SUMMARY: 'get_business_analytics', TOP_SELLING_PRODUCTS: 'get_business_analytics', FORECAST: 'get_product_forecast',
   CUSTOMERS_AT_RISK: 'get_customer_intelligence', CUSTOMER_VALUE: 'get_customer_intelligence', CUSTOMER_ACTIVITY: 'get_customer_intelligence',
-  SUPPLIER_PERFORMANCE: 'get_supplier_intelligence', CROSS_SELL: 'get_cross_sell_recommendations', BUSINESS_HEALTH: 'get_business_health' };
+  SUPPLIER_PERFORMANCE: 'get_supplier_intelligence', CROSS_SELL: 'get_cross_sell_recommendations', BUSINESS_HEALTH: 'get_business_health',
+  INVENTORY_FORECAST: 'get_inventory_intelligence', FORECAST_MODEL_STATUS: 'get_product_forecast', FORECAST_METHOD: 'get_product_forecast' };
 // Offline oracle tests the entire provider/validator/plan boundary, not real-model accuracy.
 for (const row of dataset) test(`J4 language corpus ${row.intent}: ${row.message}`, async () => {
   let calls = 0, accepted;
   const message = normalizeConversationalInput(row.message);
-  const productQuery = ['PRODUCT_SEARCH', 'INVENTORY_LOOKUP', 'FORECAST', 'CROSS_SELL', 'CREATE_SALE'].includes(row.intent)
+  const productQuery = ['PRODUCT_SEARCH', 'INVENTORY_LOOKUP', 'FORECAST', 'CROSS_SELL', 'CREATE_SALE', 'INVENTORY_FORECAST', 'FORECAST_MODEL_STATUS'].includes(row.intent)
     ? message.match(/\b(?:PAN-FRE-001|ABA-ACE-002|ABA-ACE-001|pan francés|pan frances|panes franceses|panes|cocinero|primor|bimbo|coca|leche|pan|arroz|Sprite)\b/i)?.[0] || null : null;
   const result = await language.semanticPlan({ message, memory: {}, binding, execution: {
     hasSemanticProvider: () => true, async generateSemantic(input) { calls++; assert.ok(Buffer.byteLength(JSON.stringify(input.messages)) < 8000);
       const minimal = JSON.parse(input.messages[1].content); assert.deepEqual(Object.keys(minimal), ['message', 'context']);
-      assert.deepEqual(Object.keys(minimal.context), ['activeEntityType', 'hasList']); assert.equal(minimal.context.activeEntityType, null);
+      assert.deepEqual(Object.keys(minimal.context), ['activeEntityType', 'hasList', 'hasActiveProduct', 'lastProductTask', 'pending']);
+      assert.equal(minimal.context.activeEntityType, null); assert.equal(minimal.context.hasActiveProduct, false);
+      assert.equal(minimal.context.lastProductTask, null); assert.equal(minimal.context.pending, null);
       return { text: JSON.stringify(value(row.intent, { productQuery })) }; },
     recordSemanticOutcome(ok) { accepted = ok; }
   } });
