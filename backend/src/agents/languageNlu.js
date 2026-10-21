@@ -85,6 +85,15 @@ function highPrecisionMessage(message, { allowImplicitReference = false } = {}) 
     .replace(/^(?:ya[, ]+(?:pero\s+)?)?ahora\s+dime\s+si\s+/, '')
     .replace(/^(?:crees?|considera)\s+que\s+/, '')
     .replace(/^(?:masomenos|mas o menos)\s+/, '');
+  // Recognize the READ relationship before generic "con/de" extraction. Feed
+  // one canonical intent to the existing specialist and product resolver; never
+  // interpret a purchase command or merge independent clauses into a product.
+  const associationRead = read.replace(/^[¿¡]\s*|\s*[?!.]+$/g, '').trim();
+  const association = associationRead.match(/^con que(?: productos?)?\s+(?:se\s+)?suelen?\s+(?:comprar|compran?)\s+(?:mas\s+)?(.+)$/)
+    || associationRead.match(/^que(?: productos?)?\s+(?:se\s+)?(?:suelen?\s+)?(?:comprar|compran?)\s+(?:junto\s+(?:con|a)|con)\s+(.+)$/)
+    || associationRead.match(/^que productos?\s+acompanan?\s+(?:a\s+)?(.+)$/);
+  if (association && !/\b(?:y|ademas)\b/.test(association[1]))
+    return `productos relacionados con ${association[1]}`;
   const quantityForecast = read.match(/^(?:cuanto|(?:en )?que cantidad)\s+(?:(?:crees?|considera)\s+que\s+)?(?:(?:se\s+)?(?:vendera|venderia|venda|vendamos|venderemos|vendere|salga|saldra)|se espera vender)\s+(?:de\s+)?(.+)$/)
     || read.match(/^cuanto\s+(.+?)\s+voy a vender(\s+.*)?$/)
     || read.match(/^se espera vender\s+(.+)$/);

@@ -16,6 +16,59 @@ const setup = () => fixture({ contactRows: vendors, mlTransform(domain, payload,
   return body;
 } });
 const agents = result => result.participants.map(row => row.agentId).sort();
+for (const question of [
+  'con q productos suelen comprar coca cola?',
+  'con qué productos suelen comprar coca cola?',
+  'qué suelen comprar junto con coca cola?',
+  'qué productos compran junto a coca cola?',
+  'qué se compra con coca cola?',
+  'qué productos acompañan a coca cola?',
+  'con qué se suele comprar coca cola?',
+  'qué productos compran junto con coca cola?',
+  'con q productos suelen comprar coca cola porfa?'
+]) test(`A5.2.1 human READ intent precedes product resolution: ${question}`, async () => {
+  const { highPrecisionMessage } = require('../src/agents/languageNlu');
+  const { normalizeProductReference, extractProductReference } = require('../src/utils/productReference');
+  const { routeV3 } = require('../src/agents/v3Routing');
+  const { specialistPlan } = require('../src/agents/specialistRouting');
+  const normalized = highPrecisionMessage(question);
+  assert.equal(normalizeProductReference(extractProductReference(normalized)), 'coca cola');
+  assert.equal(highPrecisionMessage(normalized), normalized);
+  for (const plan of [routeV3(question, {}, { operationalDate: '2026-10-15' }), specialistPlan(question)]) {
+    assert.equal(plan?.tasks?.[0].agent, 'associations');
+    assert.equal(normalizeProductReference(plan.tasks[0].args.productRef), 'coca cola');
+  }
+  const f = setup(); let result = await f.run(question);
+  assert.equal(result.requiresClarification, true, result.answer); assert.equal(result.suggestions?.length, 2);
+  const snapshot = await f.snapshot(), pending = snapshot.v3Context.pending.tasks[0];
+  assert.equal(pending.agent, 'associations'); assert.equal(pending.skillId, 'get_cross_sell_recommendations');
+  assert.equal(normalizeProductReference(pending.args.productRef), 'coca cola');
+  const searches = JSON.stringify(f.catalogReads, (_key, value) => value instanceof RegExp ? value.source : value);
+  assert.doesNotMatch(searches, /suelen|acompan|productos|junto/i);
+  assert.equal(f.calls.length, 0); assert.equal(result.usage.totalLlmCalls, 0);
+  result = await f.run('1');
+  assert.equal(result.code, null, result.answer); assert.deepEqual(agents(result), ['associations', 'coordinator']);
+  assert.equal(f.calls.length, 1); assert.equal(f.calls[0].payload.sku, 'BEB-GAS-001');
+  assert.equal(result.usage.totalLlmCalls, 0); assert.equal(f.prepared.length, 0); assert.equal(f.mutations.length, 0);
+});
+
+for (const question of ['compra 10 coca colas', 'registra una compra de 10 unidades de Coca-Cola'])
+  test(`A5.2.1 purchase commands retain Operations and quantity: ${question}`, async t => {
+    const { Product } = require('../src/models');
+    const { actionIntent, parseAction } = require('../src/automations/actionInput');
+    t.mock.method(Product, 'find', require('./helpers/j2sProductFixture').productFind);
+    assert.equal(actionIntent(question), 'create_purchase');
+    assert.equal(require('../src/agents/languageNlu').highPrecisionMessage(question), question);
+    assert.equal(parseAction(question, 'create_purchase').items[0].quantity, 10);
+    const f = setup(), result = await f.run(question);
+    assert.equal(result.agent, 'operations', result.answer); assert.equal(result.suggestions?.length, 2);
+    assert.equal(result.usage.totalLlmCalls, 0); assert.equal(f.calls.length, 0);
+    const selected = await f.run('1');
+    assert.equal(selected.agent, 'operations', selected.answer);
+    assert.equal(selected.pendingAction?.action, 'create_purchase', selected.answer);
+    assert.equal(f.prepared[0].products[0].quantity, 10); assert.equal(f.mutations.length, 0);
+  });
+
 for (const question of ['¿Cómo están mis proveedores?', '¿Qué proveedor entrega más rápido?',
   'q proveedor suele entregar mas rapido', '¿Qué compras tengo pendientes?', '¿Qué proveedor ha sido más puntual?'])
   test(`A5.2 Procurement deterministic: ${question}`, async () => {
@@ -45,7 +98,7 @@ test('A5.2 unique and absent supplier use the existing tenant resolver', async (
   const before = f.calls.length; result = await f.run('historial de compras del proveedor Inexistente');
   assert.equal(result.requiresClarification, true, result.answer); assert.equal(f.calls.length, before);
 });
-for (const question of ['¿Qué productos se compran con Coca-Cola?', '¿Qué productos se compran junto con Coca-Cola?', 'con q se compra mas la coca cola',
+for (const question of ['q productos se compran junto con la cocacola?', '¿Qué productos se compran con Coca-Cola?', '¿Qué productos se compran junto con Coca-Cola?', 'con q se compra mas la coca cola',
   '¿Qué reglas de asociación hay para Coca-Cola?']) test(`A5.2 Associations selection: ${question}`, async () => {
   const f = setup(); let result = await f.run(question);
   assert.equal(result.requiresClarification, true, result.answer); assert.equal(result.suggestions.length, 2);
@@ -58,14 +111,21 @@ for (const question of ['¿Qué productos se compran con Coca-Cola?', '¿Qué pr
   assert.match(result.answer, /no demuestra causalidad|no implica causalidad/);
   assert.equal(result.usage.totalLlmCalls, 0); assert.equal(f.mutations.length, 0);
 });
-test('A5.2 technical association metrics preserve service values and active product', async () => {
+for (const reference of ['esta', 'esa']) test(`A5.2 technical association metrics preserve active product: ${reference}`, async () => {
   const f = setup(); let result = await f.run('reglas de asociación para BEB-GAS-001');
   assert.equal(result.code, null, result.answer);
-  result = await f.run('¿Cuál es el lift de esta asociación?');
+  result = await f.run(`¿Cuál es el lift de ${reference} asociación?`);
   assert.equal(result.code, null, result.answer); assert.deepEqual(agents(result), ['associations', 'coordinator']);
   assert.equal(f.calls.at(-1).payload.sku, 'BEB-GAS-001');
   assert.match(result.answer, /lift 2|lift: 2/i); assert.match(result.answer, /Support|support/);
   assert.match(result.answer, /Confidence|confidence/); assert.match(result.answer, /congelado/);
+});
+
+test('A5.2.1 shared normalization does not reinterpret customers or merge separate clauses', () => {
+  const { highPrecisionMessage } = require('../src/agents/languageNlu');
+  for (const question of ['¿Qué clientes compran con más frecuencia?', '¿Quién suele comprar Coca-Cola?',
+    'con qué productos suelen comprar coca cola y cuánto venderemos en 14 días?'])
+    assert.doesNotMatch(highPrecisionMessage(question), /^productos relacionados con /);
 });
 
 test('A5.2 normal associations stay compact; explicit metrics remain available', async () => {

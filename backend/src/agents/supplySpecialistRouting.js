@@ -8,6 +8,7 @@ const supplyWrite = message => /^(?:(?:quiero|quisiera)\s+)?(?:crea(?:r)?\s+(?:u
   .test(normalize(message).replace(/[¿?¡!]/g, '').trim());
 
 const supplyPlan = (message, memory = {}, binding = {}) => {
+  message = require('./languageNlu').highPrecisionMessage(message);
   const text = normalize(message).replace(/\bq\b/g, 'que').replace(/[¿?¡!]/g, '').trim();
   if (require('../automations/actionInput').actionIntent(message) || supplyWrite(message) || /\s+y\s+/.test(text)) return null;
   const asOf = binding.operationalDate || binding.asOfDate;
