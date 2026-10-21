@@ -3,7 +3,7 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 const { randomUUID } = require('node:crypto');
 const { performance } = require('node:perf_hooks');
 const attempts = new AsyncLocalStorage();
-const PHASES = new Set(['SESSION_START', 'ACTION_LOAD', 'PRECONDITION_REVALIDATION', 'STOCK_UPDATE',
+const PHASES = new Set(['EXECUTION_PREFLIGHT', 'SESSION_START', 'ACTION_LOAD', 'PRECONDITION_REVALIDATION', 'STOCK_UPDATE',
   'EXCHANGE_RATE', 'TRANSACTION_PERSIST', 'JOURNAL', 'DOMAIN_EVENTS', 'EXECUTOR',
   'EXECUTION_BUDGET_CHECK', 'ACTION_PERSIST', 'AUDIT', 'COMMIT', 'ROLLBACK']);
 const DEPENDENCIES = new Set(['NONE', 'MONGO', 'EXCHANGE_RATE']);

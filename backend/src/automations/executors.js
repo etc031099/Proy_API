@@ -6,13 +6,20 @@ const { createProductRecord } = require('../services/productCreationService');
 const { fail } = require('./contracts');
 const { redact } = require('../services/agentHistoryProjection');
 const { countLabel, units, money, ruleNote } = require('../utils/assistantFormatting');
-const { writeTransaction } = require('../services/transactionWriteService');
+const { writeTransaction, prepareTransactionExchangeRates } = require('../services/transactionWriteService');
 const ActionDomainEvent = require('../models/ActionDomainEvent');
 const diagnostics = require('./actionDiagnostics');
-const recordEvents = (context, actionId, entityId, types, session) => ActionDomainEvent.create(types.map(type => ({
+const recordEvents = (context, actionId, entityId, types, session) => ActionDomainEvent.insertMany(types.map(type => ({
   businessId: context.businessId, actionId, entityId: String(entityId), type
 })), { session, ordered: true });
 const transactionExecutor = type => ({
+  async prepareExecution(args, _context, snapshot) {
+    try { return await prepareTransactionExchangeRates(args, snapshot); }
+    catch (error) {
+      if (error.statusCode === 400 || error.statusCode === 404 || error.code === 'ACTION_CONFLICT') fail('ACTION_CONFLICT');
+      throw error;
+    }
+  },
   async preview(args, context) {
     try {
       const { snapshot } = await writeTransaction({ input: { ...args, type }, businessId: context.businessId, preview: true });
@@ -24,11 +31,11 @@ const transactionExecutor = type => ({
           total: Number((item.quantity * item.convertedPrice).toFixed(2)) })) };
     } catch { fail('ACTION_VALIDATION_FAILED'); }
   },
-  async execute(args, context, session, actionId, expectedSnapshot, onCommitted) {
+  async execute(args, context, session, actionId, expectedSnapshot, onCommitted, preparedExchangeRates) {
     if (!expectedSnapshot) fail('ACTION_CONFLICT');
     let result;
     try {
-      result = await writeTransaction({ input: { ...args, type }, businessId: context.businessId, session, expectedSnapshot });
+      result = await writeTransaction({ input: { ...args, type }, businessId: context.businessId, session, expectedSnapshot, preparedExchangeRates });
     } catch (error) {
       if (error.statusCode === 400 || error.statusCode === 404 || error.code === 'ACTION_CONFLICT') fail('ACTION_CONFLICT');
       throw error;

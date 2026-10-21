@@ -7,6 +7,14 @@ const { createActionService, hashArgs } = require('../src/automations/execution'
 const { createActionRepository } = require('../src/automations/repository');
 const { createAgentActionHandler } = require('../src/controllers/agentActionsController');
 const { createActionContext, ActionError, randomUUID } = require('../src/automations/contracts');
+const { getActionSkill } = require('../src/automations/skills');
+
+test('only financial action budgets change; commit and other actions keep their existing contract', () => {
+  assert.equal(getActionSkill('create_sale').timeoutMs, 15000);
+  assert.equal(getActionSkill('create_purchase').timeoutMs, 15000);
+  assert.equal(getActionSkill('create_product').timeoutMs, 10000);
+  assert.equal(getActionSkill('create_stock_alert_rule').timeoutMs, 10000);
+});
 
 function fixture(t, { execute, auditFailure = false, abortFailure = false, commitFailure = null, commitClearsTransaction = false, loggerFailure = false } = {}) {
   const logs = [], sessions = [];
@@ -31,7 +39,7 @@ function fixture(t, { execute, auditFailure = false, abortFailure = false, commi
   const repository = createActionRepository({ pendingModel: model,
     conversationModel: { exists: () => ({ maxTimeMS: async () => true }) },
     startSession: async () => {
-      const session = { row: structuredClone(row), active: false, startTransaction() { this.active = true; }, inTransaction() { return this.active; },
+      const session = { row: structuredClone(row), active: false, startTransaction(options) { assert.equal(options.maxCommitTimeMS, 10000); this.active = true; }, inTransaction() { return this.active; },
         async commitTransaction() { if (commitFailure && sessions.length === 1) {
           if (commitClearsTransaction) this.active = false;
           throw commitFailure;
@@ -50,18 +58,18 @@ function fixture(t, { execute, auditFailure = false, abortFailure = false, commi
 }
 const privateError = extra => Object.assign(new Error('token=secret payload args price customer stack mongodb://private'), extra);
 
-test('deadline logs once, with unchanged 10s budget, original phase, fallback timing and confirmed rollback', async t => {
+test('deadline logs once, with financial 15s budget, original phase, fallback timing and confirmed rollback', async t => {
   const f = fixture(t, { execute: async advance => {
     await diagnostics.exchangeRate(true, async () => { advance(8000); return { source: 'fallback', rate: 3.7 }; });
-    await diagnostics.observe('STOCK_UPDATE', 'MONGO', async () => advance(3230));
+    await diagnostics.observe('STOCK_UPDATE', 'MONGO', async () => advance(8230));
   } });
   await assert.rejects(f.confirm(), { code: 'ACTION_EXECUTION_FAILED' });
   assert.equal(f.logs.length, 1);
   const log = f.logs[0];
   assert.equal(log.event, 'agent_action_execution_failed'); assert.equal(log.actionId, f.id);
   assert.equal(log.failureCategory, 'EXECUTION_DEADLINE'); assert.equal(log.executionPhase, 'EXECUTION_BUDGET_CHECK');
-  assert.equal(log.timeoutMs, 10000); assert.equal(log.budgetElapsedMs, 11230); assert.equal(log.executorDurationMs, 11230);
-  assert.equal(log.durationMs, 11230); assert.equal(log.phaseDurationsMs.STOCK_UPDATE, 3230);
+  assert.equal(log.timeoutMs, 15000); assert.equal(log.budgetElapsedMs, 16230); assert.equal(log.executorDurationMs, 16230);
+  assert.equal(log.durationMs, 16230); assert.equal(log.phaseDurationsMs.STOCK_UPDATE, 8230);
   assert.deepEqual(log.exchangeRate, { called: true, durationMs: 8000, fallbackUsed: true, respondedSuccessfully: false });
   assert.equal(log.rollbackStatus, 'CONFIRMED'); assert.equal(f.state().status, 'FAILED');
   await assert.rejects(f.confirm(), { code: 'ACTION_CONFLICT' }); assert.equal(f.logs.length, 1);
@@ -112,9 +120,9 @@ for (const kind of [112, 251, 'TransientTransactionError', 'UnknownTransactionCo
   await assert.rejects(f.confirm(), { code: 'ACTION_CONFLICT' }); assert.equal(f.logs.length, 0); assert.equal(f.state().status, 'PENDING');
 });
 
-for (const ms of [10000, 10001]) test(`execution budget still uses strict greater-than at ${ms}ms`, async t => {
+for (const ms of [15000, 15001]) test(`financial execution budget uses strict greater-than at ${ms}ms`, async t => {
   const f = fixture(t, { execute: advance => advance(ms) });
-  if (ms === 10000) { assert.equal((await f.confirm()).status, 'EXECUTED'); assert.equal(f.logs.length, 0); }
+  if (ms === 15000) { assert.equal((await f.confirm()).status, 'EXECUTED'); assert.equal(f.logs.length, 0); }
   else { await assert.rejects(f.confirm(), { code: 'ACTION_EXECUTION_FAILED' }); assert.equal(f.logs[0].failureCategory, 'EXECUTION_DEADLINE'); }
 });
 

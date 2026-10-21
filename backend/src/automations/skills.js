@@ -10,7 +10,9 @@ const entry = (id, description, inputSchema, automatic = false, status = 'PENDIN
   id, version: '1.0.0', description, allowedAgents: ['operations'], readOnly: false,
   riskLevel: automatic ? 'SAFE_AUTOMATIC' : 'REQUIRES_CONFIRMATION', requiresConfirmation: !automatic,
   inputSchema, outputContract: 'Identificador y resumen seguro del resultado; sin documentos completos.',
-  timeoutMs: 10000, sensitivity: 'OPERATIONAL', idempotent: true,
+  // Atlas evidence: 13.861s minus 3.465s external FX still leaves 10.396s.
+  // Bound financial writes at 15s after preflight; other actions keep 10s.
+  timeoutMs: ['create_sale', 'create_purchase'].includes(id) ? 15000 : 10000, sensitivity: 'OPERATIONAL', idempotent: true,
   idempotencyStrategy: 'scoped sourceChannel + externalRequestId; pendingActionId + atomic Mongo commit', auditRequired: true, status
 });
 // Separate write registry: existing read skills and Gemini declarations remain read-only.

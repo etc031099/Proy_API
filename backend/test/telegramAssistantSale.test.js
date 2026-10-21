@@ -12,7 +12,7 @@ test('assistant sale registers a low-stock notification only for after commit', 
     snapshot: { currency: 'PEN', totalAmount: 1, items: [{ sku: product.sku, name: product.name, quantity: 1, resultingStock: 2 }] },
     lowStockNotifications: [{ product, previousStock: 3 }]
   }));
-  t.mock.method(ActionDomainEvent, 'create', async () => {});
+  t.mock.method(ActionDomainEvent, 'insertMany', async () => {});
   t.mock.method(telegram, 'notifyLowStock', async (...args) => { calls.push(args); });
   delete require.cache[require.resolve('../src/automations/executors')];
   const executor = require('../src/automations/executors').createActionExecutors().create_sale;

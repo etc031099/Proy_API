@@ -7,9 +7,23 @@ const { recordV3Transaction } = require('./v3OperationalSnapshotService');
 const mlTestBaselines = require('./mlTestProductBaselineService');
 const diagnostics = require('../automations/actionDiagnostics');
 const TRANSACTION_CURRENCIES = ['PEN', 'USD', 'EUR'];
+// Resolve a bounded, per-confirmation quote before opening the business transaction.
+// No product/contact values are trusted from this quote: they are re-read below.
+const prepareTransactionExchangeRates = async (args, snapshot) => {
+  const targetCurrency = String(args.currency || 'PEN').toUpperCase();
+  const bases = new Set(['USD', ...snapshot.items.map(item => String(item.currency || '').trim().toUpperCase())]);
+  if (!TRANSACTION_CURRENCIES.includes(targetCurrency)
+      || [...bases].some(base => !TRANSACTION_CURRENCIES.includes(base))) {
+    throw Object.assign(new Error('Transaction currency changed; prepare a new preview.'), { code: 'ACTION_CONFLICT', statusCode: 409 });
+  }
+  const rates = new Map();
+  for (const base of bases) rates.set(`${base}/${targetCurrency}`,
+    await diagnostics.exchangeRate(base !== targetCurrency, () => getExchangeRate({ base, target: targetCurrency })));
+  return { targetCurrency, rates };
+};
 // One business implementation for CRUD and actions. Caller-owned sessions never commit here.
 // Preview runs the same pricing/contact/credit validation without business writes.
-const writeTransaction = async ({ input, businessId, historical = null, session: suppliedSession, preview = false, expectedSnapshot }) => {
+const writeTransaction = async ({ input, businessId, historical = null, session: suppliedSession, preview = false, expectedSnapshot, preparedExchangeRates }) => {
   const { type, customerId, customerName, vendorId, products = [], paymentMethod, notes, currency = 'PEN' } = input;
   const normalizedCurrency = String(currency || 'PEN').toUpperCase();
   const targetCurrency = TRANSACTION_CURRENCIES.includes(normalizedCurrency) ? normalizedCurrency : 'PEN';
@@ -18,6 +32,11 @@ const writeTransaction = async ({ input, businessId, historical = null, session:
     ? normalizeDate(historical.date, 'transaction date')
     : new Date();
   const resolveExchangeRate = async (base, target) => {
+    if (preparedExchangeRates && !historical) {
+      const quote = preparedExchangeRates.targetCurrency === target && preparedExchangeRates.rates.get(`${base}/${target}`);
+      if (!quote) throw Object.assign(new Error('Transaction currency changed; prepare a new preview.'), { code: 'ACTION_CONFLICT', statusCode: 409 });
+      return quote;
+    }
     if (!historical) return diagnostics.exchangeRate(base !== target, () => getExchangeRate({ base, target }));
     if (base === target) return { rate: 1 };
     const rate = toFiniteNumber(historical.exchangeRates?.[`${base}/${target}`], {
@@ -301,5 +320,5 @@ const writeTransaction = async ({ input, businessId, historical = null, session:
   }
 };
 
-module.exports = { writeTransaction: input => require('./mlTestFence').runCycle(() => writeTransaction(input), undefined,
+module.exports = { prepareTransactionExchangeRates, writeTransaction: input => require('./mlTestFence').runCycle(() => writeTransaction(input), undefined,
   { businessId: input?.businessId }) };

@@ -16,6 +16,22 @@ const createActionService = ({ repository = createActionRepository(), executors 
   const transition = async (context, id, decision, confirmedByHuman = false) => {
     scopeOf(context); if (!isTraceId(id)) fail('ACTION_VALIDATION_FAILED');
     await repository.checkConversation(context);
+    let preparedExecution;
+    // Read-only preflight. The transaction below still reloads and validates the
+    // scoped action, expiry, immutable hashes, catalog, stock and commercial snapshot.
+    if (decision === 'confirm' && Object.values(executors).some(executor => executor.prepareExecution)) {
+      const pending = await repository.get(context, id);
+      const executor = pending && executors[pending.actionSkillId];
+      if (pending?.status === 'PENDING' && new Date(pending.expiresAt) > clock() && executor?.prepareExecution
+          && pending.preview.snapshot && hashArgs(pending.validatedArgs) === pending.argsHash
+          && hashArgs(pending.preview.snapshot) === pending.snapshotHash) {
+        preparedExecution = { argsHash: pending.argsHash, snapshotHash: pending.snapshotHash,
+          value: await diagnostics.observe('EXECUTION_PREFLIGHT', 'NONE', () => executor.prepareExecution(
+            deepFreeze(structuredClone(pending.validatedArgs)), context, pending.preview.snapshot)) };
+      }
+    }
+    // Each HTTP quote request has its own 8s timeout. This budget bounds the
+    // transactional work, not an external request performed before it starts.
     const started = performance.now();
     const afterCommit = [];
     const row = await repository.transition(context, id, decision, clock, async (stored, session) => {
@@ -24,10 +40,11 @@ const createActionService = ({ repository = createActionRepository(), executors 
       diagnostics.limit(skill.timeoutMs);
       if (hashArgs(args) !== stored.argsHash) fail('ACTION_CONFLICT');
       if (stored.preview.snapshot && stored.snapshotHash !== hashArgs(stored.preview.snapshot)) fail('ACTION_CONFLICT');
+      if (preparedExecution && (preparedExecution.argsHash !== stored.argsHash || preparedExecution.snapshotHash !== stored.snapshotHash)) fail('ACTION_CONFLICT');
       if (skill.requiresConfirmation && (!confirmedByHuman || context.actorType !== 'USER')) fail('ACTION_CONFIRMATION_REQUIRED');
       if (!executors[skill.id]) fail('ACTION_NOT_ALLOWED');
       const result = await diagnostics.observe('EXECUTOR', 'NONE', () => executors[skill.id].execute(deepFreeze(structuredClone(args)), context, session,
-        stored.pendingActionId, stored.preview.snapshot, callback => afterCommit.push(callback)));
+        stored.pendingActionId, stored.preview.snapshot, callback => afterCommit.push(callback), preparedExecution?.value));
       // Do not use Promise.race for writes: a timed-out promise could still commit a mutation.
       // This deadline is checked before the atomic commit and rolls back late work.
       const durationMs = performance.now() - started;

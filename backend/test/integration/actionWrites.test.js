@@ -422,6 +422,58 @@ test('A5.3.1 changed third-line stock rolls back every line and keeps the pendin
   assert.equal(await Outbox.countDocuments({ businessId, actionId: pending.pendingActionId }), 0);
 });
 
+for (const fallback of [false, true]) test(`A5.3.3 FX ${fallback ? 'fallback' : 'success'} resolves before transaction; reporting and retry remain consistent`, async t => {
+  const { products, pending } = await threeProductSale();
+  const { performance } = require('node:perf_hooks');
+  const diagnostics = require('../../src/automations/actionDiagnostics');
+  let tick = 0, calls = 0;
+  const sessions = [], startSession = mongoose.startSession.bind(mongoose), observe = diagnostics.observe;
+  t.mock.method(performance, 'now', () => tick);
+  t.mock.method(mongoose, 'startSession', async (...args) => { const session = await startSession(...args); sessions.push(session); return session; });
+  t.mock.method(diagnostics, 'observe', async (phase, dependency, work) => {
+    if (phase === 'JOURNAL') tick += 10396; // Real cloud residual after removing 3465ms external work.
+    return observe(phase, dependency, work);
+  });
+  t.mock.method(console, 'warn', () => {});
+  t.mock.method(global, 'fetch', async () => {
+    calls++; tick += 3465;
+    assert.equal(sessions.some(session => session.inTransaction()), false, 'External FX must not hold a Mongo transaction');
+    if (fallback) throw Error('synthetic network unavailable');
+    return { ok: true, json: async () => ({ rates: { USD: 1, PEN: 3.7, EUR: 0.92 } }) };
+  });
+  const done = await service.confirmPendingAction(context(), pending.pendingActionId);
+  assert.equal(done.status, 'EXECUTED'); assert.equal(done.result.total, 15.06);
+  const transaction = await Transaction.findById(done.result.id);
+  assert.equal(transaction.exchangeRate, 3.7); assert.equal(transaction.originalAmount, Number((15.06 / 3.7).toFixed(2)));
+  assert.equal(calls, 1);
+  assert.deepEqual((await service.confirmPendingAction(context(), pending.pendingActionId)).result, done.result);
+  assert.equal(calls, 1, 'An idempotent retry must not call FX again');
+  assert.deepEqual(await Promise.all(products.map(async p => (await Product.findById(p._id)).stock)), [19, 19, 18]);
+});
+
+test('A5.3.3 preflight failure starts no transaction and leaves all products/action untouched', async t => {
+  const executors = createActionExecutors();
+  const isolated = createActionService({ executors });
+  const { products, pending } = await threeProductSale(isolated);
+  const before = await counts();
+  t.mock.method(console, 'error', () => {});
+  t.mock.method(executors.create_sale, 'prepareExecution', async () => { throw Error('synthetic preflight failure'); });
+  t.mock.method(mongoose, 'startSession', () => assert.fail('No transaction may start after failed preflight'));
+  await assert.rejects(isolated.confirmPendingAction(context(), pending.pendingActionId), { code: 'ACTION_EXECUTION_FAILED' });
+  assert.deepEqual(await counts(), before);
+  assert.equal((await isolated.get(context(), pending.pendingActionId)).status, 'PENDING');
+  assert.deepEqual(await Promise.all(products.map(async p => (await Product.findById(p._id)).stock)), [20, 20, 20]);
+});
+
+test('A5.3.3 changed reporting FX still conflicts with the frozen preview and rolls every line back', async t => {
+  const { products, pending } = await threeProductSale();
+  t.mock.method(global, 'fetch', async () => ({ ok: true, json: async () => ({ rates: { USD: 1, PEN: 3.8, EUR: 0.92 } }) }));
+  await assert.rejects(service.confirmPendingAction(context(), pending.pendingActionId), { code: 'ACTION_CONFLICT' });
+  assert.equal((await service.get(context(), pending.pendingActionId)).status, 'PENDING');
+  assert.deepEqual(await Promise.all(products.map(async p => (await Product.findById(p._id)).stock)), [20, 20, 20]);
+  assert.equal(await InventoryMovement.countDocuments({ businessId, productId: { $in: products.map(p => p._id) } }), 0);
+});
+
 test('A5.3.1 V3 gateway confirms the three-product sale inside the real writer fence', async () => {
   const config = require('../../src/config/v3Operational');
   const fence = require('../../src/services/mlTestFence');

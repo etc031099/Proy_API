@@ -265,7 +265,7 @@ test('actual create_product executor shares CRUD opening movement/session and mi
   t.mock.method(Product, 'create', async (docs, options) => { assert.equal(options.session, session); insert = docs[0];
     return [{ ...docs[0], _id: 'cccccccccccccccccccccccc', async save(options) { assert.equal(options.session, session); saves++; } }]; });
   t.mock.method(InventoryMovement, 'create', async (docs, options) => { assert.equal(options.session, session); movement = docs[0]; return [{ ...docs[0], _id: 'dddddddddddddddddddddddd' }]; });
-  t.mock.method(require('../src/models/ActionDomainEvent'), 'create', async (docs, options) => { assert.equal(options.session, session); assert.equal(options.ordered, true); return docs; });
+  t.mock.method(require('../src/models/ActionDomainEvent'), 'insertMany', async (docs, options) => { assert.equal(options.session, session); assert.equal(options.ordered, true); return docs; });
   const executor = createActionExecutors().create_product;
   const preview = await executor.preview(product, ctx()); assert.equal(preview.fields.resultingStock, 5);
   const result = await executor.execute(product, ctx(), session);
