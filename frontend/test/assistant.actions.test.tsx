@@ -9,6 +9,24 @@ vi.mock('@/lib/api', () => ({ apiClient: { decideAgentAction: vi.fn() } }));
 const pending: PendingActionPreview = { pendingActionId: '11111111-1111-4111-8111-111111111111', action: 'create_product',
   summary: 'Crear producto demo', fields: { stock: 5, sku: 'SKU-001', price: 10 }, expiresAt: '2099-01-01T00:00:00Z',
   requiresConfirmation: true, status: 'PENDING' };
+it.each(['create_sale', 'create_purchase'] as const)('A5.3 %s multi-line preview retains all lines and one confirmation', action => {
+  vi.mocked(apiClient.decideAgentAction).mockReset();
+  const purchase = action === 'create_purchase';
+  render(<PendingActionCard conversationId="22222222-2222-4222-8222-222222222222" action={{ ...pending, action, summary: 'Registrar operación de 3 productos',
+    fields: { currency: 'PEN', total: 17, contact: 'Contacto configurado' }, items: [
+      { name: 'Papas Lays', sku: 'LAYS-001', quantity: 1, price: 2, total: 2, stock: 20, resultingStock: purchase ? 21 : 19 },
+      { name: 'Coca-Cola', sku: 'COLA-001', quantity: 1, price: 3, total: 3, stock: 20, resultingStock: purchase ? 21 : 19 },
+      { name: 'Leche', sku: 'LECHE-002', quantity: 2, price: 6, total: 12, stock: 20, resultingStock: purchase ? 22 : 18 }
+    ] }} />);
+  expect(screen.getByText('Papas Lays · LAYS-001')).toBeTruthy();
+  expect(screen.getByText('Coca-Cola · COLA-001')).toBeTruthy();
+  expect(screen.getByText('Leche · LECHE-002')).toBeTruthy();
+  expect(screen.getByText(/2 unidades · Precio unitario: S\/ 6\.00 · Total: S\/ 12\.00/)).toBeTruthy();
+  expect(screen.getByText(`Stock actual: 20 · Stock después: ${purchase ? 22 : 18}`)).toBeTruthy();
+  expect(screen.getAllByRole('button', { name: 'Confirmar' })).toHaveLength(1);
+  expect(screen.getAllByRole('button', { name: 'Cancelar' })).toHaveLength(1);
+  expect(apiClient.decideAgentAction).not.toHaveBeenCalled();
+});
 it('candidate text fallback remains in API while cards avoid duplicate visible lists', () => {
   const response = { suggestions: [{ label: '1. Agua', message: 'SKU-001', detail: 'SKU-001' }] } as AgentResponse;
   const text = 'Encontré 2 coincidencias.\n1. Agua — SKU-001\nMostrando 1–1.';

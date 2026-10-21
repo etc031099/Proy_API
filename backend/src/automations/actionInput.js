@@ -83,11 +83,17 @@ function parseAction(message, action) {
   const content = itemText.replace(/^(?:(?:quiero|quisiera)\s+)?(?:vender|vende|compre|compré|comprar|compra|compr|pedir|prepara(?:r)?(?: una)? compra|registra(?:r)?(?: una)? (?:venta|compra))(?=\s|$)\s*(?:de\s+)?/i, '');
   // A comma inside a number stays part of that token. Quantities only occur at
   // the beginning of an item, never inside its name, item number or SKU.
-  const segments = content.split(/(?<=\S),\s+|(?<=[^\d\s]),|\s+y\s+(?=[+\-−]?\d|uno\b|una\b|dos\b|tres\b|cuatro\b|cinco\b|seis\b|siete\b|ocho\b|nueve\b|diez\b|once\b|doce\b|veinte\b|treinta\b|cincuenta\b|cien\b)/i);
+  const segments = content.split(/(?<=\S),\s+|(?<=[^\d\s]),|\s+y\s+(?=[+\-−]?\d|uno\b|una\b|unos\b|unas\b|dos\b|tres\b|cuatro\b|cinco\b|seis\b|siete\b|ocho\b|nueve\b|diez\b|once\b|doce\b|veinte\b|treinta\b|cincuenta\b|cien\b)/i);
   const items = [];
   for (const segment of segments) {
     const match = /^\s*(\S+)(?:\s+(?:unidades?\s+)?(?:de(?:l)?\s+)?(?:SKU\s+|producto\s+)?(.+?))?\s*$/.exec(segment);
     if (!match) continue;
+    if (/^un[oa]s$/i.test(match[1])) {
+      if (!match[2]) fail('ACTION_VALIDATION_FAILED');
+      // An indefinite plural is a missing quantity, never an inferred one.
+      items.push({ ref: match[2].trim().replace(/[.!?]+$/, '') });
+      continue;
+    }
     if (/^[+\-−]?(?:\d|[.,]\d)/.test(match[1]) || Object.hasOwn(quantityWords, match[1].toLowerCase())) {
       // A raw ObjectId/SKU is a reference, not a quantity.
       if (/^[a-f\d]{24}$/i.test(match[1])) continue;
@@ -129,8 +135,9 @@ async function resolveAction(extracted, context, resolver = resolveReference, su
   const args = { products: [], paymentMethod: extracted.paymentMethod || 'cash' }, currencies = new Set();
   const products = [], quantities = new Map();
   for (const [index, item] of extracted.items.entries()) {
+    if (!item.requestedRef) item.requestedRef = item.ref;
     const result = trustedUnique(await resolver(Product, context, item.ref));
-    if (!result.value) return { ...refineSingle(result), ...(!uncertainSingle(result) ? { selection: { slot: 'product', index, candidates: result.candidates || [], ...(result.pagination || {}) } } : {}) };
+    if (!result.value) return { ...refineSingle(result), itemIndex: index, ...(!uncertainSingle(result) ? { selection: { slot: 'product', index, candidates: result.candidates || [], ...(result.pagination || {}) } } : {}) };
     if (result.value.isActive === false) return { clarification: `Encontré ${result.value.name}, pero está inactivo. Elige otro producto.` };
     // Keep previously resolved slots; later ambiguous items must not discard them.
     item.ref = String(result.value._id);

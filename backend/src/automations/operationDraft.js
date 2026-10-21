@@ -16,7 +16,7 @@ const selectionSchema = schema({ slot: { ...string(20), enum: ['product', 'suppl
 const draftSchema = schema({ action: { ...string(30), enum: ['create_product', 'create_sale', 'create_purchase', 'create_stock_alert_rule'] },
   operator: { ...string(2), enum: ['<', '<='] }, threshold: integer(1000000),
   product: schema(getActionSkill('create_product').inputSchema.properties, []),
-  items: { type: 'array', maxItems: 20, items: schema({ ref: string(100), quantity: { ...integer(1000000), minimum: 1 } }, ['ref']) },
+  items: { type: 'array', maxItems: 20, items: schema({ ref: string(100), requestedRef: string(100), quantity: { ...integer(1000000), minimum: 1 } }, ['ref']) },
   currency: { ...string(3), enum: ['PEN', 'USD', 'EUR'] }, paymentMethod: { ...string(20), enum: ['cash', 'credit', 'card', 'bank_transfer', 'wallet', 'other'] },
   customerRef: string(100), supplierRef: string(100), supplierId: objectId, purchasePrice: number(), enrichment: string(20),
   selection: selectionSchema, supplierChoices: selectionSchema, productChoices: selectionSchema,
@@ -158,6 +158,12 @@ function updateDraft(previous, extracted, message) {
       // An unparseable quantity correction must not silently reissue the old quantity.
       draft.items[0].quantity = integerToken(numericText.split(' ').at(-1));
     } else if (previous?.missingFields?.includes('quantity') && /^\S+(?: unidades?)?$/.test(numericText)) draft.items[previous.itemIndex || 0].quantity = integerToken(numericText.split(' ')[0]);
+    else if (previous?.missingFields?.includes('product') && draft.items?.[previous.itemIndex || 0]) {
+      // With no visible candidates, an option number is not a product or a new
+      // quantity. Require a name/SKU correction and keep every line untouched.
+      if (/^(?:opcion\s+)?\d+$/.test(text) || ordinalSelection(message).matched) return draft;
+      draft.items[previous.itemIndex || 0].ref = message.trim().replace(/^(?:SKU|producto)\s+/i, '');
+    }
     else if (!previous || /^(?:vende|vender|compre|compra|comprar|registra)/.test(text)) draft.items = extracted.items;
     const changeProduct = /^(?:no es .+?,? es|cambia (?:el )?producto (?:a|por)|producto|sku)\s+(.+)$/.exec(text);
     if (changeProduct && draft.items?.length === 1) { draft.items[0].ref = changeProduct[1].replace(/^la de /, ''); delete draft.selection; delete draft.productChoices; }
@@ -247,10 +253,16 @@ function applyResolution(draft, result, now) {
   const pagination = ['product', 'supplier', 'productSupplier'].includes(selection?.slot) && selection.query ? Object.fromEntries(
     ['query', 'offset', 'limit', 'totalMatches', 'hasMore', 'hasPrevious'].map(key => [key, selection[key]])) : undefined;
   const entity = selection?.slot === 'product' ? 'producto' : 'proveedor';
+  const lineIndex = selection?.slot === 'product' ? selection.index : result.itemIndex;
+  const line = draft.items?.[lineIndex];
+  const lineContext = draft.items?.length > 1 && line
+    ? `Línea ${lineIndex + 1} de ${draft.items.length}: ${line.requestedRef || line.ref} · ${Number.isSafeInteger(line.quantity) ? `${line.quantity} ${line.quantity === 1 ? 'unidad' : 'unidades'}` : 'cantidad por indicar'}.\n`
+    : '';
   const intro = pagination ? `Encontré ${pagination.totalMatches} ${pagination.totalMatches === 1 ? 'coincidencia' : 'coincidencias'} para «${pagination.query}». Mostrando ${candidates.length ? pagination.offset + 1 : 0}–${pagination.offset + candidates.length}.\n${selection.refining ? 'Escribe una búsqueda más específica.' : `Puedes seleccionar un ${entity}, ver más resultados o escribir una búsqueda más específica. Los números y ordinales se refieren a esta lista visible.`}` : result.clarification;
   return { ...result,
+    ...(result.clarification ? { clarification: `${lineContext}${result.clarification}` } : {}),
     ...(pagination ? { suggestionsPagination: pagination } : {}),
-    ...(candidates.length && result.clarification ? { clarification: `${intro}\n${candidates.map(option => option.label).join('\n')}` } : {}),
+    ...(candidates.length && result.clarification ? { clarification: `${lineContext}${intro}\n${candidates.map(option => option.label).join('\n')}` } : {}),
     suggestions: [...candidates, ...(result.suggestions || [])] };
 }
 module.exports = { TTL_MS, compactDraft, updateDraft, resolveDraft, applyResolution };

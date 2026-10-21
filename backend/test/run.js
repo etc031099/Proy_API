@@ -69,3 +69,4 @@ require('./inventoryForecastAgents.test');
 require('./salesCustomersAgents.test');
 require('./salesWritePrecedence.test');
 require('./procurementAssociationsAgents.test');
+require('./operationsMultiProduct.test');

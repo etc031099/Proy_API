@@ -121,10 +121,13 @@ const withActionAssistant = (runtime, service, options = {}) => {
       const state = await runtime.getContextSnapshot?.(req, input.conversationId);
       if (state?.lastForecastAnalytics || state?.supplierResolution || state?.supplierProductListing || state?.v3Context?.pending) return runtime.handle(req, input);
     }
-    if (!skillId && !decision && !candidateCommand) return runtime.handle(req, input);
+    const unspecifiedRegistration = !previous && !explicit
+      && /^(?:quiero|quisiera)\s+registrar\s+\d+\b/.test(numericWords(normalized));
+    if (!skillId && !decision && !candidateCommand && !unspecifiedRegistration) return runtime.handle(req, input);
     const started = performance.now(), conversationId = input.conversationId || randomUUID();
     const context = createActionContext(req, { conversationId }), key = keyFor(req, conversationId);
     let pendingAction, answer, clarification = false, previewShown = false, execution, suggestions = [], suggestionsExpiresAt, suggestionsPagination, suggestionsEntityType;
+    if (unspecifiedRegistration) return response('¿Quieres registrar una venta o una compra? Indica el tipo de operación junto con los productos y cantidades; no se preparó ni ejecutó ninguna operación.', undefined, true);
     if (previous && /^me equivoque\b/.test(normalized)) {
       if (previous.pendingActionId) {
         const pending = await service.get(context, previous.pendingActionId);
