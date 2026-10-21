@@ -1,9 +1,10 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ForecastImpactDetailCard, ForecastImpactSummaryCard, useForecastImpact } from '@/components/business-intelligence/ForecastImpactPanel';
 import { apiClient } from '@/lib/api';
 import { clearLatestForecastImpactSale, FORECAST_IMPACT_SESSION_KEY, publishForecastImpactSale, readLatestForecastImpactSale, type ForecastImpactSaleMessage } from '@/lib/forecastImpactChannel';
-import { readForecastImpactSnapshot, registerSaleWithImpact, type ForecastImpactProduct, type ForecastImpactSnapshot } from '@/lib/forecastImpactSnapshot';
+import { readForecastImpactSnapshot, registerSaleWithImpact, type ForecastImpactProduct, type ForecastImpactSnapshot, type ForecastImpactInference } from '@/lib/forecastImpactSnapshot';
+import { RIDGE_FEATURE_ORDER, compareRidgeFeatures, compareRidgeInferenceFeatures, readRidgeFeatureInputs } from '@/lib/ridgeFeatures';
 
 class TestBroadcastChannel {
   static channels: TestBroadcastChannel[] = [];
@@ -25,9 +26,18 @@ function horizon(horizonDays: 7 | 14, pendingSignalCount: number, eligibility = 
       requiredOrigins: 107 as const, availableOriginsActual: null },
   };
 }
-function forecast(sku: string, value: number) {
+function forecast(sku: string, value: number, days: 7 | 14 = 7, revision = '174') {
   return { success: true, data: { mode: 'LIVE', status: 'READY', product: { sku, name: `Producto ${sku}` },
-    modelFamily: 'RIDGE_REGRESSION', activeModelStatus: 'ACTIVE', predictionUnits: value, method: 'RIDGE_REGRESSION' } };
+    modelFamily: 'RIDGE_REGRESSION', activeModelStatus: 'ACTIVE', predictionUnits: value, method: 'RIDGE_REGRESSION',
+    horizonDays: days, modelVersion: 1, dataVersion: revision, snapshotHash: 'a'.repeat(64), artifactHash: 'b'.repeat(64),
+    observationsThrough: '2026-10-18', dataCutoff: '2026-10-15', trainedDataVersion: '83', trainedAt: '2026-10-15T10:00:00Z',
+    featureVersion: 'RIDGE_CAUSAL27_V1', featureHash: '84e928e62343eb9d9b7d9e0dc8843ea8e9395ae135997287f5b7ea3a02a860f5',
+    featureInputs: Object.fromEntries(RIDGE_FEATURE_ORDER.map((key, index) => [key, index < 6 ? key === 'sku' ? sku : 'descriptor' : index])) } };
+}
+function inference(sku: string, days: 7 | 14, revision: string, value: number): ForecastImpactInference {
+  const row = forecast(sku, value, days, revision).data;
+  return { ...row, horizonDays: days, revision, observationsClosedThrough: row.observationsThrough,
+    featureInputs: readRidgeFeatureInputs(row.featureInputs), forecastStartDate: null, forecastEndDate: null, updatedAt: null };
 }
 function setSnapshotMocks(revision: string, signals: number, units: number) {
   vi.mocked(apiClient.getIntelligenceRevision).mockResolvedValue({ success: true, data: {
@@ -40,7 +50,7 @@ function setSnapshotMocks(revision: string, signals: number, units: number) {
     horizonDays: horizonDays as 7 | 14, status: 'ACTIVE' as const, activeModelStatus: 'ACTIVE' as const,
     modelFamily: 'RIDGE_REGRESSION', recipeId: 'RIDGE-CAUSAL27', modelVersion: 1,
   })) } });
-  vi.mocked(apiClient.getBusinessIntelligenceForecast).mockImplementation(async (sku, days) => forecast(sku, units + (sku === 'SKU-B' ? days : 0)) as never);
+  vi.mocked(apiClient.getBusinessIntelligenceForecast).mockImplementation(async (sku, days) => forecast(sku, units + (sku === 'SKU-B' ? days : 0), days as 7 | 14, revision) as never);
 }
 function Harness({ navigate = vi.fn() }: { navigate?: (tab: 'forecast' | 'inventory' | 'sales' | 'customers' | 'related') => void }) {
   const impact = useForecastImpact();
@@ -55,8 +65,10 @@ function baseline(revision = '173', signals = 90, seven = 4.9, fourteen = 10.4):
   const h = () => ({ pending: true, signals, activeVersion: 1, eligibility: 'NOT_MATURE', reasonCode: 'NOT_MATURE',
     currentlyRunning: false, lastEvaluatedAt: null, lastResult: null });
   return { context: { businessId: 'demo', scenarioId: 'v3', datasetVersion: 'v1' }, complete: true, revision, capturedAt: '2026-10-19T16:00:00Z', horizons: { 7: h(), 14: h() }, forecasts: {
-    'SKU-A': { sku: 'SKU-A', name: 'Producto A', seven, fourteen },
-    'SKU-B': { sku: 'SKU-B', name: 'Producto B', seven: seven + 1, fourteen: fourteen + 1 },
+    'SKU-A': { sku: 'SKU-A', name: 'Producto A', seven, fourteen,
+      inferences: { 7: inference('SKU-A', 7, revision, seven), 14: inference('SKU-A', 14, revision, fourteen) } },
+    'SKU-B': { sku: 'SKU-B', name: 'Producto B', seven: seven + 1, fourteen: fourteen + 1,
+      inferences: { 7: inference('SKU-B', 7, revision, seven + 1), 14: inference('SKU-B', 14, revision, fourteen + 1) } },
   } };
 }
 
@@ -75,6 +87,13 @@ describe('forecast impact observation', () => {
     vi.spyOn(apiClient, 'createMlTestCheckpoint');
     vi.spyOn(apiClient, 'restoreMlTestCheckpoint');
     vi.spyOn(apiClient, 'requestForecastMlUpdate');
+  });
+
+  it('keeps the no-operation state compact instead of rendering unavailable comparison rows', () => {
+    render(<Harness />);
+    expect(screen.getByText(/Sin una operación reciente para comparar/)).toBeTruthy();
+    expect(screen.queryByText('Revisión')).toBeNull();
+    expect(screen.queryByText('Señales pendientes 7d')).toBeNull();
   });
 
   it('captures automatically before one-SKU sale POST and publishes only after success', async () => {
@@ -176,7 +195,7 @@ describe('forecast impact observation', () => {
 
   it('retries a failed AFTER read without losing the BEFORE baseline', async () => {
     setSnapshotMocks('174', 91, 4.92);
-    vi.mocked(apiClient.getForecastModelDiagnostics).mockRejectedValueOnce(new Error('temporary read failure'));
+    vi.mocked(apiClient.getBusinessIntelligenceForecast).mockRejectedValueOnce(new Error('temporary read failure'));
     const savedBaseline = baseline();
     publishForecastImpactSale({ version: 2, type: 'SALE_COMPLETED', transactionId: 'retry-sale', occurredAt: '2026-10-19T17:00:00Z',
       hasCustomer: false, customerRef: null, baseline: savedBaseline, baselineUnavailable: false, context: savedBaseline.context,
@@ -200,7 +219,7 @@ describe('forecast impact observation', () => {
     act(() => publishForecastImpactSale(sale));
     await waitFor(() => expect(document.body.textContent).toContain('173 → 174'));
     expect(document.body.textContent).toContain('90 → 91');
-    expect(document.body.textContent?.match(/v1 → v1/g)).toHaveLength(2);
+    expect(document.body.textContent?.match(/v1 → v1/g)).toHaveLength(4);
     expect(document.body.textContent).toContain('4.9 → 4.92');
     expect(document.body.textContent).toContain('5.9 → 11.92');
     expect(screen.getByText(/2 productos afectados · 3 unidades/)).toBeTruthy();
@@ -234,8 +253,187 @@ describe('forecast impact observation', () => {
     expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenCalledTimes(2);
     expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenNthCalledWith(1, 'SKU-A', 7);
     expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenNthCalledWith(2, 'SKU-A', 14);
+    expect(apiClient.getForecastModelDiagnostics).not.toHaveBeenCalled();
     expect(apiClient.createMlTestCheckpoint).not.toHaveBeenCalled();
     expect(apiClient.restoreMlTestCheckpoint).not.toHaveBeenCalled();
     expect(apiClient.requestForecastMlUpdate).not.toHaveBeenCalled();
+  });
+
+  function renderComparison(before: ForecastImpactSnapshot | null, after: ForecastImpactSnapshot | null, saleProducts = [products[0]]) {
+    const sale: ForecastImpactSaleMessage = { version: 2, type: 'SALE_COMPLETED', transactionId: 'feature-sale',
+      occurredAt: '2026-10-19T17:00:00Z', hasCustomer: false, customerRef: null, products: saleProducts,
+      baseline: before, baselineUnavailable: !before?.complete, context: before?.context || baseline().context };
+    render(<ForecastImpactDetailCard impact={{ baseline: before, after, sale, pendingSale: null, allowUnknownScope: false,
+      loadingAfter: false, error: null, retryAfterSale: vi.fn() }} />);
+  }
+
+  it('preserves each inference binding, raw vector and distinct horizon without another request', async () => {
+    setSnapshotMocks('193', 104, 7.65);
+    const snapshot = await readForecastImpactSnapshot([products[0]]);
+    const seven = snapshot.forecasts['SKU-A'].inferences![7]!;
+    const fourteen = snapshot.forecasts['SKU-A'].inferences![14]!;
+    expect(seven.dataVersion).toBe('193'); expect(seven.revision).toBe('193');
+    expect(seven.observationsClosedThrough).toBe('2026-10-18');
+    expect(seven.snapshotHash).toBe('a'.repeat(64)); expect(seven.featureVersion).toBe('RIDGE_CAUSAL27_V1');
+    expect(Object.keys(seven.featureInputs!)).toEqual(RIDGE_FEATURE_ORDER);
+    expect(seven.horizonDays).toBe(7); expect(fourteen.horizonDays).toBe(14);
+    expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenCalledTimes(2);
+    expect(apiClient.getIntelligenceRevision).toHaveBeenCalledTimes(1);
+    expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledTimes(1);
+    expect(apiClient.getForecastModelDiagnostics).not.toHaveBeenCalled();
+  });
+
+  it('retains a valid feature vector when optional identity hashes are absent', async () => {
+    setSnapshotMocks('193', 104, 7.65);
+    vi.mocked(apiClient.getBusinessIntelligenceForecast).mockImplementation(async (sku, days) => {
+      const response = forecast(sku, 7.65, days as 7 | 14, '193');
+      Object.assign(response.data, { snapshotHash: null, artifactHash: null, featureHash: null, dataVersion: null });
+      return response as never;
+    });
+    const snapshot = await readForecastImpactSnapshot([products[0]]);
+    expect(snapshot.forecasts['SKU-A'].inferences![7]!.featureInputs).not.toBeNull();
+    expect(snapshot.forecasts['SKU-A'].inferences![14]!.featureInputs).not.toBeNull();
+    expect(snapshot.complete).toBe(false);
+    expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenCalledTimes(2);
+  });
+
+  it('never substitutes status or another horizon metadata for the inference binding', async () => {
+    setSnapshotMocks('193', 104, 7.65);
+    vi.mocked(apiClient.getBusinessIntelligenceForecast).mockImplementation(async (sku, days) => {
+      const response = forecast(sku, days === 7 ? 7.65 : 15.89, days as 7 | 14, days === 7 ? '192' : '194');
+      response.data.modelVersion = days === 7 ? 1 : 2;
+      response.data.featureInputs.weekendNextDays = days === 7 ? 2 : 4;
+      return response as never;
+    });
+    const snapshot = await readForecastImpactSnapshot([products[0]]);
+    expect(snapshot.revision).toBe('193');
+    expect(snapshot.forecasts['SKU-A'].inferences![7]!.dataVersion).toBe('192');
+    expect(snapshot.forecasts['SKU-A'].inferences![14]!.dataVersion).toBe('194');
+    expect(snapshot.forecasts['SKU-A'].inferences![7]!.featureInputs!.weekendNextDays).toBe(2);
+    expect(snapshot.forecasts['SKU-A'].inferences![14]!.featureInputs!.weekendNextDays).toBe(4);
+    expect(snapshot.forecasts['SKU-A'].inferences![14]!.modelVersion).toBe(2);
+    expect(snapshot.complete).toBe(false);
+  });
+
+  it('explains an open-day sale only with equal bound inputs, cutoffs, artifacts and raw predictions', () => {
+    const before = baseline('192', 103), after = baseline('193', 104);
+    renderComparison(before, after);
+    expect(screen.getAllByText('0 de 8 modificadas')).toHaveLength(2);
+    expect(screen.getAllByText('0 de 6 modificadas')).toHaveLength(2);
+    expect(screen.getAllByText('0 de 13 modificadas')).toHaveLength(2);
+    const table = screen.getByRole('table', { name: 'Entradas Ridge 7d BEFORE y AFTER', hidden: true });
+    expect(within(table).getAllByRole('row', { hidden: true })).toHaveLength(28);
+    expect(screen.getByText(/La venta añadió evidencia pendiente, pero el día actual todavía está abierto/)).toBeTruthy();
+    expect(document.body.textContent).toContain('4.9 → 4.9');
+    expect(document.body.textContent).toContain('10.4 → 10.4');
+  });
+
+  it('compares valid vectors when revision, dataVersion and snapshotHash differ between reads', () => {
+    const before = baseline('193', 104), after = baseline('194', 105);
+    after.forecasts['SKU-A'].inferences![7]!.snapshotHash = 'c'.repeat(64);
+    after.forecasts['SKU-A'].inferences![14]!.snapshotHash = 'd'.repeat(64);
+    renderComparison(before, after);
+    expect(screen.getAllByText('0 de 8 modificadas')).toHaveLength(2);
+    expect(screen.getAllByText('0 de 6 modificadas')).toHaveLength(2);
+    expect(screen.getAllByText('0 de 13 modificadas')).toHaveLength(2);
+    expect(document.body.textContent).toContain('193 → 194');
+  });
+
+  it('keeps feature comparisons visible when a global snapshot is partial, without claiming full causality', () => {
+    const before = baseline('193', 104), after = baseline('194', 105);
+    after.complete = false;
+    renderComparison(before, after);
+    expect(screen.getAllByText('0 de 8 modificadas')).toHaveLength(2);
+    expect(screen.getAllByText('0 de 6 modificadas')).toHaveLength(2);
+    expect(screen.getAllByText('0 de 13 modificadas')).toHaveLength(2);
+    expect(screen.queryByText(/por eso P7 y P14 permanecieron iguales/)).toBeNull();
+  });
+
+  it.each([
+    ['different feature version', { featureVersion: 'OTHER' }, {}],
+    ['different SKU', {}, { featureInputs: readRidgeFeatureInputs(forecast('SKU-B', 1).data.featureInputs) }],
+    ['different horizon', { horizonDays: 14 }, {}],
+    ['incomplete vector', { featureInputs: null }, {}],
+  ])('marks %s as incomparable', (_label, beforeChanges, afterChanges) => {
+    const before = inference('SKU-A', 7, '193', 4.9);
+    const after = inference('SKU-A', 7, '194', 4.9);
+    Object.assign(before, beforeChanges);
+    Object.assign(after, afterChanges);
+    expect(compareRidgeInferenceFeatures(before, after, 'SKU-A', 7).complete).toBe(false);
+  });
+
+  it('compares received calendar, closed-sales and admissible catalog changes without formulas', () => {
+    const before = baseline(), after = baseline('174', 91);
+    after.forecasts['SKU-A'].inferences![7]!.featureInputs!.currentUnits = 50;
+    after.forecasts['SKU-A'].inferences![7]!.featureInputs!.weekdayNext = 4;
+    after.forecasts['SKU-A'].inferences![7]!.featureInputs!.brand = 'Nueva marca';
+    after.forecasts['SKU-A'].inferences![7]!.observationsClosedThrough = '2026-10-19';
+    renderComparison(before, after);
+    expect(screen.getByText('1 de 8 modificadas')).toBeTruthy();
+    expect(screen.getByText('1 de 6 modificadas')).toBeTruthy();
+    expect(screen.getByText('1 de 13 modificadas')).toBeTruthy();
+    expect(screen.getByText(/Ridge 7d: 1 entrada modificada en producto/)).toBeTruthy();
+    expect(screen.queryByText(/por eso P7 y P14 permanecieron iguales/)).toBeNull();
+  });
+
+  it.each(['BEFORE', 'AFTER'] as const)('missing %s inputs never asserts full equality or discards the other side', side => {
+    const before = baseline(), after = baseline('174', 91);
+    (side === 'BEFORE' ? before : after).forecasts['SKU-A'].inferences![7]!.featureInputs = null;
+    renderComparison(before, after);
+    expect(screen.getAllByText('Comparación no disponible')).toHaveLength(3);
+    expect(screen.getByText(/La comparación de entradas está incompleta/)).toBeTruthy();
+    expect(document.body.textContent).toContain('173 → 174');
+    expect(screen.queryByText(/por eso P7 y P14 permanecieron iguales/)).toBeNull();
+  });
+
+  it.each(['BEFORE', 'AFTER'] as const)('a partial %s snapshot still compares its valid vectors but avoids the open-day conclusion', side => {
+    const before = baseline('192', 103), after = baseline('193', 104);
+    (side === 'BEFORE' ? before : after).complete = false;
+    renderComparison(before, after);
+    expect(screen.getAllByText('0 de 8 modificadas')).toHaveLength(2);
+    expect(screen.getAllByText('0 de 6 modificadas')).toHaveLength(2);
+    expect(screen.getAllByText('0 de 13 modificadas')).toHaveLength(2);
+    expect(document.body.textContent).toContain('192 → 193');
+    expect(screen.queryByText(/por eso P7 y P14 permanecieron iguales/)).toBeNull();
+  });
+
+  it('stores the complete BEFORE inference evidence and recovers it without a separate model read', () => {
+    const before = baseline();
+    publishForecastImpactSale({ version: 2, type: 'SALE_COMPLETED', transactionId: 'evidence',
+      occurredAt: '2026-10-19T17:00:00Z', hasCustomer: false, customerRef: null, products: [products[0]],
+      baseline: before, baselineUnavailable: false, context: before.context });
+    expect(readLatestForecastImpactSale()?.baseline?.forecasts['SKU-A'].inferences).toEqual(before.forecasts['SKU-A'].inferences);
+    expect(apiClient.getForecastModelDiagnostics).not.toHaveBeenCalled();
+  });
+
+  it('identifies an AFTER model change without attributing a promotion to the sale', () => {
+    const before = baseline(), after = baseline('174', 91);
+    after.forecasts['SKU-A'].inferences![14]!.modelVersion = 2;
+    after.forecasts['SKU-A'].inferences![14]!.artifactHash = 'c'.repeat(64);
+    renderComparison(before, after);
+    expect(screen.getByText(/La inferencia AFTER de Ridge 14d usó otra versión ACTIVE o artifact \(v1 → v2\)/)).toBeTruthy();
+  });
+
+  it('uses exact received numbers rather than rounded output to claim equality', () => {
+    const before = baseline(), after = baseline('174', 91);
+    after.forecasts['SKU-A'].inferences![7]!.predictionUnits = 4.900001;
+    renderComparison(before, after);
+    expect(screen.queryByText(/por eso P7 y P14 permanecieron iguales/)).toBeNull();
+  });
+
+  it('keeps a feature change isolated to its SKU and horizon in a multi-product sale', () => {
+    const before = baseline(), after = baseline('174', 91);
+    after.forecasts['SKU-B'].inferences![14]!.featureInputs!.currentUnits = 50;
+    renderComparison(before, after, [products[0], products[1]]);
+    const a = screen.getByText('Producto A · SKU-A').closest('details')!;
+    const b = screen.getByText('Producto B · SKU-B').closest('details')!;
+    expect(within(a).getAllByText('0 de 13 modificadas')).toHaveLength(2);
+    expect(within(a).queryByText('1 de 13 modificadas')).toBeNull();
+    expect(within(b).getByText('1 de 13 modificadas')).toBeTruthy();
+  });
+
+  it('legacy or incomplete vectors are unavailable and never interpreted as zeros', () => {
+    expect(compareRidgeFeatures(null, null).groups.every(group => group.changed === null)).toBe(true);
+    expect(compareRidgeFeatures({}, forecast('SKU-A', 1).data.featureInputs).complete).toBe(false);
   });
 });

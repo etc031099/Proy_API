@@ -17,3 +17,17 @@ export interface SalesAnomalies {
   period: { startDate: string; endDate: string }; filteredDays: number; filteredAnomalyCount: number;
   topAnomalies: DailySalesAnomaly[]; series: DailySalesAnomaly[];
 }
+export interface SalesProvisionalEvaluation {
+  modelVersion: string; provisional: true; localDate: string; revision: string; observedAt: string;
+  businessContext: { businessId: string; scenarioId: string; datasetVersion: string };
+  status: 'EVALUATED' | 'NOT_EVALUABLE'; reason: string | null;
+  aggregate: { revenuePEN: number; units: number; tickets: number; averageTicketPEN: number | null } | null;
+  modelInput: { weekday: number; weekdayLogTicketsDeviation: number; weekdayLogAverageTicketDeviation: number } | null;
+  inference: { anomalyScore: number; decisionFunction: number; prediction: -1 | 1;
+    label: 'WITHIN_PATTERN' | 'ANOMALOUS_SIGNAL'; regionSignature: string } | null;
+  modelIdentity: { artifact: string; artifactHash: string; weeklyReferenceHash: string; threshold: number;
+    trainingCutoff: string; analysisCutoff: string };
+  commercial: { grossMargin: { value: number | null; currency: string | null; percent: number | null;
+    availability: 'AVAILABLE' | 'PARTIAL' | 'UNAVAILABLE' } | null;
+    costCoverage: { knownSaleLines: number | null; unknownSaleLines: number | null; status: string | null } | null };
+}

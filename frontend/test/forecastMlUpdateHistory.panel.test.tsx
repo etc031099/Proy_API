@@ -62,6 +62,10 @@ describe('forecast ML update history panel', () => {
   });
   afterEach(() => cleanup());
 
+  async function openFullHistory() {
+    fireEvent.click(await screen.findByRole('button', { name: 'Ver historial completo' }));
+  }
+
   it('loads newest-first compact executions, identifies sources, shows origins, and keeps detail lazy', async () => {
     const older = makeExecution({ executionId: '22222222-2222-4222-8222-222222222222',
       triggerSource: 'SCHEDULED', requestSource: 'SCHEDULED', status: 'NO_PENDING_WORK', availableOrigins: null, requiredOrigins: null });
@@ -80,12 +84,28 @@ describe('forecast ML update history panel', () => {
     expect(apiClient.getForecastMlUpdateExecution).toHaveBeenCalledWith(executionId);
   });
 
+  it('shows at most three recent executions until the complete-history disclosure is opened', async () => {
+    const rows = Array.from({ length: 5 }, (_, index) => makeExecution({
+      executionId: `11111111-1111-4111-8111-${String(index + 1).padStart(12, '0')}`,
+    }));
+    vi.mocked(apiClient.getForecastMlUpdateHistory).mockResolvedValue(ok(historyPage(rows, 'next-page')));
+    render(<ForecastMlUpdateHistoryPanel />);
+    await screen.findAllByText('Modelo promovido');
+    expect(screen.getAllByRole('article')).toHaveLength(3);
+    expect(screen.queryByRole('button', { name: 'Cargar más' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Ver historial completo' }));
+    expect(screen.getAllByRole('article')).toHaveLength(5);
+    expect(screen.getByRole('group', { name: 'Filtrar historial' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Cargar más' })).toBeTruthy();
+  });
+
   it('uses distinct state copy and does not collapse outcomes into “sin cambios”', async () => {
     const statuses = ['NOT_ELIGIBLE', 'EVALUATED_NO_PROMOTION', 'PROMOTED', 'PARTIAL', 'FAILED', 'INTERRUPTED', 'NO_PENDING_WORK', 'DEFERRED'] as const;
     vi.mocked(apiClient.getForecastMlUpdateHistory).mockResolvedValue(ok(historyPage(statuses.map((status, index) => makeExecution({
       executionId: `11111111-1111-4111-8111-${String(index + 1).padStart(12, '0')}`, status, horizons: [],
     })))));
     render(<ForecastMlUpdateHistoryPanel />);
+    await openFullHistory();
     expect(await screen.findByText('La evidencia aún no es elegible.')).toBeTruthy();
     expect(screen.getByText('Candidato evaluado; no se promovió.')).toBeTruthy();
     expect(screen.getByText('Se activó una nueva versión.')).toBeTruthy();
@@ -162,6 +182,7 @@ describe('forecast ML update history panel', () => {
     ];
     vi.mocked(apiClient.getForecastMlUpdateHistory).mockResolvedValue(ok(historyPage(rows)));
     render(<ForecastMlUpdateHistoryPanel />);
+    await openFullHistory();
     await screen.findByText('Modelo promovido');
 
     fireEvent.click(screen.getByRole('button', { name: 'Promovidos' }));
@@ -205,15 +226,16 @@ describe('forecast ML update history panel', () => {
       .mockResolvedValueOnce(ok(historyPage([first, second])))
       .mockResolvedValueOnce(ok(historyPage([second])));
     render(<ForecastMlUpdateHistoryPanel />);
+    await openFullHistory();
     await screen.findByText('Modelo promovido');
     fireEvent.click(screen.getByRole('button', { name: 'Sin trabajo' }));
     expect(screen.getByText('No hay coincidencias entre los registros cargados.')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Ver más' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cargar más' }));
     expect(await screen.findByText('Sin trabajo pendiente')).toBeTruthy();
     expect(apiClient.getForecastMlUpdateHistory).toHaveBeenNthCalledWith(2, { limit: 5, cursor: 'cursor-1' });
     expect(screen.getAllByRole('article')).toHaveLength(1);
     expect(screen.getByRole('button', { name: 'Sin trabajo' }).getAttribute('aria-pressed')).toBe('true');
-    expect(screen.queryByRole('button', { name: 'Ver más' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Cargar más' })).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Actualizar historial' }));
     await waitFor(() => expect(apiClient.getForecastMlUpdateHistory).toHaveBeenCalledTimes(3));

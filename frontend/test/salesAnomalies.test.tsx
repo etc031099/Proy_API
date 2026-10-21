@@ -23,14 +23,27 @@ describe('frozen daily sales anomaly panel', () => {
   it('shows actual KPIs, frozen training/analysis dates and descriptive top anomalies', async () => {
     const get = vi.spyOn(apiClient, 'getSalesAnomalies').mockResolvedValue(envelope);
     render(<SalesAnomalyPanel />);
-    expect(await screen.findByText(/Modelo exploratorio entrenado con 261 días/)).toBeTruthy();
-    expect(screen.getByText(/analiza 365 días/)).toBeTruthy();
+    expect(await screen.findByText('HISTÓRICO CONGELADO')).toBeTruthy();
+    expect(screen.getByText(`Versión: ${data.version}`)).toBeTruthy();
+    expect(screen.getByText(`Training cutoff: ${data.trainingCutoff}`)).toBeTruthy();
+    expect(screen.getByText(`Análisis cutoff: ${data.analysisCutoff}`)).toBeTruthy();
     expect(screen.getByText('71')).toBeTruthy();
     expect(screen.getByText(/^19[.,]45%$/)).toBeTruthy();
     expect(screen.getByText(`× ${data.topAnomalies[0].date}`)).toBeTruthy();
-    expect(screen.getByText('Ventas históricas y días atípicos')).toBeTruthy();
-    expect(screen.queryByText(/accuracy|fraude|sospechosa/i)).toBeNull();
+    expect(screen.getByText('Ventas históricas y señales atípicas')).toBeTruthy();
+    expect(screen.getByText(/Una señal atípica describe un patrón inusual; no implica fraude/)).toBeTruthy();
+    expect(screen.getAllByRole('row')).toHaveLength(11);
+    expect(screen.getByRole('button', { name: 'Ver todos los días atípicos →' })).toBeTruthy();
     expect(get).toHaveBeenCalledWith({ limit: 20 });
+  });
+  it('expands only the already-loaded anomaly records without another request', async () => {
+    const get = vi.spyOn(apiClient, 'getSalesAnomalies').mockResolvedValue(envelope);
+    render(<SalesAnomalyPanel />);
+    await screen.findByRole('button', { name: 'Ver todos los días atípicos →' });
+    fireEvent.click(screen.getByRole('button', { name: 'Ver todos los días atípicos →' }));
+    expect(screen.getAllByRole('row')).toHaveLength(data.topAnomalies.length + 1);
+    expect(screen.getByRole('button', { name: 'Mostrar menos' })).toBeTruthy();
+    expect(get).toHaveBeenCalledTimes(1);
   });
   it('tooltip exposes evidence and a symbol, not color alone', () => {
     render(<SalesAnomalyTooltip active payload={[{ payload: data.topAnomalies[0] }]} />);
@@ -43,10 +56,10 @@ describe('frozen daily sales anomaly panel', () => {
   it('academic help describes unsupervised algorithm and threshold', async () => {
     vi.spyOn(apiClient, 'getSalesAnomalies').mockResolvedValue(envelope);
     render(<SalesAnomalyPanel />);
-    await screen.findByText('Ver metodología y limitaciones');
+    await screen.findByText('Metodología y limitaciones');
     fireEvent.click(screen.getByRole('button', { name: 'Ayuda: Isolation Forest' }));
     expect(screen.getByRole('tooltip').textContent).toMatch(/aislarse más fácilmente/);
-    fireEvent.click(screen.getByText('Ver metodología y limitaciones'));
+    fireEvent.click(screen.getByText('Metodología y limitaciones'));
     fireEvent.click(screen.getByRole('button', { name: 'Ayuda: Contamination' }));
     expect(screen.getAllByRole('tooltip').some(element => element.textContent?.includes('no fija una tasa objetivo'))).toBe(true);
     fireEvent.keyDown(screen.getByRole('button', { name: 'Ayuda: Contamination' }), { key: 'Escape' });

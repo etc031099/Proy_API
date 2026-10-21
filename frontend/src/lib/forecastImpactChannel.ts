@@ -1,4 +1,5 @@
 import type { ForecastImpactSnapshot } from './forecastImpactSnapshot';
+import { readRidgeFeatureInputs } from './ridgeFeatures';
 
 export const FORECAST_IMPACT_CHANNEL = 'business-intelligence-sale-completed-v2';
 export const FORECAST_IMPACT_SESSION_KEY = 'business-intelligence.latest-sale-impact.v2';
@@ -80,5 +81,18 @@ function isSnapshot(value: unknown): value is import('./forecastImpactSnapshot')
     && Boolean(snapshot.horizons && snapshot.horizons[7] && snapshot.horizons[14] && snapshot.forecasts)
     && Object.values(snapshot.forecasts || {}).every(item => item && typeof item.sku === 'string'
       && typeof item.name === 'string' && (item.seven === null || typeof item.seven === 'number')
-      && (item.fourteen === null || typeof item.fourteen === 'number'));
+      && (item.fourteen === null || typeof item.fourteen === 'number')
+      && (item.inferences === undefined || [7, 14].every(days => {
+        const inference = item.inferences?.[days as 7 | 14];
+        if (inference === null) return true;
+        if (!inference || inference.horizonDays !== days || typeof inference.status !== 'string') return false;
+        const textFields = ['artifactHash', 'dataVersion', 'revision', 'snapshotHash', 'observationsThrough',
+          'observationsClosedThrough', 'dataCutoff', 'featureVersion', 'featureHash', 'trainedDataVersion',
+          'trainedAt', 'forecastStartDate', 'forecastEndDate', 'updatedAt'] as const;
+        return textFields.every(key => inference[key] === null || typeof inference[key] === 'string')
+          && (inference.modelVersion === null || Number.isSafeInteger(inference.modelVersion) && inference.modelVersion > 0)
+          && (inference.predictionUnits === null || typeof inference.predictionUnits === 'number' && Number.isFinite(inference.predictionUnits))
+          && (inference.featureInputs === null || Boolean(readRidgeFeatureInputs(inference.featureInputs)) && inference.featureInputs.sku === item.sku)
+          && inference.dataVersion === inference.revision && inference.observationsThrough === inference.observationsClosedThrough;
+      })));
 }

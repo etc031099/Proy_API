@@ -106,7 +106,7 @@ export function InventoryImpactSummaryCard({ impact, onNavigate }: { impact: Ret
 
 export function InventoryImpactDetailCard({ impact }: { impact: ReturnType<typeof useInventoryImpact> }) {
   const { event, after, loading, error } = impact;
-  if (!event) return <Card><CardContent className="p-5 text-sm text-muted-foreground">{loading ? 'Validando el contexto de la última operación…' : error || 'La próxima venta, anulación, compra inmediata o ajuste de stock se comparará automáticamente con el estado de inventario.'}</CardContent></Card>;
+  if (!event) return <section aria-label="Impacto de última operación" className="rounded-lg border bg-muted/20 px-3 py-2 text-sm text-muted-foreground">{loading ? 'Validando el contexto de la última operación…' : error || 'La próxima venta, anulación, compra inmediata o ajuste de stock se comparará aquí con el estado de inventario.'}</section>;
   const unavailableBefore = event.baselineStatus !== 'AVAILABLE';
   return <Card><CardHeader><CardTitle>Impacto de la última operación</CardTitle>
     <CardDescription>{operationLabels[event.type]}{event.reference ? ` · ${event.reference}` : ''} · {date(event.occurredAt)} · {event.products.length} producto(s) · {event.products.reduce((sum, row) => sum + row.quantity, 0)} unidad(es)</CardDescription></CardHeader>
@@ -119,14 +119,19 @@ export function InventoryImpactDetailCard({ impact }: { impact: ReturnType<typeo
         const current = after?.products[product.sku];
         return <details key={product.sku} className="rounded-lg border p-3" open={event.products.length === 1}>
           <summary className="cursor-pointer text-sm font-medium">{before?.name || product.name} · {product.sku} · {product.quantity} unidad(es)</summary>
-          <dl className="mt-2 divide-y">
+          <div className="mt-3 grid gap-4 lg:grid-cols-2">
+          <section className="rounded-lg bg-muted/30 p-3" aria-label="Pronóstico Ridge"><h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Pronóstico Ridge · ML directo</h4><dl className="divide-y">
             <Metric label="Pronóstico Ridge 7 días (P7)" semantic="Pronóstico directo acumulado" before={before} after={current}
               select={row => row.demand?.expectedUnitsNext7d} formatter={number} hideUnavailable={false} showWhenMissing />
             <Metric label="Pronóstico Ridge 14 días (P14)" semantic="Pronóstico directo acumulado" before={before} after={current}
               select={row => row.demand?.expectedUnitsNext14d} formatter={number} hideUnavailable={false} showWhenMissing />
+          </dl></section>
+          <section className="rounded-lg bg-muted/30 p-3" aria-label="Operativo"><h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Operativo</h4><dl className="divide-y">
             <Metric label="Stock" semantic="Dato operativo" before={before} after={current} select={row => row.stock?.onHand} formatter={number} hideUnavailable={unavailableBefore} />
             <Metric label="Entradas pendientes" semantic="Dato operativo" before={before} after={current} select={row => row.stock?.incoming} formatter={number} hideUnavailable={unavailableBefore} />
             <Metric label="Posición de inventario" semantic="Cálculo operativo" before={before} after={current} select={row => row.stock?.inventoryPosition} formatter={number} hideUnavailable={unavailableBefore} />
+          </dl></section>
+          <section className="rounded-lg bg-muted/30 p-3 lg:col-span-2" aria-label="Reglas derivadas"><h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Reglas derivadas · usan Ridge como insumo cuando está disponible</h4><dl className="divide-y">
             <Metric label="Cobertura" semantic="Regla con Ridge" before={before} after={current} select={row => row.coverage?.daysCover} formatter={v => v == null ? 'No disponible' : `${number(v)} días`} hideUnavailable={unavailableBefore} />
             <Metric label="Estado de cobertura" semantic="Regla con Ridge" before={before} after={current} select={row => row.coverage?.status} formatter={value} hideUnavailable={unavailableBefore} />
             <Metric label="Riesgo" semantic="Regla con Ridge" before={before} after={current} select={row => row.risk?.level} formatter={value} hideUnavailable={unavailableBefore} />
@@ -136,9 +141,11 @@ export function InventoryImpactDetailCard({ impact }: { impact: ReturnType<typeo
             <Metric label="Reponer ahora" semantic="Regla con Ridge" before={before} after={current} select={row => row.recommendation?.reorderNow} formatter={value} hideUnavailable={unavailableBefore} />
             <Metric label="Cantidad recomendada" semantic="Regla con Ridge" before={before} after={current} select={row => row.recommendation?.recommendedQty} formatter={number} hideUnavailable={unavailableBefore} />
             <Metric label="Tasa diaria derivada" semantic="Tasa derivada de Ridge, no forecast 1 día" before={before} after={current} select={ridgeDerivedDailyRate} formatter={number} hideUnavailable={unavailableBefore} />
+          </dl></section>
+          <section className="rounded-lg bg-muted/30 p-3" aria-label="Clasificación"><h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Clasificación descriptiva</h4><dl className="divide-y">
             <Metric label="ABC" semantic="Clasificación" before={before} after={current} select={row => row.classification?.abc} formatter={value} hideUnavailable={unavailableBefore} />
             <Metric label="XYZ" semantic="Clasificación" before={before} after={current} select={row => row.classification?.xyz} formatter={value} hideUnavailable={unavailableBefore} />
-          </dl>
+          </dl></section></div>
           {before?.captureStatus === 'UNAVAILABLE' && <p className="mt-2 text-xs text-muted-foreground">Estado previo no disponible para este producto.</p>}
           {current?.captureStatus === 'UNAVAILABLE' && <p className="mt-2 text-xs text-muted-foreground">Estado posterior no disponible para este producto.</p>}
         </details>;

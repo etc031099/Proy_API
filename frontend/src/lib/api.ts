@@ -61,7 +61,10 @@ class ApiClient {
   private intelligenceRead<T>(path: string, params?: object, versioned = true): Promise<T> {
     const session = this.getToken();
     if (session !== this.intelligenceSession) { this.invalidateIntelligenceReads(); this.intelligenceSession = session; }
-    const load = async () => (await this.instance.get(path, params ? { params } : undefined)).data as T;
+    const load = async () => {
+      const response = await this.instance.get(path, params ? { params } : undefined);
+      return response.data as T;
+    };
     if (!session) return load();
     const normalized = Object.entries(params || {}).filter(([, value]) => value !== undefined).sort(([a], [b]) => a.localeCompare(b));
     return this.intelligenceCache.read(JSON.stringify([path, normalized]), load, versioned);
@@ -88,7 +91,10 @@ class ApiClient {
     if (this.mlTestControlStatusPending) return this.mlTestControlStatusPending;
     const request = this.diagnosticRead<MlTestControlStatus>('/intelligence/test-control/status');
     this.mlTestControlStatusPending = request;
-    try { return await request; }
+    try {
+      const result = await request;
+      return result;
+    }
     finally { if (this.mlTestControlStatusPending === request) this.mlTestControlStatusPending = null; }
   }
   async getMlTestLifecycleStatus(): Promise<AuthenticatedDiagnosticResult<MlTestLifecycleStatus>> {
@@ -596,6 +602,10 @@ class ApiClient {
   // Extended V3 analytics use the same authenticated Axios instance and interceptors as the dashboard.
   async getSalesAnalytics(params: { period: SalesPeriod; includeSeries?: boolean; compare?: boolean; limit?: number }): Promise<AnalyticsEnvelope<SalesAnalytics>> {
     return this.intelligenceRead('/intelligence/sales', params);
+  }
+  async getSalesImpactAnalytics(): Promise<AnalyticsEnvelope<import('@/types/salesAnomalies').SalesProvisionalEvaluation>> {
+    const response = await this.instance.get('/intelligence/sales/anomalies/provisional', { timeout: 15_000 });
+    return response.data;
   }
   async getCustomersAnalytics(params?: { sortBy?: 'spend' | 'frequency' | 'recency' | 'gross_margin'; segment?: string; limit?: number; offset?: number }): Promise<AnalyticsEnvelope<CustomersAnalytics>> {
     return this.intelligenceRead('/intelligence/customers', params);

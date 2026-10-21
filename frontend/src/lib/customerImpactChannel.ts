@@ -1,9 +1,14 @@
-import { captureCustomerImpactSnapshot, isCustomerImpactEvent, makeCustomerImpactEvent, type CustomerImpactContext, type CustomerImpactEvent } from './customerImpactSnapshot';
+import { captureCustomerImpactSnapshot, isCustomerImpactEvent, makeCustomerImpactEvent, sameCustomerImpactContext, type CustomerImpactContext, type CustomerImpactEvent } from './customerImpactSnapshot';
 
 export const CUSTOMER_IMPACT_CHANNEL = 'business-intelligence-customer-sale-impact-v1';
 export const CUSTOMER_IMPACT_SESSION_KEY = 'business-intelligence.latest-customer-impact.v1';
 
 export function publishCustomerImpact(event: CustomerImpactEvent): void {
+  const previous = readLatestCustomerImpact();
+  if (event.captureStatus !== 'COMPLETE' && previous?.captureStatus === 'COMPLETE'
+    && sameCustomerImpactContext(previous.businessContext, event.businessContext)) {
+    return;
+  }
   saveLatestCustomerImpact(event);
   if (typeof BroadcastChannel === 'undefined') return;
   try {
@@ -44,15 +49,16 @@ export async function registerCustomerSaleImpact<T>(options: {
   isSuccessful: (response: T) => boolean;
   getMetadata: (response: T) => { transactionId: string | null; occurredAt?: string | null };
 }): Promise<T> {
-  const before = options.customerMongoId ? await captureCustomerImpactSnapshot(options.customerMongoId) : null;
+  const individualCustomerId = options.customerMongoId !== 'CONSUMER_FINAL' ? options.customerMongoId : null;
+  const before = individualCustomerId ? await captureCustomerImpactSnapshot(individualCustomerId) : null;
   const response = await options.submit();
   if (options.isSuccessful(response)) {
     const context = options.getContext();
-    if (!options.customerMongoId || !context.businessId || !context.scenarioId || !context.datasetVersion) {
+    if (!individualCustomerId || !context.businessId || !context.scenarioId || !context.datasetVersion) {
       clearLatestCustomerImpact();
       return response;
     }
-    const after = await captureCustomerImpactSnapshot(options.customerMongoId);
+    const after = await captureCustomerImpactSnapshot(individualCustomerId);
     const metadata = options.getMetadata(response);
     publishCustomerImpact(makeCustomerImpactEvent({ businessContext: context, transactionId: metadata.transactionId,
       displayName: options.displayName || 'Cliente', occurredAt: metadata.occurredAt || new Date().toISOString(), before, after }));

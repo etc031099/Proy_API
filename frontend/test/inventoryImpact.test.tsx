@@ -152,6 +152,10 @@ describe('InventoryImpact observational flow', () => {
     expect(document.body.textContent).toContain('Pronóstico Ridge 14 días (P14)');
     expect(screen.getAllByText('Dato operativo').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Pronóstico directo acumulado').length).toBe(2);
+    expect(screen.getByRole('region', { name: 'Pronóstico Ridge' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Operativo' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Reglas derivadas' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Clasificación' })).toBeTruthy();
     expect(screen.getByText(/Tasa diaria derivada/).closest('div')?.textContent).toContain('1.2 → 1.2');
     act(() => publishInventoryImpact(event('PURCHASE_CREATED')));
     await waitFor(() => expect(document.body.textContent).toContain('Compra inmediata: aumenta el stock.'));

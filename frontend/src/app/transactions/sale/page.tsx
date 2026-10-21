@@ -29,6 +29,8 @@ import { readForecastImpactSnapshot, registerSaleWithImpact } from '@/lib/foreca
 import { recordInventoryOperation } from '@/lib/inventoryImpactSnapshot';
 import { registerCustomerSaleImpact } from '@/lib/customerImpactChannel';
 import type { CustomerImpactContext } from '@/lib/customerImpactSnapshot';
+import { publishCompletedSaleImpact } from '@/lib/salesImpactChannel';
+import { captureSalesImpactSnapshot, waitForSalesImpactBefore, type SalesImpactSnapshot } from '@/lib/salesImpactSnapshot';
 
 // Form validation schema
 const saleFormSchema = z.object({
@@ -211,6 +213,7 @@ export default function AddSalePage() {
           return product?.sku ? [{ sku: product.sku, name: product.name, quantity: item.quantity }] : [];
         });
       let customerImpactContext: CustomerImpactContext = { businessId: null, scenarioId: null, datasetVersion: null };
+      let salesImpactBefore: SalesImpactSnapshot | null = null;
       const response = await recordInventoryOperation({
         type: 'SALE', products: saleProducts,
         submit: () => registerCustomerSaleImpact({ customerMongoId: customerId || null,
@@ -219,8 +222,10 @@ export default function AddSalePage() {
           submit: () => registerSaleWithImpact({
             products: saleProducts,
             captureBefore: async products => {
+              const salesBeforeRequest = waitForSalesImpactBefore(captureSalesImpactSnapshot());
               const baseline = await readForecastImpactSnapshot(products);
               customerImpactContext = baseline.context;
+              salesImpactBefore = await salesBeforeRequest;
               return baseline;
             },
             submit: () => api.createTransaction(saleData),
@@ -235,6 +240,18 @@ export default function AddSalePage() {
                 hasCustomer: Boolean(customerId), customerRef: customerId || null, products: affectedProducts, baseline,
                 baselineUnavailable: baseline === null || !baseline.complete,
                 context: baseline?.context || { businessId: null, scenarioId: null, datasetVersion: null },
+              });
+              const transactionTotal = typeof saved?.totalAmount === 'number' && Number.isFinite(saved.totalAmount)
+                ? saved.totalAmount : null;
+              publishCompletedSaleImpact({
+                businessContext: baseline?.context || customerImpactContext,
+                transactionId: typeof saved?._id === 'string' ? saved._id : null,
+                occurredAt: typeof saved?.date === 'string' ? saved.date : new Date().toISOString(),
+                saleTotal: transactionTotal === null ? null : {
+                  value: transactionTotal,
+                  currency: typeof saved?.currency === 'string' ? saved.currency : 'PEN',
+                },
+                before: salesImpactBefore,
               });
             },
           }),

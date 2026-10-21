@@ -13,6 +13,7 @@ import { ExtendedAnalyticsPanel, type ExtendedTab } from './ExtendedAnalyticsPan
 import { ChartCard, MetricInfo, MetricLabel } from './MetricInfo';
 import { ForecastEvaluationPanel } from './ForecastEvaluationPanel';
 import { ForecastDiagnosticsPanel } from './ForecastDiagnosticsPanel';
+import { ForecastMlUpdatePanel } from './ForecastMlUpdatePanel';
 import { ForecastMlUpdateHistoryPanel } from './ForecastMlUpdateHistoryPanel';
 import { ForecastReplayEvidencePanel } from './ForecastReplayEvidencePanel';
 import { ProductOperationHistoryPanel } from './ProductOperationHistoryPanel';
@@ -20,8 +21,8 @@ import { MlTestControlPanel } from './MlTestControlPanel';
 import { MlTestScenarioUiProvider, useMlTestScenarioUiState } from './MlTestScenarioUiContext';
 import { AnalyticsErrorBoundary } from './AnalyticsErrorBoundary';
 import { MlTestEpochBoundary } from './MlTestEpochBoundary';
-import { ForecastImpactDetailCard, ForecastImpactSummaryCard, useForecastImpact } from './ForecastImpactPanel';
-import { InventoryImpactDetailCard, InventoryImpactSummaryCard, useInventoryImpact } from './InventoryImpactPanel';
+import { ForecastImpactDetailCard, useForecastImpact } from './ForecastImpactPanel';
+import { InventoryImpactDetailCard, useInventoryImpact } from './InventoryImpactPanel';
 
 type TabKey = 'summary' | 'forecast' | 'inventory' | ExtendedTab;
 type LoadState = 'loading' | 'ready' | 'error';
@@ -65,6 +66,9 @@ function freshnessLine(value: { mode: IntelligenceMode; updatedAt: string | null
 function MetricCard({ title, value, hint, help }: { title: string; value: string; hint?: string; help?: React.ReactNode }) {
   return <Card><CardHeader className="pb-2"><div className="text-sm text-muted-foreground"><MetricLabel label={title} help={help} /></div><CardTitle className="text-2xl">{value}</CardTitle></CardHeader>{hint && <CardContent className="pt-0 text-xs text-muted-foreground">{hint}</CardContent>}</Card>;
 }
+function ExecutiveMetric({ title, value, hint, help }: { title: string; value: string; hint?: string; help?: React.ReactNode }) {
+  return <Card className="min-w-0"><CardContent className="px-4 py-3.5"><p className="text-xs font-medium text-muted-foreground"><MetricLabel label={title} help={help} /></p><p className="mt-2 break-words text-2xl font-semibold tracking-tight">{value}</p>{hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}</CardContent></Card>;
+}
 function SkeletonGrid() {
   return <div role="status" aria-label="Cargando resumen general" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{Array.from({ length: 8 }, (_, index) => <div key={index} className="h-28 animate-pulse rounded-xl border bg-muted/40" />)}<span className="sr-only">Cargando resumen general…</span></div>;
 }
@@ -77,6 +81,31 @@ function RiskBadge({ risk }: { risk: RiskLevel | null }) {
 }
 export function BusinessIntelligenceDashboard() {
   return <MlTestScenarioUiProvider><MlTestEpochBoundary><BusinessIntelligenceContent /></MlTestEpochBoundary></MlTestScenarioUiProvider>;
+}
+
+function RecentOperationStrip({ forecastImpact, inventoryImpact, onNavigate }: {
+  forecastImpact: ReturnType<typeof useForecastImpact>;
+  inventoryImpact: ReturnType<typeof useInventoryImpact>;
+  onNavigate: (tab: TabKey) => void;
+}) {
+  const event = inventoryImpact.event;
+  const sale = forecastImpact.sale;
+  const preferSale = Boolean(sale && (!event || Date.parse(sale.occurredAt) > Date.parse(event.occurredAt)));
+  const operationAt = preferSale ? sale?.occurredAt : event?.occurredAt;
+  const operationType = preferSale ? 'Venta' : event ? ({ SALE: 'Venta', SALE_CANCELLED: 'Anulación de venta', PURCHASE_CREATED: 'Compra inmediata', INVENTORY_ADJUSTMENT: 'Ajuste de inventario' } as const)[event.type] : null;
+  const products = preferSale ? sale?.products : event?.products;
+  const hasCustomer = Boolean(sale?.hasCustomer && (preferSale || event?.type === 'SALE'));
+  const hasForecastEvidence = Boolean(sale || event?.type === 'SALE' || event?.type === 'SALE_CANCELLED');
+  const links: Array<{ tab: TabKey; label: string }> = [];
+  if (event || sale) links.push({ tab: 'inventory', label: 'Ver inventario' });
+  if (hasForecastEvidence) links.push({ tab: 'forecast', label: 'Ver predicción' });
+  if (hasCustomer) links.push({ tab: 'customers', label: 'Ver cliente' });
+  const count = products?.reduce((sum, product) => sum + product.quantity, 0) ?? null;
+  const dateLabel = operationAt ? new Intl.DateTimeFormat('es-PE', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Lima' }).format(new Date(operationAt)) : null;
+  return <section aria-label="Última operación" className="flex flex-col gap-2 rounded-xl border bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between">
+    <div className="min-w-0">{operationType ? <><p className="text-sm font-medium">{operationType}{preferSale && sale?.transactionId ? ` · #${sale.transactionId.slice(-8)}` : event?.reference ? ` · ${event.reference}` : ''}{dateLabel ? ` · ${dateLabel}` : ''}</p><p className="text-xs text-muted-foreground">{products?.length ?? 0} producto(s){count == null ? '' : ` · ${count} unidad(es)`}{event || sale ? ' · Inventario operativo afectado' : ''}{hasForecastEvidence ? ' · Evidencia para revisar en Predicción' : ''}{hasCustomer ? ' · Cliente asociado' : ''}</p></> : <p className="text-sm text-muted-foreground">Sin una operación reciente para comparar.</p>}</div>
+    {links.length > 0 && <nav aria-label="Accesos a la última operación" className="flex flex-wrap gap-x-4 gap-y-1">{links.map(link => <button key={link.tab} type="button" onClick={() => onNavigate(link.tab)} className="text-sm font-medium text-primary underline underline-offset-4">{link.label}</button>)}</nav>}
+  </section>;
 }
 
 function BusinessIntelligenceContent() {
@@ -100,6 +129,7 @@ function BusinessIntelligenceContent() {
   const [detailState, setDetailState] = useState<LoadState>('loading');
   const [detailError, setDetailError] = useState(false);
   const [detailRetry, setDetailRetry] = useState(0);
+  const [localToolsMounted, setLocalToolsMounted] = useState(false);
   const detailsRequest = useRef(0);
   const summaryRequest = useRef(0);
   const inventoryRequest = useRef(0);
@@ -112,7 +142,8 @@ function BusinessIntelligenceContent() {
       if (requestId !== summaryRequest.current) return;
       if (!response.success || !response.data) throw new Error('Unavailable');
       setSummary(response.data); setSummaryState('ready');
-    } catch { if (requestId === summaryRequest.current) { setSummary(null); setSummaryError(true); setSummaryState('error'); } }
+    } catch {
+      if (requestId === summaryRequest.current) { setSummary(null); setSummaryError(true); setSummaryState('error'); } }
   }, []);
   const loadInventory = useCallback(async (invalidate = false) => {
     const requestId = ++inventoryRequest.current;
@@ -123,7 +154,8 @@ function BusinessIntelligenceContent() {
       if (requestId !== inventoryRequest.current) return;
       if (!response.success || !response.data) throw new Error('Unavailable');
       setInventory(response.data); setInventoryState('ready');
-    } catch { if (requestId === inventoryRequest.current) { setInventory(null); setInventoryError(true); setInventoryState('error'); } }
+    } catch {
+      if (requestId === inventoryRequest.current) { setInventory(null); setInventoryError(true); setInventoryState('error'); } }
   }, []);
   const loadOverview = useCallback(() => {
     void loadSummary();
@@ -165,6 +197,10 @@ function BusinessIntelligenceContent() {
     setSelected({ id: row.sku, sku: row.sku, name: row.productName, presentation: row.presentation });
     setTab('forecast');
   };
+  const selectFromSummaryRanking = (row: InventorySummary['items'][number]) => {
+    setSelected({ id: row.sku, sku: row.sku, name: row.productName, presentation: row.presentation });
+    setTab('inventory');
+  };
   const freshness = summary ? freshnessLine(summary) : null;
   const riskRows = inventory ? ([
     { key: 'critical' as const, label: 'Crítico', value: inventory.summary.riskCounts.critical },
@@ -173,50 +209,82 @@ function BusinessIntelligenceContent() {
     { key: 'low' as const, label: 'Bajo', value: inventory.summary.riskCounts.low },
   ]) : [];
   const riskCountsComplete = riskRows.every(row => typeof row.value === 'number');
-  const unavailableRiskCount = inventory?.summary.riskUnavailableCount || 0;
-  const hasAbcClassifiedProducts = ['A', 'B', 'C'].some(key => (inventory?.summary.abcCounts?.[key] ?? 0) > 0);
+  const riskAggregateUnavailable = summary?.inventory.riskCounts.critical == null || summary?.inventory.riskCounts.high == null;
+  const reorderAggregateUnavailable = summary?.inventory.reorderCount == null;
+  const riskUnavailableCount = inventory?.summary.riskUnavailableCount ?? null;
+  const recommendationUnavailableCount = inventory?.summary.recommendationUnavailableCount ?? null;
+  const riskEvaluableCounts = inventory?.summary.riskEvaluableCounts;
+  const riskEvaluableCount = inventory?.summary.riskEvaluableCount ?? null;
+  const riskCriticalCount = riskUnavailableCount != null && riskUnavailableCount > 0
+    ? riskEvaluableCounts?.critical ?? null
+    : inventory?.summary.riskCounts.critical ?? riskEvaluableCounts?.critical ?? null;
+  const riskHighCount = riskUnavailableCount != null && riskUnavailableCount > 0
+    ? riskEvaluableCounts?.high ?? null
+    : inventory?.summary.riskCounts.high ?? riskEvaluableCounts?.high ?? null;
+  const riskCriticalHighTotal = typeof riskCriticalCount === 'number' && typeof riskHighCount === 'number'
+    ? riskCriticalCount + riskHighCount : null;
+  const riskDistributionRows = riskRows.flatMap(row => {
+    const value = riskUnavailableCount != null && riskUnavailableCount > 0
+      ? riskEvaluableCounts?.[row.key]
+      : row.value ?? riskEvaluableCounts?.[row.key];
+    return typeof value === 'number' ? [{ ...row, value }] : [];
+  });
+  const reorderCountEvaluable = inventory?.summary.reorderCountEvaluable ?? null;
+  const reorderEvaluableCount = inventory?.summary.reorderEvaluableCount ?? null;
+  const reorderDecisionUnavailableCount = inventory?.summary.reorderDecisionUnavailableCount ?? null;
+  const partialReorderCountAvailable = reorderCountEvaluable != null && reorderEvaluableCount != null && reorderEvaluableCount > 0;
+  const grossMarginCostCoverage = summary?.grossMargin.costCoverage;
 
   return <div className="space-y-6">
     <header className="space-y-2"><div className="flex items-center gap-2 text-primary"><BarChart3 className="h-5 w-5" aria-hidden="true" /><span className="text-sm font-semibold uppercase tracking-wider">Inteligencia del negocio</span></div><h1 className="text-3xl font-bold tracking-tight sm:text-4xl">Analítica e Inteligencia del Negocio</h1><p className="max-w-3xl text-muted-foreground">Pronósticos, inventario y análisis del negocio en una sola vista.</p></header>
     {freshness && <p className="flex items-center gap-2 text-xs text-muted-foreground"><CalendarClock aria-hidden="true" className="h-4 w-4" />{freshness}</p>}
     <div>
-      <div role="tablist" aria-label="Secciones de inteligencia del negocio" className="flex w-full gap-1 overflow-x-auto rounded-lg bg-muted p-1 sm:grid sm:grid-cols-4 xl:inline-grid xl:grid-cols-8">
+      <div className="w-full overflow-x-auto">
+        <div role="tablist" aria-label="Secciones de inteligencia del negocio" className="flex w-max min-w-full justify-start gap-2 rounded-lg bg-muted p-1 xl:justify-center">
           {([{ key: 'summary', label: 'Resumen' }, { key: 'forecast', label: 'Predicción' }, { key: 'inventory', label: 'Inventario' },
           { key: 'sales', label: 'Ventas' }, { key: 'customers', label: 'Clientes' }, { key: 'suppliers', label: 'Proveedores' },
-          { key: 'related', label: 'Productos relacionados' }, { key: 'health', label: 'Salud' }] as const).map(item => <button key={item.key} id={`intelligence-tab-${item.key}`} type="button" role="tab" aria-controls={`intelligence-panel-${item.key}`} aria-selected={tab === item.key} onClick={() => setTab(item.key)} className={`shrink-0 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:shrink ${tab === item.key ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground'}`}>{item.label}</button>)}
+          { key: 'related', label: 'Productos relacionados' }, { key: 'health', label: 'Salud' }] as const).map(item => <button key={item.key} id={`intelligence-tab-${item.key}`} type="button" role="tab" aria-controls={`intelligence-panel-${item.key}`} aria-selected={tab === item.key} onClick={() => setTab(item.key)} className={`flex-none whitespace-nowrap rounded-md border px-3 py-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${tab === item.key ? 'border-primary bg-background text-foreground shadow' : 'border-transparent text-muted-foreground hover:text-foreground'}`}>{item.label}</button>)}
+        </div>
       </div>
       <AnalyticsErrorBoundary key={tab} label={{ summary: 'resumen', forecast: 'predicción', inventory: 'inventario', sales: 'ventas', customers: 'clientes', suppliers: 'proveedores', related: 'productos relacionados', health: 'salud' }[tab]}>
       {tab === 'summary' && <section id="intelligence-panel-summary" role="tabpanel" aria-labelledby="intelligence-tab-summary" tabIndex={0} className="mt-4 space-y-6">
         {summaryState === 'loading' && <SkeletonGrid />}
         {summaryError && <ErrorPanel retry={() => void loadSummary(true)} />}
         {summaryState === 'ready' && summary && <>
-          <section aria-label="Indicadores de hoy" className="space-y-3"><h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Actividad comercial · hoy</h2><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <MetricCard title="Ventas de hoy" value={summary.salesToday ? money(summary.salesToday.value, summary.salesToday.currency) : 'No disponible'} />
-            <MetricCard title="Unidades vendidas hoy" value={safeNumber(summary.unitsToday)} />
-            <MetricCard title="Tickets hoy" value={safeNumber(summary.ticketsToday)} />
-            <MetricCard title="Ticket promedio" value={summary.averageTicket ? money(summary.averageTicket.value, summary.averageTicket.currency) : 'No disponible'} />
-            <MetricCard title="Margen bruto" value={summary.grossMargin.availability === 'UNAVAILABLE' ? 'No disponible' : `${summary.grossMargin.availability === 'PARTIAL' ? 'Parcial · ' : ''}${money(summary.grossMargin.value, summary.grossMargin.currency)}${summary.grossMargin.percent !== null ? ` · ${safeNumber(summary.grossMargin.percent, 1)}%` : ''}`} hint={summary.grossMargin.availability === 'PARTIAL' ? 'Algunos costos no están disponibles.' : summary.grossMargin.availability === 'UNAVAILABLE' ? 'El costo disponible no permite calcularlo.' : undefined} help="El margen bruto resta el costo de los productos vendidos a sus ingresos. Si faltan costos, no se estima." />
+          <section aria-label="Actividad de hoy" className="space-y-3"><h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Actividad de hoy</h2><div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5">
+            <ExecutiveMetric title="Ventas" value={summary.salesToday ? money(summary.salesToday.value, summary.salesToday.currency) : 'No disponible'} />
+            <ExecutiveMetric title="Unidades vendidas" value={safeNumber(summary.unitsToday)} />
+            <ExecutiveMetric title="Tickets" value={safeNumber(summary.ticketsToday)} />
+            <ExecutiveMetric title="Ticket promedio" value={summary.averageTicket ? money(summary.averageTicket.value, summary.averageTicket.currency) : 'No disponible'} />
+            <ExecutiveMetric title="Margen bruto" value={summary.grossMargin.availability === 'PARTIAL' || summary.grossMargin.availability === 'UNAVAILABLE' ? 'No disponible' : `${money(summary.grossMargin.value, summary.grossMargin.currency)}${summary.grossMargin.percent !== null ? ` · ${safeNumber(summary.grossMargin.percent, 1)}%` : ''}`} hint={summary.grossMargin.availability === 'PARTIAL'
+              ? grossMarginCostCoverage?.knownSaleLines != null && grossMarginCostCoverage.unknownSaleLines != null
+                ? `Costos registrados para ${safeNumber(grossMarginCostCoverage.knownSaleLines)} de ${safeNumber(grossMarginCostCoverage.knownSaleLines + grossMarginCostCoverage.unknownSaleLines)} líneas de venta.`
+                : 'Cobertura de costos parcial; no se muestra un margen total.'
+              : summary.grossMargin.availability === 'UNAVAILABLE' ? 'No hay costos suficientes para calcularlo.' : undefined}
+              help="El margen bruto suma ingresos menos costo histórico capturado por línea. Si falta costo en alguna línea relevante, no se estima el total." />
           </div></section>
-          <section aria-label="Indicadores de inventario" className="space-y-3"><h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Inventario y atención</h2><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <MetricCard title="Productos en riesgo" value={summary.inventory.riskCounts.critical === null || summary.inventory.riskCounts.high === null ? 'No disponible' : `${safeNumber(summary.inventory.riskCounts.critical)} críticos · ${safeNumber(summary.inventory.riskCounts.high)} altos`} hint={summary.inventory.riskCounts.critical === null || summary.inventory.riskCounts.high === null ? 'Análisis parcial; el riesgo no disponible no se cuenta como bajo.' : 'Riesgo crítico o alto'} help="Conteo del análisis de inventario para productos con riesgo crítico o alto." />
-            <MetricCard title="Productos a reponer" value={safeNumber(summary.inventory.reorderCount)} help="Cantidad de productos para los que el motor recomienda reponer inventario." />
-            <MetricCard title="Compras pendientes" value={safeNumber(summary.inventory.pendingPurchasesCount)} />
+          <section aria-label="Inventario y atención" className="space-y-3"><h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Inventario y atención</h2><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <ExecutiveMetric title="Productos en riesgo" value={riskAggregateUnavailable ? 'No disponible' : `${safeNumber(summary.inventory.riskCounts.critical)} críticos · ${safeNumber(summary.inventory.riskCounts.high)} altos`} hint={riskAggregateUnavailable
+              ? `Conteo global no disponible; análisis parcial disponible abajo${riskUnavailableCount != null && riskUnavailableCount > 0 ? ` (${safeNumber(riskUnavailableCount)} sin riesgo calculable)` : ''}.`
+              : 'Crítico y alto'} help="Conteo global contractual. Si algún producto carece de riesgo calculable, no se presenta un total incompleto como global." />
+            <ExecutiveMetric title="Productos a reponer" value={safeNumber(summary.inventory.reorderCount)} hint={reorderAggregateUnavailable
+              ? `Conteo global no disponible; revisa las acciones por producto abajo${recommendationUnavailableCount != null && recommendationUnavailableCount > 0 ? ` (${safeNumber(recommendationUnavailableCount)} sin recomendación calculable)` : ''}.`
+              : undefined} help="Conteo global de productos cuyo shouldReorder es verdadero; no es un conteo del Top visible." />
+            <ExecutiveMetric title="Compras pendientes" value={safeNumber(summary.inventory.pendingPurchasesCount)} />
           </div></section>
-          <ForecastImpactSummaryCard impact={forecastImpact} onNavigate={target => setTab(target)} />
-          <InventoryImpactSummaryCard impact={inventoryImpact} onNavigate={() => setTab('inventory')} />
+          <RecentOperationStrip forecastImpact={forecastImpact} inventoryImpact={inventoryImpact} onNavigate={setTab} />
           <section aria-labelledby="analytics-techniques-title" className="space-y-3">
-            <div><h2 id="analytics-techniques-title" className="inline text-lg font-semibold">Técnicas analíticas utilizadas</h2><span className="ml-2"><MetricInfo label="Machine Learning">Machine Learning permite aprender patrones a partir de datos, en lugar de depender únicamente de reglas definidas manualmente.</MetricInfo></span><p className="text-sm text-muted-foreground">3 técnicas de Machine Learning y 1 técnica de minería de patrones, elegidas según el problema.</p></div>
+            <div><h2 id="analytics-techniques-title" className="text-lg font-semibold">Técnicas de análisis</h2></div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               {([
-                { key: 'forecast', title: 'Predicción', algorithm: 'Ridge Regression', type: 'Aprendizaje supervisado', objective: 'Pronóstico LIVE 7/14 días', status: 'Modelo ACTIVE según registro', help: 'Predice demanda con un modelo promovido para el horizonte, SKU y artefacto activos; el horizonte de 1 día no está aprobado.' },
-                { key: 'customers', title: 'Clientes', algorithm: 'K-Means', type: 'Aprendizaje no supervisado', objective: 'Agrupación por similitud', status: 'Exploratorio · histórico', help: 'Busca estructuras en los datos sin utilizar etiquetas previas.' },
-                { key: 'sales', title: 'Ventas', algorithm: 'Isolation Forest', type: 'Aprendizaje no supervisado', objective: 'Detección de comportamientos atípicos', status: 'Exploratorio · histórico', help: 'Busca observaciones que se separan del patrón aprendido sin etiquetas previas.' },
-                { key: 'related', title: 'Productos relacionados', algorithm: 'FP-Growth', type: 'Minería de patrones', objective: 'Coocurrencias en tickets', status: 'Histórico congelado', help: 'Descubre combinaciones frecuentes de productos en datos históricos.' },
-              ] as const).map(item => <article key={item.key} className="rounded-xl border bg-card p-4">
-                <div className="flex items-center gap-1"><h3 className="font-semibold">{item.title}</h3><MetricInfo label={item.algorithm}>{item.help}</MetricInfo></div>
-                <p className="mt-1 text-xs text-muted-foreground">{item.algorithm}</p><div className="mt-2 flex items-center gap-1"><Badge variant="outline">{item.type}</Badge><MetricInfo label={item.type}>{item.key === 'forecast' ? 'Aprende una relación entre variables de entrada y un objetivo conocido.' : item.key === 'related' ? 'Descubre combinaciones frecuentes y relaciones de coocurrencia dentro de datos históricos.' : 'Busca estructuras o comportamientos en los datos sin utilizar etiquetas previas.'}</MetricInfo></div>
-                <p className="mt-2 text-sm">{item.objective}</p><p className="mt-1 text-xs text-muted-foreground">{item.status}</p>
-                <button type="button" onClick={() => setTab(item.key)} className="mt-3 rounded-sm text-sm font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Ver análisis</button>
+                { key: 'forecast', title: 'Predicción', algorithm: 'Ridge Regression', type: 'LIVE', objective: 'Demanda acumulada a 7 y 14 días', status: '1 día no aprobado', help: 'Pronóstico servido con modelos activos por horizonte.' },
+                { key: 'customers', title: 'Clientes', algorithm: 'RFM + K-Means', type: 'OPERACIONAL + ML', objective: 'Actividad y grupos por similitud', status: 'Modelo de referencia', help: 'RFM describe actividad; K-Means asigna al modelo congelado.' },
+                { key: 'sales', title: 'Ventas', algorithm: 'Isolation Forest', type: 'HISTÓRICO', objective: 'Días con patrones inusuales', status: 'No implica fraude', help: 'Analiza una ventana histórica congelada.' },
+                { key: 'related', title: 'Productos relacionados', algorithm: 'FP-Growth', type: 'REGLA · HISTÓRICO', objective: 'Productos que coocurren en tickets', status: 'No se actualiza por venta individual', help: 'Resume reglas históricas de asociación; no implica causalidad.' },
+              ] as const).map(item => <article key={item.key} className="min-w-0 rounded-xl border bg-card p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">{item.title}</h3><Badge variant="outline" className="text-[10px]">{item.type}</Badge></div>
+                <p className="mt-1 text-xs text-muted-foreground">{item.objective}</p><p className="mt-2 flex items-center gap-1 text-sm font-semibold">{item.algorithm}<MetricInfo label={item.algorithm}>{item.help}</MetricInfo></p>
+                <button type="button" onClick={() => setTab(item.key)} className="mt-2 rounded-sm text-sm font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Ver análisis</button>
               </article>)}
             </div>
           </section>
@@ -225,59 +293,83 @@ function BusinessIntelligenceContent() {
         {inventoryState === 'loading' && <LoadingDetail label="Cargando inventario y ranking…" />}
         {inventoryError && <ErrorPanel message="No se pudo cargar el inventario." retry={() => void loadInventory(true)} />}
         {inventoryState === 'ready' && inventory && <>
-          <section className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,.9fr)]">
-            <Card><CardHeader><CardTitle>Distribución de riesgo de inventario</CardTitle><CardDescription>{safeNumber(inventory.summary.totalProducts)} productos en el análisis del motor.</CardDescription></CardHeader><CardContent>{riskCountsComplete ? <div className="h-64 w-full" role="img" aria-label={`Distribución de riesgo: ${riskRows.map(row => `${row.label} ${safeNumber(row.value)}`).join(', ')}`}><ResponsiveContainer width="100%" height="100%"><BarChart data={riskRows} layout="vertical" margin={{ left: 6, right: 20, top: 4, bottom: 4 }}><CartesianGrid strokeDasharray="3 3" horizontal={false} /><XAxis type="number" allowDecimals={false} /><YAxis type="category" dataKey="label" width={65} /><Tooltip formatter={value => [safeNumber(typeof value === 'number' ? value : null), 'Productos']} /><Bar dataKey="value" name="Productos" radius={[0, 5, 5, 0]}>{riskRows.map(row => <Cell key={row.key} fill={riskColors[riskKeyLevels[row.key]]} />)}</Bar></BarChart></ResponsiveContainer></div> : <p role="status" className="rounded-lg border border-dashed p-5 text-sm text-muted-foreground">Distribución parcial: {safeNumber(unavailableRiskCount)} productos no tienen un nivel de riesgo calculable y no se cuentan como riesgo bajo.</p>}</CardContent></Card>
-            <RankingTable rows={inventory.items} onSelect={selectFromRanking} />
+          <section aria-labelledby="inventory-overview-title" className="space-y-3"><h2 id="inventory-overview-title" className="text-lg font-semibold">Panorama de inventario</h2><div className="grid gap-4 lg:grid-cols-2">
+            <Card className="min-w-0"><CardHeader className="pb-2"><CardTitle className="text-base">Distribución de riesgo</CardTitle><CardDescription>{safeNumber(inventory.summary.totalProducts)} productos analizados</CardDescription></CardHeader><CardContent>{riskCountsComplete ? <div className="mx-auto h-36 w-full max-w-2xl" role="img" aria-label={`Distribución de riesgo: ${riskRows.map(row => `${row.label} ${safeNumber(row.value)}`).join(', ')}`}><ResponsiveContainer width="100%" height="100%"><BarChart data={riskRows} layout="vertical" margin={{ left: 4, right: 16, top: 2, bottom: 2 }}><CartesianGrid strokeDasharray="3 3" horizontal={false} /><XAxis type="number" allowDecimals={false} /><YAxis type="category" dataKey="label" width={58} /><Tooltip formatter={value => [safeNumber(typeof value === 'number' ? value : null), 'Productos']} /><Bar dataKey="value" name="Productos" radius={[0, 5, 5, 0]}>{riskRows.map(row => <Cell key={row.key} fill={riskColors[riskKeyLevels[row.key]]} />)}</Bar></BarChart></ResponsiveContainer></div> : <p role="status" className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">Distribución parcial: {riskUnavailableCount == null ? 'Cantidad sin riesgo calculable no disponible.' : `${safeNumber(riskUnavailableCount)} productos no tienen un nivel de riesgo calculable`}; no se cuentan como riesgo bajo.</p>}</CardContent></Card>
+            <Card className="min-w-0"><CardHeader className="pb-2"><CardTitle className="text-base">Estabilidad de demanda (XYZ)</CardTitle><CardDescription>Clasificación descriptiva · no es un pronóstico</CardDescription></CardHeader><CardContent><ClassificationChart title="Distribución XYZ" compact counts={inventory.summary.xyzCounts} colors={{ X: '#16a34a', Y: '#84cc16', Z: '#facc15', UNCLASSIFIED: '#94a3b8' }} requiredLabels={['X', 'Y', 'Z', 'UNCLASSIFIED']} help="X indica demanda estable, Y variable y Z irregular." /></CardContent></Card>
+          </div></section>
+          <section aria-label="Productos que requieren atención" className="space-y-3"><h2 className="text-lg font-semibold">Productos que requieren atención</h2><SummaryRanking rows={inventory.items.slice(0, 8)} onSelect={selectFromSummaryRanking} onViewAll={() => setTab('inventory')} /></section>
+        </>}
+      </section>}
+      {tab === 'forecast' && <ForecastMlUpdatePanel onManualRequestFinished={() => setMlHistoryRefreshToken(value => value + 1)}>
+        {({ statusSummary, preparation }) => <section id="intelligence-panel-forecast" role="tabpanel" aria-labelledby="intelligence-tab-forecast" tabIndex={0} className="mt-4 space-y-4">
+          <Card aria-label="Pronóstico Ridge LIVE" className="overflow-hidden">
+            <CardHeader className="pb-3"><div><CardTitle>Pronóstico Ridge LIVE</CardTitle><CardDescription>Horizontes aprobados: 7 y 14 días. El horizonte de 1 día no está aprobado.</CardDescription></div></CardHeader>
+            <CardContent className="space-y-3 pt-0">
+              {statusSummary}
+              <details className="border-t pt-2 text-sm"><summary className="cursor-pointer font-medium">Detalles técnicos</summary>
+                <div className="mt-3"><ForecastDiagnosticsPanel showUpdatePanel={false} onForecastModelsChange={setActiveForecastModels} /></div>
+              </details>
+            </CardContent>
+          </Card>
+          <Card><CardHeader className="pb-3"><CardTitle>Pronóstico por producto</CardTitle><CardDescription>Selecciona un producto para consultar P7 y P14; son valores directos del modelo Ridge.</CardDescription></CardHeader><CardContent className="pt-0"><ProductSearchPicker id="intelligence-product-search" selected={selected} onSelect={chooseProduct} /></CardContent></Card>
+          {!selected && <EmptyProductState />}
+          {selected && <ForecastPanel product={selected} forecasts={forecastByHorizon} horizon={horizon} setHorizon={setHorizon} activeModels={activeForecastModels} onRetry={() => { apiClient.invalidateIntelligenceReads(); setDetailRetry(value => value + 1); }} />}
+          <ForecastImpactDetailCard impact={forecastImpact} />
+          {preparation}
+          <ForecastMlUpdateHistoryPanel refreshToken={mlHistoryRefreshToken} />
+          <ForecastReplayEvidencePanel />
+          <details className="rounded-xl border p-4">
+            <summary className="cursor-pointer font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Evidencia histórica y comparación de modelos</summary>
+            <div className="mt-4 space-y-3"><p className="text-sm text-muted-foreground">Esta sección contiene experimentos y evaluaciones históricas. No corresponde al modelo LIVE utilizado actualmente para predicciones operativas.</p>
+              <p className="text-sm text-muted-foreground">MA28 es un baseline estadístico de referencia. HistGradientBoosting (HGB) es un modelo histórico/experimental, no usado para serving LIVE.</p>
+              <ForecastEvaluationPanel />
+            </div>
+          </details>
+          <details onToggle={event => { if (event.currentTarget.open) setLocalToolsMounted(true); }} className="rounded-xl border p-4"><summary className="cursor-pointer font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Herramientas avanzadas de demostración local</summary>{localToolsMounted && <div className="mt-4"><MlTestControlPanel /></div>}</details>
+        </section>}
+      </ForecastMlUpdatePanel>}
+      {tab === 'inventory' && <section id="intelligence-panel-inventory" role="tabpanel" aria-labelledby="intelligence-tab-inventory" tabIndex={0} className="mt-4 space-y-5">
+        <div><h2 className="text-xl font-semibold">Inventario operativo</h2><p className="text-sm text-muted-foreground">Resumen de existencias, prioridades y reglas de reposición.</p></div>
+        {inventoryError && <ErrorPanel message="No se pudo cargar el inventario." retry={() => void loadInventory(true)} />}
+        {inventoryState === 'loading' && <LoadingDetail label="Cargando inventario…" />}
+        {inventory && <>
+          <section aria-label="Resumen operativo de inventario" className="space-y-2">
+            <h3 className="text-sm font-semibold">Resumen operativo</h3>
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+              <ExecutiveMetric title="Stock bajo" value={safeNumber(inventory.summary.lowStockCount)} />
+              <ExecutiveMetric title="Productos a reponer" value={inventory.summary.reorderCount != null ? safeNumber(inventory.summary.reorderCount) : partialReorderCountAvailable ? safeNumber(reorderCountEvaluable) : 'No disponible'} hint={inventory.summary.reorderCount == null
+                ? partialReorderCountAvailable && reorderDecisionUnavailableCount != null
+                  ? `${safeNumber(reorderCountEvaluable)} de ${safeNumber(reorderEvaluableCount)} productos evaluables · ${safeNumber(reorderDecisionUnavailableCount)} sin decisión de reposición.`
+                  : 'Conteo global no disponible; el ranking conserva el análisis por producto.'
+                : undefined} />
+              <ExecutiveMetric title="Compras pendientes" value={safeNumber(summary?.inventory.pendingPurchasesCount)} />
+              <Card className="min-w-0"><CardContent className="px-4 py-3.5"><p className="text-xs font-medium text-muted-foreground">Riesgo crítico / alto</p>
+                <p className="mt-2 break-words text-2xl font-semibold tracking-tight">{riskCriticalHighTotal == null ? 'No disponible' : `${safeNumber(riskCriticalHighTotal)} productos`}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{typeof riskCriticalCount === 'number' && typeof riskHighCount === 'number' ? `${safeNumber(riskCriticalCount)} críticos · ${safeNumber(riskHighCount)} altos` : 'No están disponibles ambos conteos.'}</p>
+                {riskEvaluableCount != null && inventory.summary.totalProducts != null && <p className="mt-1 text-xs text-muted-foreground">{safeNumber(riskEvaluableCount)} de {safeNumber(inventory.summary.totalProducts)} productos evaluables{riskUnavailableCount != null ? ` · ${safeNumber(riskUnavailableCount)} sin riesgo calculable` : ''}.</p>}
+              </CardContent></Card>
+            </div>
           </section>
-          <Card><CardHeader><CardTitle>Clasificación de productos</CardTitle><CardDescription>Distribución calculada por el motor de inventario.</CardDescription></CardHeader><CardContent className={`grid gap-6 ${hasAbcClassifiedProducts ? 'md:grid-cols-2' : 'grid-cols-1'}`}>
-            {hasAbcClassifiedProducts && <ClassificationChart title="Importancia económica (ABC)" counts={inventory.summary.abcCounts} colors={{ A: '#2563eb', B: '#60a5fa', C: '#bfdbfe' }} help="A agrupa productos de mayor importancia económica, B de importancia intermedia y C de menor importancia." />}
-            <ClassificationChart title="Estabilidad de demanda (XYZ)" counts={inventory.summary.xyzCounts} colors={{ X: '#16a34a', Y: '#84cc16', Z: '#facc15' }} help="X indica demanda más estable, Y demanda variable y Z demanda irregular." />
-          </CardContent></Card>
         </>}
-      </section>}
-      {tab === 'forecast' && <section id="intelligence-panel-forecast" role="tabpanel" aria-labelledby="intelligence-tab-forecast" tabIndex={0} className="mt-4 space-y-6">
-        <div><h2 className="text-xl font-semibold">Pronóstico operativo</h2><p className="text-sm text-muted-foreground">Pronósticos operativos Ridge para horizontes acumulados de 7 y 14 días.</p><details className="mt-2 text-sm"><summary className="w-fit cursor-pointer font-medium">Sobre los modelos</summary><p className="mt-2 max-w-3xl text-muted-foreground">MA28 es un baseline estadístico de referencia. HistGradientBoosting (HGB) es un modelo histórico/experimental y no se utiliza para serving LIVE.</p></details></div>
-        <ForecastDiagnosticsPanel onForecastModelsChange={setActiveForecastModels}
-          onManualRequestFinished={() => setMlHistoryRefreshToken(value => value + 1)} />
-        <ForecastImpactDetailCard impact={forecastImpact} />
-          <Card><CardHeader className="pb-3"><CardTitle>Pronóstico por producto</CardTitle><CardDescription>Consulta la demanda acumulada estimada para los próximos 7 o 14 días.</CardDescription></CardHeader><CardContent className="pt-0"><ProductSearchPicker id="intelligence-product-search" selected={selected} onSelect={chooseProduct} /></CardContent></Card>
-        {!selected && <EmptyProductState />}
-        {selected && <ForecastPanel product={selected} forecasts={forecastByHorizon} horizon={horizon} setHorizon={setHorizon} activeModels={activeForecastModels} onRetry={() => { apiClient.invalidateIntelligenceReads(); setDetailRetry(value => value + 1); }} />}
-        <ForecastMlUpdateHistoryPanel refreshToken={mlHistoryRefreshToken} />
-        <ForecastReplayEvidencePanel />
-        <details className="rounded-xl border p-4">
-          <summary className="cursor-pointer font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Evidencia histórica y comparación de modelos</summary>
-          <div className="mt-4 space-y-3"><p className="text-sm text-muted-foreground">Esta sección contiene experimentos y evaluaciones históricas. No corresponde al modelo LIVE utilizado actualmente para predicciones operativas.</p>
-            <p className="text-sm text-muted-foreground">MA28 es un baseline estadístico de referencia. HistGradientBoosting (HGB) es un modelo histórico/experimental, no usado para serving LIVE.</p>
-            <ForecastEvaluationPanel />
-          </div>
-        </details>
-        <MlTestControlPanel />
-      </section>}
-      {tab === 'inventory' && <section id="intelligence-panel-inventory" role="tabpanel" aria-labelledby="intelligence-tab-inventory" tabIndex={0} className="mt-4 space-y-6">
         <InventoryImpactDetailCard impact={inventoryImpact} />
-        <Card><CardContent className="p-5"><ProductSearchPicker id="intelligence-inventory-product-search" selected={selected} onSelect={chooseProduct} /></CardContent></Card>
-        {!selected && <>
-          {inventoryError && <ErrorPanel message="No se pudo cargar el inventario." retry={() => void loadInventory(true)} />}
-          {inventoryState === 'loading' && <LoadingDetail label="Cargando ranking de inventario…" />}
-            {inventory && <>
-              <Card>
-                <CardHeader><CardTitle>Riesgo de inventario</CardTitle><CardDescription>Distribución del análisis de inventario.</CardDescription></CardHeader>
-                <CardContent>
-                  <p className="mb-4 text-sm text-muted-foreground">La reposición combina pronósticos acumulados Ridge de 7/14 días con reglas operativas. La tasa diaria y la cobertura son aproximaciones de política, no un modelo de 1 día. {hasAbcClassifiedProducts ? 'ABC/XYZ' : 'XYZ'} y estas políticas no son modelos de Machine Learning.</p>
-                  {inventory.availabilityStatus === 'PARTIAL' && <p role="status" className="mb-4 rounded-lg border border-dashed p-3 text-sm text-muted-foreground">Análisis parcial: los cálculos sin evidencia suficiente se muestran como no disponibles; no se sustituyen por cero ni por riesgo bajo.</p>}
-                  {riskCountsComplete ? <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">{riskRows.map(row => <div key={row.key} className="rounded-lg border p-3"><RiskBadge risk={riskKeyLevels[row.key]} /><p className="mt-2 text-xl font-semibold">{safeNumber(row.value)}</p></div>)}</div> : <p role="status" className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">Distribución parcial: {safeNumber(unavailableRiskCount)} productos no tienen un nivel de riesgo calculable y no se cuentan como riesgo bajo.</p>}
-                  <div className={`mt-5 grid gap-4 ${hasAbcClassifiedProducts ? 'sm:grid-cols-2' : 'grid-cols-1'}`}>
-                    {hasAbcClassifiedProducts && <ClassificationChart title="Importancia económica (ABC)" counts={inventory.summary.abcCounts} colors={{ A: '#2563eb', B: '#60a5fa', C: '#bfdbfe' }} help="A representa mayor importancia económica, B importancia intermedia y C menor importancia." />}
-                    <ClassificationChart title="Estabilidad de demanda (XYZ)" counts={inventory.summary.xyzCounts} colors={{ X: '#16a34a', Y: '#84cc16', Z: '#facc15' }} help="X es una demanda más estable, Y variable y Z irregular." />
-                  </div>
-                  <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">Reposición recomendada</p><p className="text-lg font-semibold">{safeNumber(inventory.summary.reorderCount)}</p></div>{inventory.summary.lowStockCount != null && <div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">Stock bajo</p><p className="text-lg font-semibold">{safeNumber(inventory.summary.lowStockCount)}</p></div>}{inventory.summary.overstockCount != null && <div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">Sobreinventario</p><p className="text-lg font-semibold">{safeNumber(inventory.summary.overstockCount)}</p></div>}{inventory.summary.slowMovingCount != null && <div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">Movimiento lento</p><p className="text-lg font-semibold">{safeNumber(inventory.summary.slowMovingCount)}</p></div>}{inventory.summary.deadStockCount != null && <div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">Sin movimiento</p><p className="text-lg font-semibold">{safeNumber(inventory.summary.deadStockCount)}</p></div>}</div>
-                </CardContent>
-              </Card>
-              <RankingTable rows={inventory.items} onSelect={selectFromRanking} />
-            </>}
-        </>}
-        {selected && detailState === 'loading' && <LoadingDetail label="Cargando inventario del producto…" />}
+        <Card><CardContent className="p-3 sm:p-4"><ProductSearchPicker id="intelligence-inventory-product-search" selected={selected} onSelect={chooseProduct} />{!selected && inventory && <p className="mt-2 text-xs text-muted-foreground">Selecciona un producto del buscador o del ranking para ver su detalle.</p>}</CardContent></Card>
+        {inventory && <section aria-label="Panorama de inventario" className="space-y-2">
+          <div><h3 className="text-lg font-semibold">Panorama de inventario</h3><p className="text-xs text-muted-foreground">Distribución de riesgo y clasificación descriptiva de estabilidad.</p></div>
+          {inventory.availabilityStatus === 'PARTIAL' && <p role="status" className="text-xs text-muted-foreground">Análisis parcial: los valores sin evidencia suficiente permanecen como no disponibles.</p>}
+          <div className="grid items-stretch gap-3 lg:grid-cols-2">
+            <Card className="h-full min-w-0"><CardHeader className="pb-1"><CardTitle className="text-base">Distribución de riesgo</CardTitle><CardDescription>{safeNumber(inventory.summary.totalProducts)} productos analizados</CardDescription></CardHeader><CardContent className="space-y-1 pt-0 pb-3">
+              {riskDistributionRows.length > 0 && <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">{riskDistributionRows.map(row => <div key={row.key} className="rounded-md border p-2"><RiskBadge risk={riskKeyLevels[row.key]} /><p className="mt-1 text-lg font-semibold">{safeNumber(row.value)}</p></div>)}</div>}
+              {(riskUnavailableCount != null && riskUnavailableCount > 0) || (riskEvaluableCount != null && inventory.summary.totalProducts != null) ? <div role="status" className="space-y-1 text-xs text-muted-foreground">
+                {riskEvaluableCount != null && inventory.summary.totalProducts != null && <p>Distribución parcial sobre {safeNumber(riskEvaluableCount)} de {safeNumber(inventory.summary.totalProducts)} productos evaluables.</p>}
+                {riskUnavailableCount != null && riskUnavailableCount > 0 && <p>{safeNumber(riskUnavailableCount)} {riskUnavailableCount === 1 ? 'producto sin riesgo calculable' : 'productos sin riesgo calculable'}</p>}
+                {riskUnavailableCount == null && (riskEvaluableCount == null || inventory.summary.totalProducts == null) && <p>Distribución parcial; cantidad sin riesgo calculable no disponible.</p>}
+              </div> : riskDistributionRows.length === 0 && <p role="status" className="text-xs text-muted-foreground">No hay conteos evaluables disponibles.</p>}
+            </CardContent></Card>
+            <Card className="h-full min-w-0"><CardHeader className="pb-2"><CardTitle className="text-base">Estabilidad de demanda (XYZ)</CardTitle><CardDescription>Clasificación descriptiva; no es un pronóstico.</CardDescription></CardHeader><CardContent><ClassificationChart title="Distribución XYZ" compact counts={inventory.summary.xyzCounts} colors={{ X: '#16a34a', Y: '#84cc16', Z: '#facc15', UNCLASSIFIED: '#94a3b8' }} requiredLabels={['X', 'Y', 'Z', 'UNCLASSIFIED']} help="X indica demanda estable, Y variable y Z irregular." /></CardContent></Card>
+          </div>
+        </section>}
+        {inventory && <RankingTable rows={inventory.items} onSelect={selectFromRanking} />}
+        {selected && detailState === 'loading' && <LoadingDetail label="Cargando detalle del producto…" />}
         {selected && detailError && <ErrorPanel retry={() => { apiClient.invalidateIntelligenceReads(); setDetailError(false); setDetailRetry(value => value + 1); }} />}
         {selected && detailState === 'ready' && productInventory && <ProductInventoryPanel inventory={productInventory} />}
       </section>}
@@ -287,14 +379,27 @@ function BusinessIntelligenceContent() {
   </div>;
 }
 
-function EmptyProductState() { return <Card><CardContent className="flex min-h-32 flex-col items-center justify-center gap-2 p-6 text-center"><PackageSearch className="h-8 w-8 text-muted-foreground" aria-hidden="true" /><p className="font-medium">Elige un producto para consultar su pronóstico.</p></CardContent></Card>; }
-function ClassificationChart({ title, counts, colors, help }: { title: string; counts?: Record<string, number> | null; colors: Record<string, string>; help: string }) {
+function EmptyProductState() { return <div className="flex items-center gap-3 rounded-lg border border-dashed px-4 py-3 text-sm text-muted-foreground"><PackageSearch className="h-5 w-5 shrink-0" aria-hidden="true" /><p>Elige un producto para ver sus pronósticos Ridge de 7 y 14 días.</p></div>; }
+function ClassificationChart({ title, counts, colors, help, compact = false, requiredLabels }: { title: string; counts?: Record<string, number> | null; colors: Record<string, string>; help: string; compact?: boolean; requiredLabels?: string[] }) {
   const data = counts ? Object.entries(counts).map(([key, value]) => ({ name: key, value })) : [];
-  return <section><h3 className="mb-2 flex items-center gap-1 text-sm font-medium">{title}<MetricInfo label={title}>{help}</MetricInfo></h3>{data.length ? <><div className="h-40" role="img" aria-label={`${title}: ${data.map(row => `${row.name}, ${safeNumber(row.value)}`).join('; ')}`}><ResponsiveContainer width="100%" height="100%"><BarChart data={data} margin={{ top: 6, right: 12, left: -18, bottom: 0 }}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="name" /><YAxis allowDecimals={false} /><Tooltip formatter={value => [`${safeNumber(Number(value))} productos`, title]} /><Bar dataKey="value" name="Productos" radius={[5, 5, 0, 0]}>{data.map(row => <Cell key={row.name} fill={colors[row.name] || '#64748b'} />)}</Bar></BarChart></ResponsiveContainer></div><p className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">{data.map(row => <span key={row.name}>{row.name}: {safeNumber(row.value)}</span>)}</p></> : <p className="text-sm text-muted-foreground">Clasificación no disponible en este contrato.</p>}</section>;
+  const labels = requiredLabels?.map(label => ({ name: label, value: counts && typeof counts[label] === 'number' ? counts[label] : null }));
+  return <section><h3 className={`mb-2 flex items-center gap-1 text-sm font-medium ${compact ? 'sr-only' : ''}`}>{title}<MetricInfo label={title}>{help}</MetricInfo></h3>{data.length ? <><div className={compact ? 'h-32' : 'h-40'} role="img" aria-label={`${title}: ${data.map(row => `${row.name}, ${safeNumber(row.value)}`).join('; ')}`}><ResponsiveContainer width="100%" height="100%"><BarChart data={data} margin={{ top: 6, right: 12, left: -18, bottom: 0 }}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="name" /><YAxis allowDecimals={false} /><Tooltip formatter={value => [`${safeNumber(Number(value))} productos`, title]} /><Bar dataKey="value" name="Productos" radius={[5, 5, 0, 0]}>{data.map(row => <Cell key={row.name} fill={colors[row.name] || '#64748b'} />)}</Bar></BarChart></ResponsiveContainer></div><p className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">{labels ? labels.map(row => <span key={row.name}>{row.name}: {row.value == null ? 'No disponible' : safeNumber(row.value)}</span>) : data.map(row => <span key={row.name}>{row.name}: {safeNumber(row.value)}</span>)}</p></> : <p className="text-sm text-muted-foreground">Clasificación no disponible en este contrato.</p>}</section>;
 }
 function LoadingDetail({ label }: { label: string }) { return <Card role="status"><CardContent className="flex min-h-40 items-center justify-center gap-3 p-6"><Loader2 className="h-5 w-5 animate-spin text-primary" aria-hidden="true" />{label}</CardContent></Card>; }
 function RankingTable({ rows, onSelect }: { rows: InventorySummary['items']; onSelect: (row: InventorySummary['items'][number]) => void }) {
-  return <Card><CardHeader><CardTitle>Productos que requieren atención</CardTitle><CardDescription>Ranking entregado por la analítica de inventario; selecciona un producto para ver su detalle.</CardDescription></CardHeader><CardContent>{rows.length ? <div className="overflow-x-auto"><table className="w-full min-w-[700px] text-sm"><caption className="sr-only">Ranking de riesgo y reposición</caption><thead><tr className="border-b text-left text-muted-foreground">{['Producto', 'Stock', 'Cobertura', 'Riesgo', 'Reposición', 'Cantidad sugerida'].map(label => <th key={label} scope="col" className="px-3 py-3 font-medium">{label}</th>)}</tr></thead><tbody>{rows.map(row => <tr key={row.sku} className="border-b last:border-0"><td className="px-3 py-3"><button type="button" onClick={() => onSelect(row)} className="text-left font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{row.productName}{row.presentation ? <span className="block text-xs font-normal text-muted-foreground">{row.presentation}</span> : null}<span className="block text-xs font-normal text-muted-foreground">{row.sku}</span></button></td><td className="px-3 py-3">{safeNumber(row.stock)}</td><td className="px-3 py-3">{row.coverageDays === null ? 'No disponible' : `${safeNumber(row.coverageDays, 1)} días`}</td><td className="px-3 py-3"><RiskBadge risk={row.risk} /></td><td className="px-3 py-3">{row.reorderNow === null ? 'No disponible' : row.reorderNow ? 'Sí' : 'No'}</td><td className="px-3 py-3">{row.recommendedQty === null ? 'No disponible' : `${safeNumber(row.recommendedQty)} unidades`}</td></tr>)}</tbody></table></div> : <p className="rounded-md border border-dashed p-5 text-center text-sm text-muted-foreground">El análisis no devolvió productos en el ranking.</p>}</CardContent></Card>;
+  const [showAll, setShowAll] = useState(false);
+  const visibleRows = showAll ? rows : rows.slice(0, 8);
+  return <Card><CardHeader className="pb-2"><CardTitle className="text-base">Productos que requieren atención</CardTitle><CardDescription>Prioridad recibida del análisis; conserva el orden del sistema.</CardDescription></CardHeader><CardContent className="space-y-2">{visibleRows.length ? <>
+    <div className="hidden md:block"><table className="w-full table-fixed text-sm"><caption className="sr-only">Productos priorizados por el ranking de inventario</caption><colgroup><col className="w-[42%]" /><col className="w-[12%]" /><col className="w-[16%]" /><col className="w-[14%]" /><col className="w-[16%]" /></colgroup><thead><tr className="border-b text-left text-muted-foreground">{['Producto', 'Stock', 'Cobertura', 'Riesgo', 'Acción'].map(label => <th key={label} scope="col" className="px-2 py-2 font-medium">{label}</th>)}</tr></thead><tbody>{visibleRows.map(row => <tr key={row.sku} className="border-b last:border-0"><td className="px-2 py-2"><button type="button" onClick={() => onSelect(row)} className="max-w-full text-left font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="block truncate">{row.productName}</span><span className="block truncate text-xs font-normal text-muted-foreground">{row.sku}</span></button></td><td className="px-2 py-2">{safeNumber(row.stock)}</td><td className="px-2 py-2">{row.coverageDays === null ? 'No disponible' : `${safeNumber(row.coverageDays, 1)} días`}</td><td className="px-2 py-2"><RiskBadge risk={row.risk} /></td><td className="px-2 py-2">{row.reorderNow === null ? 'No disponible' : row.reorderNow ? 'Reponer ahora' : 'Sin urgencia'}</td></tr>)}</tbody></table></div>
+    <ul className="space-y-2 md:hidden">{visibleRows.map(row => <li key={row.sku} className="rounded-md border p-3"><button type="button" onClick={() => onSelect(row)} className="text-left font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{row.productName}<span className="block text-xs font-normal text-muted-foreground">{row.sku}</span></button><dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-sm"><div><dt className="text-xs text-muted-foreground">Stock</dt><dd>{safeNumber(row.stock)}</dd></div><div><dt className="text-xs text-muted-foreground">Cobertura</dt><dd>{row.coverageDays === null ? 'No disponible' : `${safeNumber(row.coverageDays, 1)} días`}</dd></div><div><dt className="text-xs text-muted-foreground">Riesgo</dt><dd><RiskBadge risk={row.risk} /></dd></div><div><dt className="text-xs text-muted-foreground">Acción</dt><dd>{row.reorderNow === null ? 'No disponible' : row.reorderNow ? 'Reponer ahora' : 'Sin urgencia'}</dd></div></dl></li>)}</ul>
+    {rows.length > 8 && <Button type="button" variant="link" size="sm" className="h-auto px-0" onClick={() => setShowAll(value => !value)}>{showAll ? 'Mostrar solo los 8 prioritarios' : 'Ver ranking completo →'}</Button>}
+    </> : <p className="py-3 text-sm text-muted-foreground">No hay productos para mostrar en el ranking.</p>}</CardContent></Card>;
+}
+function SummaryRanking({ rows, onSelect, onViewAll }: { rows: InventorySummary['items']; onSelect: (row: InventorySummary['items'][number]) => void; onViewAll: () => void }) {
+  return <Card><CardContent className="p-3 sm:p-4">{rows.length ? <>
+    <div className="hidden md:block"><table className="w-full table-fixed text-sm"><caption className="sr-only">Hasta ocho productos priorizados por el ranking de inventario</caption><colgroup><col className="w-[42%]" /><col className="w-[12%]" /><col className="w-[16%]" /><col className="w-[14%]" /><col className="w-[16%]" /></colgroup><thead><tr className="border-b text-left text-muted-foreground">{['Producto', 'Stock', 'Cobertura', 'Riesgo', 'Acción'].map(label => <th key={label} scope="col" className="px-2 py-2 font-medium">{label}</th>)}</tr></thead><tbody>{rows.map(row => <tr key={row.sku} className="border-b last:border-0"><td className="px-2 py-2"><button type="button" onClick={() => onSelect(row)} className="max-w-full text-left font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="block truncate">{row.productName}</span><span className="block truncate text-xs font-normal text-muted-foreground">{row.sku}</span></button></td><td className="px-2 py-2">{safeNumber(row.stock)}</td><td className="px-2 py-2">{row.coverageDays === null ? 'No disponible' : `${safeNumber(row.coverageDays, 1)} días`}</td><td className="px-2 py-2"><RiskBadge risk={row.risk} /></td><td className="px-2 py-2">{row.reorderNow === null ? 'No disponible' : row.reorderNow ? 'Reponer ahora' : 'Sin urgencia'}</td></tr>)}</tbody></table></div>
+    <ul className="space-y-2 md:hidden">{rows.map(row => <li key={row.sku} className="rounded-lg border p-3"><button type="button" onClick={() => onSelect(row)} className="text-left font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{row.productName}<span className="block text-xs font-normal text-muted-foreground">{row.sku}</span></button><dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-sm"><div><dt className="text-xs text-muted-foreground">Stock</dt><dd>{safeNumber(row.stock)}</dd></div><div><dt className="text-xs text-muted-foreground">Cobertura</dt><dd>{row.coverageDays === null ? 'No disponible' : `${safeNumber(row.coverageDays, 1)} días`}</dd></div><div><dt className="text-xs text-muted-foreground">Riesgo</dt><dd><RiskBadge risk={row.risk} /></dd></div><div><dt className="text-xs text-muted-foreground">Acción</dt><dd>{row.reorderNow === null ? 'No disponible' : row.reorderNow ? 'Reponer ahora' : 'Sin urgencia'}</dd></div></dl></li>)}</ul>
+    </> : <p className="py-3 text-sm text-muted-foreground">No hay productos para mostrar en el ranking.</p>}<Button type="button" variant="link" size="sm" className="mt-2 h-auto px-0" onClick={onViewAll}>Ver todos los productos en Inventario →</Button></CardContent></Card>;
 }
 function ForecastPanel({ product, forecasts, horizon, setHorizon, activeModels, onRetry }: { product: ProductOption; forecasts: Partial<Record<RidgeHorizon, ForecastRead>>; horizon: Horizon; setHorizon: (horizon: Horizon) => void; activeModels: ForecastActiveModel[] | null; onRetry: () => void }) {
   const [section, setSection] = useState<'forecast' | 'history' | 'explanation'>('forecast');
@@ -364,12 +469,9 @@ function ProductInventoryPanel({ inventory }: { inventory: ProductInventory }) {
   const hasPreventiveQuantity = inventory.recommendation.reorderNow === false
     && typeof inventory.recommendation.recommendedQty === 'number' && inventory.recommendation.recommendedQty > 0;
   const quantityLabel = hasPreventiveQuantity ? 'Cantidad para el nivel objetivo' : 'Cantidad recomendada';
-  const cards: Array<[string, string]> = [
+  const operationalCards: Array<[string, string]> = [
     ['Stock actual', safeNumber(inventory.stock.onHand)], ['Entrante', safeNumber(inventory.stock.incoming)],
-    ['Posición de inventario', safeNumber(inventory.stock.inventoryPosition)], ['Tasa diaria aproximada', inventory.demand.expectedDaily === null ? 'No disponible' : `${safeNumber(inventory.demand.expectedDaily, 2)} unidades`],
-    ['Días de cobertura', inventory.coverage.daysCover === null ? 'No disponible' : `${safeNumber(inventory.coverage.daysCover, 1)} días`],
-    ['Stock de seguridad', safeNumber(policy.safetyStock)], ['Punto de reorden', safeNumber(policy.reorderPoint)],
-    [quantityLabel, inventory.recommendation.recommendedQty === null ? 'No disponible' : `${safeNumber(inventory.recommendation.recommendedQty)} unidades`],
+    ['Posición de inventario', safeNumber(inventory.stock.inventoryPosition)],
   ];
   const explanation = inventory.risk.level === 'CRITICAL' || inventory.risk.level === 'HIGH' ? 'El producto presenta riesgo elevado de quiebre.' : inventory.coverage.daysCover !== null ? `Stock suficiente para aproximadamente ${safeNumber(inventory.coverage.daysCover, 1)} días.` : 'La cobertura no está disponible.';
   const action = inventory.recommendation.reorderNow === true ? 'Se recomienda reposición inmediata.' : hasPreventiveQuantity ? 'No se recomienda reposición inmediata; la cantidad mostrada es una referencia para completar el nivel objetivo.' : inventory.recommendation.reorderNow === false ? 'No se recomienda reposición inmediata.' : 'La recomendación de reposición no está disponible.';
@@ -377,5 +479,23 @@ function ProductInventoryPanel({ inventory }: { inventory: ProductInventory }) {
     ? 'No hay un horizonte ML aprobado para este plazo.'
     : inventory.recommendation.reasonCode || inventory.risk.reasonCode
       ? 'Pronóstico insuficiente para este cálculo.' : null;
-  return <div className="space-y-5"><div><h2 className="text-xl font-semibold">{inventory.product.name || inventory.product.sku}</h2><p className="text-sm text-muted-foreground">{inventory.product.presentation || 'Presentación no especificada'} · SKU: {inventory.product.sku} · {freshnessLine(inventory.freshness)}</p></div><section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-label="Indicadores de inventario del producto">{cards.map(([title, value]) => <MetricCard key={title} title={title} value={value} help={title === 'Tasa diaria aproximada' ? 'Tasa operativa derivada de Ridge acumulado a 7 y 14 días; no es un pronóstico ML de 1 día.' : title === 'Días de cobertura' ? 'Estimación de política usando la tasa aproximada derivada de los horizontes Ridge 7/14.' : title === 'Stock de seguridad' ? 'Reserva heurística existente; requiere historial observable y variabilidad de entrega.' : title === 'Punto de reorden' ? 'Referencia operativa disponible cuando la demanda del plazo de entrega está respaldada.' : undefined} />)}</section><Card><CardHeader><CardTitle>Estado y recomendación</CardTitle><CardDescription>Valores reportados por el análisis de inventario.</CardDescription></CardHeader><CardContent className="flex flex-wrap items-center gap-3"><RiskBadge risk={inventory.risk.level} />{hasClassifiedAbc && <Badge variant="outline"><MetricLabel label={`ABC: ${inventory.classification.abc}`} help="ABC clasifica la importancia económica: A alta, B intermedia y C menor." /></Badge>}<Badge variant="outline"><MetricLabel label={`XYZ: ${inventory.classification.xyz || 'No disponible'}`} help="XYZ describe la estabilidad de la demanda: X estable, Y variable y Z irregular." /></Badge>{partialReason && <p role="status" className="w-full rounded-lg border border-dashed p-3 text-sm text-muted-foreground">{partialReason}</p>}<p className="w-full rounded-lg bg-muted/50 p-3 text-sm">{explanation} {action}{inventory.recommendation.recommendedQty != null ? ` Cantidad para el nivel objetivo: ${safeNumber(inventory.recommendation.recommendedQty)} unidades.` : ''}</p><p className="w-full text-sm"><strong>Reposición inmediata:</strong> {inventory.recommendation.reorderNow === null ? 'No disponible' : inventory.recommendation.reorderNow ? 'Sí' : 'No'}</p>{inventory.recommendation.preventiveRecommendation === true && <p className="w-full text-sm">Reposición preventiva sugerida</p>}</CardContent></Card></div>;
+  return <div className="space-y-3"><div><h2 className="text-lg font-semibold">{inventory.product.name || inventory.product.sku}</h2><p className="text-xs text-muted-foreground">{inventory.product.presentation || 'Presentación no especificada'} · SKU: {inventory.product.sku} · {freshnessLine(inventory.freshness)}</p></div>
+    <section aria-label="Ridge directo" className="rounded-lg border p-3"><div className="mb-2 flex items-center gap-2"><h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Ridge directo</h3><Badge variant="outline">ML acumulado · LIVE</Badge></div><div className="grid gap-2 sm:grid-cols-2"><MetricCard title="P7 · Demanda acumulada en 7 días" value={inventory.demand.expectedUnitsNext7d == null ? 'No disponible' : `${safeNumber(inventory.demand.expectedUnitsNext7d, 2)} unidades`} /><MetricCard title="P14 · Demanda acumulada en 14 días" value={inventory.demand.expectedUnitsNext14d == null ? 'No disponible' : `${safeNumber(inventory.demand.expectedUnitsNext14d, 2)} unidades`} /></div></section>
+    <section aria-label="Operativo" className="rounded-lg border p-3"><h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Operativo</h3><div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{operationalCards.map(([title, value]) => <MetricCard key={title} title={title} value={value} />)}</div></section>
+    <section aria-label="Reglas" className="rounded-lg border p-3"><div className="mb-2 flex items-center gap-2"><h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Reglas derivadas</h3><Badge variant="outline">Política con Ridge</Badge></div><div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+      <MetricCard title="Cobertura" value={inventory.coverage.daysCover === null ? 'No disponible' : `${safeNumber(inventory.coverage.daysCover, 1)} días`} help="Estimación de política usando la tasa aproximada derivada de los horizontes Ridge 7/14." />
+      <MetricCard title="Riesgo" value={inventory.risk.level ? riskLabels[inventory.risk.level] : 'No disponible'} />
+      <MetricCard title="Stock bajo" value={inventory.risk.lowStock == null ? 'No disponible' : inventory.risk.lowStock ? 'Sí' : 'No'} />
+      <MetricCard title="Stock de seguridad" value={safeNumber(policy.safetyStock)} help="Reserva heurística existente; requiere historial observable y variabilidad de entrega." />
+      <MetricCard title="Punto de reorden" value={safeNumber(policy.reorderPoint)} help="Referencia operativa disponible cuando la demanda del plazo de entrega está respaldada." />
+      <MetricCard title="Reponer ahora" value={inventory.recommendation.reorderNow == null ? 'No disponible' : inventory.recommendation.reorderNow ? 'Sí' : 'No'} />
+      <MetricCard title={quantityLabel} value={inventory.recommendation.recommendedQty === null ? 'No disponible' : `${safeNumber(inventory.recommendation.recommendedQty)} unidades`} />
+      <MetricCard title="Tasa diaria derivada" value={inventory.demand.expectedDaily === null ? 'No disponible' : `${safeNumber(inventory.demand.expectedDaily, 2)} unidades`} help="Tasa operativa derivada de Ridge acumulado a 7 y 14 días; no es un pronóstico ML de 1 día." />
+      <MetricCard title="Estado de cobertura" value={inventory.coverage.status || 'No disponible'} />
+    </div>
+      <p className="mt-2 text-xs text-muted-foreground">{explanation} {action}{inventory.recommendation.recommendedQty != null ? ` Cantidad para el nivel objetivo: ${safeNumber(inventory.recommendation.recommendedQty)} unidades.` : ''}</p>
+      {partialReason && <p role="status" className="mt-1 text-xs text-muted-foreground">{partialReason}</p>}
+      {inventory.recommendation.preventiveRecommendation === true && <p className="mt-1 text-xs text-muted-foreground">Reposición preventiva sugerida</p>}
+    </section>
+    <section aria-label="Clasificación" className="rounded-lg border p-3"><h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Clasificación descriptiva</h3><div className="flex flex-wrap gap-2">{hasClassifiedAbc && <Badge variant="outline"><MetricLabel label={`ABC: ${inventory.classification.abc}`} help="ABC clasifica la importancia económica: A alta, B intermedia y C menor." /></Badge>}<Badge variant="outline"><MetricLabel label={`XYZ: ${inventory.classification.xyz || 'No disponible'}`} help="XYZ describe la estabilidad de la demanda: X estable, Y variable y Z irregular." /></Badge></div></section></div>;
 }

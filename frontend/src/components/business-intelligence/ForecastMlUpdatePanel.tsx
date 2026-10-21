@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Loader2, RefreshCw } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -125,6 +126,18 @@ function preparationSummary(status: ForecastMlUpdateStatus | null, statusError: 
   return reasonMessage(status) || 'No hay señales pendientes; los modelos LIVE siguen disponibles.';
 }
 
+function preparationLabel(status: ForecastMlUpdateStatus | null): string {
+  if (!status) return 'Consultando';
+  if (status.horizons.some(row => row.currentlyRunning)) return 'Evaluación en curso';
+  const readiness = status.horizons.map(row => row.readiness?.status);
+  const eligibility = status.horizons.map(row => row.readiness?.eligibility || row.eligibility);
+  if (readiness.includes('WAITING_DEBOUNCE') || eligibility.includes('DEBOUNCE_NOT_ELAPSED')) return 'Agrupando cambios recientes';
+  if (eligibility.includes('ELIGIBLE') || readiness.includes('READY_FOR_WORKER_REVIEW')) return 'Lista para evaluación';
+  if (hasPendingEvidence(status) || readiness.includes('WAITING_MATURITY')
+      || readiness.includes('SIGNALS_PENDING') || eligibility.includes('PENDING')) return 'Evidencia pendiente';
+  return 'Sin evidencia pendiente';
+}
+
 function friendlyHeadline(value: string): string {
   switch (value) {
     case 'ACTUALIZANDO': return 'Revisión en curso';
@@ -167,8 +180,11 @@ function technicalValue(value: unknown) {
   return safeCode(value) || (typeof value === 'string' && /^\d{1,20}$/.test(value) ? value : 'No disponible');
 }
 
-export function ForecastMlUpdatePanel({ refreshToken = 0, onManualRequestFinished }: {
+type ForecastMlUpdateSections = { statusSummary: ReactNode; preparation: ReactNode };
+
+export function ForecastMlUpdatePanel({ refreshToken = 0, onManualRequestFinished, children }: {
   refreshToken?: number; onManualRequestFinished?: () => void;
+  children?: (sections: ForecastMlUpdateSections) => ReactNode;
 }) {
   const [status, setStatus] = useState<ForecastMlUpdateStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
@@ -299,32 +315,29 @@ export function ForecastMlUpdatePanel({ refreshToken = 0, onManualRequestFinishe
   const pending14 = byHorizon(14)?.readiness?.pendingSignalCount;
   const evaluationAt = rows.map(row => row.lastEvaluatedAt).filter((value): value is string => Boolean(value)).sort().at(-1);
 
-  return <section aria-label="Resumen del ML" className="space-y-3">
-    <div className="flex flex-wrap items-center justify-between gap-3">
-      <h3 className="font-semibold">Resumen del ML</h3>
-      <Button type="button" onClick={() => { void submit(); }} disabled={sending || requestActive || rows.some(row => row.currentlyRunning || row.requestStatus === 'ALREADY_PENDING' || row.requestStatus === 'RUNNING')}>
-        {sending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />}
-        {sending ? 'Solicitando actualización…' : 'Actualizar ML ahora'}
-      </Button>
-    </div>
-    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-      <div className="rounded-md bg-muted/40 p-3"><p className="text-xs text-muted-foreground">Estado general</p><Badge className="mt-1" variant={statusTone}>{loading ? 'Consultando' : friendlyHeadline(currentHeadline)}</Badge></div>
+  const statusSummary = <div aria-label="Estado Ridge LIVE" className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+      <div className="rounded-md bg-muted/40 p-3"><p className="text-xs text-muted-foreground">Estado de evidencia</p><Badge className="mt-1" variant={statusTone}>{loading ? 'Consultando' : friendlyHeadline(currentHeadline)}</Badge></div>
       <div className="rounded-md bg-muted/40 p-3"><p className="text-xs text-muted-foreground">Ridge LIVE · 7 días</p><p className="mt-1 font-semibold">{modelVersion(byHorizon(7))} · {byHorizon(7)?.activeModelVersion == null ? 'No disponible' : 'Activo'}</p></div>
       <div className="rounded-md bg-muted/40 p-3"><p className="text-xs text-muted-foreground">Ridge LIVE · 14 días</p><p className="mt-1 font-semibold">{modelVersion(byHorizon(14))} · {byHorizon(14)?.activeModelVersion == null ? 'No disponible' : 'Activo'}</p></div>
       <div className="rounded-md bg-muted/40 p-3"><p className="text-xs text-muted-foreground">Revisión de datos</p><p className="mt-1 font-semibold">{technicalValue(status?.dataVersion)}</p></div>
       <div className="min-w-0 rounded-md bg-muted/40 p-3"><p className="text-xs text-muted-foreground">Última evaluación</p><p className="mt-1 whitespace-nowrap font-semibold">{formatDate(evaluationAt)}</p></div>
       <div className="rounded-md bg-muted/40 p-3"><p className="text-xs text-muted-foreground">Actualización automática</p><p className="mt-1 font-semibold">Activa · cada 6 h</p></div>
-    </div>
-    {statusError && <p role="alert" className="text-sm text-destructive">{statusError}</p>}
-    {message && <p role="status" aria-live="polite" className="text-sm">{message}</p>}
-    {status && <>
-      <section aria-label="Preparación para próxima evaluación" className="rounded-lg border p-3">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div><h4 className="font-medium">Preparación para próxima evaluación</h4>{!messageIsFinalResult && <p role="status" className="mt-1 text-sm text-muted-foreground">{explanation}</p>}</div>
-          <Badge variant="outline">{hasPendingEvidence(status) ? 'Evidencia pendiente' : 'Sin evidencia pendiente'}</Badge>
+    </div>;
+  const preparation = <section aria-label="Preparación para próxima evaluación" className="rounded-lg border p-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div><h3 className="font-semibold">Preparación para próxima evaluación</h3>{!messageIsFinalResult && <p role="status" className="mt-1 text-sm text-muted-foreground">{explanation}</p>}</div>
+        <div className="flex items-center gap-2"><span className="text-xs text-muted-foreground">Elegibilidad actual</span><Badge variant="outline">{preparationLabel(status)}</Badge>
+          <Button type="button" size="sm" onClick={() => { void submit(); }} disabled={sending || requestActive || rows.some(row => row.currentlyRunning || row.requestStatus === 'ALREADY_PENDING' || row.requestStatus === 'RUNNING')}>
+            {sending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />}
+            {sending ? 'Solicitando actualización…' : 'Actualizar ML ahora'}
+          </Button>
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">Señales pendientes: 7d {pending7 ?? 'No disponible'} · 14d {pending14 ?? 'No disponible'}</p>
-        <details className="mt-2 border-t pt-2 text-sm"><summary className="cursor-pointer font-medium">Ver detalles</summary>
+      </div>
+      <p className="mt-2 text-sm">Señales pendientes: 7d {pending7 ?? 'No disponible'} · 14d {pending14 ?? 'No disponible'}</p>
+      <p className="mt-1 text-xs text-muted-foreground">Política vigente: se requieren 107 orígenes maduros; no equivale a 107 ventas.</p>
+      {message && <p role="status" aria-live="polite" className="mt-2 text-sm">{message}</p>}
+      {statusError && <p role="alert" className="mt-2 text-sm text-destructive">{statusError}</p>}
+      {status && <details className="mt-2 border-t pt-2 text-sm"><summary className="cursor-pointer font-medium">Ver detalles técnicos</summary>
           <dl className="mt-2 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
             <div><dt>Cierre operativo vigente</dt><dd>{formatClosedDay(status.closedThrough)}</dd></div>
             {rows.map(row => <div key={`ready-${row.horizonDays}`}><dt>Ridge {row.horizonDays}d · estado / elegibilidad / motivo</dt><dd>{technicalValue(row.readiness?.status)} / {technicalValue(row.readiness?.eligibility)} / {technicalValue(row.readiness?.reasonCode)}</dd></div>)}
@@ -335,18 +348,18 @@ export function ForecastMlUpdatePanel({ refreshToken = 0, onManualRequestFinishe
             {rows.map(row => <div key={`next-${row.horizonDays}`}><dt>Ridge {row.horizonDays}d · próxima elegibilidad</dt><dd>{formatDate(row.readiness?.nextEligibleAt || row.nextEligibleAt)}</dd></div>)}
             {rows.map(row => <div key={`trigger-${row.horizonDays}`}><dt>Ridge {row.horizonDays}d · origen / resultado</dt><dd>{technicalValue(row.trigger)} / {technicalValue(row.lastEvaluationReason || row.lastResult)}</dd></div>)}
             <div><dt>Política de evidencia</dt><dd>107 orígenes maduros no significan 107 ventas.</dd></div>
+            <div><dt>Próxima revisión automática aproximada</dt><dd>{nextAutomaticReview()}</dd></div>
+            <div><dt>Última solicitud manual</dt><dd>{formatDate(rows.map(row => row.lastRequestAt).filter(Boolean).sort().at(-1))}</dd></div>
+            <div><dt>Último intento elegible del worker</dt><dd>{formatDate(rows.map(row => row.lastAttemptAt).filter(Boolean).sort().at(-1))}</dd></div>
+            <div><dt>Último resultado operativo</dt><dd>{rows.map(row => technicalValue(row.lastEvaluationReason || row.lastResult)).filter(value => value !== 'No disponible').join(' · ') || 'No registrado'}</dd></div>
+            {rows.map(row => <div key={`trained-${row.horizonDays}`}><dt>Revisión de datos usada por Ridge {row.horizonDays}d</dt><dd>{technicalValue(row.trainedDataVersion)}</dd></div>)}
           </dl>
-        </details>
-      </section>
-      <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">Ver detalles operativos</summary>
-        <dl className="mt-2 grid gap-2 sm:grid-cols-2">
-          <div><dt>Próxima revisión automática aproximada</dt><dd>{nextAutomaticReview()}</dd></div>
-          <div><dt>Última solicitud manual</dt><dd>{formatDate(rows.map(row => row.lastRequestAt).filter(Boolean).sort().at(-1))}</dd></div>
-          <div><dt>Último intento elegible del worker</dt><dd>{formatDate(rows.map(row => row.lastAttemptAt).filter(Boolean).sort().at(-1))}</dd></div>
-          <div><dt>Último resultado operativo</dt><dd>{rows.map(row => technicalValue(row.lastEvaluationReason || row.lastResult)).filter(value => value !== 'No disponible').join(' · ') || 'No registrado'}</dd></div>
-          {rows.map(row => <div key={`trained-${row.horizonDays}`}><dt>Revisión de datos usada por Ridge {row.horizonDays}d</dt><dd>{technicalValue(row.trainedDataVersion)}</dd></div>)}
-        </dl>
-      </details>
-    </>}
+        </details>}
+    </section>;
+  if (children) return <>{children({ statusSummary, preparation })}</>;
+
+  return <section aria-label="Estado y preparación del ML" className="space-y-3">
+    {statusSummary}
+    {preparation}
   </section>;
 }

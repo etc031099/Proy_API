@@ -10,7 +10,7 @@ import type { AuthenticatedDiagnosticResult, ForecastActiveModel, ForecastActive
 import { ForecastMlUpdatePanel } from './ForecastMlUpdatePanel';
 
 type Props = { onForecastModelsChange: (models: ForecastActiveModel[] | null) => void;
-  onManualRequestFinished?: () => void };
+  onManualRequestFinished?: () => void; showUpdatePanel?: boolean };
 type SectionState = 'loading' | 'retrying' | 'ready' | 'error';
 
 const DIAGNOSTIC_RETRY_DELAY_MS = 2500;
@@ -145,7 +145,7 @@ function HealthSection({ result }: { result: AuthenticatedDiagnosticResult<Healt
   </section>;
 }
 
-export function ForecastDiagnosticsPanel({ onForecastModelsChange, onManualRequestFinished }: Props) {
+export function ForecastDiagnosticsPanel({ onForecastModelsChange, onManualRequestFinished, showUpdatePanel = true }: Props) {
   const [forecast, setForecast] = useState<AuthenticatedDiagnosticResult<ForecastActiveModels> | null>(null);
   const [health, setHealth] = useState<AuthenticatedDiagnosticResult<HealthDiagnostic> | null>(null);
   const [forecastState, setForecastState] = useState<SectionState>('loading');
@@ -238,7 +238,7 @@ export function ForecastDiagnosticsPanel({ onForecastModelsChange, onManualReque
       {(healthState === 'loading' || healthState === 'retrying') && <section aria-label="Diagnóstico de salud" className="space-y-3 border-t pt-4"><h3 className="font-semibold">Health</h3><p role="status" className="text-sm text-muted-foreground">{healthState === 'retrying' ? 'Preparando diagnóstico Health…' : 'Cargando Health…'}</p></section>}
       {healthState === 'error' && <section aria-label="Diagnóstico de salud" className="space-y-3 border-t pt-4"><h3 className="font-semibold">Health</h3><p role="alert" className="text-sm text-muted-foreground">No se pudo consultar Health. Puedes actualizar el estado e intentarlo nuevamente.</p></section>}
       {healthState === 'ready' && health && <HealthSection result={health} />}
-      <ForecastMlUpdatePanel refreshToken={requestNumber} onManualRequestFinished={onManualRequestFinished} />
+      {showUpdatePanel && <ForecastMlUpdatePanel refreshToken={requestNumber} onManualRequestFinished={onManualRequestFinished} />}
     </CardContent>
   </Card>;
 }

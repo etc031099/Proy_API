@@ -18,7 +18,8 @@ export interface BusinessSummary extends IntelligenceFreshness {
   unitsToday: number | null;
   ticketsToday: number | null;
   averageTicket: MoneyValue | null;
-  grossMargin: { value: number | null; currency: string | null; percent: number | null; availability: MarginAvailability };
+  grossMargin: { value: number | null; currency: string | null; percent: number | null; availability: MarginAvailability;
+    costCoverage?: { knownSaleLines: number | null; unknownSaleLines: number | null; status: string | null } | null };
   inventory: {
     totalProducts: number | null;
     riskCounts: { critical: number | null; high: number | null; medium: number | null; low: number | null };
@@ -44,12 +45,16 @@ export interface InventorySummary extends IntelligenceFreshness {
   summary: {
     totalProducts: number | null;
     riskCounts: { critical: number | null; high: number | null; medium: number | null; low: number | null };
+    riskEvaluableCounts?: { critical: number | null; high: number | null; medium: number | null; low: number | null } | null;
+    riskEvaluableCount?: number | null;
     reorderCount: number | null; lowStockCount: number | null; overstockCount: number | null; incomingUnits: number | null;
     slowMovingCount?: number | null; deadStockCount?: number | null;
     abcCounts?: Record<string, number> | null; xyzCounts?: Record<string, number> | null;
     abcXyzCounts?: Record<string, number> | null;
     riskCountsStatus?: string | null; riskUnavailableCount?: number | null;
-    recommendationUnavailableCount?: number | null; forecastAvailability?: string | null;
+    recommendationUnavailableCount?: number | null; reorderCountEvaluable?: number | null;
+    reorderEvaluableCount?: number | null; reorderDecisionUnavailableCount?: number | null;
+    forecastAvailability?: string | null;
     modelVersion7?: number | null; modelVersion14?: number | null;
   };
   items: InventoryRankingItem[]; total: number; flag?: string | null;
@@ -73,6 +78,9 @@ export interface ForecastResponse extends IntelligenceFreshness {
   trainedDataVersion?: string | null;
   dataCutoff?: string | null;
   featureVersion?: string | null;
+  featureHash?: string | null;
+  artifactHash?: string | null;
+  featureInputs?: import('@/lib/ridgeFeatures').RidgeFeatureInputs | null;
   promotionPolicyVersion?: string | null;
   activeModelStatus?: string | null;
   dataVersion?: string | null;
@@ -458,7 +466,8 @@ export interface SalesAnalytics extends AnalyticsMeta {
   period: { startDate: string; endDate: string };
   comparisonPeriod: { startDate: string; endDate: string } | null;
   summary: { revenue: AnalyticsMoney | null; units: number | null; tickets: number | null; averageTicket: AnalyticsMoney | null;
-    grossMargin: { value: number | null; currency: string | null; percent: number | null; availability: MarginAvailability } };
+    grossMargin: { value: number | null; currency: string | null; percent: number | null; availability: MarginAvailability;
+      costCoverage?: { knownSaleLines: number | null; unknownSaleLines: number | null; status: string | null } | null } };
   grossMarginAvailability: MarginAvailability; variation: Record<string, unknown> | null; comparisonAvailability: string | null;
   series: Array<{ date: string; revenue: AnalyticsMoney | null; units: number | null; tickets: number | null; status: string }> | null;
   seriesStatus: string;
@@ -495,9 +504,12 @@ export interface SupplierAnalyticsDetail extends AnalyticsMeta {
 export interface AssociationRule {
   antecedent: string[]; antecedentProducts: Array<string | Record<string, unknown>>; consequent: string[]; consequentProducts: Array<string | Record<string, unknown>>;
   support: number | null; confidence: number | null; lift: number | null; ticketCount: number | null; stability: string | null; status: string | null;
+  totalTickets?: number | null; antecedentCount?: number | null; consequentCount?: number | null; jointCount?: number | null;
 }
 export interface AssociationsAnalytics extends AnalyticsMeta {
   mode: 'FROZEN'; cutoff: string; summary: Record<string, unknown> | null; available: boolean; items: AssociationRule[]; total: number; limit: number; offset: number;
+  analysisVersion?: string | null; artifactIdentity?: string | null;
+  businessContext?: { businessId: string | null; scenarioId: string | null; datasetVersion: string | null };
 }
 export interface RelatedProductAnalytics extends AnalyticsMeta {
   mode: 'FROZEN'; cutoff: string; sourceProduct: { sku: string; name: string; presentation: string | null }; available: boolean;

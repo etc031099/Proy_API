@@ -115,13 +115,40 @@ describe('business intelligence dashboard', () => {
     render(<BusinessIntelligenceDashboard />);
     expect(getTranslation('es', 'navigation.demandForecast')).toBe('Inteligencia del Negocio');
     expect(screen.getByRole('heading', { name: 'Analítica e Inteligencia del Negocio' })).toBeTruthy();
-    expect(await screen.findByText('Ventas de hoy')).toBeTruthy();
+    expect(await screen.findByText('Ventas')).toBeTruthy();
+  });
+
+  it('keeps the eight navigation tabs in one non-wrapping row and preserves selection', async () => {
+    render(<BusinessIntelligenceDashboard />);
+    const tablist = screen.getByRole('tablist', { name: 'Secciones de inteligencia del negocio' });
+    const tabs = within(tablist).getAllByRole('tab');
+    expect(tabs.map(tab => tab.textContent)).toEqual([
+      'Resumen', 'Predicción', 'Inventario', 'Ventas', 'Clientes', 'Proveedores', 'Productos relacionados', 'Salud',
+    ]);
+    expect(tablist.className).toContain('w-max');
+    expect(tablist.className).toContain('min-w-full');
+    expect(tablist.className).toContain('gap-2');
+    expect(tablist.className).toContain('xl:justify-center');
+    expect(tablist.className).not.toContain('justify-between');
+    expect(tablist.parentElement?.className).toContain('overflow-x-auto');
+    expect(tabs.every(tab => tab.className.includes('flex-none') && tab.className.includes('whitespace-nowrap'))).toBe(true);
+    expect(tabs[0]?.getAttribute('aria-selected')).toBe('true');
+    expect(tabs[0]?.className).toContain('border-primary');
+    expect(tabs[1]?.className).toContain('border-transparent');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Productos relacionados' }));
+    const relatedTab = screen.getByRole('tab', { name: 'Productos relacionados' });
+    expect(relatedTab.getAttribute('aria-selected')).toBe('true');
+    expect(relatedTab.className).toContain('border-primary');
+    expect(screen.getByRole('tab', { name: 'Salud' })).toBeTruthy();
   });
 
   it('shows summary KPIs and treats zero sales as a real zero state', async () => {
     render(<BusinessIntelligenceDashboard />);
     expect((await screen.findAllByText(/0\.00/)).length).toBeGreaterThan(0);
-    expect(screen.getAllByText('0', { selector: 'h3' }).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByLabelText('Actividad de hoy')).toBeTruthy();
+    expect(screen.getByText('Unidades vendidas')).toBeTruthy();
+    expect(screen.getByText('Tickets')).toBeTruthy();
     expect(screen.getByText(/Hoy aún no hay ventas registradas/)).toBeTruthy();
     expect(screen.getByText('29')).toBeTruthy();
     expect(screen.getByText('No disponible')).toBeTruthy();
@@ -135,13 +162,13 @@ describe('business intelligence dashboard', () => {
     render(<BusinessIntelligenceDashboard />);
 
     await act(async () => { summaryRead.resolve(success(summaryFixture)); await summaryRead.promise; });
-    expect(await screen.findByText('Ventas de hoy')).toBeTruthy();
+    expect(await screen.findByLabelText('Actividad de hoy')).toBeTruthy();
     expect(screen.getByText('Cargando inventario y ranking…')).toBeTruthy();
     expect(apiClient.getBusinessIntelligenceSummary).toHaveBeenCalledTimes(1);
     expect(apiClient.getInventoryAnalytics).toHaveBeenCalledTimes(1);
 
     await act(async () => { inventoryRead.resolve(success(inventoryFixture)); await inventoryRead.promise; });
-    expect(await screen.findByText('Distribución de riesgo de inventario')).toBeTruthy();
+    expect(await screen.findByText('Panorama de inventario')).toBeTruthy();
     expect(screen.queryByText('Cargando inventario y ranking…')).toBeNull();
   });
 
@@ -153,12 +180,12 @@ describe('business intelligence dashboard', () => {
     render(<BusinessIntelligenceDashboard />);
 
     await act(async () => { inventoryRead.resolve(success(inventoryFixture)); await inventoryRead.promise; });
-    expect(await screen.findByText('Estabilidad de demanda (XYZ)')).toBeTruthy();
+    expect(await screen.findByText('Panorama de inventario')).toBeTruthy();
     expect(screen.getByRole('status', { name: 'Cargando resumen general' })).toBeTruthy();
-    expect(screen.queryByText('Ventas de hoy')).toBeNull();
+    expect(screen.queryByText('Ventas')).toBeTruthy();
 
     await act(async () => { summaryRead.resolve(success(summaryFixture)); await summaryRead.promise; });
-    expect(await screen.findByText('Ventas de hoy')).toBeTruthy();
+    expect(await screen.findByLabelText('Actividad de hoy')).toBeTruthy();
     expect(screen.queryByRole('status', { name: 'Cargando resumen general' })).toBeNull();
   });
 
@@ -167,20 +194,20 @@ describe('business intelligence dashboard', () => {
     vi.spyOn(apiClient, 'getInventoryAnalytics').mockRejectedValue(new Error('Inventory unavailable'));
     render(<BusinessIntelligenceDashboard />);
 
-    expect(await screen.findByText('Ventas de hoy')).toBeTruthy();
+    expect(await screen.findByLabelText('Actividad de hoy')).toBeTruthy();
     expect(await screen.findByText('No se pudo cargar el inventario.')).toBeTruthy();
     expect(apiClient.getBusinessIntelligenceSummary).toHaveBeenCalledTimes(1);
     expect(apiClient.getInventoryAnalytics).toHaveBeenCalledTimes(1);
   });
 
-  it('summarizes four correctly classified techniques and navigates without adding a tab', async () => {
+  it('shows a compact map of analytical methods and navigates without adding a tab', async () => {
     render(<BusinessIntelligenceDashboard />);
-    expect(await screen.findByRole('heading', { name: 'Técnicas analíticas utilizadas' })).toBeTruthy();
-    expect(screen.getByText('3 técnicas de Machine Learning y 1 técnica de minería de patrones, elegidas según el problema.')).toBeTruthy();
-    expect(screen.getByText('Ridge Regression')).toBeTruthy();
-    expect(screen.getByText('K-Means')).toBeTruthy();
-    expect(screen.getByText('Isolation Forest')).toBeTruthy();
-    expect(screen.getByText('FP-Growth')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Técnicas de análisis' })).toBeTruthy();
+    expect(screen.getAllByText('LIVE').length).toBeGreaterThan(0);
+    expect(screen.getByText(/Ridge Regression/)).toBeTruthy();
+    expect(screen.getByText(/RFM \+ K-Means/)).toBeTruthy();
+    expect(screen.getByText(/Isolation Forest/)).toBeTruthy();
+    expect(screen.getByText(/FP-Growth/)).toBeTruthy();
     expect(screen.getAllByRole('tab')).toHaveLength(8);
     fireEvent.click(screen.getAllByRole('button', { name: 'Ver análisis' })[0]);
     expect(screen.getByRole('tab', { name: 'Predicción' }).getAttribute('aria-selected')).toBe('true');
@@ -192,12 +219,45 @@ describe('business intelligence dashboard', () => {
     expect(screen.getByText('No disponible')).toBeTruthy();
     cleanup();
     vi.restoreAllMocks();
-    const partial = { ...summaryFixture, grossMargin: { value: null, currency: null, percent: null, availability: 'PARTIAL' as const } };
+    const partial = { ...summaryFixture, grossMargin: { value: null, currency: null, percent: null, availability: 'PARTIAL' as const,
+      costCoverage: { knownSaleLines: 3, unknownSaleLines: 2, status: 'PARTIAL' } } };
     vi.spyOn(apiClient, 'getBusinessIntelligenceSummary').mockResolvedValue(success(partial));
     vi.spyOn(apiClient, 'getInventoryAnalytics').mockResolvedValue(success(inventoryFixture));
     render(<BusinessIntelligenceDashboard />);
-    expect(await screen.findByText('Parcial · No disponible')).toBeTruthy();
-    expect(screen.getByText('Algunos costos no están disponibles.')).toBeTruthy();
+    expect(await screen.findByText('No disponible')).toBeTruthy();
+    expect(screen.getByText('Costos registrados para 3 de 5 líneas de venta.')).toBeTruthy();
+    expect(screen.queryByText(/Parcial ·/)).toBeNull();
+  });
+
+  it('shows the returned risk and reorder aggregates and explains when global counts are partial', async () => {
+    render(<BusinessIntelligenceDashboard />);
+    expect(await screen.findByText('5 críticos · 6 altos')).toBeTruthy();
+    expect(screen.getByText('9')).toBeTruthy();
+    cleanup();
+    vi.restoreAllMocks();
+    const partialSummary: BusinessSummary = { ...summaryFixture,
+      inventory: { ...summaryFixture.inventory, riskCounts: { critical: null, high: null, medium: null, low: null }, reorderCount: null } };
+    const partialInventory: InventorySummary = { ...inventoryFixture,
+      summary: { ...inventoryFixture.summary, riskCounts: { critical: null, high: null, medium: null, low: null },
+        riskUnavailableCount: 4, recommendationUnavailableCount: 3, reorderCount: null } };
+    vi.spyOn(apiClient, 'getBusinessIntelligenceSummary').mockResolvedValue(success(partialSummary));
+    vi.spyOn(apiClient, 'getInventoryAnalytics').mockResolvedValue(success(partialInventory));
+    render(<BusinessIntelligenceDashboard />);
+    expect(await screen.findByText('Conteo global no disponible; análisis parcial disponible abajo (4 sin riesgo calculable).')).toBeTruthy();
+    expect(screen.getByText('Conteo global no disponible; revisa las acciones por producto abajo (3 sin recomendación calculable).')).toBeTruthy();
+    expect(screen.getAllByText('Alto').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Reponer ahora').length).toBeGreaterThan(0);
+  });
+
+  it('shows a complete margin amount and percentage from the dashboard summary contract', async () => {
+    const completeMargin: BusinessSummary = { ...summaryFixture,
+      grossMargin: { value: 123.45, currency: 'PEN', percent: 25, availability: 'AVAILABLE',
+        costCoverage: { knownSaleLines: 5, unknownSaleLines: 0, status: 'AVAILABLE' } } };
+    vi.spyOn(apiClient, 'getBusinessIntelligenceSummary').mockResolvedValue(success(completeMargin));
+    render(<BusinessIntelligenceDashboard />);
+    const marginCard = (await screen.findByText('Margen bruto')).closest('.rounded-xl');
+    expect(marginCard?.textContent).toMatch(/123[,.]45/);
+    expect(marginCard?.textContent).toMatch(/25[,.]0/);
   });
 
   it('searches products only on demand and offers operational 7 and 14-day forecasts without 1 or 28-day options', async () => {
@@ -276,13 +336,14 @@ describe('business intelligence dashboard', () => {
     vi.spyOn(apiClient, 'getBusinessIntelligenceForecast').mockResolvedValue(success(forecastFixture));
     render(<BusinessIntelligenceDashboard />);
     await openForecast();
-    const panel = await screen.findByRole('region', { name: 'Evaluación histórica de candidato' });
+    const panel = await screen.findByRole('region', { name: 'Evaluación histórica certificada' });
+    fireEvent.click(within(panel).getByText('Ver evaluación completa'));
     expect(apiClient.getCertifiedForecastReplayEvidence).toHaveBeenCalledTimes(1);
     expect(within(panel).getByText(/Esta evaluación reproduce evidencia histórica cerrada/)).toBeTruthy();
     expect(within(panel).getByText('107 orígenes maduros evaluados')).toBeTruthy();
     expect(within(panel).getByText(/No significa 107 ventas/)).toBeTruthy();
-    expect(within(panel).getByText('APROBADO')).toBeTruthy();
-    expect(within(panel).getByText('RECHAZADO')).toBeTruthy();
+    expect(within(panel).getAllByText('APROBADO').length).toBeGreaterThan(0);
+    expect(within(panel).getAllByText('RECHAZADO').length).toBeGreaterThan(0);
     expect(within(panel).getAllByText(/\+7[,.]29\s*%/)).toHaveLength(2);
     expect(within(panel).getAllByText(/\+13[,.]23\s*%/)).toHaveLength(2);
     expect(within(panel).getByText(/21[,.]82\s*%/)).toBeTruthy();
@@ -342,11 +403,15 @@ describe('business intelligence dashboard', () => {
       maintenance: false, checkpoint: null, cloudRestoreEnabled: false } });
     render(<BusinessIntelligenceDashboard />);
     await openForecast();
+    expect(apiClient.getMlTestControlStatus).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('Herramientas avanzadas de demostración local'));
+    await waitFor(() => expect(apiClient.getMlTestControlStatus).toHaveBeenCalledTimes(1));
     const orderedLabels = [
-      'Estado del Machine Learning', 'Salud de los modelos LIVE',
-      'Preparación para próxima evaluación', 'Pronóstico por producto',
-      'Historial de actualizaciones ML', 'Evaluación histórica de candidato',
-      'Evidencia histórica y comparación de modelos', 'Pruebas del Machine Learning',
+      'Pronóstico Ridge LIVE', 'Salud de los modelos LIVE',
+      'Pronóstico por producto', 'Pronóstico 7 días', 'Impacto de nuevos datos',
+      'Preparación para próxima evaluación', 'Historial de actualizaciones ML',
+      'Evaluación histórica certificada', 'Evidencia histórica y comparación de modelos',
+      'Herramientas avanzadas de demostración local',
     ];
     const orderedNodes = orderedLabels.map(title => screen.getByText(title));
     for (let index = 0; index < orderedNodes.length - 1; index += 1) {
@@ -361,7 +426,7 @@ describe('business intelligence dashboard', () => {
     render(<BusinessIntelligenceDashboard />);
     await openForecast();
     expect(await screen.findByText('No se pudo cargar la evaluación histórica certificada.')).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Pronóstico operativo' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Pronóstico Ridge LIVE' })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Pronóstico 7 días/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Pronóstico 14 días/ })).toBeTruthy();
   });
@@ -403,7 +468,7 @@ describe('business intelligence dashboard', () => {
     vi.spyOn(apiClient, 'getBusinessIntelligenceForecast');
     render(<BusinessIntelligenceDashboard />);
     fireEvent.click(screen.getByRole('tab', { name: 'Predicción' }));
-    expect(await screen.findByText('Elige un producto para consultar su pronóstico.')).toBeTruthy();
+    expect(await screen.findByText('Elige un producto para ver sus pronósticos Ridge de 7 y 14 días.')).toBeTruthy();
     expect(apiClient.searchBusinessIntelligenceProducts).not.toHaveBeenCalled();
     expect(apiClient.getBusinessIntelligenceForecast).not.toHaveBeenCalled();
   });
@@ -427,7 +492,7 @@ describe('business intelligence dashboard', () => {
     vi.mocked(apiClient.getInventoryAnalytics).mockRejectedValueOnce(new Error('inventory unavailable'));
     apiClient.invalidateIntelligenceReads();
     fireEvent.click(screen.getByRole('tab', { name: 'Inventario' }));
-    await screen.findByText('Cargando ranking de inventario…');
+    await screen.findByText('Cargando inventario…');
     expect(screen.queryByText('Riesgo de inventario')).toBeNull();
     await screen.findByText('No se pudo cargar el inventario.');
     expect(screen.queryByText('Riesgo de inventario')).toBeNull();
@@ -442,8 +507,8 @@ describe('business intelligence dashboard', () => {
     await waitFor(() => expect(apiClient.searchBusinessIntelligenceProducts).toHaveBeenCalled());
     fireEvent.click(await screen.findByRole('button', { name: /Pan francés.*SKU: PAN-FRE-001/ }));
     expect(await screen.findByText('Stock actual')).toBeTruthy();
-    expect(screen.getByText('Alto')).toBeTruthy();
-    expect(screen.getByText('Reposición inmediata:')).toBeTruthy();
+    expect(screen.getAllByText('Alto').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Reponer ahora').length).toBeGreaterThan(0);
     expect(screen.getByText('ABC: A')).toBeTruthy();
     expect(screen.getByText('XYZ: X')).toBeTruthy();
     expect(screen.getByText('12 unidades')).toBeTruthy();
@@ -462,22 +527,72 @@ describe('business intelligence dashboard', () => {
     await waitFor(() => expect(apiClient.searchBusinessIntelligenceProducts).toHaveBeenCalled());
     fireEvent.click(await screen.findByRole('button', { name: /Pan francés.*SKU: PAN-FRE-001/ }));
     expect(await screen.findByText('XYZ: X')).toBeTruthy();
-    expect(screen.queryByText(/ABC|UNCLASSIFIED/)).toBeNull();
+    expect(screen.queryByText('ABC: UNCLASSIFIED')).toBeNull();
     expect(screen.getByText('Cantidad para el nivel objetivo')).toBeTruthy();
     expect(screen.getByText(/No se recomienda reposición inmediata; la cantidad mostrada es una referencia/)).toBeTruthy();
-    expect(screen.getByText('Reposición inmediata:')).toBeTruthy();
-    expect(screen.getByText('Reposición inmediata:').parentElement?.textContent).toBe('Reposición inmediata: No');
+    const reorderMetric = within(screen.getByRole('region', { name: 'Reglas' })).getByText('Reponer ahora');
+    expect(reorderMetric.closest('div')?.parentElement?.textContent).toContain('No');
     expect(screen.getByText(/Cantidad para el nivel objetivo: 12 unidades/)).toBeTruthy();
   });
 
-  it('renders ranking table and selecting a row opens its product forecast', async () => {
+  it('renders the compact summary ranking and opens the selected product in inventory', async () => {
     vi.spyOn(apiClient, 'searchBusinessIntelligenceProducts').mockResolvedValue(success({ products: [productOption] }));
-    vi.spyOn(apiClient, 'getBusinessIntelligenceForecast').mockResolvedValue(success(forecastFixture));
+    vi.spyOn(apiClient, 'getBusinessIntelligenceProductInventory').mockResolvedValue(success(productInventoryFixture));
     render(<BusinessIntelligenceDashboard />);
-    expect(await screen.findByRole('table', { name: 'Ranking de riesgo y reposición' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /Pan francés.*PAN-FRE-001/ }));
-    expect((await screen.findAllByText(/Modelo LIVE · Ridge/)).length).toBeGreaterThan(0);
-    expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenCalledWith('PAN-FRE-001', 7);
+    expect(await screen.findByRole('table', { name: 'Hasta ocho productos priorizados por el ranking de inventario' })).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('button', { name: /Pan francés.*PAN-FRE-001/ })[0]!);
+    expect(await screen.findByText('Stock actual')).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Inventario' }).getAttribute('aria-selected')).toBe('true');
+    expect(apiClient.getBusinessIntelligenceProductInventory).toHaveBeenCalledWith('PAN-FRE-001');
+  });
+
+  it('limits the summary ranking to the first eight backend-ranked products without extra reads', async () => {
+    const items = Array.from({ length: 12 }, (_, index) => ({
+      ...inventoryFixture.items[0]!,
+      sku: `SKU-${String(index + 1).padStart(3, '0')}`,
+      productName: `Producto ${index + 1}`,
+    }));
+    vi.spyOn(apiClient, 'getInventoryAnalytics').mockResolvedValue(success({ ...inventoryFixture, items, total: items.length }));
+    render(<BusinessIntelligenceDashboard />);
+
+    const table = await screen.findByRole('table', { name: 'Hasta ocho productos priorizados por el ranking de inventario' });
+    expect(within(table).getAllByRole('row')).toHaveLength(9);
+    expect(within(table).getByText('Producto 1')).toBeTruthy();
+    expect(within(table).getByText('Producto 8')).toBeTruthy();
+    expect(within(table).queryByText('Producto 9')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Ver todos los productos en Inventario →' })).toBeTruthy();
+    expect(apiClient.getBusinessIntelligenceSummary).toHaveBeenCalledTimes(1);
+    expect(apiClient.getInventoryAnalytics).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('UNCLASSIFIED: No disponible')).toBeTruthy();
+  });
+
+  it('orders inventory sections and expands the top-eight ranking from already loaded rows only', async () => {
+    const items = Array.from({ length: 12 }, (_, index) => ({
+      ...inventoryFixture.items[0]!, sku: `INV-${index + 1}`, productName: `Inventario ${index + 1}`,
+    }));
+    vi.spyOn(apiClient, 'getInventoryAnalytics').mockResolvedValue(success({ ...inventoryFixture, items, total: 80 }));
+    render(<BusinessIntelligenceDashboard />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Inventario' }));
+    const summarySection = await screen.findByRole('region', { name: 'Resumen operativo de inventario' });
+    const impactSection = screen.getByRole('region', { name: 'Impacto de última operación' });
+    const searchHint = screen.getByText('Selecciona un producto del buscador o del ranking para ver su detalle.');
+    const searchCard = screen.getByRole('textbox', { name: 'Producto' }).closest('[class*="p-3"]');
+    expect(searchCard).toBeTruthy();
+    expect(searchHint.closest('[class*="p-3"]')).toBe(searchCard);
+    const panoramaHeading = screen.getByRole('heading', { name: 'Panorama de inventario' });
+    const rankingHeading = screen.getByRole('heading', { name: 'Productos que requieren atención' });
+    expect(summarySection.compareDocumentPosition(impactSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(impactSection.compareDocumentPosition(panoramaHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(panoramaHeading.compareDocumentPosition(rankingHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const table = screen.getByRole('table', { name: 'Productos priorizados por el ranking de inventario' });
+    expect(within(table).getAllByRole('row')).toHaveLength(9);
+    expect(within(table).getByText('Inventario 8')).toBeTruthy();
+    expect(within(table).queryByText('Inventario 9')).toBeNull();
+    const inventoryReadsBeforeExpand = vi.mocked(apiClient.getInventoryAnalytics).mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Ver ranking completo →' }));
+    expect(within(table).getAllByRole('row')).toHaveLength(13);
+    expect(within(table).getByText('Inventario 12')).toBeTruthy();
+    expect(apiClient.getInventoryAnalytics).toHaveBeenCalledTimes(inventoryReadsBeforeExpand);
   });
 
   it('shows a safe retry state on dashboard API failure', async () => {
@@ -490,12 +605,60 @@ describe('business intelligence dashboard', () => {
     expect(screen.queryByText('private backend detail')).toBeNull();
   });
 
-  it('renders ABC and XYZ distributions returned by the inventory endpoint', async () => {
+  it('renders the requested risk and XYZ panorama without adding ABC to this overview', async () => {
     render(<BusinessIntelligenceDashboard />);
     fireEvent.click(screen.getByRole('tab', { name: 'Inventario' }));
-    expect(await screen.findByText('Importancia económica (ABC)')).toBeTruthy();
-    expect(screen.getByText('A: 40')).toBeTruthy();
+    expect(await screen.findByText('Distribución de riesgo')).toBeTruthy();
     expect(screen.getByText('X: 55')).toBeTruthy();
+    expect(screen.queryByText(/Importancia económica \(ABC\)/)).toBeNull();
+  });
+
+  it('shows honest global partial risk and reorder aggregates from the full inventory projection', async () => {
+    const partialInventory: InventorySummary = { ...inventoryFixture, summary: {
+      ...inventoryFixture.summary,
+      riskCounts: { critical: null, high: null, medium: null, low: null },
+      riskUnavailableCount: 1,
+      riskEvaluableCounts: { critical: 23, high: 19, medium: 30, low: 7 },
+      riskEvaluableCount: 79,
+      reorderCount: null,
+      reorderCountEvaluable: 18,
+      reorderEvaluableCount: 79,
+      reorderDecisionUnavailableCount: 1,
+    } };
+    vi.spyOn(apiClient, 'getInventoryAnalytics').mockResolvedValue(success(partialInventory));
+    render(<BusinessIntelligenceDashboard />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Inventario' }));
+    expect(await screen.findByText('18')).toBeTruthy();
+    expect(screen.getByText('18 de 79 productos evaluables · 1 sin decisión de reposición.')).toBeTruthy();
+    expect(screen.getByText('42 productos')).toBeTruthy();
+    expect(screen.getByText('23 críticos · 19 altos')).toBeTruthy();
+    expect(screen.getByText('79 de 80 productos evaluables · 1 sin riesgo calculable.')).toBeTruthy();
+    expect(screen.getByText('Distribución parcial sobre 79 de 80 productos evaluables.')).toBeTruthy();
+    expect(screen.getByText('1 producto sin riesgo calculable')).toBeTruthy();
+    const panorama = screen.getByRole('region', { name: 'Panorama de inventario' });
+    for (const level of ['Crítico', 'Alto', 'Medio', 'Bajo']) expect(within(panorama).getByText(level)).toBeTruthy();
+    expect(screen.getAllByText('Reponer ahora').length).toBeGreaterThan(0);
+  });
+
+  it('shows only known risk levels when partial category counts are incomplete', async () => {
+    const partialInventory: InventorySummary = { ...inventoryFixture, summary: {
+      ...inventoryFixture.summary,
+      riskCounts: { critical: null, high: null, medium: null, low: null },
+      riskUnavailableCount: 2,
+      riskEvaluableCounts: { critical: 4, high: null, medium: 8, low: 20 },
+      riskEvaluableCount: 78,
+    } };
+    vi.spyOn(apiClient, 'getInventoryAnalytics').mockResolvedValue(success(partialInventory));
+    render(<BusinessIntelligenceDashboard />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Inventario' }));
+    const panorama = await screen.findByRole('region', { name: 'Panorama de inventario' });
+    expect(within(panorama).getByText('Crítico')).toBeTruthy();
+    expect(within(panorama).getByText('Medio')).toBeTruthy();
+    expect(within(panorama).getByText('Bajo')).toBeTruthy();
+    expect(within(panorama).queryByText('Alto')).toBeNull();
+    expect(screen.getByText('No disponible')).toBeTruthy();
+    expect(screen.queryByText(/\d+ productos$/)).toBeNull();
+    expect(screen.getByText('Distribución parcial sobre 78 de 80 productos evaluables.')).toBeTruthy();
   });
 
   it('hides ABC when every product is unclassified while keeping XYZ and other inventory visible', async () => {
@@ -511,20 +674,21 @@ describe('business intelligence dashboard', () => {
     expect(await screen.findByText('Estabilidad de demanda (XYZ)')).toBeTruthy();
     expect(screen.getByRole('heading', { name: /Estabilidad de demanda \(XYZ\)/ }).textContent).toBe('Estabilidad de demanda (XYZ)');
     expect(screen.queryByText('Importancia económica (ABC)')).toBeNull();
-    expect(screen.queryByText(/ABC/)).toBeNull();
-    expect(screen.getByText('Riesgo de inventario')).toBeTruthy();
-    expect(screen.getByText('Reposición recomendada')).toBeTruthy();
+    expect(screen.queryByText('Importancia económica (ABC)')).toBeNull();
+    expect(screen.getByText('Distribución de riesgo')).toBeTruthy();
+    expect(screen.getByText('Productos a reponer')).toBeTruthy();
     expect(screen.getByText('X: 55')).toBeTruthy();
   });
 
-  it('shows ABC when any classified group has products, even if A and C are empty', async () => {
+  it('keeps ABC out of the panorama while retaining the XYZ classification view', async () => {
     const bClassifiedInventory: InventorySummary = { ...inventoryFixture, summary: {
       ...inventoryFixture.summary, abcCounts: { A: 0, B: 4, C: 0, UNCLASSIFIED: 76 },
     } };
     vi.spyOn(apiClient, 'getInventoryAnalytics').mockResolvedValue(success(bClassifiedInventory));
     render(<BusinessIntelligenceDashboard />);
     fireEvent.click(screen.getByRole('tab', { name: 'Inventario' }));
-    expect(await screen.findByText('Importancia económica (ABC)')).toBeTruthy();
+    expect(await screen.findByText('Estabilidad de demanda (XYZ)')).toBeTruthy();
+    expect(screen.queryByText('Importancia económica (ABC)')).toBeNull();
     expect(screen.getByText('Estabilidad de demanda (XYZ)')).toBeTruthy();
   });
 
@@ -549,9 +713,22 @@ describe('business intelligence dashboard', () => {
     vi.spyOn(apiClient, 'getInventoryAnalytics').mockResolvedValue(success(partialSummary));
     render(<BusinessIntelligenceDashboard />);
     fireEvent.click(screen.getByRole('tab', { name: 'Inventario' }));
-    expect(await screen.findByText(/Distribución parcial: 5 productos no tienen un nivel de riesgo calculable/)).toBeTruthy();
+    expect(await screen.findByText('5 productos sin riesgo calculable')).toBeTruthy();
+    expect(screen.queryByText('La distribución global no está disponible porque el análisis es parcial.')).toBeNull();
     expect(screen.queryByRole('img', { name: /Distribución de riesgo:/ })).toBeNull();
-    expect(screen.getByText('No disponible')).toBeTruthy();
+    expect(screen.getAllByText('No disponible').length).toBeGreaterThan(0);
     expect(screen.queryByText('Bajo 0')).toBeNull();
+  });
+
+  it('does not invent a count when the number of products without computable risk is absent', async () => {
+    const partialSummary: InventorySummary = { ...inventoryFixture, availabilityStatus: 'PARTIAL', summary: {
+      ...inventoryFixture.summary, riskCounts: { critical: null, high: null, medium: null, low: null },
+      riskCountsStatus: 'PARTIAL', riskUnavailableCount: undefined,
+    } };
+    vi.spyOn(apiClient, 'getInventoryAnalytics').mockResolvedValue(success(partialSummary));
+    render(<BusinessIntelligenceDashboard />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Inventario' }));
+    expect(await screen.findByText('No hay conteos evaluables disponibles.')).toBeTruthy();
+    expect(screen.queryByText(/\d+ productos? sin riesgo calculable/)).toBeNull();
   });
 });

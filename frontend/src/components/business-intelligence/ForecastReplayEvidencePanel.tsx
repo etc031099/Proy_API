@@ -122,19 +122,32 @@ export function ForecastReplayEvidencePanel() {
     return () => { current = false; };
   }, []);
 
-  return <section aria-labelledby="forecast-replay-evidence-title" className="space-y-4">
+  return <section aria-labelledby="forecast-replay-evidence-title" className="space-y-3 rounded-xl border p-4">
     <div>
-      <h2 id="forecast-replay-evidence-title" className="text-xl font-semibold">Evaluación histórica de candidato</h2>
-      <p className="max-w-3xl text-sm text-muted-foreground">Esta evaluación reproduce evidencia histórica cerrada para mostrar cómo el sistema decide si un candidato puede reemplazar al modelo activo. No modifica el modelo LIVE ni los datos actuales.</p>
+      <h2 id="forecast-replay-evidence-title" className="text-lg font-semibold">Evaluación histórica certificada</h2>
+      <p className="text-sm text-muted-foreground">Replay aislado de 107 orígenes maduros; no modifica ACTIVE ni Registry y no entrena con datos actuales.</p>
     </div>
-    <aside className="rounded-lg border border-sky-600/20 bg-sky-600/5 p-3 text-sm">
-      <p className="font-medium">Esta evaluación es histórica y aislada.</p>
-      <p className="mt-1 text-muted-foreground">No cambia ACTIVE ni Registry, no modifica ventas, stock o señales LIVE y no entrena con datos actuales.</p>
-    </aside>
     {state === 'loading' && <Card><CardContent className="p-5 text-sm text-muted-foreground" role="status">Cargando evaluación histórica certificada…</CardContent></Card>}
     {state === 'error' && <p role="alert" className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">No se pudo cargar la evaluación histórica certificada.</p>}
     {state === 'unavailable' && <p role="status" className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">La evaluación histórica certificada no está disponible.</p>}
     {state === 'ready' && evidence && <>
+      <div className="grid gap-2 sm:grid-cols-[auto_1fr_1fr] sm:items-center">
+        <p className="text-sm font-medium">{evidence.requiredOrigins} orígenes maduros</p>
+        {([7, 14] as const).map(days => {
+          const item = evidence.horizons.find(row => row.horizonDays === days)!;
+          const approved = item.status === 'PASS';
+          return <div key={days} className="flex items-center justify-between gap-3 rounded-md bg-muted/40 px-3 py-2 text-sm"><span>Ridge {days} días</span><Badge variant={approved ? 'default' : 'destructive'}>{approved ? 'APROBADO' : 'RECHAZADO'}</Badge></div>;
+        })}
+      </div>
+      <p className="text-xs text-muted-foreground">El requisito de 107 orígenes no se debilitó. Un resultado aprobado en replay no implica promoción LIVE.</p>
+      <details className="rounded-lg border p-3 text-sm">
+        <summary className="w-fit cursor-pointer font-medium">Ver evaluación completa</summary>
+        <div className="mt-3 space-y-4">
+          <p className="text-sm text-muted-foreground">Esta evaluación reproduce evidencia histórica cerrada para mostrar cómo se decide si un candidato puede reemplazar al modelo activo; no representa entrenamiento con datos actuales.</p>
+          <aside className="rounded-lg border border-sky-600/20 bg-sky-600/5 p-3 text-sm">
+            <p className="font-medium">Esta evaluación es histórica y aislada.</p>
+            <p className="mt-1 text-muted-foreground">No cambia ACTIVE ni Registry, no modifica ventas, stock o señales LIVE y no entrena con datos actuales.</p>
+          </aside>
       <Card><CardContent className="space-y-2 p-4 text-sm">
         <p className="font-semibold">{evidence.requiredOrigins} orígenes maduros evaluados</p>
         <p className="text-muted-foreground">Un origen maduro es un punto histórico que ya dispone del futuro necesario para comprobar qué tan buena fue una predicción.</p>
@@ -162,6 +175,8 @@ export function ForecastReplayEvidencePanel() {
         {exploring ? 'Cerrar explorador de evidencia' : 'Explorar evidencia'}
       </button>
       {exploring && <div id="certified-replay-explorer"><ForecastReplayOriginsExplorer /></div>}
+        </div>
+      </details>
     </>}
   </section>;
 }

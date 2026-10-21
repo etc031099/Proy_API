@@ -28,6 +28,7 @@ describe('certified replay origins explorer', () => {
   });
   async function explore() {
     render(<ForecastReplayEvidencePanel />);
+    fireEvent.click(await screen.findByText('Ver evaluación completa'));
     const button = await screen.findByRole('button', { name: 'Explorar evidencia' });
     fireEvent.click(button);
     await screen.findByText(/107 orígenes maduros ·/);
@@ -36,6 +37,7 @@ describe('certified replay origins explorer', () => {
 
   it('preserves summary, lazily reads ten origins, and exposes real fold names/counts and a selectable compact flow', async () => {
     render(<ForecastReplayEvidencePanel />);
+    fireEvent.click(await screen.findByText('Ver evaluación completa'));
     const open = await screen.findByRole('button', { name: 'Explorar evidencia' });
     expect(open.getAttribute('aria-expanded')).toBe('false');
     expect(apiClient.getCertifiedForecastReplayOrigins).not.toHaveBeenCalled();
@@ -50,8 +52,8 @@ describe('certified replay origins explorer', () => {
     fireEvent.click(within(explorer).getByRole('button', { name: '3. Folds temporales' }));
     expect(within(explorer).getByText(/no son 107 muestras independientes/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Promover|Aplicar candidato|Ejecutar replay/i })).toBeNull();
-    expect(screen.getByText('APROBADO')).toBeTruthy();
-    expect(screen.getByText('RECHAZADO')).toBeTruthy();
+    expect(screen.getAllByText('APROBADO').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('RECHAZADO').length).toBeGreaterThan(0);
   });
 
   it('paginates, filters folds, selects a real origin and keeps horizons separate', async () => {
@@ -100,12 +102,13 @@ describe('certified replay origins explorer', () => {
     let resolve!: (value: { httpStatus: number }) => void;
     vi.mocked(apiClient.getCertifiedForecastReplayOrigins).mockReturnValue(new Promise(done => { resolve = done; }));
     render(<ForecastReplayEvidencePanel />);
+    fireEvent.click(await screen.findByText('Ver evaluación completa'));
     fireEvent.click(await screen.findByRole('button', { name: 'Explorar evidencia' }));
     expect(screen.getByText('Cargando orígenes certificados…')).toBeTruthy();
-    expect(screen.getByText('APROBADO')).toBeTruthy();
+    expect(screen.getAllByText('APROBADO').length).toBeGreaterThan(0);
     resolve({ httpStatus: 503 });
     expect(await screen.findByText(/No se pudieron cargar los orígenes/)).toBeTruthy();
-    expect(screen.getByText('RECHAZADO')).toBeTruthy();
+    expect(screen.getAllByText('RECHAZADO').length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole('button', { name: 'Cerrar explorador de evidencia' }));
     expect(screen.queryByRole('region', { name: 'Explorador de orígenes certificados' })).toBeNull();
   });

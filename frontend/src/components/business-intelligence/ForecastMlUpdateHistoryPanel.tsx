@@ -111,12 +111,12 @@ function resultVariant(row: ForecastMlUpdateExecution): 'default' | 'destructive
   return category === 'ERRORS' ? 'destructive' : category === 'PROMOTED' ? 'default' : 'outline';
 }
 function executionSummary(row: ForecastMlUpdateExecution) {
-  return <div className="min-w-0 space-y-1">
+  return <div className="min-w-0 space-y-0.5">
     <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
       <Badge variant={resultVariant(row)}>{resultLabel(row)}</Badge>
       <span className="text-sm text-muted-foreground">{triggerLabel(row.triggerSource)} · {localDate(row.requestedAt)}</span>
     </div>
-    <div className="grid gap-x-4 gap-y-0.5 text-sm sm:grid-cols-3">
+    <div className="grid gap-x-4 gap-y-0 text-sm sm:grid-cols-3">
       <span className="whitespace-nowrap"><span className="text-muted-foreground">Revisión </span>{safeText(row.dataVersionEvaluated)}</span>
       {[7, 14].map(days => {
         const item = horizon(row.horizons, days as 7 | 14);
@@ -133,6 +133,7 @@ export function ForecastMlUpdateHistoryPanel({ refreshToken = 0 }: { refreshToke
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState(false);
   const [filter, setFilter] = useState<HistoryFilter>('ALL');
+  const [showFullHistory, setShowFullHistory] = useState(false);
   const [expandedExecutionId, setExpandedExecutionId] = useState<string | null>(null);
   const requestId = useRef(0);
   const refresh = useCallback(async () => {
@@ -179,6 +180,7 @@ export function ForecastMlUpdateHistoryPanel({ refreshToken = 0 }: { refreshToke
 
   const loadedItems = page?.items || [];
   const visibleItems = loadedItems.filter(row => matchesFilter(row, filter));
+  const displayedItems = showFullHistory ? visibleItems : visibleItems.slice(0, 3);
   const noMorePages = !page?.page.nextCursor;
 
   return <Card role="region" aria-label="Historial de actualizaciones ML">
@@ -189,10 +191,10 @@ export function ForecastMlUpdateHistoryPanel({ refreshToken = 0 }: { refreshToke
       <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />Actualizar historial
     </Button></div></CardHeader>
     <CardContent className="space-y-3">
-      <div role="group" aria-label="Filtrar historial" className="flex flex-wrap gap-2">
+      {showFullHistory && <div role="group" aria-label="Filtrar historial" className="flex flex-wrap gap-2">
         {historyFilters.map(option => <Button key={option.id} type="button" size="sm" variant={filter === option.id ? 'default' : 'outline'}
           aria-pressed={filter === option.id} onClick={() => setFilter(option.id)}>{option.label}</Button>)}
-      </div>
+      </div>}
       {loading && <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />Cargando historial…</p>}
       {error && <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/40 p-3 text-sm">
         <span>No se pudo cargar una parte del historial. El estado del ML y los pronósticos siguen disponibles.</span>
@@ -202,10 +204,13 @@ export function ForecastMlUpdateHistoryPanel({ refreshToken = 0 }: { refreshToke
       {!loading && !error && loadedItems.length > 0 && visibleItems.length === 0 && <p className="text-sm text-muted-foreground">
         {noMorePages ? 'No hay más ejecuciones que coincidan con este filtro.' : 'No hay coincidencias entre los registros cargados.'}
       </p>}
-      {visibleItems.map(row => <ExecutionCard key={row.executionId} row={row} expanded={expandedExecutionId === row.executionId}
+      {displayedItems.map(row => <ExecutionCard key={row.executionId} row={row} expanded={expandedExecutionId === row.executionId}
         onToggle={open => setExpandedExecutionId(current => open ? row.executionId : current === row.executionId ? null : current)} />)}
-      {page?.page.nextCursor && <div className="flex justify-center"><Button type="button" variant="outline" onClick={() => void loadMore()} disabled={loadingMore}>
-        {loadingMore && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}{loadingMore ? 'Cargando…' : 'Ver más'}
+      {!loading && !error && loadedItems.length > 0 && <Button type="button" variant="link" className="mx-auto block" onClick={() => setShowFullHistory(value => !value)}>
+        {showFullHistory ? 'Mostrar solo las 3 recientes' : 'Ver historial completo'}
+      </Button>}
+      {showFullHistory && page?.page.nextCursor && <div className="flex justify-center"><Button type="button" variant="outline" onClick={() => void loadMore()} disabled={loadingMore}>
+        {loadingMore && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}{loadingMore ? 'Cargando…' : 'Cargar más'}
       </Button></div>}
     </CardContent>
   </Card>;
@@ -231,9 +236,9 @@ function ExecutionCard({ row, expanded, onToggle }: { row: ForecastMlUpdateExecu
     if (!detail) void loadDetail();
   };
   const id = `ml-execution-${row.executionId}`;
-  return <article className="rounded-md border px-3 py-2">
+  return <article className="rounded-md border px-3 py-1.5">
     {executionSummary(row)}
-    <Button type="button" variant="ghost" size="sm" className="mt-0.5 px-2" aria-expanded={expanded} aria-controls={id} onClick={() => void toggle()}>
+    <Button type="button" variant="ghost" size="sm" className="px-2" aria-expanded={expanded} aria-controls={id} onClick={() => void toggle()}>
       {expanded ? 'Ocultar detalle' : 'Ver detalle'}<ChevronDown className={`ml-2 h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} aria-hidden="true" />
     </Button>
     {expanded && <div id={id} className="mt-3 space-y-4 border-t pt-4">
