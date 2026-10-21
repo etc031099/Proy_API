@@ -1,5 +1,6 @@
 const { createHash } = require('node:crypto');
 const { AgentError, assertAgentRequestContext, deepFreeze, isObjectId, isDate, isTimestamp, isTraceId } = require('./contracts');
+const { isAgentId } = require('./identity');
 
 const TTL_MS = 30 * 60 * 1000;
 const BUDGET_PLAN_TTL_MS = 30 * 60 * 1000;
@@ -185,7 +186,7 @@ const createConversationMemory = ({ now = Date.now, ttlMs = TTL_MS, maxEntries =
             lastForecastAnalytics: Object.hasOwn(patch, 'lastForecastAnalytics')
               ? require('./forecastAnalytics').compactAnalyticsContext(patch.lastForecastAnalytics) : state.lastForecastAnalytics || null,
             lastIntent: label(patch.lastIntent ?? state.lastIntent, 40),
-            lastAgent: ['operations', 'analyst'].includes(patch.lastAgent) ? patch.lastAgent : state.lastAgent || null,
+            lastAgent: isAgentId(patch.lastAgent) ? patch.lastAgent : isAgentId(state.lastAgent) ? state.lastAgent : null,
             lastEntity: entity || (entities.length === 1 ? entities[0] : null), recentEntities: entities,
             lastSupplier: supplier || (Object.hasOwn(patch, 'lastSupplier') ? null : state.lastSupplier || null),
             lastProductSelection: productSelection,

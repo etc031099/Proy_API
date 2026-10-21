@@ -144,7 +144,9 @@ test('context comes from auth, is branded, immutable and never trusts body tenan
   const c = ctx(); assert.equal(c.businessId, 'A'); assert.ok(Object.isFrozen(c));
   assert.throws(() => validateActionInvocation({ context: { ...c }, agentId: 'operations', skillId: 'create_product', args: product }), { code: 'ACTION_NOT_ALLOWED' });
 });
-for (const [agentId, skillId] of [['coordinator', 'create_product'], ['analyst', 'create_product'], ['operations', 'executeMongoQuery'],
+for (const [agentId, skillId] of [['coordinator', 'create_product'], ['analyst', 'create_product'], ['sales', 'create_sale'],
+  ['inventory', 'create_stock_alert_rule'], ['forecast', 'create_purchase'], ['customers', 'create_sale'],
+  ['procurement', 'create_purchase'], ['associations', 'create_product'], ['operations', 'executeMongoQuery'],
   ['operations', 'update_product'], ['operations', 'create_supplier']]) test(`denies ${agentId}/${skillId}`, async () => {
   const f = fixture(); await assert.rejects(f.service.prepare({ agentId, skillId, args: product, context: ctx(), externalRequestId: randomUUID() }), { code: 'ACTION_NOT_ALLOWED' });
   assert.equal(f.rows().length, 0);

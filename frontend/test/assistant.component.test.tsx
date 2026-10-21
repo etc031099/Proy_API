@@ -76,6 +76,24 @@ it('J2M displays safe limitation diagnostics without generated prose', () => {
   expect(screen.getByText('limitations[0]')).toBeTruthy();
   expect(screen.getByText('Diagnóstico de síntesis').closest('details')?.textContent).not.toMatch(/prompt|raw response|reasoning/);
 });
+it.each([
+  ['sales', 'Ventas'], ['inventory', 'Inventario'], ['forecast', 'Pronóstico'], ['customers', 'Clientes'],
+  ['procurement', 'Compras y proveedores'], ['associations', 'Productos relacionados'], ['analyst', 'Analista (compatibilidad)']
+] as const)('activity renders registered identity %s only when it participated', (agentId, displayName) => {
+  render(<AgentActivity response={{ ...response, participants: [{ ...response.participants[0], agentId }] }} />);
+  const safeNamePattern = new RegExp(displayName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  expect(screen.getByRole('heading', { name: safeNamePattern })).toBeTruthy();
+  expect(screen.getByText(agentId, { selector: 'span' })).toBeTruthy();
+});
+it('does not display planned identities when they did not participate', () => {
+  render(<AgentActivity response={{ ...response, participants: [] }} />);
+  expect(screen.queryByText('Ventas', { selector: 'h3' })).toBeNull();
+  expect(screen.queryByText('Inventario', { selector: 'h3' })).toBeNull();
+  expect(screen.queryByText('Pronóstico', { selector: 'h3' })).toBeNull();
+  expect(screen.queryByText('Clientes', { selector: 'h3' })).toBeNull();
+  expect(screen.queryByText('Compras y proveedores', { selector: 'h3' })).toBeNull();
+  expect(screen.queryByText('Productos relacionados', { selector: 'h3' })).toBeNull();
+});
 it('J2I J2K displays rejected numeric values and safe categories in the expandable diagnostic', () => {
   render(<AgentActivity response={{ ...response, grounded: { route: 'GROUNDED_LLM', responseDiagnostic: {
     validationResult: 'REJECTED', validationReason: 'UNSUPPORTED_NUMBER', validationField: 'observations[0].interpretation',

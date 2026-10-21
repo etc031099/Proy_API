@@ -1,6 +1,7 @@
 import type { AgentResponse, AgentUsage } from '@/types/agent';
 
-const names = { coordinator: 'Coordinador', operations: 'Operaciones', analyst: 'Analista' };
+const names = { coordinator: 'Coordinador', operations: 'Operaciones', analyst: 'Analista (compatibilidad)', sales: 'Ventas',
+  inventory: 'Inventario', forecast: 'Pronóstico', customers: 'Clientes', procurement: 'Compras y proveedores', associations: 'Productos relacionados' };
 const labels: Record<string, string> = {
   list_stock_alert_rules: 'Consultó reglas de alerta de stock configuradas',
   list_inventory_alerts: 'Consultó alertas de inventario generadas',

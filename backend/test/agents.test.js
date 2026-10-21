@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
 const {
-  AGENTS, SKILLS, EVENT_TYPES, EXECUTION_LIMITS, TOKEN_BUDGETS, AgentError,
+  AGENTS, AGENT_IDS, PLANNED_SPECIALIST_IDS, SKILLS, EVENT_TYPES, EXECUTION_LIMITS, TOKEN_BUDGETS, AgentError,
   createAgentRequestContext, getAgentDefinition, getSkillDefinition,
   validateSkillInvocation, validateAgentMessage, createExecutionBudget,
   createTraceEvent, createRequestUsage, createEvidence, createAgentExecution
@@ -18,18 +18,56 @@ const context = () => createAgentRequestContext(authenticatedRequest());
 const expectCode = code => error => error instanceof AgentError && error.code === code;
 const invoke = (skillId, args, agentId = 'analyst') => validateSkillInvocation({ agentId, skillId, args, context: context() });
 
-test('registry contains exactly three distinct immutable agent definitions', () => {
-  assert.deepEqual(AGENTS.map(agent => agent.id), ['coordinator', 'operations', 'analyst']);
-  assert.equal(new Set(AGENTS.map(agent => agent.id)).size, 3);
+test('registry contains current identities and planned read-only specialists without enabling execution', () => {
+  assert.deepEqual(AGENT_IDS, ['coordinator', 'operations', 'analyst', 'sales', 'inventory', 'forecast', 'customers', 'procurement', 'associations']);
+  assert.deepEqual(AGENTS.map(agent => agent.id), AGENT_IDS);
+  assert.equal(new Set(AGENTS.map(agent => agent.id)).size, AGENT_IDS.length);
   for (const agent of AGENTS) {
     assert.equal(agent.version, '1.0.0');
-    assert.ok(agent.displayName && agent.description && agent.responsibilities.length);
-    assert.equal(agent.llmPolicy.providerEnabled, true);
-    assert.ok(Object.isFrozen(agent) && Object.isFrozen(agent.allowedSkills));
+    assert.ok(agent.displayName && agent.role && agent.description && agent.responsibilities.length);
+    assert.ok(agent.capabilities && Array.isArray(agent.allowedSkillFamilies) && Array.isArray(agent.prohibitedSkillFamilies));
+    assert.ok(Object.isFrozen(agent) && Object.isFrozen(agent.allowedSkills) && Object.isFrozen(agent.allowedSkillFamilies));
     assert.equal(Reflect.set(agent, 'version', 'tampered'), false);
   }
   assert.deepEqual(getAgentDefinition('coordinator').allowedSkills, []);
   assert.equal(getAgentDefinition('analyst').llmPolicy.preferredMode, 'hybrid');
+  assert.equal(getAgentDefinition('analyst').status, 'LEGACY_ACTIVE');
+  assert.deepEqual(PLANNED_SPECIALIST_IDS.map(id => getAgentDefinition(id).displayName),
+    ['Ventas', 'Inventario', 'Pronóstico', 'Clientes', 'Compras y proveedores', 'Productos relacionados']);
+  assert.deepEqual(getAgentDefinition('operations').allowedActionSkills,
+    ['create_product', 'create_sale', 'create_purchase', 'create_inventory_alert', 'create_stock_alert_rule']);
+  for (const id of PLANNED_SPECIALIST_IDS) {
+    const specialist = getAgentDefinition(id);
+    assert.equal(specialist.status, 'PLANNED');
+    assert.equal(specialist.capabilities.readOnly, true);
+    assert.equal(specialist.capabilities.canWrite, false);
+    assert.deepEqual(specialist.allowedSkills, []);
+    assert.deepEqual(specialist.allowedActionSkills, []);
+    assert.equal(specialist.llmPolicy.providerEnabled, false);
+    assert.equal(specialist.limits.maxLlmCalls, 0);
+    assert.ok(specialist.prohibitedSkillFamilies.includes('operational_writes'));
+    assert.ok(specialist.prohibitedSkillFamilies.includes('destructive_ml'));
+    assert.deepEqual(specialist.allowedSkillFamilies.filter(family => specialist.prohibitedSkillFamilies.includes(family)), []);
+    assert.equal(createTraceEvent('agent_started', { requestId: randomUUID(), agentId: id, agentRunId: randomUUID(), status: 'STARTED' }).agentId, id);
+    for (const skill of SKILLS) assert.throws(() => validateSkillInvocation({ agentId: id, skillId: skill.id, args: {}, context: context() }),
+      expectCode('AGENT_SKILL_NOT_ALLOWED'));
+  }
+  assert.equal(getAgentDefinition('operations').capabilities.canWrite, true);
+  assert.equal(getAgentDefinition('operations').capabilities.writesVia, 'operations_action_gateway');
+  for (const agent of AGENTS.filter(item => item.id !== 'operations')) assert.equal(agent.capabilities.canWrite, false);
+});
+
+test('adding specialist identities does not expand current routing destinations', () => {
+  const { validateRoutingOutput } = require('../src/agents/routing');
+  for (const targetAgent of PLANNED_SPECIALIST_IDS) {
+    assert.throws(() => validateRoutingOutput({ intent: 'business_query', targetAgent, requiresClarification: false }),
+      error => error.code === 'GEMINI_INVALID_RESPONSE');
+  }
+  const { routeDeterministically } = require('../src/agents/intentRouting');
+  assert.equal(routeDeterministically('muéstrame más', { lastIntent: 'top_selling_products', lastAgent: 'forecast', listLimit: 5 }, new Date()).agent,
+    'analyst');
+  assert.equal(routeDeterministically('y el mes anterior', { lastIntent: 'sales_summary', lastAgent: 'sales' }, new Date()).agent,
+    'analyst');
 });
 
 test('only twenty-six implemented read-only skills are advertised', () => {

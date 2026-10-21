@@ -181,6 +181,39 @@ test('metadata and compact snapshot drop unexpected nested properties, redact se
   assert.equal(snapshot({ messages: ['private'], apiKey: 'private' }).messages, undefined);
 });
 
+test('conversation snapshots preserve historical and registered specialist lastAgent identities', () => {
+  const identities = ['coordinator', 'operations', 'analyst', 'sales', 'inventory', 'forecast', 'customers', 'procurement', 'associations'];
+  for (const lastAgent of identities) assert.equal(snapshot({ lastAgent }).lastAgent, lastAgent);
+  assert.equal(snapshot({ lastAgent: 'unknown-agent' }).lastAgent, null);
+});
+
+test('conversation memory commits and rehydrates registered lastAgent identities', async () => {
+  const memory = createConversationMemory();
+  const identities = ['coordinator', 'operations', 'analyst', 'sales', 'inventory', 'forecast', 'customers', 'procurement', 'associations'];
+  for (const lastAgent of identities) {
+    const context = require('../src/agents/contracts').createAgentRequestContext(req(), { conversationId: randomUUID() });
+    await memory.withConversation(context, async (_, commit) => commit({ lastIntent: 'test_intent', lastAgent }));
+    const restored = await memory.withConversation(context, state => state);
+    assert.equal(restored.lastAgent, lastAgent);
+    assert.equal(snapshot(restored).lastAgent, lastAgent);
+  }
+});
+
+test('history projection and persisted conversation schema accept legacy and planned agent identities', () => {
+  const identities = ['coordinator', 'operations', 'analyst', 'sales', 'inventory', 'forecast', 'customers', 'procurement', 'associations'];
+  const lastAgentPath = Conversation.schema.path('lastAgent');
+  for (const lastAgent of identities) {
+    const projected = publicResponse({ ...response(randomUUID()), agent: lastAgent,
+      participants: [{ ...response(randomUUID()).participants[0], agentId: lastAgent }] });
+    assert.equal(projected.agent, lastAgent);
+    assert.equal(projected.participants[0].agentId, lastAgent);
+    assert.ok(lastAgentPath.enumValues.includes(lastAgent));
+    const document = new Conversation({ conversationId: randomUUID(), userId: 'aaaaaaaaaaaaaaaaaaaaaaaa', businessId: 'TENANT-A',
+      title: 'Consulta', lastMessageAt: new Date(), lastAgent });
+    assert.equal(document.validateSync(), undefined);
+  }
+});
+
 test('deterministic temporal provenance retains its safe explanation through public history projection', () => {
   const value = response(randomUUID());
   value.evidence = [];

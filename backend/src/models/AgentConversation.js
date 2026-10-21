@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const { isTraceId } = require('../agents/contracts');
+const { AGENT_IDS } = require('../agents/identity');
 
 const schema = new mongoose.Schema({
   conversationId: { type: String, required: true, validate: isTraceId },
@@ -10,7 +11,7 @@ const schema = new mongoose.Schema({
   messageCount: { type: Number, default: 0, min: 0, max: 400 },
   status: { type: String, enum: ['active', 'archived'], default: 'active' },
   lastIntent: { type: String, maxlength: 40 },
-  lastAgent: { type: String, enum: ['coordinator', 'operations', 'analyst'] },
+  lastAgent: { type: String, enum: AGENT_IDS },
   // Written only through the compact memory projection, never chat text or skill DTOs.
   contextSnapshot: { type: mongoose.Schema.Types.Mixed, default: {} }
 }, { timestamps: true, strict: 'throw' });

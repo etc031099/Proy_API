@@ -4,6 +4,12 @@ const { parseRequestedDate, routeForecastTemporalQuery, isTemporalOnlyReference 
 const { ordinalSelection } = require('./ordinalSelection');
 
 const normalize = value => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const currentMemoryAgent = memory => {
+  if (['operations', 'analyst'].includes(memory?.lastAgent)) return memory.lastAgent;
+  return ['low_stock', 'recent_transactions', 'search_product', 'product_details', 'supplier_products',
+    'inventory_alert_events', 'inventory_alert_deliveries', 'inventory_alert_channel_deliveries', 'stock_alert_rules']
+    .includes(memory?.lastIntent) ? 'operations' : 'analyst';
+};
 const tenantScopeViolation = message => {
   const text = normalize(message).replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
   const scopes = '(?:negocio|empresa|usuario|tenant|business|cuenta|cliente|negocios|empresas|usuarios|tenants|businesses|cuentas)';
@@ -621,7 +627,7 @@ const routeDeterministically = (message, memory = {}, now = new Date(), conversa
   if (contextualPeriodFollowup && ['sales_summary', 'sales_causality', 'recent_transactions', 'product_sales_summary'].includes(memory.lastIntent)) {
     if (memory.lastIntent === 'product_sales_summary' && !memory.lastEntity) return clarify('¿Qué producto deseas consultar en ese periodo?');
     return { intent: memory.lastIntent === 'sales_causality' ? 'sales_summary' : memory.lastIntent,
-      agent: memory.lastAgent || 'operations', period: explicitRelativePeriod,
+      agent: currentMemoryAgent(memory), period: explicitRelativePeriod,
       ...(memory.lastIntent === 'product_sales_summary' ? { selector: { productId: memory.lastEntity.id } } : {}),
       ...(memory.lastIntent === 'recent_transactions' ? { ...memory.lastTransactionFilters, periodRequested: true } : {}),
       periodExplicit: true, limit: memory.listLimit || 5 };
@@ -677,14 +683,14 @@ const routeDeterministically = (message, memory = {}, now = new Date(), conversa
   if (/muestrame mas|mostrar mas/.test(text)) {
     const limits = { low_stock: 20, recent_transactions: 20, search_product: 20, top_selling_products: 10, replenishment_candidates: 20 };
     if (!limits[memory.lastIntent] || (memory.listLimit || 5) >= limits[memory.lastIntent]) return clarify('Indica un filtro más específico; no puedo ampliar esta lista más allá de su límite.');
-    return { intent: memory.lastIntent, agent: memory.lastAgent, period,
+    return { intent: memory.lastIntent, agent: currentMemoryAgent(memory), period,
       ...(memory.lastIntent === 'recent_transactions' ? memory.lastTransactionFilters || {} : {}),
       limit: Math.min(limits[memory.lastIntent], (memory.listLimit || 5) * 2), more: true };
   }
   if (/^(y )?(el )?mes (pasado|anterior)[?.!\s]*$/.test(text.replace(/[¿?]/g, '').trim())) {
     if (!PERIOD_INTENTS.includes(memory.lastIntent)) return clarify('¿Qué información deseas consultar del mes pasado?');
     if (memory.lastIntent === 'product_sales_summary' && !memory.lastEntity) return clarify('¿Qué producto deseas consultar del mes pasado?');
-    return { intent: memory.lastIntent, agent: memory.lastAgent, period,
+    return { intent: memory.lastIntent, agent: currentMemoryAgent(memory), period,
       ...(memory.lastIntent === 'recent_transactions' ? { ...memory.lastTransactionFilters, periodRequested: true } : {}),
       ...(memory.lastIntent === 'product_sales_summary' ? { selector: { productId: memory.lastEntity.id } } : {}), limit: memory.listLimit || 5 };
   }

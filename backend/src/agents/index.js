@@ -3,6 +3,7 @@ const {
   validateAgentMessage, createExecutionBudget
 } = require('./contracts');
 const { AGENTS, getAgentDefinition } = require('./definitions');
+const { AGENT_IDS, LEGACY_AGENT_IDS, PLANNED_SPECIALIST_IDS } = require('./identity');
 const { SKILLS, getSkillDefinition, validateSkillInvocation } = require('./skills');
 const { EVENT_TYPES, createTraceEvent, createRequestUsage, createEvidence } = require('./observability');
 const { createAgentExecution } = require('./execution');
@@ -13,7 +14,7 @@ const { createAgentOrchestrator } = require('./orchestrator');
 const { createConversationMemory } = require('./memory');
 
 module.exports = {
-  AgentError, EXECUTION_LIMITS, TOKEN_BUDGETS, AGENTS, SKILLS, EVENT_TYPES,
+  AgentError, EXECUTION_LIMITS, TOKEN_BUDGETS, AGENT_IDS, LEGACY_AGENT_IDS, PLANNED_SPECIALIST_IDS, AGENTS, SKILLS, EVENT_TYPES,
   createAgentRequestContext, validateAgentMessage, createExecutionBudget,
   getAgentDefinition, getSkillDefinition, validateSkillInvocation,
   createTraceEvent, createRequestUsage, createEvidence, createAgentExecution,

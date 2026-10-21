@@ -1,5 +1,6 @@
 const { compactEntity, compactSupplier, compactProductSelection, compactSelectedProductReference, compactSupplierResolution, compactSupplierProductListing, compactBudgetPlan } = require('../agents/memory');
 const { isDate } = require('../agents/contracts');
+const { isAgentId } = require('../agents/identity');
 const redact = value => String(value).replace(/\bBearer\s+\S+|AIza[\w-]{20,}|\beyJ[\w-]+\.[\w-]+\.[\w-]+|(?:password|api[_-]?key|jwt|secret|token)\s*[:=]\s*\S+/gi, '[secreto omitido]');
 const text = (value, max = 100) => typeof value === 'string' ? redact(value).slice(0, max) : null;
 const tokens = { inputTokens: true, outputTokens: true, thoughtTokens: true, cachedInputTokens: true, toolUseTokens: true, totalTokens: true };
@@ -72,7 +73,7 @@ const snapshot = state => ({
   lastReplenishmentPlan: compactBudgetPlan(state.lastReplenishmentPlan, Date.now()),
   lastForecastAnalytics: require('../agents/forecastAnalytics').compactAnalyticsContext(state.lastForecastAnalytics),
   operationDraft: require('../automations/operationDraft').compactDraft(state.operationDraft),
-  lastIntent: text(state.lastIntent, 40), lastAgent: ['operations', 'analyst'].includes(state.lastAgent) ? state.lastAgent : null,
+  lastIntent: text(state.lastIntent, 40), lastAgent: isAgentId(state.lastAgent) ? state.lastAgent : null,
   lastEntity: compactEntity(state.lastEntity),
   lastSupplier: compactSupplier(state.lastSupplier),
   recentEntities: (state.recentEntities || []).map(compactEntity).filter(Boolean).slice(0, 4),

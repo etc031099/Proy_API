@@ -1,4 +1,4 @@
-export type AgentId = 'coordinator' | 'operations' | 'analyst';
+export type AgentId = 'coordinator' | 'operations' | 'analyst' | 'sales' | 'inventory' | 'forecast' | 'customers' | 'procurement' | 'associations';
 export interface AgentUsage {
   agentId: AgentId;
   model: string | null;
