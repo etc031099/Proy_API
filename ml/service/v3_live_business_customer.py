@@ -306,6 +306,44 @@ class LiveBusinessCustomerAdapter:
         data["freshness"] = freshness
         return data, cutoff
 
+    def provisional_anomaly(self, live: LiveV3Context):
+        from ml.service.sales_anomalies import provisional_daily_inference
+        from ml.src.sales_isolation_forest_v3 import aggregate_daily_sales
+        from ml.service.v3_schemas import BUSINESS_ID, SCENARIO_ID, DATASET_VERSION
+        metadata = live.snapshot.metadata
+        if metadata.businessId != BUSINESS_ID or metadata.scenarioId != SCENARIO_ID:
+            raise LiveDomainError("TENANT_MISMATCH", 403, "Provisional evaluation context is not authorized.")
+        day = live.as_of_date.isoformat()
+        business, _, views = self._view(live, live.as_of_date)
+        period = {"startDate": day, "endDate": day}
+        try:
+            daily = aggregate_daily_sales(views["sales"], views["linesBySale"], day)
+        except (KeyError, ValueError, TypeError):
+            daily = {"revenueCents": -1, "tickets": -1, "units": -1, "unsupportedCurrency": False}
+        try:
+            result = provisional_daily_inference(self.root, local_date=day,
+                expected_date=metadata.operationalDate.isoformat(), revenue_cents=daily["revenueCents"],
+                tickets=daily["tickets"], units=daily["units"],
+                currency="UNSUPPORTED" if daily["unsupportedCurrency"] else "PEN")
+        except (FileNotFoundError, KeyError, ValueError):
+            raise LiveDomainError("ARTIFACT_UNAVAILABLE", 503, "Frozen anomaly artifact is unavailable.") from None
+        coverage = self._coverage(views["sales"], views["linesBySale"], period, live.as_of_date)
+        margin = None
+        if result["aggregate"] is not None:
+            aggregate = m68._sales_aggregates(views["sales"], views["linesBySale"], business.products,
+                m68.resolve_period(period, live.as_of_date, allow_live=True))
+            available = coverage["unknownSaleLines"] == 0
+            margin = {"value": aggregate["grossMarginCents"] / 100 if available else None,
+                      "currency": "PEN" if available else None,
+                      "percent": aggregate["grossMarginPct"] if available else None,
+                      "availability": "AVAILABLE" if available else "PARTIAL"}
+        result.update(revision=live.data_version, observedAt=metadata.capturedAtUtc.isoformat(),
+            businessContext={"businessId": metadata.businessId, "scenarioId": metadata.scenarioId,
+                             "datasetVersion": DATASET_VERSION},
+            commercial={"grossMargin": margin, "costCoverage": {key: coverage[key]
+                for key in ("knownSaleLines", "unknownSaleLines", "status")}})
+        return result, live.as_of_date
+
     def customer_data(self, request, live: LiveV3Context):
         cutoff = live.as_of_date
         _, customer_engine, views = self._view(live, cutoff)

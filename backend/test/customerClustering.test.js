@@ -11,7 +11,7 @@ const evidence = JSON.parse(fs.readFileSync(path.join(__dirname, '../../ml/artif
 const context = { businessId: V3.businessId, userId: 'test', requestId: 'g3' };
 const req = { user: { businessId: V3.businessId, _id: 'test' }, businessId: V3.businessId, query: {} };
 const query = value => ({ select() { return this; }, lean() { return this; }, sort() { return this; }, limit() { return this; }, maxTimeMS: async () => value });
-function fixture({ corrupt, fail = false } = {}) {
+function fixture({ corrupt, fail = false, revision = '3' } = {}) {
   const calls = [];
   const customer = { _id: '507f1f77bcf86cd799439011', name: 'Cliente Uno', stableCode: 'CUS-01' };
   const models = { HistoricalScenario: { findOne: filter => query({ ...filter, status: 'completed', sourceSha256: V3.datasetSha256,
@@ -25,22 +25,26 @@ function fixture({ corrupt, fail = false } = {}) {
       return query(matches ? customer : null);
     }
   } };
-  const snapshot = { metadata: { businessId: V3.businessId, scenarioId: V3.scenarioId, asOfDate: '2026-10-14', dataVersion: '3', snapshotVersion: 'v3-operational-snapshot-v2', snapshotHash: 'verified-hash' } };
+  const snapshot = { metadata: { businessId: V3.businessId, scenarioId: V3.scenarioId, asOfDate: '2026-10-14', dataVersion: revision,
+    snapshotVersion: 'v3-operational-snapshot-v2', snapshotHash: 'a'.repeat(64), capturedAtUtc: '2026-10-14T18:00:00.000Z' } };
   const mlClient = { intelligence: async (domain, payload) => {
     calls.push({ domain, payload });
     if (fail) { const error = new Error('private path'); error.functionalCode = 'ARTIFACT_UNAVAILABLE'; throw error; }
     const live = payload.dataMode === 'LIVE';
-    const data = live ? { total: 1, items: [{ customerCode: 'CUS-01', rfm90d: { raw: { recencyDays: 2, frequency90d: 4, monetary90dCents: 12345 } } }] }
+    const data = live ? { total: 1, items: [{ customerCode: 'CUS-01', segment: 'POTENTIAL', rfm90d: { raw: { recencyDays: 2, frequency90d: 4, monetary90dCents: 12345 } } }] }
       : { ...structuredClone(evidence), ...(payload.customerCode ? { assignmentAsOfDate: payload.assignmentAsOfDate,
-        assignments: [{ customerRef: payload.customerCode, status: 'ASSIGNED', cluster: 2 }] } : {}) };
+        assignmentSource: 'AUTHORIZED_CURRENT_RFM', assignments: [{ customerRef: payload.customerCode, status: 'ASSIGNED', cluster: 2,
+          ...payload.assignmentRfm, rfmSegment: payload.assignmentSegment,
+          featureInputs: ['recency', 'frequency', 'monetary'].map((name, index) => ({ name,
+            rawValue: payload.assignmentRfm[name], log1pValue: 1 + index, scaledValue: -1 + index })) }] } : {}) };
     const result = { requestId: payload.requestId, status: 'OK', data, metadata: { ...payload.context,
       source: live ? 'HISTORICAL_PLUS_OPERATIONAL_SNAPSHOT' : 'CANONICAL_V3_BUNDLE',
       contractVersion: live ? 'm6.9f4-live-intelligence-v1' : 'm6.9b-v3-intelligence-v1',
-      ...(live ? { dataVersion: '3', snapshotHash: 'verified-hash' } : {}) } };
+      ...(live ? { dataVersion: revision, snapshotHash: 'a'.repeat(64) } : {}) } };
     return corrupt ? corrupt(result) : result;
   } };
   const service = createV3IntelligenceService({ models, mlClient, clock: () => new Date('2026-10-14T18:00:00Z'),
-    snapshotBuilder: async () => ({ mode: 'LIVE', dataVersion: '3', snapshot }) });
+    snapshotBuilder: async () => ({ mode: 'LIVE', dataVersion: revision, snapshot }) });
   return { calls, service, dashboard: createV3BusinessIntelligenceDashboard({ intelligenceService: service }) };
 }
 test('frozen clustering travels through authenticated customer domain with no user RFM', async () => {
@@ -59,6 +63,37 @@ test('current assignment uses tenant-resolved customer and verified skill RFM', 
   assert.equal(calls.length, 2);
   assert.deepEqual(calls[1].payload.assignmentRfm, { recency: 2, frequency: 4, monetary: 123.45 });
   assert.equal(calls[1].payload.assignmentAsOfDate, '2026-10-14');
+  assert.equal(calls[1].payload.assignmentSegment, 'POTENTIAL');
+  assert.equal(result.data.assignments[0].rfmSegment, 'POTENTIAL');
+  assert.equal(result.data.artifactHash, evidence.artifactHash);
+  assert.deepEqual(result.data.assignments[0].featureInputs.map(row => row.scaledValue), [-1, 0, 1]);
+  assert.deepEqual(result.data.assignmentBinding, { businessId: V3.businessId, scenarioId: V3.scenarioId,
+    datasetVersion: V3.datasetVersion, revision: '3', snapshotHash: 'a'.repeat(64), observedAt: '2026-10-14T18:00:00.000Z' });
+});
+
+test('each current assignment carries its own source revision without another inference', async () => {
+  for (const revision of ['194', '195']) {
+    const { dashboard, calls } = fixture({ revision });
+    const result = await dashboard.customerClustering({ ...req, query: { customerRef: 'CUS-01', assignmentSegment: 'INACTIVE' } });
+    assert.equal(result.data.assignmentBinding.revision, revision);
+    assert.equal(result.data.assignments[0].rfmSegment, 'POTENTIAL');
+    assert.equal(calls.length, 2);
+    assert.equal(calls.filter(call => call.payload.mode === 'clustering').length, 1);
+  }
+});
+
+test('Consumer Final never requests an individual assignment', async () => {
+  const { dashboard, calls } = fixture();
+  assert.equal((await dashboard.customerClustering({ ...req, query: { customerRef: 'CONSUMER_FINAL' } })).error.code, 'CUSTOMER_NOT_FOUND');
+  assert.equal(calls.length, 0);
+});
+
+test('mismatched raw vector, feature order and segment cannot be attached to an assignment', async () => {
+  for (const alter of [data => { data.assignments[0].featureInputs[0].rawValue = 999; },
+    data => { data.assignments[0].featureInputs.reverse(); }, data => { data.assignments[0].rfmSegment = 'INACTIVE'; }]) {
+    const { dashboard } = fixture({ corrupt: body => { if (body.data.algorithm === 'KMeans') alter(body.data); return body; } });
+    assert.equal((await dashboard.customerClustering({ ...req, query: { customerRef: 'CUS-01' } })).error.httpStatus, 503);
+  }
 });
 test('current assignment resolves a Contact Mongo ObjectId to its canonical customerCode', async () => {
   const { dashboard, calls } = fixture();

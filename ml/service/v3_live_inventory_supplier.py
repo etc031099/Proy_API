@@ -24,15 +24,31 @@ LIMA = ZoneInfo("America/Lima")
 _RISK_LEVELS = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 
 
-def _risk_counts(rows: list[dict[str, Any]]) -> dict[str, int | None]:
-    """Count the same canonical risk levels exposed by inventory ranking rows."""
+def _risk_counts(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Keep complete risk totals nullable and expose known-row counts separately."""
     normalized = [str((row.get("risk") or {}).get("level") or "").strip().upper() for row in rows]
     unavailable = sum(level not in _RISK_LEVELS for level in normalized)
-    counts = {level.lower(): sum(value == level for value in normalized) for level in _RISK_LEVELS}
+    evaluable = {level.lower(): sum(value == level for value in normalized) for level in _RISK_LEVELS}
+    counts = dict(evaluable)
     if unavailable:
         counts = {key: None for key in counts}
     counts["riskUnavailableCount"] = unavailable
+    counts["riskEvaluableCounts"] = evaluable
+    counts["riskEvaluableCount"] = len(normalized) - unavailable
     return counts
+
+
+def _reorder_counts(rows: list[dict[str, Any]]) -> dict[str, int | None]:
+    """Aggregate reorder decisions independently from recommended quantities."""
+    unknown = sum(row["recommendation"].get("shouldReorder") is None for row in rows)
+    evaluable = len(rows) - unknown
+    known_true = sum(row["recommendation"].get("shouldReorder") is True for row in rows)
+    return {
+        "shouldReorder": None if unknown else known_true,
+        "reorderCountEvaluable": known_true,
+        "reorderEvaluableCount": evaluable,
+        "reorderDecisionUnavailableCount": unknown,
+    }
 
 
 def _get(row: Any, key: str, default=None):
@@ -615,8 +631,7 @@ class LiveInventorySupplierAdapter:
                     summary["forecastAvailability"] = "PARTIAL"
             summary.update(_risk_counts(rows))
             recommendation_unavailable = sum(row["recommendation"].get("recommendedQty") is None for row in rows)
-            summary["shouldReorder"] = (None if recommendation_unavailable else
-                sum(row["recommendation"].get("shouldReorder") is True for row in rows))
+            summary.update(_reorder_counts(rows))
             summary["recommendedProducts"] = (None if recommendation_unavailable else
                 sum(row["recommendation"].get("recommendedQty", 0) > 0 for row in rows))
             overstock_unavailable = sum(row["classification"].get("overstock") is None for row in rows)

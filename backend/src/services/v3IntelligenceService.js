@@ -357,6 +357,13 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
         || row.status !== 'READY' && row.predictionUnits !== null
       : row.status === 'READY' ? !Number.isFinite(row[`expectedUnitsNext${request.horizonDays || 7}d`])
         : !['COLD_START', 'INSUFFICIENT_HISTORY'].includes(row.status))) throw unavailable();
+    if (trustedLiveRidge && responseItems.some(row => row.featureInputs != null && (
+      !require('./forecastRidgeFeatureInputs').projectRidgeFeatureInputs(row)
+      || row.horizonDays !== request.horizonDays || row.dataVersion !== String(liveSnapshot.dataVersion)
+      || row.snapshotHash !== liveSnapshot.snapshot.metadata.snapshotHash
+      || row.observationsThrough !== liveSnapshot.snapshot.metadata.observationsClosedThrough
+      || row.artifactHash !== invocation.trustedForecastModelEnvelope?.metadata?.artifactHash
+    ))) throw unavailable();
     if (count > invocation.skill.maxRecords || Array.isArray(data.items) && count > request.limit) throw unavailable();
     if (supplierOrder) {
       const value = row => supplierOrder.reduce((result, field) => result?.[field], row);
@@ -408,6 +415,9 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
   const customerClustering = async (context, { signal, customerRef } = {}) => {
     const binding = await resolveContext(context);
     if (!binding) throw new AgentError('AGENT_SKILL_NOT_ALLOWED');
+    if (customerRef === 'CONSUMER_FINAL') {
+      const error = unavailable(); error.functionalCode = 'CUSTOMER_NOT_FOUND'; throw error;
+    }
     let resolvedCustomerRef = customerRef;
     if (customerRef && customerRef !== 'CONSUMER_FINAL') {
       const notFound = () => { const error = unavailable(); error.functionalCode = 'CUSTOMER_NOT_FOUND'; return error; };
@@ -425,6 +435,7 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
       context: { businessId: binding.businessId, scenarioId: binding.scenarioId,
         datasetVersion: binding.datasetVersion, datasetSha256: binding.datasetSha256,
         timezone: binding.timezone, asOfDate: V3.historicalCutoff } };
+    let assignmentBinding = null;
     if (customerRef) {
       // Raw RFM never comes from frontend parameters: the existing tenant-scoped
       // customer skill reads and verifies its historical/LIVE source first.
@@ -437,6 +448,11 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
       payload.customerCode = row.customerCode;
       payload.assignmentRfm = { recency: raw.recencyDays, frequency: raw.frequency90d, monetary: raw.monetary90dCents / 100 };
       payload.assignmentAsOfDate = binding.operationalDate;
+      const segments = ['AT_RISK', 'INACTIVE', 'NEW', 'LOYAL', 'TOP_HIGH_VALUE', 'POTENTIAL', 'INSUFFICIENT_HISTORY'];
+      payload.assignmentSegment = segments.includes(row.segment) ? row.segment : null;
+      assignmentBinding = { businessId: binding.businessId, scenarioId: binding.scenarioId,
+        datasetVersion: binding.datasetVersion, revision: result.metadata?.dataVersion ?? null,
+        snapshotHash: result.metadata?.snapshotHash ?? null, observedAt: result.metadata?.updatedAt ?? null };
     }
     let body;
     try { body = await client.intelligence('customers', payload, { signal }); }
@@ -453,8 +469,20 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
       || data.status !== 'EXPLORATORY' || !Array.isArray(data.assignments) || !Array.isArray(data.clusters)
       || data.assignments.some(row => 'probability' in row || 'confidence' in row)
       || customerRef && (data.assignments.length !== 1 || data.assignments[0].customerRef !== payload.customerCode
-        || data.assignmentAsOfDate !== payload.assignmentAsOfDate)) throw unavailable();
-    return data;
+        || data.assignmentAsOfDate !== payload.assignmentAsOfDate
+        || (data.assignments[0].rfmSegment ?? null) !== payload.assignmentSegment)) throw unavailable();
+    if (customerRef) {
+      const row = data.assignments[0], order = ['recency', 'frequency', 'monetary'];
+      if (data.assignmentSource !== 'AUTHORIZED_CURRENT_RFM'
+        || !/^[a-f0-9]{64}$/.test(data.artifactHash || '')
+        || !Array.isArray(data.features) || JSON.stringify(data.features) !== JSON.stringify(order)
+        || order.some(name => row[name] !== payload.assignmentRfm[name])
+        || row.featureInputs != null && (!Array.isArray(row.featureInputs) || row.featureInputs.length !== order.length
+          || row.featureInputs.some((feature, index) => feature.name !== order[index]
+            || feature.rawValue !== payload.assignmentRfm[feature.name]
+            || [feature.rawValue, feature.log1pValue, feature.scaledValue].some(value => !Number.isFinite(value))))) throw unavailable();
+    }
+    return { ...data, assignmentBinding };
   };
   const salesAnomalies = async (context, { signal, startDate = V3.earliestDate, endDate = V3.historicalCutoff, limit = 10 } = {}) => {
     const binding = await resolveContext(context);
@@ -493,6 +521,67 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
       || data.topAnomalies.some(row => !row.isAnomaly || !data.series.some(day => day.date === row.date && day.anomalyScore === row.anomalyScore))) throw unavailable();
     return data;
   };
-  return Object.freeze({ resolveContext, resolveEntity, execute, operationalClock, forecastEvaluation, customerClustering, salesAnomalies });
+  const salesAnomalyProvisional = async (context, { signal } = {}) => {
+    const binding = await resolveContext(context);
+    if (!binding) throw new AgentError('AGENT_SKILL_NOT_ALLOWED');
+    const live = await getLiveSnapshot(binding, context.requestId, binding.operationalDate);
+    const snapshot = live?.snapshot, sm = snapshot?.metadata;
+    if (live?.mode !== 'LIVE' || sm?.businessId !== binding.businessId || sm?.scenarioId !== binding.scenarioId
+      || sm?.asOfDate !== binding.operationalDate || sm?.operationalDate !== binding.operationalDate
+      || sm?.historicalDatasetVersion !== binding.datasetVersion || sm?.historicalDatasetSha256 !== binding.datasetSha256
+      || String(sm?.dataVersion) !== String(live?.dataVersion)) throw unavailable();
+    let body;
+    const payload = { requestId: context.requestId, dataMode: 'LIVE', mode: 'anomalies_provisional', operationalSnapshot: snapshot,
+      context: { businessId: binding.businessId, scenarioId: binding.scenarioId, datasetVersion: binding.datasetVersion,
+        datasetSha256: binding.datasetSha256, timezone: binding.timezone, asOfDate: binding.operationalDate } };
+    try { body = await client.intelligence('business', payload, { signal }); }
+    catch (error) { const safe = unavailable();
+      if (error?.functionalCode === 'ARTIFACT_UNAVAILABLE') safe.functionalCode = 'ARTIFACT_UNAVAILABLE'; throw safe; }
+    const meta = body?.metadata, d = body?.data;
+    if (body?.requestId !== payload.requestId || body?.status !== 'OK' || !isPlainObject(d)
+      || meta?.source !== 'HISTORICAL_PLUS_OPERATIONAL_SNAPSHOT' || meta?.contractVersion !== 'm6.9f4-live-intelligence-v1'
+      || meta?.scenarioId !== binding.scenarioId || meta?.datasetVersion !== binding.datasetVersion
+      || meta?.datasetSha256 !== binding.datasetSha256 || meta?.timezone !== binding.timezone
+      || meta?.asOfDate !== binding.operationalDate || meta?.snapshotHash !== sm.snapshotHash
+      || String(meta?.dataVersion) !== String(live.dataVersion)
+      || d.provisional !== true || d.modelVersion !== 'sales-isolation-forest-v3-v1'
+      || d.localDate !== binding.operationalDate || typeof d.revision !== 'string' || !/^\d+$/.test(d.revision) || d.revision !== String(live.dataVersion)
+      || typeof d.observedAt !== 'string' || !Number.isFinite(Date.parse(d.observedAt)) || Date.parse(d.observedAt) !== Date.parse(sm.capturedAtUtc)
+      || d.businessContext?.businessId !== binding.businessId || d.businessContext?.scenarioId !== binding.scenarioId
+      || d.businessContext?.datasetVersion !== binding.datasetVersion
+      || d.modelIdentity?.threshold !== -0.5 || d.modelIdentity?.trainingCutoff !== '2026-06-30'
+      || d.modelIdentity?.analysisCutoff !== V3.historicalCutoff || d.modelIdentity?.artifact !== 'model.joblib'
+      || !/^[a-f0-9]{64}$/.test(d.modelIdentity?.artifactHash || '')
+      || !/^[a-f0-9]{64}$/.test(d.modelIdentity?.weeklyReferenceHash || '')) throw unavailable();
+    const finite = value => typeof value === 'number' && Number.isFinite(value);
+    if (d.aggregate !== null && (!isPlainObject(d.aggregate) || !finite(d.aggregate.revenuePEN) || d.aggregate.revenuePEN < 0
+      || !Number.isSafeInteger(d.aggregate.tickets) || d.aggregate.tickets < 0 || !Number.isSafeInteger(d.aggregate.units)
+      || d.aggregate.units < 0 || d.aggregate.averageTicketPEN !== null && !finite(d.aggregate.averageTicketPEN))) throw unavailable();
+    if (d.status === 'EVALUATED') {
+      const i = d.inference, x = d.modelInput;
+      if (d.reason !== null || !d.aggregate || d.aggregate.tickets <= 0 || !(d.aggregate.averageTicketPEN > 0)
+        || !isPlainObject(x) || x.weekday !== (new Date(`${d.localDate}T00:00:00Z`).getUTCDay() || 7)
+        || !finite(x.weekdayLogTicketsDeviation) || !finite(x.weekdayLogAverageTicketDeviation)
+        || !isPlainObject(i) || !finite(i.anomalyScore) || !finite(i.decisionFunction)
+        || !/^[a-f0-9]{64}$/.test(i.regionSignature || '')
+        || Math.abs(i.decisionFunction - (i.anomalyScore + .5)) > 1e-12
+        || i.prediction !== (i.decisionFunction < 0 ? -1 : 1)
+        || i.label !== (i.prediction === -1 ? 'ANOMALOUS_SIGNAL' : 'WITHIN_PATTERN')) throw unavailable();
+    } else if (d.status !== 'NOT_EVALUABLE' || d.inference !== null || d.modelInput !== null
+      || !['NO_TICKETS', 'INVALID_AVERAGE_TICKET', 'INVALID_DAILY_AGGREGATE', 'UNSUPPORTED_CURRENCY',
+        'DATE_MISMATCH', 'INVALID_DATE'].includes(d.reason)) throw unavailable();
+    const pick = (row, keys) => row == null ? null : Object.fromEntries(keys.map(key => [key, row[key]]));
+    const mapped = safeData({ modelVersion: d.modelVersion, provisional: true, localDate: d.localDate, revision: d.revision,
+      observedAt: d.observedAt, status: d.status, reason: d.reason,
+      businessContext: pick(d.businessContext, ['businessId', 'scenarioId', 'datasetVersion']),
+      aggregate: pick(d.aggregate, ['revenuePEN', 'units', 'tickets', 'averageTicketPEN']),
+      modelInput: pick(d.modelInput, ['weekday', 'weekdayLogTicketsDeviation', 'weekdayLogAverageTicketDeviation']),
+      inference: pick(d.inference, ['anomalyScore', 'decisionFunction', 'prediction', 'label', 'regionSignature']),
+      modelIdentity: pick(d.modelIdentity, ['artifact', 'artifactHash', 'weeklyReferenceHash', 'threshold', 'trainingCutoff', 'analysisCutoff']),
+      commercial: { grossMargin: pick(d.commercial?.grossMargin, ['value', 'currency', 'percent', 'availability']),
+        costCoverage: pick(d.commercial?.costCoverage, ['knownSaleLines', 'unknownSaleLines', 'status']) } });
+    return mapped;
+  };
+  return Object.freeze({ resolveContext, resolveEntity, execute, operationalClock, forecastEvaluation, customerClustering, salesAnomalies, salesAnomalyProvisional });
 };
 module.exports = { V3, createV3IntelligenceService, safeData };

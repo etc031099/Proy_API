@@ -5,6 +5,7 @@ const { V3, createV3IntelligenceService } = require('./v3IntelligenceService');
 const { artifactBytes } = require('./forecastModelRegistryService');
 const { isPlainObject } = require('../agents/contracts');
 const { createProductOperationHistoryService } = require('./productOperationHistoryService');
+const { projectRidgeFeatureInputs } = require('./forecastRidgeFeatureInputs');
 
 const RIDGE_RECIPE_ID = 'RIDGE-CAUSAL27';
 const RIDGE_FEATURE_VERSION = 'RIDGE_CAUSAL27_V1';
@@ -126,10 +127,13 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
   const kpiContract = data => {
     const kpis = data?.kpis || {};
     const marginAvailable = Number.isFinite(kpis.grossMarginCents);
+    const costCoverage = data?.costCoverage;
     return { revenue: money(kpis.revenueCents), units: finiteOrNull(kpis.unitsSold), tickets: finiteOrNull(kpis.ticketCount),
       averageTicket: money(Number.isFinite(kpis.averageTicket) ? Math.round(kpis.averageTicket * 100) : null),
       grossMargin: { value: marginAvailable ? kpis.grossMarginCents / 100 : null, currency: marginAvailable ? 'PEN' : null,
-        percent: finiteOrNull(kpis.grossMarginPct), availability: marginAvailable ? data?.availabilityStatus === 'PARTIAL' ? 'PARTIAL' : 'AVAILABLE' : 'UNAVAILABLE' } };
+        percent: finiteOrNull(kpis.grossMarginPct), availability: marginAvailable ? data?.availabilityStatus === 'PARTIAL' ? 'PARTIAL' : 'AVAILABLE' : 'UNAVAILABLE',
+        costCoverage: costCoverage ? { knownSaleLines: finiteOrNull(costCoverage.knownSaleLines),
+          unknownSaleLines: finiteOrNull(costCoverage.unknownSaleLines), status: costCoverage.status || null } : null } };
   };
   const executionError = result => result.status === 'CLARIFICATION'
     ? { code: 'AMBIGUOUS_ENTITY', httpStatus: 409, message: 'La referencia coincide con más de una entidad.',
@@ -245,6 +249,10 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
         execute(context, 'get_cross_sell_recommendations', { mode: 'rules', limit, offset }, limit),
       ]);
       return { data: { ...responseMeta(summaryResult, context, 'cross-sell'), mode: 'FROZEN', cutoff: V3.historicalCutoff,
+        businessContext: { businessId: context.authenticated.businessId, scenarioId: V3.scenarioId, datasetVersion: V3.datasetVersion },
+        analysisVersion: summaryResult.data?.summary?.analysisVersion || null,
+        artifactIdentity: /^[a-f0-9]{64}$/.test(summaryResult.data?.summary?.artifactIdentity || '')
+          ? summaryResult.data.summary.artifactIdentity : null,
         summary: summaryResult.data?.summary || null, available: result.data?.available === true,
         items: (result.data?.items || []).map(ruleRow), total: result.data?.total ?? 0, limit, offset } };
     } catch (error) { return { error: safeError(error) }; }
@@ -373,7 +381,8 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
       ]);
       const kpis = business.data?.kpis || {}, inv = inventory.data?.summary || {};
       const pendingPurchasesCount = finiteOrNull(suppliers.data?.summary?.pendingOrders);
-      const marginAvailable = Number.isFinite(kpis.grossMarginCents) && Number.isFinite(kpis.grossMarginPct);
+      const marginAmountAvailable = Number.isFinite(kpis.grossMarginCents);
+      const costCoverage = business.data?.costCoverage;
       const freshness = business.data?.freshness || inventory.data?.freshness || null;
       return { data: {
         asOf: today, timezone: V3.timezone,
@@ -384,9 +393,11 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
         unitsToday: Number.isFinite(kpis.unitsSold) ? kpis.unitsSold : null,
         ticketsToday: Number.isFinite(kpis.ticketCount) ? kpis.ticketCount : null,
         averageTicket: Number.isFinite(kpis.averageTicket) ? { value: kpis.averageTicket, currency: 'PEN' } : null,
-        grossMargin: marginAvailable ? { value: kpis.grossMarginCents / 100, currency: 'PEN', percent: kpis.grossMarginPct,
-          availability: business.status === 'PARTIAL' ? 'PARTIAL' : 'AVAILABLE' }
-          : { value: null, currency: null, percent: null, availability: business.status === 'PARTIAL' ? 'PARTIAL' : 'UNAVAILABLE' },
+        grossMargin: { value: marginAmountAvailable ? kpis.grossMarginCents / 100 : null,
+          currency: marginAmountAvailable ? 'PEN' : null, percent: finiteOrNull(kpis.grossMarginPct),
+          availability: business.status === 'PARTIAL' ? 'PARTIAL' : marginAmountAvailable ? 'AVAILABLE' : 'UNAVAILABLE',
+          costCoverage: costCoverage ? { knownSaleLines: finiteOrNull(costCoverage.knownSaleLines),
+            unknownSaleLines: finiteOrNull(costCoverage.unknownSaleLines), status: costCoverage.status || null } : null },
         inventory: {
           totalProducts: finiteOrNull(inv.products), riskCounts: { critical: finiteOrNull(inv.critical), high: finiteOrNull(inv.high),
             medium: finiteOrNull(inv.medium), low: finiteOrNull(inv.low) },
@@ -424,7 +435,14 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
       return { data: { ...responseMeta(rowsResult, context, 'inventory'),
         summary: { totalProducts: finiteOrNull(summary.products), riskCounts: { critical: finiteOrNull(summary.critical),
           high: finiteOrNull(summary.high), medium: finiteOrNull(summary.medium), low: finiteOrNull(summary.low) },
+          riskEvaluableCounts: { critical: finiteOrNull(summary.riskEvaluableCounts?.critical),
+            high: finiteOrNull(summary.riskEvaluableCounts?.high), medium: finiteOrNull(summary.riskEvaluableCounts?.medium),
+            low: finiteOrNull(summary.riskEvaluableCounts?.low) },
+          riskEvaluableCount: finiteOrNull(summary.riskEvaluableCount),
           reorderCount: finiteOrNull(summary.shouldReorder), lowStockCount: finiteOrNull(summary.lowStock),
+          reorderCountEvaluable: finiteOrNull(summary.reorderCountEvaluable),
+          reorderEvaluableCount: finiteOrNull(summary.reorderEvaluableCount),
+          reorderDecisionUnavailableCount: finiteOrNull(summary.reorderDecisionUnavailableCount),
           overstockCount: finiteOrNull(summary.overstock), slowMovingCount: finiteOrNull(summary.slowMoving),
           deadStockCount: finiteOrNull(summary.deadStock), incomingUnits: finiteOrNull(summary.incomingUnits),
           riskCountsStatus: summary.riskCountsStatus || null,
@@ -672,7 +690,19 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
       { signal: new AbortController().signal, startDate, endDate, limit }) }; }
     catch (error) { return { error: safeError(error) }; }
   };
-  return Object.freeze({ revision, summary, inventory, sales, customers, customer, suppliers, supplier, associations, productRelated, health, healthDiagnostic, forecastEvaluation, activeForecastModels, customerClustering, salesAnomalies,
+  const salesAnomalyProvisional = async req => {
+    if (Object.keys(req.query || {}).length) return { error: { code: 'INVALID_REQUEST', httpStatus: 400, message: 'La evaluación provisional usa exclusivamente el día actual.' } };
+    const prepared = await run(req);
+    if (prepared.error) return { error: prepared.error };
+    try {
+      const data = await service.salesAnomalyProvisional(prepared.context.authenticated,
+        { signal: new AbortController().signal });
+      return { data };
+    } catch (error) {
+      return { error: safeError(error) };
+    }
+  };
+  return Object.freeze({ revision, summary, inventory, sales, customers, customer, suppliers, supplier, associations, productRelated, health, healthDiagnostic, forecastEvaluation, activeForecastModels, customerClustering, salesAnomalies, salesAnomalyProvisional,
     forecast: req => product(req, 'forecast'), productInventory: req => product(req, 'inventory'),
     productOperationsList, productOperationDetail });
 };
@@ -773,6 +803,7 @@ function trustedForecastEnvelope(active, scope) {
     artifactDataBase64: bytes.toString('base64') };
 }
 function liveRidgeResponse(row, context, product, horizonDays, metadata) {
+  const featureInputs = projectRidgeFeatureInputs(row);
   const trainedDataVersion = typeof row.trainedDataVersion === 'string' ? row.trainedDataVersion : null;
   const dataVersion = typeof row.dataVersion === 'string' ? row.dataVersion : metadata.dataVersion || null;
   const isTrainingPending = dataVersion && trainedDataVersion
@@ -784,7 +815,10 @@ function liveRidgeResponse(row, context, product, horizonDays, metadata) {
     observationsThrough: row.observationsThrough || null, modelFamily: row.modelFamily || null,
     recipeId: row.recipeId || null, modelVersion: Number.isSafeInteger(row.modelVersion) ? row.modelVersion : null,
     trainedAt: row.trainedAt || null, trainedDataVersion, dataCutoff: row.dataCutoff || null,
-    featureVersion: row.featureVersion || null, promotionPolicyVersion: row.promotionPolicyVersion || null,
+    featureVersion: row.featureVersion || null, featureHash: row.featureHash || null,
+    featureInputs,
+    artifactHash: typeof row.artifactHash === 'string' && /^[a-f0-9]{64}$/.test(row.artifactHash) ? row.artifactHash : null,
+    promotionPolicyVersion: row.promotionPolicyVersion || null,
     activeModelStatus: row.activeModelStatus || 'NONE', dataVersion,
     snapshotHash: typeof row.snapshotHash === 'string' ? row.snapshotHash : metadata.snapshotHash || null,
     isTrainingPending, baselineUnits: finiteOrNull(row.baselineUnits),
@@ -834,7 +868,10 @@ const ruleRow = row => ({ antecedent: row.antecedentSkus || row.antecedentCodes 
   antecedentProducts: row.antecedentProducts || [], consequent: row.consequentSkus || row.consequentCodes || [],
   consequentProducts: row.consequentProducts || [], support: finiteOrNull(row.support),
   confidence: finiteOrNull(row.confidence), lift: finiteOrNull(row.lift), ticketCount: finiteOrNull(row.ticketCount),
+  totalTickets: countOrNull(row.totalTickets), antecedentCount: countOrNull(row.antecedentCount),
+  consequentCount: countOrNull(row.consequentCount), jointCount: countOrNull(row.jointCount),
   stability: row.stability?.status || row.stability || null, status: row.status || row.classification || null });
+const countOrNull = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const domainStatus = section => section.status || (section.freshness?.status === 'AVAILABLE' ? 'AVAILABLE'
   : section.freshness?.status || (section.available === false ? 'UNAVAILABLE' : 'AVAILABLE'));
 const stripAlerts = section => Object.fromEntries(Object.entries(section).filter(([key]) => !['alerts', 'freshness', 'status'].includes(key)));

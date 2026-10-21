@@ -29,6 +29,32 @@ def logical_hash(value):
                                    separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
 
+def average_ticket(revenue_cents, tickets):
+    """Model precision, without monetary presentation rounding."""
+    return revenue_cents / 100 / tickets if tickets else None
+
+
+def aggregate_daily_sales(sales, lines_by_sale, local_date):
+    """Shared daily reducer over normalized completed tickets; closure is a caller concern."""
+    revenue_cents = units = promotion_tickets = tickets = 0
+    unsupported_currency = False
+    for sale in sales:
+        if sale["localDate"] != local_date:
+            continue
+        items = lines_by_sale[sale["saleCode"]]
+        if sum(item["lineTotalCents"] for item in items) != sale["totalCents"]:
+            raise ValueError("Daily ticket revenue does not reconcile")
+        revenue_cents += sale["totalCents"]
+        units += sum(item["unitsSold"] for item in items)
+        tickets += 1
+        unsupported_currency |= sale.get("currency", "PEN") != "PEN"
+        promotion_tickets += int(bool(sale.get("ticketDiscountCents") or sale.get("itemDiscountCents")
+                                     or any(item.get("promotionCode") for item in items)))
+    return {"revenueCents": revenue_cents, "units": units, "tickets": tickets,
+            "averageTicket": average_ticket(revenue_cents, tickets),
+            "promotionTickets": promotion_tickets, "unsupportedCurrency": unsupported_currency}
+
+
 def build_daily(runtime):
     """Calendar + complete approved product-days certify zeros, never absence of tickets alone."""
     from ml.src.business_customer_supplier_v3 import _sale_data
@@ -47,29 +73,24 @@ def build_daily(runtime):
         if not complete:
             rows.append({"date": iso, "status": "DATA_INCOMPLETE"})
             continue
-        tickets = by_date[iso]
-        revenue_cents = units = promotion_tickets = 0
-        for ticket in tickets:
-            items = lines[ticket["saleCode"]]
-            if sum(item["lineTotalCents"] for item in items) != ticket["totalCents"]:
-                raise ValueError("Daily ticket revenue does not reconcile")
-            revenue_cents += ticket["totalCents"]
-            units += sum(item["unitsSold"] for item in items)
-            promotion_tickets += int(bool(ticket.get("ticketDiscountCents") or ticket.get("itemDiscountCents")
-                                          or any(item.get("promotionCode") for item in items)))
-        if sum(row["unitsSold"] for row in product_days) != units:
+        daily = aggregate_daily_sales(by_date[iso], lines, iso)
+        if sum(row["unitsSold"] for row in product_days) != daily["units"]:
             raise ValueError("Completed daily units do not reconcile with approved product-days")
-        rows.append({"date": iso, "status": "COMPLETE" if tickets else "ZERO_ACTIVITY",
-                     "revenue": revenue_cents/100, "units": units, "tickets": len(tickets),
-                     "averageTicket": revenue_cents/100/len(tickets) if tickets else None,
+        rows.append({"date": iso, "status": "COMPLETE" if daily["tickets"] else "ZERO_ACTIVITY",
+                     "revenue": daily["revenueCents"]/100, "units": daily["units"], "tickets": daily["tickets"],
+                     "averageTicket": daily["averageTicket"],
                      "weekday": day.isoweekday(), "weekend": day.isoweekday() >= 6,
-                     "holidayCode": calendar.get("holidayCode"), "promotionTickets": promotion_tickets})
+                     "holidayCode": calendar.get("holidayCode"), "promotionTickets": daily["promotionTickets"]})
     return rows
 
 
 def matrix(rows):
-    values = np.asarray([[row["weekday"], row["tickets"], row["averageTicket"]]
-                         for row in rows if row["status"] == "COMPLETE"], dtype=float)
+    return model_matrix([[row["weekday"], row["tickets"], row["averageTicket"]]
+                         for row in rows if row["status"] == "COMPLETE"])
+
+
+def model_matrix(values):
+    values = np.asarray(values, dtype=float)
     if (values.ndim != 2 or values.shape[1] != 3 or not np.isfinite(values).all()
             or (values[:, 1:] <= 0).any()):
         raise ValueError("Daily sales features must be complete, positive and finite")

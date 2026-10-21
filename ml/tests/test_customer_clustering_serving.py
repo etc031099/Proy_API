@@ -38,6 +38,45 @@ def body(**overrides):
 
 
 class ClusteringServingTests(unittest.TestCase):
+    def test_exact_preprocessing_and_same_vector_for_all_outputs_without_fit(self):
+        bundle, frozen = load_clustering(ROOT)
+        model, scaler, log, pca = bundle["pipeline"][-1], bundle["pipeline"]["scale"], bundle["pipeline"]["log"], bundle["pca"]
+        artifact = ROOT / ARTIFACT_DIR / "model.joblib"
+        original_bytes = artifact.read_bytes()
+        raw = {"recency": 2, "frequency": 5, "monetary": 123.45}
+        with patch.object(log, "transform", wraps=log.transform) as log_call, \
+                patch.object(scaler, "transform", wraps=scaler.transform) as scale_call, \
+                patch.object(model, "predict", wraps=model.predict) as predict, \
+                patch.object(model, "transform", wraps=model.transform) as distance, \
+                patch.object(pca, "transform", wraps=pca.transform) as pca_call, \
+                patch("sklearn.cluster.KMeans.fit", side_effect=AssertionError("no fit")), \
+                patch("sklearn.preprocessing.StandardScaler.fit", side_effect=AssertionError("no fit")), \
+                patch("sklearn.decomposition.PCA.fit", side_effect=AssertionError("no fit")), \
+                threadpool_limits(limits=1):
+            data = clustering_data(ROOT, "NEW", raw, "2026-10-20", rfm_segment="POTENTIAL")
+        row = data["assignments"][0]
+        self.assertEqual([item["name"] for item in row["featureInputs"]], ["recency", "frequency", "monetary"])
+        x = np.array([[2, 5, 123.45]])
+        logged = np.log1p(x)
+        scaled = (logged - scaler.mean_) / scaler.scale_
+        np.testing.assert_allclose([[f["rawValue"] for f in row["featureInputs"]]], x)
+        np.testing.assert_allclose([[f["log1pValue"] for f in row["featureInputs"]]], logged)
+        np.testing.assert_allclose([[f["scaledValue"] for f in row["featureInputs"]]], scaled)
+        for call in (log_call, scale_call, predict, distance, pca_call):
+            self.assertEqual(call.call_count, 1)
+        np.testing.assert_allclose(log_call.call_args.args[0], x)
+        np.testing.assert_allclose(scale_call.call_args.args[0], logged)
+        vector = predict.call_args.args[0]
+        np.testing.assert_allclose(vector, scaled)
+        self.assertIs(distance.call_args.args[0], vector)
+        self.assertIs(pca_call.call_args.args[0], vector)
+        raw_label = next(label for label, cluster in bundle["labelMapping"].items() if cluster == row["cluster"])
+        self.assertAlmostEqual(row["distance"], np.linalg.norm(vector[0] - model.cluster_centers_[raw_label]))
+        np.testing.assert_allclose([row["pc1"], row["pc2"]], ((vector - pca.mean_) @ pca.components_.T)[0])
+        self.assertEqual(row["rfmSegment"], "POTENTIAL")
+        self.assertEqual(data["artifactHash"], frozen.artifactHash)
+        self.assertEqual(artifact.read_bytes(), original_bytes)
+
     def test_load_hash_and_assignments_match_frozen_pipeline(self):
         bundle, data = load_clustering(ROOT)
         with threadpool_limits(limits=1):
@@ -60,6 +99,7 @@ class ClusteringServingTests(unittest.TestCase):
         no_history = clustering_data(ROOT, "NEW-REGISTERED", {"recency": None, "frequency": 0, "monetary": 0})
         self.assertEqual(no_history["assignments"][0]["status"], "INSUFFICIENT_HISTORY")
         self.assertIsNone(no_history["assignments"][0]["cluster"])
+        self.assertIsNone(no_history["assignments"][0]["featureInputs"])
         with self.assertRaises(LookupError):
             clustering_data(ROOT, "FOREIGN")
         with self.assertRaises(ValidationError):
@@ -124,10 +164,14 @@ class ClusteringHttpTests(unittest.TestCase):
 
     def test_future_input_is_assignment_not_training_and_historical_guard(self):
         with threadpool_limits(limits=1):
-            response = self.post(body(customerCode="NEW", assignmentRfm={"recency": 1, "frequency": 3, "monetary": 45}, assignmentAsOfDate="2026-10-14"))
+            response = self.post(body(customerCode="NEW", assignmentRfm={"recency": 1, "frequency": 3, "monetary": 45},
+                                      assignmentAsOfDate="2026-10-14", assignmentSegment="NEW"))
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["data"]["trainingCutoff"], "2026-10-12")
         self.assertEqual(response.json()["data"]["assignmentAsOfDate"], "2026-10-14")
+        self.assertEqual(response.json()["data"]["assignments"][0]["rfmSegment"], "NEW")
+        self.assertEqual(len(response.json()["data"]["assignments"][0]["featureInputs"]), 3)
+        self.assertEqual(self.post(body(assignmentSegment="NEW")).status_code, 400)
         payload = body()
         payload["context"]["asOfDate"] = "2026-10-11"
         self.assertEqual(self.post(payload).status_code, 422)

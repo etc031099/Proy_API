@@ -116,12 +116,16 @@ class M69F4DLiveInventorySupplierTests(unittest.TestCase):
                                for level in ("CRITICAL", "HIGH", "MEDIUM", "LOW")}
 
         self.assertEqual(summary, {"critical": 1, "high": 2, "medium": 1, "low": 1,
-                                   "riskUnavailableCount": 0})
+                                   "riskUnavailableCount": 0,
+                                   "riskEvaluableCounts": {"critical": 1, "high": 2, "medium": 1, "low": 1},
+                                   "riskEvaluableCount": 5})
         self.assertEqual({key: summary[key] for key in actual_from_ranking}, actual_from_ranking)
 
     def test_risk_summary_counts_empty_inventory_as_zero(self):
         self.assertEqual(_risk_counts([]), {"critical": 0, "high": 0, "medium": 0, "low": 0,
-                                            "riskUnavailableCount": 0})
+                                            "riskUnavailableCount": 0,
+                                            "riskEvaluableCounts": {"critical": 0, "high": 0, "medium": 0, "low": 0},
+                                            "riskEvaluableCount": 0})
 
     def test_risk_summary_normalizes_case_but_marks_missing_or_unknown_unavailable(self):
         normalized = _risk_counts([
@@ -129,14 +133,60 @@ class M69F4DLiveInventorySupplierTests(unittest.TestCase):
             {"risk": {"level": "HIGH"}},
         ])
         self.assertEqual(normalized, {"critical": 1, "high": 1, "medium": 0, "low": 0,
-                                     "riskUnavailableCount": 0})
+                                     "riskUnavailableCount": 0,
+                                     "riskEvaluableCounts": {"critical": 1, "high": 1, "medium": 0, "low": 0},
+                                     "riskEvaluableCount": 2})
 
         unavailable = _risk_counts([
             {"risk": {"level": None}},
             {"risk": {"level": "UNKNOWN"}},
         ])
         self.assertEqual(unavailable, {"critical": None, "high": None, "medium": None,
-                                       "low": None, "riskUnavailableCount": 2})
+                                       "low": None, "riskUnavailableCount": 2,
+                                       "riskEvaluableCounts": {"critical": 0, "high": 0, "medium": 0, "low": 0},
+                                       "riskEvaluableCount": 0})
+
+    def test_partial_risk_counts_preserve_known_rows_without_treating_unknown_as_low(self):
+        summary = _risk_counts([
+            {"risk": {"level": "CRITICAL"}},
+            {"risk": {"level": "HIGH"}},
+            {"risk": {"level": "HIGH"}},
+            {"risk": {"level": None}},
+        ])
+        self.assertIsNone(summary["critical"])
+        self.assertIsNone(summary["low"])
+        self.assertEqual(summary["riskEvaluableCounts"], {"critical": 1, "high": 2, "medium": 0, "low": 0})
+        self.assertEqual(summary["riskEvaluableCount"], 3)
+        self.assertEqual(summary["riskUnavailableCount"], 1)
+
+    def test_reorder_partial_count_uses_decision_coverage_not_quantity_coverage(self):
+        from ml.service.v3_live_inventory_supplier import _reorder_counts
+
+        one_unknown = _reorder_counts([
+            {"recommendation": {"shouldReorder": True, "recommendedQty": 4}},
+            {"recommendation": {"shouldReorder": False, "recommendedQty": 0}},
+            {"recommendation": {"shouldReorder": None, "recommendedQty": None}},
+        ])
+        self.assertIsNone(one_unknown["shouldReorder"])
+        self.assertEqual(one_unknown["reorderCountEvaluable"], 1)
+        self.assertEqual(one_unknown["reorderEvaluableCount"], 2)
+        self.assertEqual(one_unknown["reorderDecisionUnavailableCount"], 1)
+
+        quantity_missing_but_decision_known = _reorder_counts([
+            {"recommendation": {"shouldReorder": True, "recommendedQty": 2}},
+            {"recommendation": {"shouldReorder": False, "recommendedQty": None}},
+        ])
+        self.assertEqual(quantity_missing_but_decision_known["shouldReorder"], 1)
+
+        several_unknown = _reorder_counts([
+            {"recommendation": {"shouldReorder": True}},
+            {"recommendation": {"shouldReorder": None}},
+            {"recommendation": {"shouldReorder": None}},
+        ])
+        self.assertIsNone(several_unknown["shouldReorder"])
+        self.assertEqual(several_unknown["reorderCountEvaluable"], 1)
+        self.assertEqual(several_unknown["reorderEvaluableCount"], 1)
+        self.assertEqual(several_unknown["reorderDecisionUnavailableCount"], 2)
 
     def test_inventory_stock_is_snapshot_authority_and_revision_cache_isolated(self):
         adapter = _adapter()

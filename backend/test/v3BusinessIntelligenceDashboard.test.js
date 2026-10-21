@@ -45,7 +45,7 @@ test('sales parallel reads stay bounded, ordered and share one request context',
   assert.deepEqual(result.data.series.map(row => row.date), ['2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11', '2026-10-12', '2026-10-13', '2026-10-14']);
   assert.ok(result.data.series.every(row => row.revenue.value === 12 && row.units === 2));
 });
-const makeDashboard = ({ fail, partial = false, productPresent = true, supplierNoHistory = false, activeModelMissing = false, forecastFeatureUnavailable = false,
+const makeDashboard = ({ fail, partial = false, marginAvailable = false, productPresent = true, supplierNoHistory = false, activeModelMissing = false, forecastFeatureUnavailable = false,
   crossSellItems = [{ antecedentSkus: ['SKU-1'], consequentSkus: ['SKU-2'], recommendedSku: 'SKU-2',
     recommendedProduct: 'Producto dos', ticketCount: 32,
     support: .003, confidence: .4, lift: 1.8, stability: { status: 'STABLE' } }] } = {}) => {
@@ -71,7 +71,9 @@ const makeDashboard = ({ fail, partial = false, productPresent = true, supplierN
           data: invocation.args.mode === 'rank' ? { metric: invocation.args.entityType === 'category' ? 'revenueCents' : 'revenue', total: 1,
             items: [invocation.args.entityType === 'category' ? { categoryCode: 'FOODS_1', name: 'Alimentos', revenueCents: 1200, units: 4, ticketCount: 2 }
               : { sku: 'SKU-1', name: 'Producto uno', metric: 1200, metricName: 'revenue' }] }
-            : { kpis: { revenueCents: 0, unitsSold: 0, ticketCount: 0, averageTicket: 0, grossMarginCents: null, grossMarginPct: null },
+            : { kpis: { revenueCents: 0, unitsSold: 0, ticketCount: 0, averageTicket: 0,
+              grossMarginCents: marginAvailable && !partial ? 12345 : null, grossMarginPct: null },
+              costCoverage: { knownSaleLines: partial ? 3 : 5, unknownSaleLines: partial ? 2 : 0, status: partial ? 'PARTIAL' : 'AVAILABLE' },
               previousPeriod: { startDate: '2026-10-07', endDate: '2026-10-13' },
               trends: { revenue: { percentChange: null, absoluteChange: null }, units: { percentChange: 5 } } } };
         case 'get_inventory_intelligence': {
@@ -113,7 +115,8 @@ const makeDashboard = ({ fail, partial = false, productPresent = true, supplierN
             ...(invocation.args.mode === 'summary' ? { segmentDistribution: { AT_RISK: 4, INACTIVE: 6, NEW: 5, LOYAL: 10, TOP_HIGH_VALUE: 8, POTENTIAL: 7 } } : {}) } };
         }
         case 'get_cross_sell_recommendations': return { status: 'READY', metadata, data: invocation.args.mode === 'summary'
-          ? { available: true, total: 66, items: [], summary: { analysisCutoff: '2026-10-12', validTickets: 12647, itemsetsCount: 432,
+            ? { available: true, total: 66, items: [], summary: { analysisCutoff: '2026-10-12', validTickets: 12647, itemsetsCount: 432,
+              analysisVersion: 'MINIMARKET-PASCO-V3-MBA-v1', artifactIdentity: '5836aa9b5bc7d1729c0218c7336292d4985c0b997224fc64e1f8ab3ae726c086',
             rulesCount: 66, qualityRulesCount: 67, crossSellCount: 33 } }
           : { available: true, sourceSku: 'SKU-1', total: crossSellItems.length, items: crossSellItems } };
         case 'get_business_health': return { status: 'READY', metadata, data: { availabilityStatus: 'PARTIAL', healthScore: null,
@@ -189,9 +192,19 @@ test('dashboard summary preserves genuine zero sales and unavailable/partial mar
     assert.equal(data.grossMargin.value, null);
     assert.equal(data.grossMargin.percent, null);
     assert.equal(data.grossMargin.availability, partial ? 'PARTIAL' : 'UNAVAILABLE');
+    assert.deepEqual(data.grossMargin.costCoverage, partial
+      ? { knownSaleLines: 3, unknownSaleLines: 2, status: 'PARTIAL' }
+      : { knownSaleLines: 5, unknownSaleLines: 0, status: 'AVAILABLE' });
     assert.equal(data.inventory.pendingPurchasesCount, 29);
     assert.equal(data.asOf, '2026-10-14');
   }
+});
+
+test('dashboard summary preserves a known margin amount when percentage has no denominator', async () => {
+  const { service } = makeDashboard({ marginAvailable: true });
+  const { data } = await service.summary(request());
+  assert.deepEqual(data.grossMargin, { value: 123.45, currency: 'PEN', percent: null, availability: 'AVAILABLE',
+    costCoverage: { knownSaleLines: 5, unknownSaleLines: 0, status: 'AVAILABLE' } });
 });
 
 test('dashboard summary derives tenant only from the authenticated request and shares one request context', async () => {
@@ -515,6 +528,15 @@ test('sales API keeps the requested period and uses V3 business rankings without
   assert.ok(calls.some(row => row.kind === 'get_business_analytics' && row.args.mode === 'rank'));
 });
 
+test('sales API exposes existing partial cost coverage without synthesizing a margin', async () => {
+  const { service } = makeDashboard({ partial: true });
+  const result = await service.sales(request({ period: 'TODAY' }));
+  assert.equal(result.data.summary.grossMargin.value, null);
+  assert.equal(result.data.summary.grossMargin.availability, 'UNAVAILABLE');
+  assert.deepEqual(result.data.summary.grossMargin.costCoverage,
+    { knownSaleLines: 3, unknownSaleLines: 2, status: 'PARTIAL' });
+});
+
 test('sales time series delegates each point to the engine and preserves its status', async () => {
   const { service } = makeDashboard();
   const result = await service.sales(request({ period: 'LAST_7_DAYS', includeSeries: 'true' }));
@@ -557,6 +579,31 @@ test('supplier API reports received/pending semantics and detail cost history av
   assert.equal(detail.data.item.historyAvailability, 'AVAILABLE');
 });
 
+test('Market Basket exposes all 18 integer evidence rows without reconstructing rounded percentages', async () => {
+  const artifact = require('../../ml/data/minimarket-pasco-v3-market-basket-v1.json');
+  const key = skus => [...skus].sort().join('|');
+  const counts = new Map(artifact.frequentItemsets.map(row => [key(row.itemSkus), row.ticketCount]));
+  const original = artifact.rules.filter(row => row.classification === 'CROSS_SELL' && row.stability.status === 'STABLE');
+  const crossSellItems = original.map(row => ({ ...row, totalTickets: artifact.transactionCount,
+    antecedentCount: counts.get(key(row.antecedentSkus)), consequentCount: counts.get(key(row.consequentSkus)), jointCount: row.ticketCount }));
+  const { service, calls } = makeDashboard({ crossSellItems });
+  const { data } = await service.associations(request({ limit: '20', businessId: 'OTHER' }));
+  assert.equal(data.items.length, 18);
+  assert.equal(calls.filter(call => call.kind === 'get_cross_sell_recommendations').length, 2);
+  data.items.forEach((row, index) => {
+    assert.equal(row.totalTickets, 12647);
+    assert.equal(row.jointCount, row.ticketCount);
+    assert.deepEqual(row.antecedent, original[index].antecedentSkus);
+    assert.equal(row.support, original[index].support);
+    assert.equal(row.confidence, original[index].confidence);
+    assert.equal(row.lift, original[index].lift);
+    assert.ok(Math.abs(row.support - row.jointCount / row.totalTickets) < 1e-12);
+    assert.ok(Math.abs(row.confidence - row.jointCount / row.antecedentCount) < 1e-12);
+    assert.ok(Math.abs(row.lift - row.jointCount * row.totalTickets / (row.antecedentCount * row.consequentCount)) < 1e-12);
+  });
+  assert.equal(data.businessContext.businessId, V3.businessId);
+});
+
 test('Market Basket API labels frozen cutoff and projects approved rule metrics', async () => {
   const { service, calls } = makeDashboard();
   const summary = await service.associations(request({ period: 'TODAY' }));
@@ -570,6 +617,11 @@ test('Market Basket API labels frozen cutoff and projects approved rule metrics'
   assert.equal(summary.data.items[0].confidence, .4);
   assert.equal(summary.data.items[0].lift, 1.8);
   assert.equal(summary.data.items[0].ticketCount, 32);
+  assert.equal(summary.data.items[0].antecedentCount, null);
+  assert.equal(summary.data.items[0].jointCount, null);
+  assert.equal(summary.data.analysisVersion, 'MINIMARKET-PASCO-V3-MBA-v1');
+  assert.equal(summary.data.artifactIdentity, '5836aa9b5bc7d1729c0218c7336292d4985c0b997224fc64e1f8ab3ae726c086');
+  assert.deepEqual(summary.data.businessContext, { businessId: V3.businessId, scenarioId: V3.scenarioId, datasetVersion: V3.datasetVersion });
   assert.equal(summary.data.summary.validTickets, 12647);
   assert.equal(summary.data.summary.crossSellCount, 33);
   const related = await service.productRelated(request({ asOf: 'not-a-date', period: 'TODAY' }, { sku: 'SKU-1' }));

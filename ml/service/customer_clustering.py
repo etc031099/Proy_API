@@ -45,6 +45,13 @@ class Cluster(Schema):
     silhouetteMean: float
 
 
+class KMeansFeatureInput(Schema):
+    name: Literal["recency", "frequency", "monetary"]
+    rawValue: float = Field(ge=0)
+    log1pValue: float
+    scaledValue: float
+
+
 class Assignment(RfmInput):
     customerRef: str
     status: Literal["ELIGIBLE", "ASSIGNED", "INSUFFICIENT_HISTORY"]
@@ -54,6 +61,7 @@ class Assignment(RfmInput):
     distance: float | None = Field(default=None, ge=0)
     pc1: float | None = None
     pc2: float | None = None
+    featureInputs: list[KMeansFeatureInput] | None = None
 
 
 class Pca(Schema):
@@ -126,7 +134,7 @@ def load_clustering(root):
     return _load(str(Path(root).resolve()), signature)
 
 
-def clustering_data(root, customer_ref=None, rfm=None, as_of=CUTOFF):
+def clustering_data(root, customer_ref=None, rfm=None, as_of=CUTOFF, *, rfm_segment=None):
     bundle, frozen = load_clustering(root)
     data = frozen.model_dump(mode="json")
     if customer_ref is None:
@@ -140,17 +148,25 @@ def clustering_data(root, customer_ref=None, rfm=None, as_of=CUTOFF):
         data["assignments"] = found
         return data
     values = RfmInput.model_validate(rfm).model_dump()
-    result = {**values, "customerRef": customer_ref, "status": "INSUFFICIENT_HISTORY"}
+    result = {**values, "customerRef": customer_ref, "status": "INSUFFICIENT_HISTORY",
+              "rfmSegment": rfm_segment}
     if values["recency"] is not None:
         x = np.array([[values[f] for f in FEATURES]])
-        transformed = bundle["pipeline"][:-1].transform(x)
+        # Observe the existing frozen steps once. These same arrays feed the
+        # assignment, distance and visualization; no second feature construction.
+        logged = bundle["pipeline"]["log"].transform(x)
+        transformed = bundle["pipeline"]["scale"].transform(logged)
         raw_label = int(bundle["pipeline"][-1].predict(transformed)[0])
         cluster = bundle["labelMapping"][raw_label]
         profile = next(c for c in data["clusters"] if c["cluster"] == cluster)
         pc = bundle["pca"].transform(transformed)[0]
         result.update(status="ASSIGNED", cluster=cluster, clusterName=profile["name"],
                       distance=float(bundle["pipeline"][-1].transform(transformed)[0, raw_label]),
-                      pc1=float(pc[0]), pc2=float(pc[1]))
+                      pc1=float(pc[0]), pc2=float(pc[1]),
+                      featureInputs=[{"name": name, "rawValue": float(x[0, index]),
+                                      "log1pValue": float(logged[0, index]),
+                                      "scaledValue": float(transformed[0, index])}
+                                     for index, name in enumerate(FEATURES)])
     data["assignments"] = [Assignment.model_validate(result).model_dump(mode="json")]
     data["assignmentAsOfDate"] = as_of
     data["assignmentSource"] = "AUTHORIZED_CURRENT_RFM"

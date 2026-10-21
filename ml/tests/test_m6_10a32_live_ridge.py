@@ -6,6 +6,7 @@ import json
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 from sklearn.linear_model import Ridge
@@ -130,6 +131,63 @@ def _artifact(*, business=BUSINESS, scenario=SCENARIO_ID, horizon=7, categories=
 
 
 class LiveRidgeFeatureTests(unittest.TestCase):
+    def test_response_exposes_exact_scored_row_once_with_same_snapshot_and_artifact(self):
+        for horizon in (7, 14):
+            dataset, live, *_ = _fixture()
+            _, envelope = _artifact(horizon=horizon)
+            with patch('ml.service.v3_live_ridge.build_live_features', wraps=build_live_features) as build, \
+                 patch('ml.service.v3_live_ridge.score_ridge', wraps=score_ridge) as score:
+                result = ridge_live_forecast(dataset=dataset, live=live, business_id=BUSINESS,
+                    scenario_id=SCENARIO_ID, sku=SKU, horizon_days=horizon, registry_loader=lambda **_: envelope)
+            self.assertEqual(build.call_count, 1)
+            self.assertEqual(score.call_count, 1)
+            self.assertIs(result['featureInputs'], score.call_args.args[0])
+            self.assertEqual(tuple(result['featureInputs']), FEATURE_ORDER)
+            self.assertEqual(len(result['featureInputs']), 27)
+            self.assertEqual(result['featureVersion'], FEATURE_VERSION)
+            self.assertEqual(result['featureHash'], FEATURE_HASH)
+            self.assertEqual(result['predictionUnits'], score_ridge(result['featureInputs'], score.call_args.args[1]))
+            self.assertEqual(result['artifactHash'], envelope['metadata']['artifactHash'])
+            self.assertEqual(result['snapshotHash'], live.context_hash)
+            self.assertEqual(result['dataVersion'], live.data_version)
+            for internal in ('coefficients', 'categories', 'scalerMean', 'scalerScale', 'intercept'):
+                self.assertNotIn(internal, result)
+
+    def test_stock_purchase_and_adjustment_do_not_change_inputs_or_predictions(self):
+        dataset, live, *_ = _fixture()
+        _, envelope = _artifact()
+        def infer():
+            return ridge_live_forecast(dataset=dataset, live=live, business_id=BUSINESS,
+                scenario_id=SCENARIO_ID, sku=SKU, horizon_days=7, registry_loader=lambda **_: envelope)
+        before = infer()
+        for operation in ('STOCK_CHANGED', 'IMMEDIATE_PURCHASE', 'STOCK_ADJUSTMENT'):
+            live.snapshot.stockStates = [SimpleNamespace(onHand=999, operation=operation)]
+            live.snapshot.purchases = [SimpleNamespace(quantity=100, receiptEvidence=operation)]
+            live.data_version = str(int(live.data_version) + 1)
+            live.snapshot.metadata.dataVersion = live.data_version
+            after = infer()
+            self.assertEqual(before['featureInputs'], after['featureInputs'])
+            self.assertEqual(before['predictionUnits'], after['predictionUnits'])
+
+    def test_closed_boundary_advance_and_admissible_descriptor_change_use_same_active(self):
+        _, envelope = _artifact()
+        def infer(dataset, live):
+            return ridge_live_forecast(dataset=dataset, live=live, business_id=BUSINESS,
+                scenario_id=SCENARIO_ID, sku=SKU, horizon_days=7, registry_loader=lambda **_: envelope)
+        dataset, live, *_ = _fixture(values=[1] * 29)
+        before = infer(dataset, live)
+        change = SimpleNamespace(entityType='product', effectiveAtUtc=datetime(2026, 10, 16, 12, tzinfo=timezone.utc),
+            revision='10', eventKey='descriptor', projection=SimpleNamespace(before=SimpleNamespace(sku=SKU),
+                after=SimpleNamespace(**_product(brand='Admissible brand'))))
+        dataset, live, *_ = _fixture(through=date(2026, 10, 16), values=[1] * 28 + [4],
+            catalog_changes=[change], data_version='10', closed_revision='10')
+        after = infer(dataset, live)
+        self.assertEqual(before['modelVersion'], after['modelVersion'])
+        self.assertEqual(before['artifactHash'], after['artifactHash'])
+        self.assertNotEqual(before['observationsThrough'], after['observationsThrough'])
+        for name in ('weekdayNext', 'currentUnits', 'rollingMean_7', 'brand'):
+            self.assertNotEqual(before['featureInputs'][name], after['featureInputs'][name])
+
     def test_exact_27_feature_allowlist_and_order_for_7_and_14(self):
         dataset, live, _, _, _ = _fixture()
         for horizon in (7, 14):

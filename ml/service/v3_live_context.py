@@ -486,7 +486,8 @@ class LiveV3ContextStore:
         test_epoch = meta.testEpoch
         return (meta.businessId, meta.scenarioId, meta.historicalDatasetVersion,
                 meta.historicalDatasetSha256, meta.snapshotVersion, meta.dataVersion,
-                meta.snapshotHash, meta.asOfDate.isoformat(), meta.observationsClosedThrough.isoformat(),
+                meta.snapshotHash, meta.capturedAtUtc.isoformat(), meta.asOfDate.isoformat(),
+                meta.observationsClosedThrough.isoformat(),
                 test_epoch.testCycleId if test_epoch else "",
                 test_epoch.resetEpoch if test_epoch else "",
                 engine_version, json.dumps(period, sort_keys=True, separators=(",", ":"), default=str),

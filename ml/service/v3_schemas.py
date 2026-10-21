@@ -272,7 +272,7 @@ class PageRequest(StrictSchema):
 
 
 class BusinessRequest(V3Request, PageRequest):
-    mode: Literal["summary", "compare", "rank", "anomalies"] = "summary"
+    mode: Literal["summary", "compare", "rank", "anomalies", "anomalies_provisional"] = "summary"
     period: PeriodRange | None = None
     entityType: Literal["product", "category"] | None = None
     metric: Literal["units", "revenue", "gross_margin", "tickets"] | None = None
@@ -282,6 +282,9 @@ class BusinessRequest(V3Request, PageRequest):
 
     @model_validator(mode="after")
     def anomaly_scope(self):
+        if self.mode == "anomalies_provisional" and (self.dataMode != "LIVE" or self.period is not None
+                or any((self.entityType, self.metric, self.categoryCode, self.subcategoryCode, self.productSku, self.offset))):
+            raise ValueError("Provisional anomalies require unfiltered current-day LIVE context")
         if self.mode == "anomalies" and any((self.entityType, self.metric, self.categoryCode, self.subcategoryCode, self.productSku, self.offset)):
             raise ValueError("Frozen business anomalies do not accept entity filters or offset")
         return self
@@ -376,10 +379,12 @@ class CustomerRequest(V3Request, PageRequest):
     period: PeriodRange | None = None
     assignmentRfm: ClusteringRfm | None = None
     assignmentAsOfDate: date | None = None
+    assignmentSegment: Literal["AT_RISK", "INACTIVE", "NEW", "LOYAL", "TOP_HIGH_VALUE", "POTENTIAL",
+                               "INSUFFICIENT_HISTORY"] | None = None
 
     @model_validator(mode="after")
     def clustering_assignment_scope(self):
-        if self.assignmentRfm is not None or self.assignmentAsOfDate is not None:
+        if self.assignmentRfm is not None or self.assignmentAsOfDate is not None or self.assignmentSegment is not None:
             if (self.mode != "clustering" or not self.customerCode or self.assignmentRfm is None
                     or self.assignmentAsOfDate is None or self.assignmentAsOfDate < REFERENCE_DATE):
                 raise ValueError("Clustering assignment requires resolved customer and dated RFM")

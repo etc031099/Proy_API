@@ -465,6 +465,7 @@ def ridge_live_forecast(*, dataset: Any, live: LiveV3Context, business_id: str,
         "targetDefinition": TARGET_DEFINITION, "forecastStartDate": (through + timedelta(days=1)).isoformat(),
         "forecastEndDate": (through + timedelta(days=max(1, horizon_days))).isoformat(),
         "observationsThrough": through.isoformat(), "featureVersion": FEATURE_VERSION,
+        "featureHash": FEATURE_HASH,
         "promotionPolicyVersion": PROMOTION_POLICY_VERSION, "dataVersion": str(live.data_version),
         "snapshotHash": live.context_hash,
     }
@@ -510,6 +511,8 @@ def ridge_live_forecast(*, dataset: Any, live: LiveV3Context, business_id: str,
                 "activeModelStatus": envelope.get("metadata", {}).get("status", "UNKNOWN")}
     registered = envelope["metadata"]
     return {**common, "status": "READY", "reasonCode": None, "predictionUnits": prediction,
+            # Return the exact raw row just scored, never a second construction.
+            "featureInputs": features, "artifactHash": registered.get("artifactHash"),
             "modelFamily": MODEL_FAMILY, "recipeId": RECIPE_ID,
             "modelVersion": registered.get("modelVersion"),
             "trainedAt": _iso_datetime(registered.get("trainedAt")),

@@ -342,6 +342,8 @@ class V3IntelligenceRuntime:
         if getattr(self, "live_adapter", None) is None:
             raise V3FunctionalError("LIVE_ANALYTICS_NOT_READY", 501, "LIVE Business analytics are not enabled.")
         try:
+            if request.mode == "anomalies_provisional":
+                return self._run("business", lambda: self.live_adapter.provisional_anomaly(live))
             return self._run("business", lambda: self.live_adapter.business_data(request, live))
         except LiveDomainError as error:
             raise V3FunctionalError(error.code, error.status_code, error.message) from None
@@ -789,6 +791,7 @@ class V3IntelligenceRuntime:
         return self._run("forecast", calculate), cutoff
 
     def cross_sell_data(self, request):
+        from ml.service.market_basket_evidence import rule_evidence
         cutoff = self.resolve_context(request.context)
         if cutoff < BASKET_CUTOFF:
             return {"available": False, "reasonCode": "ARTIFACT_UNAVAILABLE",
@@ -806,6 +809,7 @@ class V3IntelligenceRuntime:
                 return {"available": True, "summary": {
                     "analysisCutoff": self.basket.get("cutoffDate", BASKET_CUTOFF.isoformat()),
                     "analysisVersion": self.basket.get("analysisVersion"),
+                    "artifactIdentity": self.basket.get("reproducibilitySha256"),
                     "validTickets": summary.get("validTickets"),
                     "itemsetsCount": summary.get("frequentItemsets"),
                     "rulesCount": summary.get("rulesAfterRedundancyReduction"),
@@ -814,7 +818,8 @@ class V3IntelligenceRuntime:
                 }, "total": len(self.basket.get("rules", [])), "items": [],
                     "interpretation": "Frozen observed co-occurrence; not causality or a future sales guarantee."}
             if request.sku:
-                items = list(self.basket["recommendationsBySku"].get(request.sku, []))
+                items = [rule_evidence(self.basket, row)
+                         for row in self.basket["recommendationsBySku"].get(request.sku, [])]
                 total = len(items)
                 return {"available": True, "sourceSku": request.sku, "total": total,
                         "items": items[request.offset:request.offset + request.limit],
@@ -824,7 +829,7 @@ class V3IntelligenceRuntime:
                          if request.categoryCode in row.get("antecedentCodes", [])
                          or request.categoryCode in row.get("consequentCodes", [])]
             else:
-                items = [row for row in self.basket["rules"] if row.get("classification") == "CROSS_SELL"
+                items = [rule_evidence(self.basket, row) for row in self.basket["rules"] if row.get("classification") == "CROSS_SELL"
                          and row.get("stability", {}).get("status") == "STABLE"]
             total = len(items)
             return {"available": True, "total": total,
@@ -841,7 +846,8 @@ class V3IntelligenceRuntime:
             try:
                 return clustering_data(self.root, request.customerCode,
                     request.assignmentRfm.model_dump() if request.assignmentRfm is not None else None,
-                    request.assignmentAsOfDate.isoformat() if request.assignmentAsOfDate else cutoff.isoformat()), cutoff
+                    request.assignmentAsOfDate.isoformat() if request.assignmentAsOfDate else cutoff.isoformat(),
+                    rfm_segment=request.assignmentSegment), cutoff
             except LookupError:
                 raise V3FunctionalError("CUSTOMER_NOT_FOUND", 404, "Customer code was not found.") from None
         result = self._run("customer", lambda: self._customer_snapshot(cutoff))

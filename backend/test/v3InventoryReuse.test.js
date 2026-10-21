@@ -45,6 +45,9 @@ function fixture() {
         summary: { products: 1, critical: partial ? null : 1, high: partial ? null : 0, medium: partial ? null : 0,
           low: partial ? null : 0, shouldReorder: partial ? null : 0, lowStock: 1, overstock: partial ? null : 0,
           riskUnavailableCount: partial ? 1 : 0, recommendationUnavailableCount: partial ? 1 : 0,
+          riskEvaluableCounts: { critical: partial ? 0 : 1, high: 0, medium: 0, low: 0 },
+          riskEvaluableCount: partial ? 0 : 1, reorderCountEvaluable: partial ? 0 : 0,
+          reorderEvaluableCount: partial ? 0 : 1, reorderDecisionUnavailableCount: partial ? 1 : 0,
           modelVersion7: activeModels.find(row => row.metadata.horizonDays === 7)?.metadata.modelVersion ?? null,
           modelVersion14: activeModels.find(row => row.metadata.horizonDays === 14)?.metadata.modelVersion ?? null },
         abcCounts: { A: 0, B: 0, C: 0, UNCLASSIFIED: 1 }, xyzCounts: { X: 1, Y: 0, Z: 0, UNCLASSIFIED: 0 } };
@@ -112,6 +115,11 @@ test('filtered Inventory preserves null risk/recommendation and independent glob
   assert.equal(result.data.items[0].reorderNow, null);
   assert.equal(result.data.summary.riskCounts.low, null);
   assert.equal(result.data.summary.riskUnavailableCount, 1);
+  assert.deepEqual(result.data.summary.riskEvaluableCounts, { critical: 0, high: 0, medium: 0, low: 0 });
+  assert.equal(result.data.summary.riskEvaluableCount, 0);
+  assert.equal(result.data.summary.reorderCountEvaluable, 0);
+  assert.equal(result.data.summary.reorderEvaluableCount, 0);
+  assert.equal(result.data.summary.reorderDecisionUnavailableCount, 1);
   assert.equal(result.data.unavailableCount, 0);
   assert.equal(result.data.availabilityStatus, 'PARTIAL');
 });
