@@ -27,6 +27,15 @@ const detail: AgentConversationDetail = { conversation: item, pagination: { page
   { id: 'm1', role: 'user', text: 'stock bajo', status: 'completed', createdAt: item.createdAt },
   { id: 'm2', role: 'assistant', text: response.answer, status: 'completed', createdAt: item.createdAt, response }
 ] };
+// Sanitized shape read from the incident's persisted assistant message (no PII).
+const incidentResponse: AgentResponse = { ...response, agent: 'inventory', intent: 'v3_intelligence',
+  answer: 'Resumen de inventario.',
+  participants: ['coordinator', 'inventory'].map(agentId => ({ ...response.participants[0], agentId })) as AgentResponse['participants'],
+  v3Views: [{ kind: 'inventory', title: 'Inteligencia de inventario', items: [], metrics: [
+    { label: 'Productos', value: 80 }, { label: 'Críticos', value: null }, { label: 'Stock bajo', value: 17 },
+    { label: 'Requieren reposición', value: null }, { label: 'Clasificación ABC', value: 'A: 0 · B: 0 · C: 0 · UNCLASSIFIED: 80' },
+    { label: 'Variabilidad XYZ', value: 'X: 55 · Y: 21 · Z: 4 · UNCLASSIFIED: 0' }
+  ] }] };
 beforeEach(() => {
   localStorage.clear(); vi.mocked(apiClient.sendAgentMessage).mockReset();
   vi.mocked(apiClient.listAgentConversations).mockResolvedValue({ success: true, data: { items: [item], pagination: { page: 1, limit: 10, total: 1, totalPages: 1 } } });
@@ -145,4 +154,103 @@ it('loading a selected conversation is visible and never runs inference', async 
 it('logout cleanup removes active UUIDs only, leaving unrelated storage alone', () => {
   localStorage.setItem(key, id); localStorage.setItem('theme', 'dark'); clearActiveConversations();
   expect(localStorage.getItem(key)).toBeNull(); expect(localStorage.getItem('theme')).toBe('dark');
+});
+
+it('P0 restores persisted nullable inventory metrics alongside forecast and direct answers after reload', async () => {
+  const composite = { ...response, agent: 'coordinator' as const,
+    answer: 'Sí, debes reponer Coca-Cola. Se esperan 108.27 unidades en 14 días.',
+    participants: ['coordinator', 'inventory', 'forecast'].map(agentId => ({ ...response.participants[0], agentId })),
+    v3Views: [
+      { kind: 'inventory', title: 'Inventario', metrics: [{ label: 'Críticos', value: null }, { label: 'Requieren reposición', value: null }], items: [] },
+      { kind: 'forecast', title: 'Pronóstico', metrics: [{ label: 'Predicción', value: 108.27 }], items: [] }
+    ] } as AgentResponse;
+  vi.mocked(apiClient.getAgentConversation).mockResolvedValue({ success: true, data: { ...detail,
+    messages: [...detail.messages, { ...detail.messages[1], id: 'composite', text: composite.answer, response: composite }] } });
+  const mounted = render(<AssistantPage />);
+  await screen.findByText(composite.answer);
+  expect(screen.getAllByText('No disponible')).toHaveLength(2);
+  expect(screen.getByRole('region', { name: 'Inventario' })).toBeTruthy();
+  expect(screen.getByRole('region', { name: 'Pronóstico' })).toBeTruthy();
+  expect(screen.getByText(response.answer)).toBeTruthy();
+  mounted.unmount(); render(<AssistantPage />);
+  await screen.findByText(composite.answer);
+  expect(apiClient.sendAgentMessage).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Nueva conversación' }));
+  expect(screen.getByLabelText('Tu consulta').hasAttribute('disabled')).toBe(false);
+});
+
+it('P0 auto-restores the real persisted incident shape with empty browser storage and can revisit it', async () => {
+  const brokenDetail = { ...detail, messages: [detail.messages[0], { ...detail.messages[1], text: incidentResponse.answer, response: incidentResponse }] };
+  vi.mocked(apiClient.listAgentConversations).mockResolvedValue({ success: true, data: { items: [item,
+    { ...item, conversationId: id2, title: 'Conversación anterior' }], pagination: { page: 1, limit: 10, total: 2, totalPages: 1 } } });
+  vi.mocked(apiClient.getAgentConversation).mockImplementation(async target => ({ success: true, data: target === id ? brokenDetail : detail }));
+  const mounted = render(<AssistantPage />);
+  await screen.findByText(incidentResponse.answer);
+  expect(screen.getAllByText('No disponible')).toHaveLength(2);
+  expect(screen.getByText('80')).toBeTruthy(); expect(screen.getByText('17')).toBeTruthy();
+  mounted.unmount(); localStorage.clear(); render(<AssistantPage />);
+  await screen.findByText(incidentResponse.answer);
+  fireEvent.click(screen.getByRole('button', { name: 'Nueva conversación' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Conversaciones' }));
+  fireEvent.click(screen.getByRole('button', { name: /Conversación anterior.*2 mensajes/ }));
+  await screen.findByText(response.answer);
+  fireEvent.click(screen.getByRole('button', { name: /Productos con stock bajo.*2 mensajes/ }));
+  await screen.findByText(incidentResponse.answer);
+  expect(apiClient.sendAgentMessage).not.toHaveBeenCalled();
+});
+
+it('P0 isolates an invalid message/activity, keeps valid history/input and permits conversation switching', async () => {
+  const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    const malformed = { ...response, participants: [null], v3Views: [{ kind: 'inventory', title: 'Incompleta', metrics: [null], items: [] }] } as unknown as AgentResponse;
+    vi.mocked(apiClient.listAgentConversations).mockResolvedValue({ success: true, data: { items: [item,
+      { ...item, conversationId: id2, title: 'Conversación sana' }], pagination: { page: 1, limit: 10, total: 2, totalPages: 1 } } });
+    vi.mocked(apiClient.getAgentConversation).mockImplementation(async target => ({ success: true, data: target === id2 ? detail : { ...detail,
+      messages: [...detail.messages, { ...detail.messages[1], id: 'invalid', text: 'Respuesta incompleta', response: malformed }] } }));
+    render(<AssistantPage />);
+    await screen.findAllByText('No se pudo mostrar esta respuesta.');
+    expect(screen.getByText(response.answer)).toBeTruthy();
+    expect(screen.getByLabelText('Tu consulta').hasAttribute('disabled')).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Conversaciones' }));
+    fireEvent.click(screen.getByRole('button', { name: /Conversación sana.*2 mensajes/ }));
+    await waitFor(() => expect(screen.queryByText('No se pudo mostrar esta respuesta.')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'Nueva conversación' }));
+    expect(screen.getByText('¿Qué quieres consultar?')).toBeTruthy();
+  } finally { consoleError.mockRestore(); }
+});
+
+it('P0 renders partial pre-A3 activity without treating missing usage as zero or hiding the answer', async () => {
+  const legacy = { answer: 'Respuesta antigua sin actividad.', conversationId: id } as AgentResponse;
+  vi.mocked(apiClient.getAgentConversation).mockResolvedValue({ success: true, data: { ...detail,
+    messages: [{ ...detail.messages[1], text: legacy.answer, response: legacy }] } });
+  render(<AssistantPage />);
+  await screen.findByText(legacy.answer);
+  expect(screen.getByText('Esta respuesta antigua no incluye métricas de actividad.')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Ver actividad · — llamadas IA · — tokens' })).toBeTruthy();
+});
+
+for (const [agent, answer] of [
+  ['inventory', 'Sí, debes reponer Coca-Cola Sabor Original 500 ml.'],
+  ['forecast', 'Se esperan 108.27 unidades de Coca-Cola Sabor Original 500 ml en los próximos 14 días según Ridge LIVE ACTIVE.']
+] as const) it(`P0 ${agent} direct conclusion remains visible before its evidence card`, async () => {
+  const specialized = { ...response, agent, answer, v3Views: [{ kind: agent, title: 'Evidencia del especialista', metrics: [],
+    items: [{ type: 'product' as const, key: 'BEB-GAS-001', label: 'Coca-Cola Sabor Original 500 ml',
+      metrics: [{ label: 'Dato parcial', value: null }] }] }] };
+  vi.mocked(apiClient.getAgentConversation).mockResolvedValue({ success: true, data: { ...detail,
+    messages: [{ ...detail.messages[1], text: answer, response: specialized }] } });
+  render(<AssistantPage />);
+  const conclusion = await screen.findByText(answer);
+  const card = screen.getByRole('region', { name: 'Evidencia del especialista' });
+  expect(conclusion.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.getByText('Dato parcial: No disponible')).toBeTruthy();
+});
+
+it('P0 a partial view with absent legacy collections keeps its answer and a controlled empty state', async () => {
+  const partial = { ...response, v3Views: [{ kind: 'inventory', title: 'Vista antigua', metrics: null, items: null }] } as unknown as AgentResponse;
+  vi.mocked(apiClient.getAgentConversation).mockResolvedValue({ success: true, data: { ...detail,
+    messages: [{ ...detail.messages[1], response: partial }] } });
+  render(<AssistantPage />);
+  await screen.findByText(response.answer);
+  expect(screen.getByRole('region', { name: 'Vista antigua' })).toBeTruthy();
+  expect(screen.getByText('No hay datos para los filtros solicitados.')).toBeTruthy();
 });

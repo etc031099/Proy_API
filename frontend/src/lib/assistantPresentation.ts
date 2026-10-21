@@ -5,9 +5,9 @@ export const assistantMoney = (value: number, currency = 'PEN') => {
   const amount = new Intl.NumberFormat('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
   return currency === 'PEN' ? `S/ ${amount}` : `${amount} ${currency}`;
 };
-// Keep the API's textual fallback; omit only lines already rendered as cards.
+// Cards are evidence, not a replacement for the specialist's direct conclusion.
 export const assistantDisplayText = (text: string, response?: AgentResponse) => {
-  if (response?.v3Views?.length) return '';
+  if (response?.v3Views?.some(view => view?.note === text && !view?.metrics?.length && !view?.items?.length)) return '';
   if (!response?.suggestions?.length) return text;
   const clean = (line: string) => line.trim().replace(/^(?:[•*-]\s*)?\d+[.)]\s*/, '');
   return text.split('\n').filter(line => !response.suggestions?.some(option => {

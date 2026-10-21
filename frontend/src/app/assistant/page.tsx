@@ -9,6 +9,7 @@ import { ConversationHistory } from '@/components/assistant/ConversationHistory'
 import { PendingActionCard } from '@/components/assistant/PendingActionCard';
 import { ActionSuggestions } from '@/components/assistant/ActionSuggestions';
 import { V3ResponseCards } from '@/components/assistant/V3ResponseCards';
+import { AssistantResponseBoundary } from '@/components/assistant/AssistantResponseBoundary';
 import { assistantDisplayText } from '@/lib/assistantPresentation';
 import { useAuth } from '@/contexts/AuthContext';
 import { activeConversationKey, readActiveConversation, writeActiveConversation } from '@/lib/agentHistory';
@@ -19,6 +20,23 @@ const suggestions = ['Muéstrame los productos con stock bajo', '¿Cuánto vendi
   '¿Cuáles son los productos más vendidos?', '¿Qué productos debería reponer?',
   'Resume cómo está mi negocio y qué debería vigilar'];
 interface Message { id: number | string; role: 'user' | 'assistant'; text: string; response?: AgentResponse; status?: string }
+
+function MessageBody({ message: m, disabled, busy, onSelect, onActivity }: {
+  message: Message; disabled: boolean; busy: boolean;
+  onSelect: (message: string) => void; onActivity: (response: AgentResponse) => void;
+}) {
+  return <>
+    <p className="whitespace-pre-wrap break-words text-sm">{assistantDisplayText(m.text, m.response)}</p>
+    {m.response?.v3Views?.length ? <V3ResponseCards views={m.response.v3Views} response={m.response} disabled={disabled} onSelect={onSelect} />
+      : m.response && <ActionSuggestions response={m.response} disabled={disabled} onSelect={onSelect} />}
+    {m.response?.pendingAction && <PendingActionCard action={m.response.pendingAction} conversationId={m.response.conversationId} disabled={busy} />}
+    {m.status === 'failed' && <p className="text-xs text-muted-foreground">Consulta no completada.</p>}
+    {m.status === 'pending' && <p className="text-xs text-muted-foreground">No hay un resultado confirmado para esta consulta.</p>}
+    {m.response && <button className="mt-3 text-xs underline underline-offset-4" onClick={() => onActivity(m.response!)}>
+      Ver actividad · {m.response.usage?.totalLlmCalls ?? '—'} llamadas IA · {m.response.usage?.totalTokens ?? '—'} tokens
+    </button>}
+  </>;
+}
 
 export default function AssistantPage() {
   const { user } = useAuth();
@@ -160,16 +178,10 @@ export default function AssistantPage() {
           </div>}
           {messages.map(m => <article key={m.id} className={`rounded-lg p-4 min-w-0 ${m.role === 'user' ? 'bg-muted' : 'border'}`}>
             <p className="text-xs font-medium mb-2">{m.role === 'user' ? 'Tú' : 'Asistente'}</p>
-            <p className="whitespace-pre-wrap break-words text-sm">{assistantDisplayText(m.text, m.response)}</p>
-            {m.response?.v3Views?.length ? <V3ResponseCards views={m.response.v3Views} response={m.response} disabled={loading || historyBusy || m !== messages[messages.length - 1]}
-              onSelect={message => void send(message)} /> : m.response && <ActionSuggestions response={m.response} disabled={loading || historyBusy || m !== messages[messages.length - 1]}
-              onSelect={message => void send(message)} />}
-            {m.response?.pendingAction && <PendingActionCard action={m.response.pendingAction} conversationId={m.response.conversationId} disabled={loading || historyBusy} />}
-            {m.status === 'failed' && <p className="text-xs text-muted-foreground">Consulta no completada.</p>}
-            {m.status === 'pending' && <p className="text-xs text-muted-foreground">No hay un resultado confirmado para esta consulta.</p>}
-            {m.response && <button className="mt-3 text-xs underline underline-offset-4" onClick={() => setActivity(m.response)}>
-              Ver actividad · {m.response.usage.totalLlmCalls} llamadas IA · {m.response.usage.totalTokens === null ? '—' : m.response.usage.totalTokens} tokens
-            </button>}
+            <AssistantResponseBoundary key={`${conversationId || 'new'}-${m.id}`}>
+              <MessageBody message={m} disabled={loading || historyBusy || m !== messages[messages.length - 1]}
+                busy={loading || historyBusy} onSelect={message => void send(message)} onActivity={setActivity} />
+            </AssistantResponseBoundary>
           </article>)}
           {loading && <p role="status" className="text-sm">Consultando el asistente… El servicio puede tardar unos segundos en activarse.</p>}
           <div ref={end} />
@@ -190,7 +202,9 @@ export default function AssistantPage() {
       <div className="min-w-0 space-y-3">
         <Button variant="outline" className="lg:hidden" aria-expanded={activityOpen} aria-controls="assistant-activity"
           onClick={() => setActivityOpen(!activityOpen)}>Actividad y consumo IA</Button>
-        <div id="assistant-activity" className={`${activityOpen ? 'block' : 'hidden'} lg:block`}><AgentActivity response={activity} /></div>
+        <div id="assistant-activity" className={`${activityOpen ? 'block' : 'hidden'} lg:block`}>
+          <AssistantResponseBoundary key={`${conversationId || 'new'}-${activity?.requestId || 'none'}`}><AgentActivity response={activity} /></AssistantResponseBoundary>
+        </div>
       </div>
     </div>
   </div></Layout></ProtectedRoute>;

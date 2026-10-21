@@ -17,7 +17,7 @@ const labels: Record<string, string> = {
   get_customer_intelligence: 'Consultó inteligencia de clientes', get_supplier_intelligence: 'Consultó inteligencia de proveedores',
   get_business_health: 'Consultó resumen de salud del negocio'
 };
-const metric = (value: number | null) => value === null ? '—' : value.toLocaleString('es-PE');
+const metric = (value: number | null | undefined) => typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString('es-PE') : '—';
 
 function Tokens({ usage }: { usage: Pick<AgentUsage, 'inputTokens' | 'outputTokens' | 'thoughtTokens' | 'cachedInputTokens' | 'toolUseTokens' | 'totalTokens'> }) {
   return <dl className="grid grid-cols-2 gap-2 text-sm">
@@ -35,6 +35,13 @@ export function AgentActivity({ response }: { response?: AgentResponse }) {
     <p className="mt-2 text-sm text-muted-foreground">Solo intervienen los agentes necesarios.</p>
   </aside>;
   const u = response.usage;
+  if (!u) return <aside aria-label="Actividad multiagente" className="rounded-xl border bg-card p-5">
+    <h2 className="font-semibold">Actividad de esta respuesta</h2>
+    <p className="mt-3 text-sm text-muted-foreground">Esta respuesta antigua no incluye métricas de actividad.</p>
+  </aside>;
+  const participants = Array.isArray(response.participants) ? response.participants : [];
+  const actions = Array.isArray(response.actions) ? response.actions : [];
+  const evidence = Array.isArray(response.evidence) ? response.evidence : [];
   return <aside aria-label="Actividad multiagente" className="rounded-xl border bg-card p-5 min-w-0 space-y-5 break-words">
     <h2 className="font-semibold">Actividad de esta respuesta</h2>
     {u.totalLlmCalls === 0 && <p className="rounded-lg bg-emerald-500/10 p-3 text-sm font-medium">Respuesta determinística · 0 tokens IA</p>}
@@ -48,7 +55,7 @@ export function AgentActivity({ response }: { response?: AgentResponse }) {
       <p>Latencia proveedor: {(u.totalProviderLatencyMs / 1000).toFixed(2)} s</p>
     </section>}
     <dl className="grid grid-cols-2 gap-3 text-sm">
-      <div><dt>Agentes</dt><dd>{response.participants.length}</dd></div>
+      <div><dt>Agentes</dt><dd>{Array.isArray(response.participants) ? participants.length : '—'}</dd></div>
       <div><dt>Llamadas IA</dt><dd>{u.totalLlmCalls}</dd></div>
       <div><dt>Skills ejecutadas</dt><dd>{u.totalSkillCalls}</dd></div>
       <div><dt>Tokens totales</dt><dd>{metric(u.totalTokens)}</dd></div>
@@ -75,7 +82,7 @@ export function AgentActivity({ response }: { response?: AgentResponse }) {
         </dl>
       </details>}
     <section aria-label="Agentes participantes" className="space-y-3">
-      {response.participants.map(p => <div key={p.agentId} className="rounded-lg border p-3">
+      {participants.map(p => <div key={p.agentId} className="rounded-lg border p-3">
         <h3 className="font-medium">{names[p.agentId]} <span className="text-xs text-muted-foreground">{p.agentId}</span></h3>
         <p className="text-sm mt-2">LLM: {p.llmCalls} · Skills: {p.skillCalls} · Tokens: {metric(p.totalTokens)}</p>
         <p className="text-xs text-muted-foreground">Agente: {(p.latencyMs / 1000).toFixed(2)} s · Proveedor: {(p.providerLatencyMs / 1000).toFixed(2)} s</p>
@@ -99,11 +106,11 @@ export function AgentActivity({ response }: { response?: AgentResponse }) {
       </div>)}
     </section>}
     <section><h3 className="font-medium">Acciones realizadas</h3><ul className="mt-2 space-y-2 text-sm">
-      {response.actions.map((a, i) => <li key={`${a.skillId}-${i}`}>
+      {actions.map((a, i) => <li key={`${a.skillId}-${i}`}>
         {a.status === 'SUCCEEDED' ? '✓' : '•'} {labels[a.skillId] || 'Consultó datos del sistema'}
         <span className="block text-xs text-muted-foreground break-all">{a.skillId} · {a.status === 'SUCCEEDED' ? 'Completada' : 'No completada'}</span>
       </li>)}
-      {!response.actions.length && <li className="text-muted-foreground">Sin skills ejecutadas.</li>}
+      {!actions.length && <li className="text-muted-foreground">{Array.isArray(response.actions) ? 'Sin skills ejecutadas.' : 'Acciones no registradas en esta respuesta.'}</li>}
     </ul></section>
     <section><h3 className="font-medium">Fuentes de datos utilizadas</h3><ul className="mt-2 space-y-3 text-sm">
       {response.contextProvenance?.sourceType === 'candidate_snapshot' && <li className="border-l-2 pl-3">
@@ -115,15 +122,15 @@ export function AgentActivity({ response }: { response?: AgentResponse }) {
         <p>{response.contextProvenance.sourceType === 'conversation_context' ? 'Contexto conversacional · producto' : 'Información determinística del sistema'}</p>
         <p className="text-xs text-muted-foreground">{response.contextProvenance.label}</p>
       </li>}
-      {response.evidence.map(e => <li key={e.evidenceId} className="border-l-2 pl-3">
+      {evidence.map(e => <li key={e.evidenceId} className="border-l-2 pl-3">
         <p>{e.label}</p>
         {e.period && <p>Periodo: {e.period.startDate} – {e.period.endDate}</p>}
         {e.asOf && <p>{['get_demand_forecast', 'get_replenishment_candidates'].includes(e.skillId) ? 'Ancla histórica' : 'Fecha de consulta'}: {e.asOf}</p>}
         {e.recordCount !== undefined && <p>{e.recordCount} registros</p>}
         {['get_demand_forecast', 'get_replenishment_candidates'].includes(e.skillId) && <p className="text-xs text-muted-foreground">Replay histórico: predicción ML y recomendación de reposición son resultados distintos.</p>}
       </li>)}
-      {!response.evidence.length && !response.contextProvenance && <li className="text-muted-foreground">
-        {response.usage.totalSkillCalls === 0 && response.usage.totalLlmCalls === 0
+      {!evidence.length && !response.contextProvenance && <li className="text-muted-foreground">
+        {u.totalSkillCalls === 0 && u.totalLlmCalls === 0
           ? 'Información determinística del sistema: respuesta basada en reglas y contexto disponible; no se ejecutaron skills ni consultas ML.'
           : 'Sin evidencia de datos para esta respuesta.'}
       </li>}

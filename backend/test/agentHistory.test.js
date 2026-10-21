@@ -116,6 +116,29 @@ test('first message creates a deterministic titled conversation, both messages, 
   assert.equal(f.conversations[0].contextSnapshot.lastProductSelection.items.length, 5);
 });
 
+test('P0 persistence/detail preserves composite conclusions, participants and nullable incident metrics without rerunning tools', async () => {
+  const f = fixture();
+  f.runtime.handle = async (auth, input) => ({ ...response(input.conversationId), agent: 'coordinator',
+    answer: 'Sí, debes reponer Coca-Cola. Se esperan 108.27 unidades en 14 días.',
+    participants: ['coordinator', 'inventory', 'forecast'].map(agentId => ({ ...response(input.conversationId).participants[0], agentId })),
+    v3Views: [
+      { kind: 'inventory', title: 'Inteligencia de inventario', items: [], metrics: [
+        { label: 'Productos', value: 80 }, { label: 'Críticos', value: null }, { label: 'Stock bajo', value: 17 }, { label: 'Requieren reposición', value: null }
+      ] },
+      { kind: 'forecast', title: 'Pronóstico', items: [], metrics: [{ label: 'Predicción', value: 108.27 }] }
+    ] });
+  const sent = await f.service.send(req(), { message: 'Consulta compuesta' });
+  f.runtime.handle = () => { throw Error('History must not execute a tool'); };
+  const loaded = await f.service.get(req(), sent.conversationId, 1, 50);
+  const restored = loaded.messages.find(row => row.response).response;
+  assert.equal(restored.answer, sent.answer);
+  assert.deepEqual(restored.v3Views, sent.v3Views);
+  assert.equal(restored.v3Views[0].metrics[1].value, null);
+  assert.equal(restored.v3Views[0].metrics[3].value, null);
+  assert.deepEqual(restored.participants.map(p => p.agentId), ['coordinator', 'inventory', 'forecast']);
+  assert.equal(f.messages.length, 2);
+});
+
 test('list/detail pagination is scoped, chronological and never invokes the orchestrator', async () => {
   const f = fixture();
   for (let i = 0; i < 12; i++) await f.service.send(req(), { message: `Consulta ${i}` });

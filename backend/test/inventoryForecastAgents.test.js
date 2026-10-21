@@ -120,6 +120,23 @@ test('explicit inventory plus forecast composes only two specialists with the sa
   assert.equal(result.evidence.length, 2);
 });
 
+test('P0 shared-product cloud wording executes inventory and forecast once, preserving direct conclusions and history', async () => {
+  const f = fixture(); const result = await f.runtime.handle(req(), { message:
+    'Para Coca-Cola Sabor Original 500 ml, explícame si debo reponerla y también cuánto se espera vender en 14 días.' });
+  assert.equal(result.code, null);
+  assert.deepEqual(ids(result), ['coordinator', 'inventory', 'forecast']);
+  assert.deepEqual(f.calls.map(row => row.domain), ['inventory', 'forecast']);
+  assert.deepEqual(f.calls.map(row => row.payload.skus), [[sku], [sku]]);
+  assert.equal(f.calls[1].payload.horizonDays, 14);
+  assert.equal(f.calls[0].payload.operationalSnapshot.metadata.snapshotHash, f.calls[1].payload.operationalSnapshot.metadata.snapshotHash);
+  assert.match(result.answer, /Sí, debes reponer Coca-Cola Sabor Original 500 ml/);
+  assert.match(result.answer, /Se esperan 108.27 unidades.*14 días/);
+  const restored = require('../src/services/agentHistoryProjection').publicResponse(JSON.parse(JSON.stringify(result)));
+  assert.equal(restored.answer, result.answer);
+  assert.deepEqual(restored.v3Views, result.v3Views);
+  assert.deepEqual(ids(restored), ids(result));
+});
+
 test('an explicit new question replaces pending intent rather than forcing old replenishment', async () => {
   const f = fixture(), conversationId = randomUUID();
   await f.runtime.handle(req(), { message: '¿Debo reponer Coca-Cola?', conversationId });

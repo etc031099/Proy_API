@@ -352,7 +352,7 @@ it('shows final fallback model, physical attempts and partial known usage withou
 });
 
 it('renders compact V3 inventory results with a full product label and clickable ranked selection', async () => {
-  send.mockResolvedValueOnce({ success: true, data: { ...response, answer: 'technical raw response should be represented by cards',
+  send.mockResolvedValueOnce({ success: true, data: { ...response, answer: 'Sí, debes reponer Inca Kola Original 1.5 L.',
     v3Views: [{ kind: 'inventory', title: 'Inteligencia de inventario', metrics: [], note: 'Corte V3', items: [
       { type: 'product', key: 'BEB-GAS-015', label: 'Inca Kola Original 1.5 L', secondaryLabel: 'BEB-GAS-015', selectMessage: 'BEB-GAS-015',
         metrics: [{ label: 'Stock', value: 5 }, { label: 'Riesgo', value: 'CRITICAL' }, { label: 'Cantidad sugerida', value: 10 }] }
@@ -361,7 +361,7 @@ it('renders compact V3 inventory results with a full product label and clickable
   expect(await screen.findByRole('region', { name: 'Inteligencia de inventario' })).toBeTruthy();
   expect(screen.getByText('Inca Kola Original 1.5 L')).toBeTruthy();
   expect(screen.getByText(/Riesgo: Crítico/)).toBeTruthy(); expect(screen.getByText(/Cantidad sugerida: 10/)).toBeTruthy();
-  expect(screen.queryByText('technical raw response should be represented by cards')).toBeNull();
+  expect(screen.getByText('Sí, debes reponer Inca Kola Original 1.5 L.')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Seleccionar producto Inca Kola Original 1.5 L' }));
   expect(await screen.findByText(response.answer)).toBeTruthy();
   expect(send.mock.calls[1][0].message).toBe('BEB-GAS-015');
@@ -402,7 +402,7 @@ it('offers only approved forecast horizons as clickable recovery options', async
 });
 
 it('shows one useful empty-state message without repeating the unavailable-data note', async () => {
-  send.mockResolvedValue({ success: true, data: { ...response, answer: 'raw duplicate', v3Views: [
+  send.mockResolvedValue({ success: true, data: { ...response, answer: 'No hay asociaciones validadas para este corte.', v3Views: [
     { kind: 'cross_sell', title: 'Compras observadas juntas', metrics: [], items: [], note: 'No hay asociaciones validadas para este corte.' }
   ] } });
   render(<AssistantPage />); submit('qué se compra junto con este producto');

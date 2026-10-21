@@ -12,6 +12,15 @@ const agentForTask = (skillId, args = {}) => skillId === 'get_inventory_intellig
 // their existing path. No raw user question is persisted for continuation.
 const specialistPlan = (message, memory = {}) => {
   const text = message.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[¿?¡!]/g, '').trim();
+  // A shared, explicit product anchors both clauses; never borrow another turn's SKU.
+  // Keep this bounded to read-only replenishment + an approved LIVE horizon.
+  const shared = message.match(/^\s*[¿]?para\s+([^,\n]+),\s*expl[ií]came\s+si\s+debo\s+reponer(?:la|lo)?\s+y\s+(?:tambi[eé]n\s+)?cu[aá]nto\s+se\s+espera\s+vender\s+en\s+(7|14)\s+d[ií]as[?.!]*\s*$/i);
+  if (shared) return { tasks: [
+    { skillId: 'get_inventory_intelligence', agent: 'inventory', requestedIntent: 'replenishment',
+      args: { limit: 5, mode: 'detail', productRef: shared[1].trim(), metric: 'reorder' } },
+    { skillId: 'get_product_forecast', agent: 'forecast', requestedIntent: 'forecast',
+      args: { limit: 5, mode: 'detail', productRef: shared[1].trim(), horizonDays: Number(shared[2]) } }
+  ] };
   if (/histor|evaluacion|wape|baseline|ma28|hgb|ayer|fp.?growth|k.?means|isolation|features?|variables|supervisad|algoritmo|machine learning|compar|\d{4}-\d{2}-\d{2}|\s+y\s+/.test(text)) return null;
   if (/^(?:crea|crear|compra|comprar|vende|vender|ajusta|ajustar|actualiza|prepara)\b/.test(text)) return null;
   const forecast = /pronostic|prediccion|forecast|cuanto venderemos|cuanto vendere|se vendera/.test(text);

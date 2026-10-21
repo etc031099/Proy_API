@@ -104,7 +104,8 @@ export interface ProviderStageUsage {
 }
 export type V3DisplayKind = 'business' | 'inventory' | 'forecast' | 'cross_sell' | 'customer' | 'supplier' | 'health';
 export type V3EntityKind = 'product' | 'customer' | 'supplier' | 'category';
-export interface V3DisplayMetric { label: string; value: string | number }
+// Partial analytics and persisted history preserve unknown values, never zero-fill them.
+export interface V3DisplayMetric { label: string; value: string | number | null }
 export interface V3DisplayItem {
   type: V3EntityKind;
   key: string;
