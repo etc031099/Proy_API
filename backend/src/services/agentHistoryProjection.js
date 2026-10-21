@@ -9,6 +9,7 @@ const tokenUsage = { ...tokens, usageAvailable: true };
 const period = { startDate: true, endDate: true };
 const actionItem = { sku: true, name: true, quantity: true, stock: true, resultingStock: true, price: true, total: true };
 const shape = {
+  requestedIntent: true,
   routingMode: true,
   languageDecision: { detectedIntent: true, entitySource: true, contextEntityType: true, contextEntityId: true, semanticFallbackUsed: true },
   groundedAnswer: { provider: true, model: true, calls: true, inputTokens: true, outputTokens: true, totalTokens: true,

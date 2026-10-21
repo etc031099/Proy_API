@@ -33,6 +33,15 @@ it('A4.2 keeps technical lineage for a question about the active model', () => {
     '¿Qué featureVersion y modelo está usando?');
   expect(displayed).toBe(text);
 });
+it('A4.3 uses the durable requested intent after a SKU-only selection, with a legacy question fallback', () => {
+  const technical = 'El pronóstico de Coca-Cola utiliza Ridge LIVE con el modelo ACTIVE v1 y featureVersion RIDGE_CAUSAL27_V1. El horizonte consultado es de 14 días.';
+  const response = { requestedIntent: 'model_status', actions: [{ skillId: 'get_product_forecast' }],
+    v3Views: [{ kind: 'forecast', metrics: [], items: [] }] } as unknown as AgentResponse;
+  expect(assistantDisplayText(technical, response, 'BEB-GAS-001')).toBe(technical);
+  const normal = 'Se esperan 107.3 unidades de Coca-Cola en los próximos 14 días según Ridge LIVE ACTIVE. Modelo v1 · ACTIVE · featureVersion RIDGE_CAUSAL27_V1.';
+  expect(assistantDisplayText(normal, { ...response, requestedIntent: 'forecast' }, '¿Cuánto venderemos con Ridge?'))
+    .toBe('Se esperan 107.3 unidades de Coca-Cola en los próximos 14 días según Ridge LIVE ACTIVE.');
+});
 for (const quantity of [0, 1, 2]) it(`card quantity ${quantity} uses natural grammar and money`, () => {
   const { container } = render(<PendingActionCard action={{ ...pending, action: 'create_sale',
     fields: { currency: 'PEN', total: 58.9, productId: 'bbbbbbbbbbbbbbbbbbbbbbbb' },

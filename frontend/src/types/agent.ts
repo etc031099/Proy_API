@@ -61,6 +61,7 @@ export interface AgentEvidence {
   recordCount?: number;
 }
 export interface AgentResponse {
+  requestedIntent?: 'forecast' | 'model_status' | 'method';
   routingMode?: 'deterministic' | 'semantic_fallback';
   languageDecision?: { detectedIntent: string; entitySource: 'explicit' | 'active_context' | 'resolver' | 'none';
     contextEntityType?: 'product'; contextEntityId?: string; semanticFallbackUsed: boolean };

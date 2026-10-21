@@ -461,6 +461,26 @@ it('A4.2 technical forecast question can keep model version, feature version, an
   expect(container.textContent).toContain('Revisión: 173');
 });
 
+it('A4.3 selecting a product preserves the technical answer and card detail from the original model question', async () => {
+  const question = '¿Qué modelo y versión está usando el pronóstico de Coca-Cola en 14 días?';
+  const answer = 'El pronóstico de Coca-Cola Sabor Original 500 ml utiliza Ridge LIVE con el modelo ACTIVE v1 y featureVersion RIDGE_CAUSAL27_V1. El horizonte consultado es de 14 días.';
+  send.mockResolvedValueOnce({ success: true, data: { ...response, answer: 'Elige un producto.',
+    requiresClarification: true, suggestions: [{ label: 'Coca-Cola Sabor Original 500 ml', message: 'BEB-GAS-001' }] } })
+    .mockResolvedValueOnce({ success: true, data: { ...response, agent: 'forecast', requestedIntent: 'model_status', answer,
+      actions: [{ skillId: 'get_product_forecast', agentId: 'forecast', status: 'SUCCEEDED', durationMs: 1 }],
+      v3Views: [{ kind: 'forecast', title: 'Pronóstico', metrics: [], items: [{ type: 'product', key: 'BEB-GAS-001', label: 'Coca-Cola Sabor Original 500 ml', metrics: [
+        { label: 'Unidades esperadas · 14 días', value: 107.3 }, { label: 'Estado', value: 'READY' },
+        { label: 'Modelo ACTIVE', value: 'v1' }, { label: 'Feature version', value: 'RIDGE_CAUSAL27_V1' }, { label: 'Revisión', value: 173 }
+      ] }] }] } });
+  render(<AssistantPage />); submit(question);
+  fireEvent.click(await screen.findByRole('button', { name: 'Coca-Cola Sabor Original 500 ml' }));
+  await screen.findByText(answer);
+  expect(screen.getByText('Feature version: RIDGE_CAUSAL27_V1')).toBeTruthy();
+  expect(screen.getByText('Revisión: 173')).toBeTruthy();
+  expect(send).toHaveBeenCalledTimes(2);
+  expect(send.mock.calls[1][0].message).toBe('BEB-GAS-001');
+});
+
 it('selection while a write preview is visible never calls action confirmation', async () => {
   const pending: NonNullable<AgentResponse['pendingAction']> = { pendingActionId: '33333333-3333-4333-8333-333333333333',
     action: 'create_purchase', summary: 'Revisar pedido sugerido', fields: { name: 'Leche Gloria', quantity: 2 },

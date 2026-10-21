@@ -27,7 +27,7 @@ function MessageBody({ message: m, question, disabled, busy, onSelect, onActivit
 }) {
   return <>
     <p className="whitespace-pre-wrap break-words text-sm">{assistantDisplayText(m.text, m.response, question)}</p>
-    {m.response?.v3Views?.length ? <V3ResponseCards views={m.response.v3Views} response={m.response} technical={isTechnicalAgentQuestion(question)} disabled={disabled} onSelect={onSelect} />
+    {m.response?.v3Views?.length ? <V3ResponseCards views={m.response.v3Views} response={m.response} technical={isTechnicalAgentQuestion(question, m.response)} disabled={disabled} onSelect={onSelect} />
       : m.response && <ActionSuggestions response={m.response} disabled={disabled} onSelect={onSelect} />}
     {m.response?.pendingAction && <PendingActionCard action={m.response.pendingAction} conversationId={m.response.conversationId} disabled={busy} />}
     {m.status === 'failed' && <p className="text-xs text-muted-foreground">Consulta no completada.</p>}

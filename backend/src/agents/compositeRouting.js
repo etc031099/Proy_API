@@ -20,6 +20,8 @@ function groundedCoversComposite(message) {
   });
 }
 function compositePlan(message, memory, binding, route) {
+  const shared = require('./specialistRouting').sharedProductPlan(message);
+  if (shared) return shared;
   const parts = splitRequests(message);
   if (parts.length < 2) return null;
   if (parts.length > 4 || parts.some(writeClause)) return clarify();
@@ -29,6 +31,9 @@ function compositePlan(message, memory, binding, route) {
   const plans = business.map(part => route(part, memory, binding));
   if (plans.some(plan => !plan?.tasks?.length || plan.route || plan.tasks.some(task => task.fromPrevious))) return clarify();
   const tasks = plans.flatMap(plan => plan.tasks);
+  const specialistPair = tasks.length === 2 && tasks.some(task => task.agent === 'inventory') && tasks.some(task => task.agent === 'forecast');
+  if (specialistPair && (!tasks[0].args.productRef || !tasks[1].args.productRef
+    || normalize(tasks[0].args.productRef) !== normalize(tasks[1].args.productRef))) return clarify();
   if (tasks.length > 4) return clarify();
   // Do not execute a context-dependent clause against a previous turn's entity
   // when the current composite could establish a different one.

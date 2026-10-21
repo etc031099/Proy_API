@@ -47,8 +47,11 @@ function fixture({ reorder = true } = {}) {
       source: 'HISTORICAL_PLUS_OPERATIONAL_SNAPSHOT', contractVersion: 'm6.9f4-live-intelligence-v1', dataVersion: '173', snapshotHash: 'a'.repeat(64) } };
   } };
   const service = createV3IntelligenceService({ models, forecastRegistryService, snapshotBuilder, mlClient, clock });
-  const runtime = () => createAgentOrchestrator({ memory: createConversationMemory(), clock, dependencies: { v3Service: service, clock } });
-  return { runtime: runtime(), restart: runtime, service, calls, scopes };
+  const lookups = [], observedService = { ...service, resolveEntity: async (...args) => {
+    lookups.push(args[1]); return service.resolveEntity(...args);
+  } };
+  const runtime = () => createAgentOrchestrator({ memory: createConversationMemory(), clock, dependencies: { v3Service: observedService, clock } });
+  return { runtime: runtime(), restart: runtime, service, calls, scopes, lookups };
 }
 const ids = result => result.participants.map(row => row.agentId);
 
@@ -90,7 +93,7 @@ test('forecast owns tomorrow limitation and product model questions without fall
   assert.equal(tomorrow.agent, 'forecast'); assert.deepEqual(ids(tomorrow), ['coordinator', 'forecast']);
   assert.match(tomorrow.answer, /1 día no está aprobado/); assert.equal(f.calls.length, 0); assert.equal(tomorrow.actions.length, 0);
   const model = await f.runtime.handle(req(), { message: `¿Qué modelo se usa para ${sku}?` });
-  assert.equal(model.agent, 'forecast'); assert.match(model.answer, /Modelo v1 · ACTIVE/);
+  assert.equal(model.agent, 'forecast'); assert.match(model.answer, /modelo ACTIVE v1/);
 });
 
 for (const [question, pattern] of [[`¿Cuánto stock tengo de ${sku}?`, /El stock de .* es 14/],
@@ -176,4 +179,105 @@ test('an unsupported new forecast question clears an older pending selection', a
   assert.equal(result.agent, 'forecast'); assert.equal(f.calls.length, 0);
   const state = await f.runtime.getContextSnapshot(req(), conversationId);
   assert.equal(state.v3Context.pending, null);
+});
+
+for (const question of [
+  '¿Qué modelo y versión está usando el pronóstico de Coca-Cola en 14 días?',
+  '¿Cuál es el featureVersion del pronóstico de Coca-Cola en 14 días?'
+]) test(`A4.3 technical intent survives candidate selection and persisted history: ${question}`, async () => {
+  const f = fixture(), conversationId = randomUUID();
+  const first = await f.runtime.handle(req(), { message: question, conversationId });
+  assert.equal(first.requiresClarification, true); assert.equal(f.calls.length, 0);
+  const state = JSON.parse(JSON.stringify(snapshot(await f.runtime.getContextSnapshot(req(), conversationId))));
+  assert.equal(state.v3Context.pending.tasks[0].requestedIntent, 'model_status');
+  assert.equal(state.v3Context.pending.tasks[0].args.horizonDays, 14);
+  assert.equal(state.v3Context.pending.query, 'Coca-Cola');
+  const resumed = f.restart(); await resumed.restoreContext(req(), conversationId, state);
+  const result = await resumed.handle(req(), { message: sku, conversationId });
+  assert.equal(result.agent, 'forecast'); assert.equal(result.requestedIntent, 'model_status');
+  assert.deepEqual(ids(result), ['coordinator', 'forecast']);
+  assert.equal(result.actions.length, 1); assert.equal(result.actions[0].skillId, 'get_product_forecast');
+  assert.match(result.answer, /^El pronóstico de Coca-Cola Sabor Original 500 ml utiliza Ridge LIVE con el modelo ACTIVE v1/);
+  assert.match(result.answer, /featureVersion RIDGE_CAUSAL27_V1/); assert.match(result.answer, /horizonte consultado es de 14 días/);
+  assert.doesNotMatch(result.answer, /^Se esperan/);
+  assert.equal(f.calls.length, 1); assert.equal(f.calls[0].payload.horizonDays, 14);
+  assert.deepEqual(f.calls[0].payload.skus, [sku]);
+  const restored = require('../src/services/agentHistoryProjection').publicResponse(JSON.parse(JSON.stringify(result)));
+  assert.equal(restored.requestedIntent, 'model_status'); assert.equal(restored.answer, result.answer);
+});
+
+for (const question of ['¿Qué versión está usando?', '¿Cuál es el featureVersion?', '¿Hasta qué fecha están cerradas las observaciones?'])
+  test(`A4.3 technical follow-up reuses the selected product and horizon: ${question}`, async () => {
+    const f = fixture(), conversationId = randomUUID();
+    await f.runtime.handle(req(), { message: `¿Cuánto venderemos de ${sku} en 14 días?`, conversationId });
+    const result = await f.runtime.handle(req(), { message: question, conversationId });
+    assert.equal(result.agent, 'forecast'); assert.equal(result.requestedIntent, 'model_status');
+    assert.equal(f.calls.length, 2); assert.equal(f.calls[1].payload.horizonDays, 14);
+    assert.deepEqual(f.calls[1].payload.skus, [sku]); assert.match(result.answer, /modelo ACTIVE v1/);
+    assert.match(result.answer, /Revisión de datos: 173/); assert.match(result.answer, /Observaciones cerradas hasta: 2026-10-19/);
+    const metrics = result.v3Views[0].items[0].metrics;
+    assert.equal(metrics.find(metric => metric.label === 'Observaciones cerradas hasta').value, '2026-10-19');
+  });
+
+test('A4.3 value, methodology and unavailable horizon keep their own semantics', async () => {
+  const f = fixture();
+  const value = await f.runtime.handle(req(), { message: `¿Cuánto venderemos de ${sku} en 14 días?` });
+  assert.equal(value.requestedIntent, 'forecast'); assert.match(value.answer, /^Se esperan 108.27 unidades/);
+  const method = await f.runtime.handle(req(), { message: '¿Qué metodología usa el pronóstico?' });
+  assert.equal(method.agent, 'forecast'); assert.equal(method.requestedIntent, 'method');
+  assert.match(method.answer, /Ridge Regression ACTIVE/);
+  const unavailable = await f.runtime.handle(req(), { message: '¿Por qué no hay pronóstico de 1 día?' });
+  assert.equal(unavailable.agent, 'forecast'); assert.match(unavailable.answer, /1 día no está aprobado/);
+  assert.equal(f.calls.length, 1);
+});
+
+for (const connector of ['y', 'y también', 'además', 'junto con', 'a la vez', 'por otro lado'])
+  test(`A4.3 shared-product composition accepts ${connector} with one resolution and skill per specialist`, async () => {
+    const f = fixture();
+    const result = await f.runtime.handle(req(), { message:
+      `Para Coca-Cola Sabor Original 500 ml, explícame si debo reponerla ${connector} cuánto se espera vender en 14 días.` });
+    assert.equal(result.requiresClarification, false); assert.equal(result.code, null);
+    assert.deepEqual(ids(result), ['coordinator', 'inventory', 'forecast']);
+    assert.deepEqual(result.actions.map(action => [action.agentId, action.skillId]),
+      [['inventory', 'get_inventory_intelligence'], ['forecast', 'get_product_forecast']]);
+    assert.deepEqual(f.calls.map(call => call.domain), ['inventory', 'forecast']);
+    assert.deepEqual(f.calls.map(call => call.payload.skus), [[sku], [sku]]);
+    assert.equal(f.calls[1].payload.horizonDays, 14);
+    assert.equal(f.lookups.filter(ref => ref === 'Coca-Cola Sabor Original 500 ml').length, 1);
+    assert.match(result.answer, /Sí, debes reponer/); assert.match(result.answer, /Se esperan 108.27 unidades/);
+  });
+
+test('A4.3 ambiguous shared entity is selected once for both tasks, including after restart', async () => {
+  const f = fixture(), conversationId = randomUUID();
+  const first = await f.runtime.handle(req(), { message:
+    'Para Coca-Cola, explícame si debo reponerla y cuánto se espera vender en 14 días.', conversationId });
+  assert.equal(first.requiresClarification, true); assert.equal(f.calls.length, 0);
+  const state = JSON.parse(JSON.stringify(snapshot(await f.runtime.getContextSnapshot(req(), conversationId))));
+  assert.equal(state.v3Context.pending.tasks.length, 2);
+  const resumed = f.restart(); await resumed.restoreContext(req(), conversationId, state);
+  const result = await resumed.handle(req(), { message: sku, conversationId });
+  assert.equal(result.requiresClarification, false); assert.deepEqual(ids(result), ['coordinator', 'inventory', 'forecast']);
+  assert.deepEqual(f.calls.map(call => call.payload.skus), [[sku], [sku]]); assert.equal(result.actions.length, 2);
+});
+
+for (const question of [
+  `¿Cuánto stock tengo de ${sku} y cuánto venderemos de BEB-GAS-002 en 14 días?`,
+  `¿Cuánto stock tengo de ${sku} y cuánto venderemos de ese producto en 14 días?`
+]) test(`A4.3 separate or ambiguous product clauses remain safe: ${question}`, async () => {
+  const f = fixture(); const result = await f.runtime.handle(req(), { message: question });
+  assert.equal(result.requiresClarification, true); assert.equal(f.calls.length, 0); assert.equal(result.actions.length, 0);
+});
+
+test('A4.3 shared-product grammar does not consume unrelated, historical, write or cross-product clauses', () => {
+  const { sharedProductPlan, specialistPlan } = require('../src/agents/specialistRouting');
+  for (const question of [
+    'Para Coca-Cola y Pepsi, explícame si debo reponerla y cuánto se espera vender en 14 días.',
+    'Para Coca-Cola, explícame si debo reponerla y cuánto se espera vender de Pepsi en 14 días.',
+    'Para Coca-Cola, explícame si debo reponerla y registra una venta en 14 días.',
+    'Para Coca-Cola, explícame si debo reponerla y cuánto se espera vender en 1 día.',
+    'Para Coca-Cola, explícame si debo reponerla y compara el histórico en 14 días.'
+  ]) assert.equal(sharedProductPlan(question), null);
+  assert.equal(specialistPlan('¿Qué modelo y ventas hay hoy?'), null);
+  assert.equal(specialistPlan('¿Qué versión usa la aplicación?'), null);
+  assert.equal(specialistPlan('¿Qué revisión tiene el proveedor?'), null);
 });

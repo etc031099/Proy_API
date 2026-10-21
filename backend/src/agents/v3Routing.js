@@ -1003,6 +1003,7 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
   }
   const scope = { ...memory, binding: contextBinding(context), expiresAt: now + TTL_MS };
   const resolvedProductRefs = new Set(memory.ranking?.type === 'product' ? memory.ranking.items.map(row => row.key) : []);
+  const resolvedReferences = new Map();
   const save = () => commit({ v3Context: scope,
     ...(scope.selectedSupplier ? { lastSupplier: { id: scope.selectedSupplier.id, name: scope.selectedSupplier.label } } : {}),
     ...(scope.selectedProduct ? { lastEntity: { id: scope.selectedProduct.id, sku: scope.selectedProduct.key, name: scope.selectedProduct.label },
@@ -1111,11 +1112,14 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
         if (!scope.selectedProduct) return { answer: '¿A qué producto te refieres? Indica su nombre o código.', clarification: true, intent: 'v3_selection', agent: 'coordinator' };
         refs[index] = scope.selectedProduct.key;
         productResolution = { status: 'CONTEXT_MATCH', sku: refs[index] };
+      } else if (resolvedReferences.has(normalize(ref))) {
+        refs[index] = resolvedReferences.get(normalize(ref));
       } else if (scope.selectedProduct?.key !== ref && !resolvedProductRefs.has(ref)) {
         const resolution = await service.resolveEntity('product', ref, context);
         if (!resolution.entity) return candidateView({ ...resolution, type: 'product', query: ref, selectionIndex: index, taskIndex },
           plan.tasks, current.args.productRefs ? 'productRefs' : 'productRef');
         refs[index] = resolution.entity.key; scope.selectedProduct = resolution.entity; scope.pending = null;
+        resolvedReferences.set(normalize(ref), refs[index]);
         resolvedProductRefs.add(refs[index]);
         productResolution = { status: resolution.resolutionStatus || 'SINGLE_MATCH', sku: refs[index] };
       } else if (!productResolution) {
@@ -1276,6 +1280,8 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
   const suggestions = rankedForResponse?.length ? rankedForResponse.slice(0, 5).map(row => ({ label: row.label, message: row.key,
     ...(row.type === 'product' || row.type === 'customer' || row.type === 'supplier' ? { detail: row.key } : {}) })) : undefined;
   return { answer: answers.join('\n\n'), intent: 'v3_intelligence', agent: plan.tasks.length > 1 ? 'coordinator' : plan.tasks[0].agent,
+    ...(plan.tasks.some(row => row.skillId === 'get_product_forecast')
+      ? { requestedIntent: plan.tasks.find(row => row.skillId === 'get_product_forecast').requestedIntent } : {}),
     ...(productResolution ? { productResolution } : {}),
     ...(v3Views.length ? { v3Views } : {}), ...(suggestions ? { suggestions, suggestionsEntityType: rankedForResponse[0].type } : {}) };
 

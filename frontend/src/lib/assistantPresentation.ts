@@ -6,7 +6,8 @@ export const assistantMoney = (value: number, currency = 'PEN') => {
   return currency === 'PEN' ? `S/ ${amount}` : `${amount} ${currency}`;
 };
 
-export const isTechnicalAgentQuestion = (question = '') =>
+export const isTechnicalAgentQuestion = (question = '', response?: AgentResponse) =>
+  response?.requestedIntent ? response.requestedIntent === 'model_status' || response.requestedIntent === 'method' :
   /\b(modelo|feature.?version|versi[oó]n|revisi[oó]n|observaciones cerradas|metodolog[ií]a|m[eé]todo|ridge|causal27|por qu[eé].{0,24}(?:1 d[ií]a|ma[ñn]ana|no hay forecast))\b/i.test(question);
 
 const directForecast = (text: string) => text.match(/(?:Se esperan .+? unidades .+? en los pr[oó]ximos \d+ d[ií]as seg[uú]n Ridge LIVE ACTIVE\.|El pron[oó]stico Ridge LIVE de .+? para \d+ d[ií]as no est[aá] disponible\.)/i)?.[0];
@@ -22,7 +23,7 @@ export const assistantDisplayText = (text: string, response?: AgentResponse, que
   const hasInventory = skills.includes('get_inventory_intelligence') || response?.v3Views?.some(view => view?.kind === 'inventory');
   const hasForecast = skills.includes('get_product_forecast') || response?.v3Views?.some(view => view?.kind === 'forecast');
   if (response?.v3Views?.length && (hasInventory || hasForecast)) {
-    if (isTechnicalAgentQuestion(question)) return text;
+    if (isTechnicalAgentQuestion(question, response)) return text;
     const conclusions = [
       ...(hasInventory ? [directInventory(text)].filter((value): value is string => Boolean(value)) : []),
       ...(hasForecast ? [directForecast(text)].filter((value): value is string => Boolean(value)) : [])

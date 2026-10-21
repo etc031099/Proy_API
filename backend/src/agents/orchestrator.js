@@ -867,6 +867,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, neutralProv
         ...(v3Response?.suggestions ? { suggestions: v3Response.suggestions, suggestionsEntityType: v3Response.suggestionsEntityType,
           suggestionsExpiresAt: v3Response.suggestionsExpiresAt, ...(v3Response.suggestionsPagination ? { suggestionsPagination: v3Response.suggestionsPagination } : {}) } : {}),
         ...(v3Response?.v3Views ? { v3Views: v3Response.v3Views } : {}),
+        ...(v3Response?.requestedIntent ? { requestedIntent: v3Response.requestedIntent } : {}),
         ...(v3Response?.grounded ? { grounded: v3Response.grounded } : {}),
         ...(v3Response?.productResolution ? { productResolution: v3Response.productResolution } : {}),
         participants, actions, evidence: results.map(({ result }) => ({ ...result.evidence, recordCount: result.metadata.returnedCount })),

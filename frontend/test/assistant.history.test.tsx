@@ -263,3 +263,20 @@ it('P0 a partial view with absent legacy collections keeps its answer and a cont
   expect(screen.getByRole('region', { name: 'Vista antigua' })).toBeTruthy();
   expect(screen.getByText('No hay datos para los filtros solicitados.')).toBeTruthy();
 });
+
+it('A4.3 persisted forecast model intent remains technical after a SKU selection and reload', async () => {
+  const answer = 'El pronóstico de Coca-Cola utiliza Ridge LIVE con el modelo ACTIVE v1 y featureVersion RIDGE_CAUSAL27_V1. El horizonte consultado es de 14 días.';
+  const technical: AgentResponse = { ...response, agent: 'forecast', requestedIntent: 'model_status', answer,
+    actions: [{ skillId: 'get_product_forecast', agentId: 'forecast', status: 'SUCCEEDED', durationMs: 1 }],
+    v3Views: [{ kind: 'forecast', title: 'Pronóstico', metrics: [], items: [{ type: 'product', key: 'BEB-GAS-001', label: 'Coca-Cola', metrics: [
+      { label: 'Unidades esperadas · 14 días', value: 107.3 }, { label: 'Estado', value: 'READY' },
+      { label: 'Modelo ACTIVE', value: 'v1' }, { label: 'Feature version', value: 'RIDGE_CAUSAL27_V1' }
+    ] }] }] };
+  vi.mocked(apiClient.getAgentConversation).mockResolvedValue({ success: true, data: { ...detail,
+    messages: [{ ...detail.messages[0], text: 'BEB-GAS-001' }, { ...detail.messages[1], text: answer, response: technical }] } });
+  const mounted = render(<AssistantPage />);
+  await screen.findByText(answer); expect(screen.getByText('Feature version: RIDGE_CAUSAL27_V1')).toBeTruthy();
+  mounted.unmount(); render(<AssistantPage />);
+  await screen.findByText(answer); expect(screen.getByText('Feature version: RIDGE_CAUSAL27_V1')).toBeTruthy();
+  expect(apiClient.sendAgentMessage).not.toHaveBeenCalled();
+});
