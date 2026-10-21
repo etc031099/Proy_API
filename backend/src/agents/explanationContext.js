@@ -41,7 +41,7 @@ function rememberExplanation(results, context, responseType) {
 }
 const notes = {
   get_inventory_intelligence: 'La reposición se apoya en stock, entradas, cobertura y motivos disponibles del motor. Los motivos no disponibles no pueden inferirse; no se ejecutó una compra.',
-  get_product_forecast: 'La estimación operativa usa media móvil de 28 días (MA28); no garantiza ventas futuras.',
+  get_product_forecast: 'Ridge LIVE usa modelos ACTIVE CAUSAL27 en 7 y 14 días. La evidencia histórica conserva su corte y método; 1 día no está aprobado para Ridge LIVE.',
   get_customer_intelligence: 'El segmento y la recencia son señales observadas; no existe una probabilidad individual de abandono calculada.',
   get_supplier_intelligence: 'La puntualidad y el plazo son métricas observadas; no garantizan entregas futuras ni constituyen un score global.',
   get_cross_sell_recommendations: 'FP-Growth observó asociaciones en el artefacto congelado al 2026-10-12. Asociación no implica causalidad ni garantiza ventas futuras.',

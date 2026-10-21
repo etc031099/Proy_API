@@ -11,6 +11,7 @@ require('./cors.test');
 require('./inventoryMovement.test');
 require('./mlServiceClient.test');
 require('./v3Intelligence.test');
+require('./assistantFinalBiContracts.test');
 require('./productResolutionJ2S.test');
 require('./assistantRobustnessJ3.test');
 require('./assistantRobustnessJ3.http.test');

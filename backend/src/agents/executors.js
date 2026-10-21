@@ -698,7 +698,7 @@ const createSkillExecutors = ({ models, forecastService, v3Service, clock = () =
     },
     ...Object.fromEntries(require('./v3Skills').V3_IDS.map(id => [id, invocation => {
       intelligence ||= require('../services/v3IntelligenceService').createV3IntelligenceService({ models });
-      return intelligence.execute(invocation);
+      return intelligence.executeAssistant ? intelligence.executeAssistant(invocation) : intelligence.execute(invocation);
     }])),
     async get_demand_forecast(invocation) { return forecastResult(await readForecast(invocation), invocation); },
     async get_replenishment_candidates(invocation) { return forecastResult(await readForecast(invocation), invocation, true); }

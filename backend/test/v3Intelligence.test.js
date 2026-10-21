@@ -96,6 +96,11 @@ function fixture({ corrupt, failed, record = scenario, clock = () => new Date('2
       ? { items: [{ categoryCode: 'BEB', metric: 23, metricName: 'units' }], total: 10 }
       : { items: [{ sku: 'PAN-FRE-001', name: 'Pan francés', metric: 23, metricName: 'units' }], total: 80 } : { kpis, trends: { revenue: { percentChange: 10 } } };
     else if (domain === 'inventory') data = { items: skus.slice(0, payload.limit).map(inventory), total: skus.length };
+    else if (domain === 'forecast' && payload.useLiveRidge) data = { items: skus.slice(0, payload.limit).map(sku => ({ sku,
+      status: payload.activeRidgeModel ? 'READY' : 'MODEL_UNAVAILABLE',
+      activeModelStatus: payload.activeRidgeModel ? 'ACTIVE' : 'NONE',
+      modelVersion: payload.activeRidgeModel?.metadata.modelVersion ?? null, featureVersion: 'RIDGE_CAUSAL27_V1',
+      predictionUnits: payload.activeRidgeModel ? payload.horizonDays * 2 : null })), total: skus.length };
     else if (domain === 'forecast') data = payload.mode === 'summary' ? { totalExpectedUnits: 33, horizonDays: payload.horizonDays } : { items: skus.slice(0, payload.limit).map(sku => ({ sku, expectedUnitsNext1d: 2, expectedUnitsNext7d: 14, expectedUnitsNext14d: 28, status: 'READY' })), total: skus.length };
     else if (domain === 'cross-sell') data = crossSellData || { available: true, items: [{ recommendedSku: 'BEB-GAS-003', recommendedProduct: 'Inca Kola 500 ml', ticketCount: 100, support: .08, confidence: .3, lift: 2, stability: 'STABLE' }] };
     else if (domain === 'customers') data = { items: (payload.customerCode ? [payload.customerCode] : customers.slice(0, 5).map(row => row.customerCode)).map(customer), total: payload.customerCode ? 1 : 40,
@@ -114,7 +119,9 @@ function fixture({ corrupt, failed, record = scenario, clock = () => new Date('2
   const buildSnapshot = snapshotBuilder || (async ({ businessId, asOfDate }) => ({ mode: 'LIVE', dataVersion: '4', snapshot: { metadata: {
     snapshotVersion: 'v3-operational-snapshot-v2', businessId, scenarioId: V3.scenarioId, asOfDate, dataVersion: '4', snapshotHash: 'f'.repeat(64)
   } } }));
-  const service = createV3IntelligenceService({ models, mlClient, clock, snapshotBuilder: buildSnapshot });
+  const service = createV3IntelligenceService({ models, mlClient, clock, snapshotBuilder: buildSnapshot,
+    forecastRegistryService: { getActiveModelArtifact: async scope => ({ artifactData: Buffer.from('test-ridge'),
+      metadata: { ...scope, status: 'ACTIVE', modelVersion: 1, featureVersion: 'RIDGE_CAUSAL27_V1' } }) } });
   const orchestrator = createAgentOrchestrator({ memory: createConversationMemory(), clock, onEvent: event => events.push(event), dependencies: { v3Service: service, clock },
     provider: { generateStructured() { throw new Error('Unexpected LLM'); }, generateWithTools() { throw new Error('Unexpected LLM'); } } });
   const run = (message, conversationId = randomUUID(), request = req()) => orchestrator.handle(request, { message, conversationId });
@@ -157,6 +164,9 @@ const banks = {
 };
 for (const [skillId, queries] of Object.entries(banks)) for (const message of queries) test(`V3 family ${skillId}: ${message}`, () => {
   const plan = routeV3(message, {}, binding);
+  if (skillId === 'get_product_forecast' && /mañana|próximos 1 días/.test(message)) {
+    assert.match(plan.clarificationQuestion, /1 día no está aprobado/); return;
+  }
   assert.equal(plan?.tasks?.[0]?.skillId, skillId, JSON.stringify(plan));
 });
 
@@ -514,7 +524,11 @@ test('V3 name-free forecast detail preserves the selected label and actual quant
 test('V3 horizon-only followups reuse the selected product with no LLM', async () => {
   const f = fixture(), cid = randomUUID(); zero(await f.run('Pronóstico de BEB-GAS-004', cid));
   for (const horizon of [14, 1, 7]) {
+    const before = f.calls.length;
     const result = await f.run(`¿Y para los próximos ${horizon} días?`, cid); zero(result);
+    if (horizon === 1) {
+      assert.equal(f.calls.length, before); assert.match(result.answer, /1 día no está aprobado/); continue;
+    }
     assert.equal(f.calls.at(-1).payload.horizonDays, horizon);
     assert.deepEqual(f.calls.at(-1).payload.skus, ['BEB-GAS-004']);
     assert.equal(result.v3Views[0].items[0].metrics[0].value, horizon * 2);
@@ -814,8 +828,8 @@ test('H.1 multi-intent ML queries are bounded to four deterministic skills and c
   assert.ok(/HistGradientBoostingRegressor/.test(overview.answer) && /K-Means/.test(overview.answer)
     && /Isolation Forest/.test(overview.answer) && /FP-Growth/.test(overview.answer));
   const noMl = await fixture().run('¿El inventario usa Machine Learning?'); zero(noMl);
-  assert.match(noMl.answer, /no un modelo de Machine Learning/i);
-  assert.match(noMl.answer, /cobertura, safety stock, reposición y ABC\/XYZ/i);
+  assert.match(noMl.answer, /P7\/P14 de Ridge ACTIVE/i);
+  assert.match(noMl.answer, /Cobertura, safety stock y reposición son reglas existentes/i);
   assert.doesNotMatch(noMl.answer, /proveedores resume órdenes/i);
   const suppliersNoMl = await fixture().run('¿Por qué no aplicó ML a proveedores?'); zero(suppliersNoMl);
   assert.match(suppliersNoMl.answer, /no se produce un score o calificación global de proveedor/i);

@@ -148,7 +148,7 @@ function nluPlan(v, message, memory, binding) {
     case 'TOP_SELLING_PRODUCTS': return make('get_business_analytics', { mode: 'rank', entityType: 'product', metric: v.metric || 'units', ...period.period });
     case 'FORECAST': {
       const horizonDays = requestedHorizon(message) ?? v.horizonDays ?? 7;
-      if (![1, 7, 14].includes(horizonDays)) return { clarificationQuestion: 'Los horizontes aprobados son 1, 7 y 14 días. ¿Cuál deseas consultar?' };
+      if (![7, 14].includes(horizonDays)) return { clarificationQuestion: 'Ridge LIVE está aprobado únicamente para 7 y 14 días; 1 día no está aprobado. ¿Cuál deseas consultar?' };
       return make('get_product_forecast', { mode: ref ? 'detail' : 'summary', horizonDays, ...(ref ? { productRef: ref } : {}) });
     }
     case 'CUSTOMERS_AT_RISK': return make('get_customer_intelligence', { mode: 'rank', segment: 'AT_RISK', metric: 'recency', ...period.period });

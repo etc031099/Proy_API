@@ -58,8 +58,8 @@ const buildGroundedPlan = (message, binding) => {
     clarificationQuestion: 'La evaluación del modelo es global, no por SKU. ¿Quieres revisar esa evaluación o el pronóstico operativo del producto?' };
   const horizon = Number(normalize(message).match(/\b(?:para|proximos?|horizonte(?: de)?)\s+(\d+)\s+dias?\b/)?.[1]
     || (/manana/.test(normalize(message)) ? 1 : 7));
-  if (classification.skills.includes(F) && classification.responseIntent !== 'ml_interpretation' && ![1, 7, 14].includes(horizon))
-    return { ...classification, tasks: [], clarificationQuestion: 'El pronóstico operativo admite únicamente horizontes de 1, 7 o 14 días. ¿Cuál deseas consultar?' };
+  if (classification.skills.includes(F) && classification.responseIntent !== 'ml_interpretation' && ![7, 14].includes(horizon))
+    return { ...classification, tasks: [], clarificationQuestion: 'Ridge LIVE está aprobado únicamente para 7 y 14 días; 1 día no está aprobado. ¿Cuál deseas consultar?' };
   const tasks = classification.skills.map(skillId => {
     let args = { limit: 3 };
     if (skillId === B) args = { ...args, mode: classification.responseIntent === 'sales_evolution' ? 'compare' : 'summary', ...parsed.period,

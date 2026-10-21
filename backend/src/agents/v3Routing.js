@@ -439,9 +439,9 @@ const routeV3 = (message, state, binding) => {
       || memory.selectedProduct?.key && /^(?:pronostico|prediccion|forecast)(?: a | para )/.test(text) ? memory.selectedProduct?.key : null);
     const horizon = Number(text.match(/\b(\d+) dias?\b/)?.[1] || (/manana/.test(text) ? 1 : /14|dos semanas/.test(text) ? 14 : 7));
     if (/como calcul|metodo|metodologia/.test(text)) return { tasks: [task('get_product_forecast', { mode: 'method' })] };
-    if (![1, 7, 14].includes(horizon) || /proximo mes|28 dias/.test(text)) return { clarificationQuestion: 'El horizonte validado para este escenario llega a 14 días.',
+    if (![7, 14].includes(horizon) || /proximo mes|28 dias/.test(text)) return { clarificationQuestion: 'Ridge LIVE tiene modelos aprobados únicamente para 7 y 14 días. El horizonte de 1 día no está aprobado; no se usa un sustituto.',
       suggestions: [7, 14].map(days => ({ label: `Consultar ${days} días`, message: ref ? `pronóstico de ${ref} próximos ${days} días` : `pronóstico próximos ${days} días` })) };
-    if (/esta semana/.test(text) && !ref) return { clarificationQuestion: 'El pronóstico admite horizontes agregados de 1, 7 o 14 días desde el corte del escenario. ¿Cuál deseas?' };
+    if (/esta semana/.test(text) && !ref) return { clarificationQuestion: 'Ridge LIVE admite 7 o 14 días. ¿De qué producto deseas consultar el pronóstico?' };
     if (!ref && /ayer/.test(text)) return { clarificationQuestion: '¿De qué producto deseas consultar la predicción de ayer?' };
     const args = { mode: ref ? 'detail' : /mayor|mas|top/.test(text) ? 'rank' : 'summary', horizonDays: horizon, ...(ref ? { productRef: ref } : {}) };
     const compare = /compar/.test(text) && message.match(/(?:demanda|forecast|predicci[oó]n|pron[oó]stico)\s+(?:de\s+)?(.+)\s+y\s+(.+)$/i);
@@ -578,11 +578,11 @@ const crossSellMetrics = row => [
     : typeof row.stability === 'string' ? [`estabilidad ${row.stability}`] : [])
 ].join(' · ');
 const mlExplanation = concept => ({
-  supervised: 'El aprendizaje supervisado ajusta un modelo con ejemplos que incluyen una variable objetivo. En este escenario se evaluó HGB para demanda; el método operativo V3 sigue siendo MA28.',
+  supervised: 'Ridge Regression es aprendizaje supervisado: usa las 27 variables del contrato CAUSAL27 para estimar demanda acumulada. Ridge LIVE sirve únicamente modelos ACTIVE aprobados para 7 y 14 días.',
   features: 'Las features son variables de entrada que el modelo usa para estimar su objetivo. La lista siguiente procede del contrato de evaluación; no se recalculan ni se interpretan como causas.',
   wape: 'WAPE es el error absoluto total dividido entre la demanda real total. Es una métrica agregada de error; no es una probabilidad de acierto por producto.',
   baseline: 'Un baseline es una referencia simple para comprobar si un modelo aporta mejora. Se compara con el mismo corte de evaluación; un valor menor de WAPE indica menor error agregado.',
-  why_method: 'HGB fue entrenado y evaluado, pero MA28 mostró mejor comportamiento operativo en los horizontes V3 aprobados. La evidencia HGB se conserva; su evaluación a 28 días no superó los gates operativos.',
+  why_method: 'El forecast operativo usa Ridge Regression ACTIVE con CAUSAL27 en 7 y 14 días. La evaluación histórica HGB/MA28 es evidencia separada; no sustituye Ridge LIVE ni aprueba el horizonte de 1 día.',
   kmeans: 'K-Means es aprendizaje no supervisado: agrupa clientes por similitud de Recency, Frequency y Monetary. Es exploratorio y se entrenó con 38 clientes; no asigna probabilidades.',
   silhouette: 'Silhouette resume qué tan cohesionados y separados quedan los grupos: valores mayores suelen indicar mejor separación. Aquí se interpreta junto con estabilidad y utilidad, no como criterio único.',
   ari: 'ARI mide cuánto coinciden agrupaciones entre ejecuciones; 1 representa coincidencia completa. El ARI reportado es estabilidad del clustering, no exactitud contra etiquetas reales.',
@@ -599,7 +599,7 @@ const mlExplanation = concept => ({
   confidence: 'Confidence estima qué proporción de tickets con el antecedente también contiene el consecuente. Es frecuencia condicional observada, no causalidad.',
   lift: 'Lift compara la frecuencia conjunta observada con la esperada si antecedente y consecuente fueran independientes. Mayor que 1 indica asociación positiva, no efecto causal.',
   causality: 'No puede concluirse causalidad: FP-Growth describe compras que aparecen juntas en el histórico congelado al 2026-10-12.',
-  inventory_not_ml: 'El inventario usa analítica operativa, no un modelo de Machine Learning: calcula cobertura, safety stock, reposición y ABC/XYZ. El método actual de forecast es MA28; HGB no controla la reposición ni una cantidad sugerida confirma una compra.',
+  inventory_not_ml: 'El inventario combina stock y entradas operacionales con P7/P14 de Ridge ACTIVE cuando están disponibles. Cobertura, safety stock y reposición son reglas existentes; ABC/XYZ es clasificación descriptiva. Una cantidad sugerida no confirma una compra y los datos desconocidos siguen no disponibles.',
   supplier_not_ml: 'Actualmente no se usa Machine Learning para proveedores. Se resumen órdenes, gasto, lead time, puntualidad y dependencia de abastecimiento; no se produce un score o calificación global de proveedor.',
   coverage: 'La cobertura estima cuántos días puede sostenerse el stock disponible según la demanda estimada; es una métrica operativa, no una probabilidad ni un modelo ML.',
   reorder_point: 'El punto de reposición es un umbral operativo para indicar cuándo conviene reponer, considerando demanda y plazo de abastecimiento; alcanzarlo no crea ni confirma una compra.',
@@ -651,8 +651,8 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
   if (skillId === 'get_product_forecast' && args.mode === 'evaluation') {
     kind = 'forecast'; title = 'Evaluación de modelos de demanda'; subtitle = `Evidencia histórica al ${d.analysisCutoff || result.metadata.frozenCutoff || result.metadata.asOf}`;
     const selectedMethod = d.selectedOperationalMethod || {};
-    metrics.push({ label: 'Método operativo V3', value: selectedMethod.algorithm || selectedMethod.label || 'no disponible' },
-      { label: 'Horizontes aprobados', value: (selectedMethod.horizons || [1, 7, 14]).map(day => `${day}d`).join(' · ') });
+    metrics.push({ label: 'Método del benchmark histórico', value: selectedMethod.algorithm || selectedMethod.label || 'no disponible' },
+      { label: 'Horizontes del benchmark histórico', value: (selectedMethod.horizons || []).map(day => `${day}d`).join(' · ') });
     for (const row of d.modelEvaluation || []) items.push({ type: 'category', key: row.algorithm, label: row.algorithm,
       secondaryLabel: row.dataset?.name || row.modelId,
       metrics: [{ label: 'Estado', value: row.modelStatus === 'REJECTED_FOR_OPERATIONAL_USE' ? 'Evaluado; no aprobado para operación' : row.modelStatus },
@@ -662,7 +662,7 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
       for (const row of d.modelEvaluation || []) items.push({ type: 'category', key: `${row.modelId}-features`, label: `${row.dataset?.name || row.modelId} · features`,
         metrics: (row.features || []).slice(0, 5).map((feature, index) => ({ label: `Variable ${index + 1}`, value: feature })) });
     }
-    note = `HGB fue evaluado como evidencia de Machine Learning. V3 opera con MA28, un método estadístico, en 1, 7 y 14 días; HGB a 28 días no fue aprobado.${selectedMethod.selectionReason ? ` Selección: ${selectedMethod.selectionReason}` : ''}`;
+    note = 'Evaluación histórica HGB/MA28; no representa el modelo LIVE. Ridge LIVE usa ACTIVE CAUSAL27 en 7 y 14 días; 1 día no está aprobado.';
   } else if (skillId === 'get_customer_intelligence' && args.mode === 'clustering') {
     kind = 'customer'; title = 'Segmentación exploratoria K-Means'; subtitle = `Corte de entrenamiento ${d.trainingCutoff || result.metadata.asOf}`;
     metrics.push({ label: 'Clientes entrenables', value: d.sampleCount ?? 'no disponible' }, { label: 'Clusters (k)', value: d.k ?? 'no disponible' },
@@ -710,8 +710,13 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
         { label: 'Stock', value: displayNumber(row.stock?.onHand) },
         ...(Number.isFinite(row.inventoryPolicy?.configuredMinimumStock) ? [{ label: 'Stock mínimo', value: displayNumber(row.inventoryPolicy.configuredMinimumStock) }] : []),
         { label: 'Entradas', value: displayNumber(row.stock?.incoming) },
+        { label: 'Posición de inventario', value: displayNumber(row.stock?.inventoryPosition) },
         { label: 'Cobertura', value: Number.isFinite(row.coverage?.daysCover) ? `${displayNumber(row.coverage.daysCover)} días` : 'no disponible' },
-        { label: 'Riesgo', value: row.risk?.level || 'no disponible' }, { label: 'Reponer', value: row.recommendation?.shouldReorder ? 'Sí' : 'No' },
+        { label: 'Riesgo', value: row.risk?.level || 'no disponible' },
+        { label: 'Reponer', value: row.recommendation?.shouldReorder === true ? 'Sí'
+          : row.recommendation?.shouldReorder === false ? 'No' : 'no disponible' },
+        { label: 'Stock de seguridad', value: displayNumber(row.inventoryPolicy?.safetyStock) },
+        { label: 'Punto de reorden', value: displayNumber(row.inventoryPolicy?.reorderPoint) },
         { label: 'Cantidad sugerida', value: displayNumber(row.recommendation?.recommendedQty) },
         { label: 'Motivo', value: (row.risk?.reasonCodes || []).slice(0, 3).map(reasonLabel).join(', ') || 'sin indicador adicional' }
       ]); if (item) items.push(item);
@@ -719,14 +724,24 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
   } else if (skillId === 'get_product_forecast') {
     kind = 'forecast'; title = selected?.label ? `Pronóstico · ${selected.label}` : 'Pronóstico de demanda';
     const horizon = args.horizonDays || d.horizonDays || 7;
-    subtitle = d.method ? 'Método validado: media móvil de 28 días · horizontes aprobados: 1, 7 y 14 días.'
+    const ridge = d.method === 'RIDGE_REGRESSION';
+    subtitle = ridge ? 'Ridge LIVE · autoridad ACTIVE · CAUSAL27 · 7 y 14 días aprobados'
       : `${horizon} ${horizon === 1 ? 'día' : 'días'} desde el corte operativo del escenario.`;
     if (d.totalExpectedUnits !== undefined) metrics.push({ label: `Unidades esperadas · ${horizon} ${horizon === 1 ? 'día' : 'días'}`, value: displayNumber(d.totalExpectedUnits) });
     for (let i = 0; i < rows.length; i++) {
-      const row = rows[i], item = itemFor(row, i, [{ label: `Unidades esperadas · ${horizon} ${horizon === 1 ? 'día' : 'días'}`, value: displayNumber(row[`expectedUnitsNext${horizon}d`]) }]);
+      const row = rows[i], item = itemFor(row, i, [
+        { label: `Unidades esperadas · ${horizon} días`, value: displayNumber(ridge ? row.predictionUnits : row[`expectedUnitsNext${horizon}d`]) },
+        ...(ridge ? [{ label: 'Estado', value: row.status },
+          { label: 'Estado del modelo', value: row.activeModelStatus || 'No disponible' },
+          { label: 'Motivo', value: row.reasonCode || 'Sin limitación reportada' },
+          { label: 'Modelo ACTIVE', value: Number.isSafeInteger(row.modelVersion) ? `v${row.modelVersion}` : 'No disponible' },
+          { label: 'Feature version', value: row.featureVersion || 'No disponible' },
+          { label: 'Revisión', value: row.dataVersion || result.metadata.dataVersion || 'No disponible' },
+          { label: 'Observaciones cerradas hasta', value: row.observationsThrough || result.metadata.observationsClosedThrough || 'No disponible' }] : [])]);
       if (item) items.push(item);
     }
-    note = d.method ? 'El pronóstico no representa una predicción diaria ni expone una confianza individual.' : 'Fuente: media móvil de 28 días. No es una garantía de ventas.';
+    note = ridge ? '1 día no aprobado. Un dato no disponible no equivale a cero; el pronóstico no garantiza ventas ni implica un entrenamiento nuevo.'
+      : 'Evidencia histórica de media móvil de 28 días; no representa Ridge LIVE.';
   } else if (skillId === 'get_cross_sell_recommendations') {
     kind = 'cross_sell'; title = selected?.label ? `Compras observadas junto con ${selected.label}` : 'Productos que suelen aparecer juntos';
     const sourceRows = rows.slice(0, 5);
@@ -851,13 +866,13 @@ const renderV3 = (skillId, result, args, responseMode = null) => {
   }
   if (skillId === 'get_product_forecast' && args.mode === 'evaluation') {
     const selected = d.selectedOperationalMethod || {}, evaluationRows = d.modelEvaluation || [];
-    const lines = [`Método operativo V3: ${selected.algorithm || selected.label || 'no disponible'} (${(selected.horizons || [1, 7, 14]).join('/')} días).`];
+    const lines = [`Método del benchmark histórico: ${selected.algorithm || selected.label || 'no disponible'} (${(selected.horizons || []).join('/')} días).`];
     for (const row of evaluationRows) {
       const baseline = row.baseline?.testMetrics?.wape;
       lines.push(`${row.dataset?.name || row.modelId}: ${row.algorithm} · ${row.modelStatus === 'REJECTED_FOR_OPERATIONAL_USE' ? 'evaluado; no aprobado para operación' : 'evaluado'} · TEST WAPE ${percent(row.metrics?.test?.wape)}${Number.isFinite(baseline) ? ` · baseline ${percent(baseline)}` : ''}.`);
       if (args.concept === 'features') lines.push(`Features ${row.dataset?.name || row.modelId}: ${(row.features || []).join(', ') || 'no disponibles en el contrato'}.`);
     }
-    lines.push(`HGB conserva su evaluación como evidencia ML; MA28 es un método estadístico, no ML. ${selected.selectionReason || 'V3 mantiene MA28 en los horizontes operativos aprobados.'} HGB 28d no pasó los gates operativos.`);
+    lines.push('HGB/MA28 se conservan como evidencia histórica. Ridge LIVE usa modelos ACTIVE CAUSAL27 en 7 y 14 días; 1 día no está aprobado.');
     const explanation = mlExplanation(args.concept); if (explanation && args.concept !== 'algorithm') lines.push(explanation);
     return `${heading}\n${lines.join('\n')}`;
   }
@@ -885,8 +900,10 @@ const renderV3 = (skillId, result, args, responseMode = null) => {
     return `${heading}\n${lines.join('\n')}`;
   }
   const lines = items.slice(0, 5).map((r, i) => {
-    if (skillId === 'get_inventory_intelligence') return `${i + 1}. ${label(r)} (${r.sku}) · stock ${num(r.stock?.onHand)} · entradas pendientes ${num(r.stock?.incoming)} · cobertura ${num(r.coverage?.daysCover)} días · riesgo ${r.risk?.level} · cantidad sugerida ${num(r.recommendation?.recommendedQty)} · motivos: ${(r.risk?.reasonCodes || []).map(reasonLabel).join(', ') || 'sin indicador adicional'}.`;
-    if (skillId === 'get_product_forecast') return `${i + 1}. ${result.metadata.selected?.product?.label || label(r)} (${r.sku}) · estimación de ventas: ${units(r[`expectedUnitsNext${args.horizonDays || 7}d`])} en ${args.horizonDays || 7} ${args.horizonDays === 1 ? 'día' : 'días'} · media móvil de 28 días.`;
+    if (skillId === 'get_inventory_intelligence') return `${i + 1}. ${label(r)} (${r.sku}) · stock ${num(r.stock?.onHand)} · entradas pendientes ${num(r.stock?.incoming)} · cobertura ${num(r.coverage?.daysCover)} días · riesgo ${r.risk?.level || 'no disponible'} · cantidad sugerida ${num(r.recommendation?.recommendedQty)} · motivos: ${(r.risk?.reasonCodes || []).map(reasonLabel).join(', ') || 'sin indicador adicional'}.`;
+    if (skillId === 'get_product_forecast') return d.method === 'RIDGE_REGRESSION'
+      ? `${i + 1}. ${result.metadata.selected?.product?.label || label(r)} (${r.sku}) · Ridge LIVE · autoridad ACTIVE · ${units(r.predictionUnits)} en ${args.horizonDays || 7} días · estado ${r.status} · modelo ${r.modelVersion == null ? 'no disponible' : `v${r.modelVersion}`} (${r.activeModelStatus || 'no disponible'}) · CAUSAL27 ${r.featureVersion || ''} · revisión ${r.dataVersion || result.metadata.dataVersion || 'no disponible'} · observaciones cerradas hasta ${r.observationsThrough || 'no disponible'}${r.reasonCode ? ` · motivo ${r.reasonCode}` : ''}.`
+      : `${i + 1}. ${result.metadata.selected?.product?.label || label(r)} (${r.sku}) · evidencia histórica MA28: ${units(r[`expectedUnitsNext${args.horizonDays || 7}d`])} en ${args.horizonDays || 7} días; no es Ridge LIVE.`;
     if (skillId === 'get_customer_intelligence') return `${i + 1}. ${label(r)} · ${segmentLabel(r.segment)} · última compra ${r.lastPurchaseDate || 'sin compras'} · ${num(r.ticketCount)} tickets históricos · gasto histórico ${money(r.totalSpentCents)} · ticket promedio ${money(r.averageTicketCents)}${args.mode === 'preferences' ? ` · categoría preferida: ${r.preferences?.favoriteCategoryName || 'no disponible'} · productos habituales: ${(r.preferences?.topProducts || []).slice(0, 5).map(p => p.name || p.sku).join(', ') || 'sin datos'}` : ''}.`;
     if (skillId === 'get_supplier_intelligence' && args.mode === 'alternatives') return `${i + 1}. ${r.sku} · ${(r.alternatives || []).slice(0, 5).map(offer => `${offer.supplierName || offer.supplierCode}: ${money(offer.unitCostCents)}`).join('; ') || 'sin alternativas configuradas'}.`;
     if (skillId === 'get_supplier_intelligence') return `${i + 1}. ${label(r)} (${r.supplierCode}) · ${num(r.purchaseOrderCount)} compras históricas · ${num(r.pendingOrderCount)} pedidos pendientes · gasto histórico recibido ${money(r.receivedSpendCents)} · lead time observado ${num(r.leadTime?.averageDays)} días con ${num(r.leadTime?.sampleSize)} observaciones · puntualidad ${num(r.punctuality?.onTimeRatePct)}% · catálogo exclusivo: ${num(r.exclusiveOfferedSkuCount)} productos · ${(r.productsSupplied || []).slice(0, 5).map(p => p.name || p.productName || p.sku).join(', ')}.`;
@@ -901,7 +918,7 @@ const renderV3 = (skillId, result, args, responseMode = null) => {
       : 'La variación frente al periodo comparable no está disponible.');
   }
   if (skillId === 'get_inventory_intelligence' && d.summary) lines.push(`${num(d.summary.products)} productos · ${num(d.summary.critical)} críticos · ${num(d.summary.lowStock)} con stock bajo · ${num(d.summary.shouldReorder)} requieren reposición. ABC: ${Object.entries(d.abcCounts || {}).map(([key, count]) => `${key}: ${count}`).join(', ')}. XYZ: ${Object.entries(d.xyzCounts || {}).map(([key, count]) => `${key}: ${count}`).join(', ')}.`);
-  if (skillId === 'get_product_forecast' && d.method) lines.push('Se usa MOVING_AVERAGE_28: media móvil de 28 días, seleccionada por su generalización en los horizontes operativos de 1, 7 y 14 días del benchmark V3. No expone confianza ni intervalo de predicción.');
+  if (skillId === 'get_product_forecast' && d.method === 'RIDGE_REGRESSION') lines.push('Ridge Regression ACTIVE · CAUSAL27 · horizontes aprobados 7 y 14 días. 1 día no aprobado. No se usa MA28 como sustituto ni se calcula un forecast diario.');
   if (skillId === 'get_product_forecast' && d.totalExpectedUnits !== undefined) lines.push(`Estimación agregada: ${units(d.totalExpectedUnits)} en ${d.horizonDays} ${d.horizonDays === 1 ? 'día' : 'días'} desde el corte del escenario.`);
   if (skillId === 'get_customer_intelligence' && d.periodMetrics) lines.push(`Gasto del periodo solicitado: ${Object.entries(d.periodMetrics).map(([code, row]) => `${code}: ${money(row.revenueCents)}`).join('; ')}. El segmento RFM corresponde a su ventana de 90 días.`);
   if (skillId === 'get_customer_intelligence' && args.segment === 'TOP_HIGH_VALUE') lines.push('El segmento de alto valor se basa en gasto del RFM de 90 días y actividad reciente; el riesgo de inactividad es una categoría distinta y no es el criterio de este ranking.');
@@ -1186,7 +1203,9 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
       scope.pending = null; save();
     } catch (error) {
       const functional = error.functionalCode;
-      const message = ({ UNSUPPORTED_HORIZON: 'Los horizontes aprobados son 1, 7 y 14 días.', INVALID_PERIOD: 'Indica un periodo dentro del histórico disponible y no posterior a la fecha operativa actual.',
+      const message = ({ UNSUPPORTED_HORIZON: 'Ridge LIVE solo tiene horizontes aprobados de 7 y 14 días; 1 día no está aprobado.',
+        FORECAST_PRODUCT_REQUIRED: 'Selecciona un producto para consultar su Ridge LIVE a 7 o 14 días. No se sustituirá por un ranking MA28.',
+        INVALID_PERIOD: 'Indica un periodo dentro del histórico disponible y no posterior a la fecha operativa actual.',
         PRODUCT_NOT_FOUND: 'No encontré ese producto en tu negocio.', CUSTOMER_NOT_FOUND: 'No encontré ese cliente en tu negocio.', SUPPLIER_NOT_FOUND: 'No encontré ese proveedor en tu negocio.',
         INSUFFICIENT_HISTORY: 'No hay historia suficiente para ese origen del pronóstico.',
         SNAPSHOT_BOOTSTRAP_REQUIRED: 'La analítica operativa todavía no está habilitada para este negocio; no usaré el corte histórico como reemplazo.',
@@ -1198,7 +1217,7 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
       if (functional === 'UNSUPPORTED_HORIZON') {
         const product = scope.selectedProduct?.key;
         v3Views.push({ kind: 'forecast', title: 'Horizonte no disponible', subtitle: message, metrics: [], items: [],
-          note: 'El escenario tiene pronósticos aprobados para 1, 7 y 14 días.' });
+          note: 'Ridge LIVE está aprobado únicamente para 7 y 14 días.' });
         return { answer: answers.join('\n\n'), intent: 'v3_intelligence', agent: 'analyst', v3Views,
           suggestions: [7, 14].map(days => ({ label: `Consultar ${days} días`, message: product ? `pronóstico de ${product} próximos ${days} días` : `pronóstico próximos ${days} días` })) };
       }

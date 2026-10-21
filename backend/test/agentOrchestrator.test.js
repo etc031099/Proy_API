@@ -506,7 +506,7 @@ test('P2B supplier details remain NOT READY and unsupported details clarify at z
   const result = await fixture().run('Dame el teléfono de ese proveedor');
   assertNoLLM(result); assert.equal(result.usage.totalSkillCalls, 0);
   assert.match(result.answer, /todavía no sus detalles/);
-  assert.equal(require('../src/agents/skills').getSkillDefinition('get_supplier_details').executorStatus, 'PENDING_IMPLEMENTATION');
+  assert.throws(() => require('../src/agents/skills').getSkillDefinition('get_supplier_details'), { code: 'AGENT_SKILL_NOT_FOUND' });
 });
 for (const alias of ['prov 01 san martin', 'proveedro 1 san martn', 'proveedor 001 san martin']) {
   test(`P2B READ supplier single trusted alias ${alias} auto-resolves at zero LLM`, async () => {

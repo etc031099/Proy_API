@@ -20,7 +20,7 @@ const safeData = (value, depth = 0, maxArrayLength = 100) => {
 };
 // One request owns the source binding and entity promises. No decisions are cached
 // across users/tenants or across conversation turns.
-const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(), snapshotBuilder } = {}) => {
+const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(), snapshotBuilder, forecastRegistryService } = {}) => {
   const getModels = () => models || require('../models');
   const client = mlClient || require('./mlServiceClient').createMlServiceClient({ timeoutMs: AGENT_ML_HTTP_TIMEOUT_MS });
   const operationalClock = createOperationalClock({ clock, timeZone: V3.timezone });
@@ -582,6 +582,8 @@ const createV3IntelligenceService = ({ models, mlClient, clock = () => new Date(
         costCoverage: pick(d.commercial?.costCoverage, ['knownSaleLines', 'unknownSaleLines', 'status']) } });
     return mapped;
   };
-  return Object.freeze({ resolveContext, resolveEntity, execute, operationalClock, forecastEvaluation, customerClustering, salesAnomalies, salesAnomalyProvisional });
+  const executeAssistant = require('../agents/v3ReadAdapter').createV3AssistantRead({
+    execute, resolveContext, registry: forecastRegistryService });
+  return Object.freeze({ resolveContext, resolveEntity, execute, executeAssistant, operationalClock, forecastEvaluation, customerClustering, salesAnomalies, salesAnomalyProvisional });
 };
 module.exports = { V3, createV3IntelligenceService, safeData };

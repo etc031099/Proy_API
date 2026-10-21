@@ -28,7 +28,7 @@ const buildAllowedLimitations = (evidence = []) => {
       item.recommendation?.recommendedQty === null && item.recommendation?.status === 'LIVE_FORECAST_REQUIRED'))
       add('RECOMMENDED_QUANTITY_UNAVAILABLE', row.ref);
     else if (row.skillId === 'get_product_forecast' && (unavailable || items.some(item =>
-      ['COLD_START', 'INSUFFICIENT_HISTORY', 'UNAVAILABLE'].includes(item.status))))
+      ['COLD_START', 'INSUFFICIENT_HISTORY', 'UNAVAILABLE', 'MODEL_NOT_APPROVED', 'MODEL_UNAVAILABLE', 'FEATURE_UNAVAILABLE'].includes(item.status))))
       add('FORECAST_UNAVAILABLE', row.ref);
     else if (partial) add('ANALYTICS_PARTIAL', row.ref);
     else if (unavailable) add('ANALYTICS_UNAVAILABLE', row.ref);

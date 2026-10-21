@@ -6,6 +6,7 @@ const { artifactBytes } = require('./forecastModelRegistryService');
 const { isPlainObject } = require('../agents/contracts');
 const { createProductOperationHistoryService } = require('./productOperationHistoryService');
 const { projectRidgeFeatureInputs } = require('./forecastRidgeFeatureInputs');
+const { createV3RidgeServingAuthority, trustedForecastEnvelope } = require('./v3RidgeServingAuthority');
 
 const RIDGE_RECIPE_ID = 'RIDGE-CAUSAL27';
 const RIDGE_FEATURE_VERSION = 'RIDGE_CAUSAL27_V1';
@@ -50,6 +51,7 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
   const service = intelligenceService || createV3IntelligenceService({ models, clock });
   const getModels = () => models || require('../models');
   const registry = forecastRegistryService || require('./forecastModelRegistryService').createForecastModelRegistryService();
+  const ridgeAuthority = createV3RidgeServingAuthority({ registry });
   const productOperations = createProductOperationHistoryService({ models });
   const loadCatalogProducts = async (businessId, skus, fields) => {
     if (!skus.length) return new Map();
@@ -81,24 +83,14 @@ const createV3BusinessIntelligenceDashboard = ({ models, intelligenceService, fo
     signal: new AbortController().signal,
     ...trusted,
   });
-  const liveRidgeModelsFor = async context => Promise.all([7, 14].map(async horizonDays => {
-    try {
-      const active = await registry.getActiveModelArtifact({ businessId: context.authenticated.businessId,
-        scenarioId: V3.scenarioId, horizonDays });
-      return active ? trustedForecastEnvelope(active, { businessId: context.authenticated.businessId,
-        scenarioId: V3.scenarioId, horizonDays }) : null;
-    } catch (_) {
-      // An unavailable/corrupt ACTIVE artifact makes forecast-dependent
-      // inventory fields partial; it must not suppress independent stock data.
-      return null;
-    }
-  }));
+  const liveRidgeModelsFor = context => ridgeAuthority.modelsFor({
+    businessId: context.authenticated.businessId, scenarioId: V3.scenarioId });
   const executeInventoryHealth = async (context, skillId, args = {}, maxRecords = 20, trusted = {}) => {
     if (context.asOf <= V3.historicalCutoff) return execute(context, skillId, args, maxRecords, trusted);
     const envelopes = await liveRidgeModelsFor(context);
     return execute(context, skillId, args, maxRecords, {
       ...trusted,
-      trustedInventoryRidgeModels: envelopes.filter(Boolean),
+      trustedInventoryRidgeModels: envelopes,
     });
   };
   const responseMeta = (result, context, domain) => ({
@@ -786,21 +778,6 @@ function mapServingDiagnosticCode(value) {
   if (value === 'FEATURE_UNAVAILABLE') return 'FEATURE_BUILDER_UNAVAILABLE';
   if (value === 'SCORING_UNAVAILABLE') return 'ML_SCORING_FAILED';
   return value === 'MODEL_READY' ? value : 'ML_ARTIFACT_LOAD_FAILED';
-}
-function trustedForecastEnvelope(active, scope) {
-  const metadata = active?.metadata, bytes = active?.artifactData;
-  if (!metadata || !Buffer.isBuffer(bytes) || !bytes.length || bytes.length > 262_144
-      || metadata.status !== 'ACTIVE' || metadata.businessId !== scope.businessId
-      || metadata.scenarioId !== scope.scenarioId || metadata.horizonDays !== scope.horizonDays) {
-    const error = new Error('Active model artifact does not match the requested scope.');
-    error.functionalCode = 'ARTIFACT_UNAVAILABLE'; throw error;
-  }
-  const fields = ['businessId', 'scenarioId', 'horizonDays', 'modelFamily', 'recipeId', 'modelVersion',
-    'status', 'trainedAt', 'trainedDataVersion', 'dataCutoff', 'featureVersion', 'featureHash',
-    'promotionPolicyVersion', 'promotionPolicyHash', 'artifactHash', 'artifactBytes'];
-  return { metadata: Object.fromEntries(fields.map(key => [key,
-    metadata[key] instanceof Date ? metadata[key].toISOString() : metadata[key]])),
-    artifactDataBase64: bytes.toString('base64') };
 }
 function liveRidgeResponse(row, context, product, horizonDays, metadata) {
   const featureInputs = projectRidgeFeatureInputs(row);

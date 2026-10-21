@@ -32,9 +32,9 @@ test('registry contains exactly three distinct immutable agent definitions', () 
   assert.equal(getAgentDefinition('analyst').llmPolicy.preferredMode, 'hybrid');
 });
 
-test('all twenty-nine skills are unique read-only contracts with twenty-six implemented executors', () => {
-  assert.equal(SKILLS.length, 29);
-  assert.equal(new Set(SKILLS.map(skill => skill.id)).size, 29);
+test('only twenty-six implemented read-only skills are advertised', () => {
+  assert.equal(SKILLS.length, 26);
+  assert.equal(new Set(SKILLS.map(skill => skill.id)).size, 26);
   for (const skill of SKILLS) {
     assert.equal(skill.readOnly, true);
     assert.ok(['READY', 'PENDING_IMPLEMENTATION'].includes(skill.executorStatus));
@@ -209,20 +209,18 @@ test('unknown skills and unauthorized agents fail before any executor lifecycle 
   assert.equal(execution.getEvents().some(event => event.type === 'skill_called'), false);
 });
 
-test('a pending executor returns a controlled error with trace correlation and zero LLM usage', async () => {
+test('a retired capability is rejected before dispatch with zero LLM usage', async () => {
   const ctx = context();
   const execution = createAgentExecution({ context: ctx });
-  await assert.rejects(execution.executeSkill({ agentId: 'analyst', skillId: 'get_inventory_summary' }), expectCode('AGENT_EXECUTOR_NOT_READY'));
+  await assert.rejects(execution.executeSkill({ agentId: 'analyst', skillId: 'get_inventory_summary' }), expectCode('AGENT_SKILL_NOT_FOUND'));
   const usage = execution.finish();
   assert.equal(usage.totalSkillCalls, 0);
   assert.equal(usage.totalLlmCalls, 0);
   assert.equal(usage.totalTokens, 0);
   assert.equal(usage.metricsComplete, true);
-  assert.equal(usage.agents[0].usageAvailable, true);
   const events = execution.getEvents();
-  assert.deepEqual(events.map(event => event.type), ['request_started', 'agent_started', 'error', 'agent_finished', 'request_finished']);
+  assert.deepEqual(events.map(event => event.type), ['request_started', 'error', 'request_finished']);
   assert.ok(events.every(event => event.requestId === ctx.requestId));
-  assert.equal(events[1].agentRunId, events[3].agentRunId);
   assert.equal(events.at(-1).status, 'FAILED');
   const count = events.length;
   execution.finish();
@@ -231,13 +229,15 @@ test('a pending executor returns a controlled error with trace correlation and z
 });
 
 test('skill dispatch budget admits four attempts and blocks the fifth without executing it', async () => {
-  const execution = createAgentExecution({ context: context() });
+  const execution = createAgentExecution({ context: context(), dependencies: { models: {
+    Product: { findOne() { throw new Error('Offline fixture unavailable'); } }
+  } } });
   for (let i = 0; i < 4; i++) {
-    await assert.rejects(execution.executeSkill({ agentId: 'operations', skillId: 'get_inventory_summary' }), expectCode('AGENT_EXECUTOR_NOT_READY'));
+    await assert.rejects(execution.executeSkill({ agentId: 'operations', skillId: 'get_product_details', args: { sku: 'SKU-1' } }), expectCode('AGENT_SKILL_EXECUTION_FAILED'));
   }
-  await assert.rejects(execution.executeSkill({ agentId: 'operations', skillId: 'get_inventory_summary' }), expectCode('AGENT_BUDGET_EXCEEDED'));
-  assert.equal(execution.finish().totalSkillCalls, 0);
-  assert.equal(execution.getEvents().filter(event => event.type === 'skill_called').length, 0);
+  await assert.rejects(execution.executeSkill({ agentId: 'operations', skillId: 'get_product_details', args: { sku: 'SKU-1' } }), expectCode('AGENT_BUDGET_EXCEEDED'));
+  assert.equal(execution.finish().totalSkillCalls, 4);
+  assert.equal(execution.getEvents().filter(event => event.type === 'skill_called').length, 4);
 });
 
 test('central budgets bound messages and future calls without reporting them as usage', () => {
@@ -348,7 +348,7 @@ test('synthesis lifecycle trace keeps correlation and safe diagnostic only', () 
 
 test('failed telemetry sinks do not break the controlled domain result', async () => {
   const execution = createAgentExecution({ context: context(), onEvent: () => { throw new Error('sink unavailable'); } });
-  await assert.rejects(execution.executeSkill({ agentId: 'analyst', skillId: 'get_inventory_summary' }), expectCode('AGENT_EXECUTOR_NOT_READY'));
+  await assert.rejects(execution.executeSkill({ agentId: 'analyst', skillId: 'get_inventory_summary' }), expectCode('AGENT_SKILL_NOT_FOUND'));
   assert.equal(execution.finish().totalLlmCalls, 0);
 });
 

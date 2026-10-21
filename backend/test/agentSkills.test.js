@@ -180,7 +180,7 @@ test('informal product components require every word and numeric component withi
   f.assertNoMutation();
 });
 
-test('AG-R3, AG-R5, replenishment budgeting and alert delivery query skills are ready; three remain pending', () => {
+test('only implemented AG-R3, AG-R5, budgeting and alert delivery skills remain advertised', () => {
   assert.deepEqual(SKILLS.filter(skill => skill.executorStatus === 'READY').map(skill => skill.id), [
     ...require('../src/agents/v3Skills').V3_IDS,
     'list_inventory_alert_channel_deliveries',
@@ -190,9 +190,7 @@ test('AG-R3, AG-R5, replenishment budgeting and alert delivery query skills are 
     'get_sales_summary', 'get_business_summary', 'get_supplier_products', 'get_top_selling_products', 'get_product_sales_summary', 'get_demand_forecast', 'get_replenishment_candidates',
     'get_replenishment_cost', 'plan_replenishment_budget', 'compare_supplier_costs'
   ]);
-  assert.deepEqual(SKILLS.filter(skill => skill.executorStatus !== 'READY').map(skill => skill.id), [
-    'get_inventory_summary', 'get_purchase_summary', 'get_supplier_details'
-  ]);
+  assert.deepEqual(SKILLS.filter(skill => skill.executorStatus !== 'READY').map(skill => skill.id), []);
 });
 test('product search caps active tenant matches, projects DTOs and reports truncation', async () => {
   const f = fixture();
