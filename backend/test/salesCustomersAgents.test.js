@@ -81,7 +81,7 @@ test('A5.1 specialist read-only boundaries remain explicit', () => {
     assert.throws(() => validateSkillInvocation({ context, agentId, skillId: 'get_product_forecast', args: {} }));
   }
   assert.throws(() => validateSkillInvocation({ context, agentId: 'sales', skillId: 'get_recent_transactions', args: { type: 'purchase' } }));
-  for (const agentId of ['procurement', 'associations']) assert.equal(getAgentDefinition(agentId).status, 'PLANNED');
+  for (const agentId of ['procurement', 'associations']) assert.equal(getAgentDefinition(agentId).status, 'ACTIVE');
   assert.equal(getAgentDefinition('operations').capabilities.canWrite, true);
 });
 

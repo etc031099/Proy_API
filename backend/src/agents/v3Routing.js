@@ -231,6 +231,8 @@ const routeV3 = (message, state, binding) => {
   // Even a direct READ-runtime call must never reinterpret an admitted write.
   if (require('../automations/actionInput').actionIntent(message)) return { specialist: 'operations',
     clarificationQuestion: 'Las operaciones requieren resolver el producto y revisar un preview antes de confirmar. No se ejecutó ninguna operación.' };
+  if (require('./supplySpecialistRouting').supplyWrite(message)) return { specialist: 'operations',
+    clarificationQuestion: 'No tengo habilitada una acción para crear órdenes o recibir compras desde el asistente. Usa la pantalla de Compras. No se ejecutó ninguna operación.' };
   const text = clean(message), memory = state || {};
   if (/\b(?:que|cuanto) comprara\b/.test(text))
     return { clarificationQuestion: 'No hay un modelo que prediga las compras futuras de una persona. Puedo consultar su historial observado o el pronóstico operativo por producto.' };
@@ -605,7 +607,7 @@ const mlExplanation = concept => ({
   score: 'El anomaly score ordena observaciones por atipicidad según el artifact. No es una probabilidad de fraude ni de error.',
   accuracy: 'Accuracy requiere etiquetas reales para comparar predicciones correctas e incorrectas. Este Isolation Forest es no supervisado y el escenario no tiene etiquetas de anomalías verificadas; por eso no se reporta accuracy.',
   contamination: 'Contamination es un parámetro de Isolation Forest relacionado con la proporción esperada de observaciones atípicas; no es una probabilidad individual.',
-  fp_growth: 'FP-Growth extrae patrones frecuentes de compras y genera reglas de asociación. El artifact de Market Basket está congelado al 2026-10-12; asociación no implica causalidad.',
+  fp_growth: 'FP-Growth extrae patrones frecuentes de compras y genera reglas de asociación. La cesta es binaria: presencia o ausencia del producto, no multiplicación por unidades. El artifact de Market Basket está congelado al 2026-10-12; asociación no implica causalidad.',
   support: 'Support es la proporción de tickets que contienen conjuntamente los productos de una regla; ticketCount muestra evidencia observada en cantidad de tickets.',
   confidence: 'Confidence estima qué proporción de tickets con el antecedente también contiene el consecuente. Es frecuencia condicional observada, no causalidad.',
   lift: 'Lift compara la frecuencia conjunta observada con la esperada si antecedente y consecuente fueran independientes. Mayor que 1 indica asociación positiva, no efecto causal.',
@@ -768,13 +770,13 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
     const sourceRows = rows.slice(0, 5);
     for (let i = 0; i < sourceRows.length; i++) {
       const row = sourceRows[i], names = row.consequentProducts || [row.recommendedProduct], keys = row.consequentSkus || [row.recommendedSku || row.sku];
-      const detail = [
+      const detail = args.concept ? [
         ...(Number.isFinite(row.support) ? [{ label: 'Support', value: percent(row.support) }] : []),
         ...(Number.isFinite(row.confidence) ? [{ label: 'Confidence observada', value: percent(row.confidence) }] : []),
         ...(Number.isFinite(row.lift) ? [{ label: 'Lift', value: displayNumber(row.lift) }] : []),
         ...(typeof row.stability?.status === 'string' || typeof row.stability === 'string'
           ? [{ label: 'Estabilidad', value: row.stability?.status || row.stability }] : [])
-      ];
+      ] : [];
       for (let j = 0; j < Math.min((keys || []).length, 5 - items.length); j++) {
         const key = keys[j], name = names?.[j]; if (!key || !name) continue;
         items.push({ type: 'product', key, label: name, secondaryLabel: key,
@@ -810,7 +812,7 @@ const createV3View = async (skillId, result, args, service, context, rankedEntit
         { label: 'Pedidos pendientes', value: row.pendingOrderCount ?? 'no disponible' },
         { label: 'Lead time observado', value: Number.isFinite(row.leadTime?.averageDays) ? `${displayNumber(row.leadTime.averageDays)} días` : 'no disponible' },
         { label: 'Puntualidad', value: Number.isFinite(row.punctuality?.onTimeRatePct) ? `${displayNumber(row.punctuality.onTimeRatePct)}%` : 'no disponible' },
-        { label: 'Productos', value: (row.productsSupplied || []).slice(0, 3).map(p => p.name || p.productName || p.sku).join(', ') || `${row.exclusiveOfferedSkuCount ?? 0} exclusivos` }
+        { label: 'Productos', value: (row.productsSupplied || []).slice(0, 3).map(p => p.name || p.productName || p.sku).join(', ') || (row.exclusiveOfferedSkuCount == null ? 'no disponible' : `${row.exclusiveOfferedSkuCount} exclusivos`) }
       ]); if (item) items.push(item);
     }
     if (d.singleSourceCriticalOrHigh) metrics.push({ label: 'Productos de alto riesgo con una sola fuente', value: d.singleSourceCriticalOrHigh.singleSourceCriticalOrHighSkuCount });
@@ -863,7 +865,9 @@ const renderV3 = (skillId, result, args, responseMode = null) => {
     : `Escenario V3 · ${result.metadata.dataMode === 'LIVE' ? 'datos operativos' : 'histórico'} al ${date}${period ? ` · ${period.startDate === period.endDate ? `el ${period.startDate}` : `${period.startDate} → ${period.endDate}`}` : ''}.`;
   if (skillId === 'get_cross_sell_recommendations') {
     const baseLabel = crossSellBaseLabel(result, args);
-    const metricExplanation = ['support', 'confidence', 'lift'].includes(args.concept) ? mlExplanation(args.concept) : null;
+    const metricExplanation = args.concept === 'fp_growth'
+      ? 'La cesta es binaria: presencia o ausencia del producto, no multiplicación por unidades.'
+      : ['support', 'confidence', 'lift', 'causality'].includes(args.concept) ? mlExplanation(args.concept) : null;
     const methodology = [crossSellExplanation(result), metricExplanation].filter(Boolean).join(' ');
     if (d.available === false) {
       return `${heading}\n${baseLabel ? `Producto base: ${baseLabel}.\n` : ''}No se pudieron consultar asociaciones validadas en el artefacto actual de Market Basket.\n${methodology}`;
@@ -880,7 +884,7 @@ const renderV3 = (skillId, result, args, responseMode = null) => {
       const associated = (names || []).slice(0, 5).map((name, i) => {
         const key = keys?.[i]; return name && key ? `${name} (${key})` : name || key;
       }).filter(Boolean).join(', ');
-      const metrics = crossSellMetrics(row);
+      const metrics = args.concept ? crossSellMetrics(row) : '';
       return `${index + 1}. ${associated}${metrics ? ` · ${metrics}` : ''}.`;
     });
     return `${heading}\n${baseLabel ? `Producto base: ${baseLabel}.\n` : ''}${lines.join('\n')}\n${methodology}`;
@@ -955,6 +959,8 @@ const renderV3 = (skillId, result, args, responseMode = null) => {
   if (skillId === 'get_customer_intelligence' && args.segment === 'TOP_HIGH_VALUE') lines.push('El segmento de alto valor se basa en gasto del RFM de 90 días y actividad reciente; el riesgo de inactividad es una categoría distinta y no es el criterio de este ranking.');
   if (skillId === 'get_supplier_intelligence' && d.singleSourceCriticalOrHigh) lines.push(`Dependencia: ${num(d.singleSourceCriticalOrHigh.singleSourceCriticalOrHighSkuCount)} productos críticos o de alto riesgo con un solo proveedor observado/configurado; no es un score de calidad.`);
   if (skillId === 'get_supplier_intelligence' && args.pendingOnly) lines.unshift(`${d.total ?? items.length} proveedores con pedidos pendientes; se muestran hasta 5. La cifra procede de órdenes pendientes registradas.`);
+  if (skillId === 'get_supplier_intelligence' && args.mode === 'detail')
+    lines.push('Este es un resumen agregado del historial disponible; no un listado de compras o recepciones individuales.');
   if (skillId !== 'get_cross_sell_recommendations' && args.concept && mlExplanation(args.concept)) lines.push(mlExplanation(args.concept));
   if (skillId === 'get_business_health') {
     const h = d.businessHealth;
@@ -1161,6 +1167,10 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
     if (row.skillId === 'get_inventory_intelligence' && args.mode === 'detail' && intent === 'replenishment') delete args.flag;
     return { ...row, requestedIntent: intent, agent: agentForTask(row.skillId, args), args };
   }) };
+  if (plan.tasks.some(row => ['procurement', 'associations'].includes(row.agent))
+    && new Set(plan.tasks.map(row => row.agent)).size > 2)
+    return { answer: 'Indica como máximo dos dominios relacionados por consulta.', clarification: true,
+      intent: 'v3_clarification', agent: 'coordinator' };
   for (let taskIndex = 0; taskIndex < plan.tasks.length; taskIndex++) {
     const current = plan.tasks[taskIndex], refs = current.args.productRefs?.split('|')
       || (current.args.productRef ? [current.args.productRef] : []);

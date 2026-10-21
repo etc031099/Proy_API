@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
+const { SPECIALIST_IDS } = require('../src/agents/identity');
 const {
   AGENTS, AGENT_IDS, PLANNED_SPECIALIST_IDS, SKILLS, EVENT_TYPES, EXECUTION_LIMITS, TOKEN_BUDGETS, AgentError,
   createAgentRequestContext, getAgentDefinition, getSkillDefinition,
@@ -32,8 +33,7 @@ test('registry preserves legacy identities and keeps only unimplemented speciali
   assert.deepEqual(getAgentDefinition('coordinator').allowedSkills, []);
   assert.equal(getAgentDefinition('analyst').llmPolicy.preferredMode, 'hybrid');
   assert.equal(getAgentDefinition('analyst').status, 'LEGACY_ACTIVE');
-  assert.deepEqual(PLANNED_SPECIALIST_IDS.map(id => getAgentDefinition(id).displayName),
-    ['Compras y proveedores', 'Productos relacionados']);
+  assert.deepEqual(PLANNED_SPECIALIST_IDS, []);
   assert.deepEqual(getAgentDefinition('operations').allowedActionSkills,
     ['create_product', 'create_sale', 'create_purchase', 'create_inventory_alert', 'create_stock_alert_rule']);
   for (const id of PLANNED_SPECIALIST_IDS) {
@@ -57,9 +57,9 @@ test('registry preserves legacy identities and keeps only unimplemented speciali
   for (const agent of AGENTS.filter(item => item.id !== 'operations')) assert.equal(agent.capabilities.canWrite, false);
 });
 
-test('planned identities stay excluded from generic routing and legacy follow-ups', () => {
+test('specialists stay excluded from the generic classifier and legacy follow-ups', () => {
   const { validateRoutingOutput } = require('../src/agents/routing');
-  for (const targetAgent of PLANNED_SPECIALIST_IDS) {
+  for (const targetAgent of SPECIALIST_IDS) {
     assert.throws(() => validateRoutingOutput({ intent: 'business_query', targetAgent, requiresClarification: false }),
       error => error.code === 'GEMINI_INVALID_RESPONSE');
   }

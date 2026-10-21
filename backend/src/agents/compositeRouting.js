@@ -42,7 +42,7 @@ function compositePlan(message, memory, binding, route) {
       && plans.every(plan => !plan?.clarificationQuestion || plan.semanticFallback === true)
   };
   const tasks = plans.flatMap(plan => plan.tasks);
-  if (tasks.some(row => ['sales', 'customers'].includes(row.agent))
+  if (tasks.some(row => ['sales', 'customers', 'procurement', 'associations'].includes(row.agent))
     && new Set(tasks.map(row => row.agent)).size > 2) return clarify();
   const specialistPair = tasks.length === 2 && tasks.some(task => task.agent === 'inventory') && tasks.some(task => task.agent === 'forecast');
   if (specialistPair && (!tasks[0].args.productRef || !tasks[1].args.productRef

@@ -59,7 +59,7 @@ const SKILLS = deepFreeze([
     schema({ ...product, productIds: text(125) }, [], ['productId', 'sku', 'productIds']), 5, 'OPERATIONAL', 'Product identity, stock, minimum, price and currency; bounded list lookup accepts at most five comma-separated ObjectIds'),
   entry('get_low_stock_products', 'Consulta productos bajo su stock mínimo.', both,
     schema({ limit: limit(20), offset: { type: 'integer', minimum: 0, maximum: 40 } }), 20, 'OPERATIONAL', 'Product identity, stock and minimum stock'),
-  entry('get_recent_transactions', 'Consulta transacciones recientes con filtros explícitos.', ['operations', 'sales'],
+  entry('get_recent_transactions', 'Consulta transacciones recientes con filtros explícitos.', ['operations', 'sales', 'procurement'],
     schema({ ...period, type: { ...text(8), enum: ['sale', 'purchase'] },
       status: { ...text(9), enum: ['completed', 'pending', 'cancelled'] }, limit: limit(20) }), 20, 'FINANCIAL', 'Transaction identity, type, date, status, amount and currency'),
   entry('get_sales_summary', 'Resume ventas completadas en un periodo.', [...both, 'sales'],
@@ -112,6 +112,8 @@ const validateSkillInvocation = invocation => {
     throw new AgentError('AGENT_SKILL_NOT_ALLOWED');
   }
   if (agentId === 'sales' && skillId === 'get_recent_transactions' && args?.type !== 'sale')
+    throw new AgentError('AGENT_SKILL_NOT_ALLOWED');
+  if (agentId === 'procurement' && skillId === 'get_recent_transactions' && args?.type !== 'purchase')
     throw new AgentError('AGENT_SKILL_NOT_ALLOWED');
   return Object.freeze({ agent, skill, args: validateSkillArgs(skill.inputSchema, args), context });
 };

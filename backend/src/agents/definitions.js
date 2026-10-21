@@ -7,7 +7,7 @@ const SPECIALIST_CONTRACTS = {
   inventory: { displayName: 'Inventario', role: 'Consulta de stock, riesgo, reposición e historial operacional.', families: ['inventory', 'stock', 'replenishment', 'operational_history'] },
   forecast: { displayName: 'Pronóstico', role: 'Consulta Ridge LIVE aprobado 7d/14d, modelos activos y disponibilidad.', families: ['ridge_live', 'forecast_status'] },
   customers: { displayName: 'Clientes', role: 'Consulta RFM, clustering y actividad de clientes.', families: ['customer_rfm', 'customer_clustering', 'customer_activity'] },
-  procurement: { displayName: 'Compras y proveedores', role: 'Consulta proveedores, compras, recepción y desempeño de entrega.', families: ['suppliers', 'purchases', 'receiving', 'supplier_performance'] },
+  procurement: { displayName: 'Compras y proveedores', role: 'Consulta proveedores, compras, recepción y desempeño de entrega.', families: ['suppliers', 'purchases', 'transactions', 'receiving', 'supplier_performance'] },
   associations: { displayName: 'Productos relacionados', role: 'Consulta FP-Growth y recomendaciones de cross-sell.', families: ['fp_growth', 'cross_sell'] }
 };
 const ALL_SKILL_FAMILIES = Object.freeze([...new Set([
@@ -19,7 +19,7 @@ const OPERATIONS_FAMILIES = Object.freeze(['sales', 'transactions', 'inventory',
 const ANALYST_FAMILIES = Object.freeze(ALL_SKILL_FAMILIES.filter(family => !['operational_writes', 'destructive_ml'].includes(family)));
 const plannedSpecialists = SPECIALIST_IDS.map(id => {
   const contract = SPECIALIST_CONTRACTS[id];
-  const active = ['inventory', 'forecast', 'sales', 'customers'].includes(id);
+  const active = ['inventory', 'forecast', 'sales', 'customers', 'procurement', 'associations'].includes(id);
   return {
     id, version: '1.0.0', status: active ? 'ACTIVE' : 'PLANNED', displayName: contract.displayName, role: contract.role,
     description: contract.role, responsibilities: [contract.role], capabilities: { readOnly: true, canRead: true, canWrite: false },
@@ -28,7 +28,9 @@ const plannedSpecialists = SPECIALIST_IDS.map(id => {
     // Implemented specialists use existing READ executors; never action tools.
     allowedSkills: id === 'inventory' ? ['get_inventory_intelligence'] : id === 'forecast' ? ['get_product_forecast']
       : id === 'customers' ? ['get_customer_intelligence'] : id === 'sales'
-        ? ['get_business_analytics', 'get_recent_transactions', 'get_sales_summary', 'get_product_sales_summary', 'get_top_selling_products'] : [],
+        ? ['get_business_analytics', 'get_recent_transactions', 'get_sales_summary', 'get_product_sales_summary', 'get_top_selling_products']
+        : id === 'procurement' ? ['get_supplier_intelligence', 'get_recent_transactions']
+          : id === 'associations' ? ['get_cross_sell_recommendations'] : [],
     allowedActionSkills: [], llmPolicy: { preferredMode: 'deterministic-first', providerEnabled: false },
     limits: { maxInputTokens: 0, responseTargetTokens: 0, providerMaxOutputTokens: 0, maxSkillCalls: active ? EXECUTION_LIMITS.maxSkillCalls : 0, maxLlmCalls: 0 }
   };

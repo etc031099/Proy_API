@@ -751,6 +751,7 @@ const routeDeterministically = (message, memory = {}, now = new Date(), conversa
   if (plan.intent === 'recent_transactions' && /ventas|\bsale\b/.test(text) && !/compras/.test(text)) {
     plan.agent = 'sales'; plan.type = 'sale';
   }
+  if (plan.intent === 'recent_transactions' && plan.type === 'purchase') plan.agent = 'procurement';
   if (plan.intent === 'top_selling_products') {
     const continuesPeriod = /^(y ahora|ahora|y tambien|tambien)\b/.test(text) && memory.lastPeriodExplicit === true;
     const rankingPeriod = explicitPeriod || (continuesPeriod ? memory.lastPeriod : undefined);
