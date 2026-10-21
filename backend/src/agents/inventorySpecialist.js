@@ -15,7 +15,7 @@ const renderInventoryConclusion = (result, intent) => {
   const comparison = Number.isFinite(position) && Number.isFinite(point)
     ? `La posición de inventario es ${number(position)} y está ${position < point ? 'por debajo del' : position === point ? 'en el' : 'por encima del'} punto de reorden de ${number(point)}.` : '';
   const risk = { CRITICAL: 'crítico', HIGH: 'alto', MEDIUM: 'medio', LOW: 'bajo' }[row.risk?.level] || 'no disponible';
-  return [conclusion, comparison, `Cobertura: ${number(row.coverage?.daysCover)} días; riesgo: ${risk}.`,
+  return [conclusion, `Stock actual: ${number(row.stock?.onHand)} unidades.`, comparison, `Cobertura: ${number(row.coverage?.daysCover)} días; riesgo: ${risk}.`,
     `Cantidad sugerida por el servicio: ${number(row.recommendation?.recommendedQty)} unidades.`].filter(Boolean).join(' ');
 };
 module.exports = { renderInventoryConclusion };

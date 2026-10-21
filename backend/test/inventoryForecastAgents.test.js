@@ -11,11 +11,12 @@ const { validateSkillInvocation } = require('../src/agents/skills');
 const { getAgentDefinition } = require('../src/agents/definitions');
 const { validateActionInvocation } = require('../src/automations/skills');
 const { snapshot } = require('../src/services/agentHistoryProjection');
+const { withActionAssistant } = require('../src/automations/assistant');
 const req = (businessId = V3.businessId) => ({ user: { _id: '507f1f77bcf86cd799439011', businessId, role: 'user', isActive: true }, businessId });
 const clock = () => new Date('2026-10-20T17:00:00Z');
 const sku = 'BEB-GAS-001';
 const query = rows => ({ select() { return this; }, sort() { return this; }, limit() { return this; }, lean() { return this; }, maxTimeMS() { return Promise.resolve(rows); } });
-function fixture({ reorder = true } = {}) {
+function fixture({ reorder = true, throughActions = false } = {}) {
   const calls = [], scopes = [];
   const products = [{ _id: '507f1f77bcf86cd799439012', sku, name: 'Coca-Cola Sabor Original 500 ml' },
     { _id: '507f1f77bcf86cd799439013', sku: 'BEB-GAS-002', name: 'Coca-Cola Sin Azúcar 500 ml' }];
@@ -50,10 +51,113 @@ function fixture({ reorder = true } = {}) {
   const lookups = [], observedService = { ...service, resolveEntity: async (...args) => {
     lookups.push(args[1]); return service.resolveEntity(...args);
   } };
-  const runtime = () => createAgentOrchestrator({ memory: createConversationMemory(), clock, dependencies: { v3Service: observedService, clock } });
+  const runtime = () => {
+    const agent = createAgentOrchestrator({ memory: createConversationMemory(), clock, dependencies: { v3Service: observedService, clock } });
+    const denied = () => assert.fail('A read must never prepare or execute an action');
+    return throughActions ? withActionAssistant(agent, { prepare: denied, get: denied, confirmPendingAction: denied,
+      cancelPendingAction: denied }, { clock: Date.now }) : agent;
+  };
   return { runtime: runtime(), restart: runtime, service, calls, scopes, lookups };
 }
 const ids = result => result.participants.map(row => row.agentId);
+
+for (const question of [
+  'debo reponer coca cola o todavia aguanta?',
+  'coca cola ya toca reponer?', 'coca cola todavía aguanta?',
+  'crees que debo comprar más coca cola?', 'me alcanza la coca cola o repongo?',
+  '¿Crees que ya debería reponer Coca-Cola?', '¿Considera que debería reponer Coca-Cola?',
+  'cuanto stock me qeda de coca cola y si ya deberia comprar mas'
+]) test(`A4.5 human replenishment isolates the product and retains its pending decision: ${question}`, async () => {
+  const f = fixture({ throughActions: true }), conversationId = randomUUID();
+  const first = await f.runtime.handle(req(), { message: question, conversationId });
+  assert.equal(first.requiresClarification, true, first.answer);
+  const state = snapshot(await f.runtime.getContextSnapshot(req(), conversationId));
+  assert.equal(state.v3Context.pending.tasks[0].requestedIntent, 'replenishment');
+  assert.equal(state.v3Context.pending.query.toLowerCase().replace(/-/g, ' '), 'coca cola');
+  const restarted = f.restart(); await restarted.restoreContext(req(), conversationId, state);
+  const result = await restarted.handle(req(), { message: sku, conversationId });
+  assert.equal(result.agent, 'inventory'); assert.equal(result.actions.length, 1);
+  assert.match(result.answer, /Sí, debes reponer Coca-Cola/);
+  assert.match(result.answer, /Stock actual: 14 unidades/);
+  assert.equal(f.calls.length, 1); assert.deepEqual(f.calls[0].payload.skus, [sku]);
+  assert.equal(result.usage.totalLlmCalls, 0);
+});
+
+for (const question of [
+  'masomenos cuanto coca cola voy a vender en 14 dias',
+  'cuánto crees que venda coca cola en 14 días',
+  'cuánto se vendería coca cola de aquí a 14 días',
+  'más o menos cuánto saldrá coca cola en dos semanas',
+  'qué cantidad crees que vendamos de coca cola en dos semanas',
+  '¿Cuánto cree que se venderá Coca-Cola en 14 días?',
+  '¿Cuánto crees que se venda Coca-Cola de aquí a 14 días?'
+]) test(`A4.5 human forecast retains 14 days through product selection: ${question}`, async () => {
+  const f = fixture({ throughActions: true }), conversationId = randomUUID();
+  const first = await f.runtime.handle(req(), { message: question, conversationId });
+  assert.equal(first.requiresClarification, true, first.answer);
+  const state = snapshot(await f.runtime.getContextSnapshot(req(), conversationId));
+  assert.equal(state.v3Context.pending.query.toLowerCase().replace(/-/g, ' '), 'coca cola');
+  assert.equal(state.v3Context.pending.tasks[0].requestedIntent, 'forecast');
+  assert.equal(state.v3Context.pending.tasks[0].args.horizonDays, 14);
+  const result = await f.runtime.handle(req(), { message: sku, conversationId });
+  assert.equal(result.agent, 'forecast'); assert.match(result.answer, /Se esperan 108.27 unidades.*14 días/);
+  assert.equal(f.calls.length, 1); assert.equal(f.calls[0].payload.horizonDays, 14);
+  assert.equal(result.usage.totalLlmCalls, 0);
+});
+
+for (const [question, domains, technical] of [
+  ['y esa coca cuanto crees q salga en estas 2 semanas', ['forecast']],
+  ['¿Y esa misma Coca-Cola cuánto vendería en dos semanas?', ['forecast']],
+  ['esa misma cuánto vendería en 14 días', ['forecast']],
+  ['y esa cuánto tiene de stock', ['inventory']],
+  ['ya toca reponerla?', ['inventory']],
+  ['q modelo esta usando eso?', ['forecast'], true],
+  ['¿Qué modelo usa ese pronóstico?', ['forecast'], true],
+  ['¿Qué modelo utiliza este pronóstico?', ['forecast'], true],
+  ['qué modelo usa eso?', ['forecast'], true],
+  ['ya pero ahora dime si tengo q reponerla', ['inventory']],
+  ['esa coca ya toca reponerla? y cuanto crees q venda en 14 dias', ['inventory', 'forecast']],
+  ['¿Esa Coca-Cola ya debería reponerse y cuánto se venderá en 14 días?', ['inventory', 'forecast']],
+  ['¿Esta Coca-Cola necesita reposición y cuánto se venderá en dos semanas?', ['inventory', 'forecast']],
+  ['¿Me alcanza el stock y cuánto se espera vender en dos semanas?', ['inventory', 'forecast']],
+  ['¿Ya debo reponerla? Además, ¿cuánto venderemos en 14 días?', ['inventory', 'forecast']]
+]) test(`A4.5 human follow-up uses only the active product and explicit intent: ${question}`, async () => {
+  const f = fixture({ throughActions: true }), conversationId = randomUUID();
+  await f.runtime.handle(req(), { message: `¿Cuánto venderemos de ${sku} en 14 días?`, conversationId });
+  const result = await f.runtime.handle(req(), { message: question, conversationId });
+  assert.equal(result.requiresClarification, false, result.answer);
+  assert.deepEqual(f.calls.slice(1).map(call => call.domain), domains);
+  assert.deepEqual(f.calls.slice(1).map(call => call.payload.skus), domains.map(() => [sku]));
+  assert.equal(result.actions.length, domains.length); assert.equal(result.usage.totalLlmCalls, 0);
+  const forecast = f.calls.slice(1).find(call => call.domain === 'forecast');
+  if (forecast) assert.equal(forecast.payload.horizonDays, 14);
+  if (technical) { assert.equal(result.requestedIntent, 'model_status'); assert.match(result.answer, /modelo ACTIVE v1.*featureVersion RIDGE_CAUSAL27_V1/); }
+  if (domains.includes('inventory') && !question.includes('stock')) assert.match(result.answer, /Sí, debes reponer/);
+});
+
+test('A4.5 ordinal selection is not a quantity and ambiguity never adopts a previous product', async () => {
+  const f = fixture({ throughActions: true }), conversationId = randomUUID();
+  await f.runtime.handle(req(), { message: '¿Cuánto crees que venda coca cola en 14 días?', conversationId });
+  const selected = await f.runtime.handle(req(), { message: 'la primera nomas', conversationId });
+  assert.equal(selected.agent, 'forecast'); assert.equal(selected.actions.length, 1);
+  assert.deepEqual(f.calls[0].payload.skus, [sku]); assert.equal(f.calls[0].payload.horizonDays, 14);
+  assert.equal(selected.pendingAction, undefined);
+  await f.runtime.handle(req(), { message: '¿Debo reponer coca cola?', conversationId });
+  const before = f.calls.length;
+  const ambiguous = await f.runtime.handle(req(), { message: 'esa misma cuánto vendería en 14 días', conversationId });
+  assert.equal(ambiguous.requiresClarification, true); assert.equal(f.calls.length, before);
+});
+
+test('A4.5 a different explicit SKU overrides active context; a mismatched contextual hint cannot borrow it', async () => {
+  const f = fixture({ throughActions: true }), conversationId = randomUUID();
+  await f.runtime.handle(req(), { message: `pronóstico de ${sku} en 14 días`, conversationId });
+  await f.runtime.handle(req(), { message: '¿Cuánto cree que se venderá BEB-GAS-002 en dos semanas?', conversationId });
+  assert.deepEqual(f.calls.at(-1).payload.skus, ['BEB-GAS-002']);
+  const count = f.calls.length;
+  const unknown = await f.runtime.handle(req(), { message: 'esa pepsi cuánto vendería en 14 días', conversationId });
+  assert.equal(f.calls.length, count); assert.equal(unknown.requiresClarification, true);
+  assert.equal(f.lookups.at(-1), 'pepsi');
+});
 
 for (const horizon of [7, 14]) test(`forecast ${horizon}d preserves intention through ambiguous SKU selection and compact history`, async () => {
   const f = fixture(), conversationId = randomUUID();

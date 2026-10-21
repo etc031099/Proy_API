@@ -3,7 +3,7 @@ const { isPlainObject } = require('./contracts');
 const { normalize } = require('./domainGate');
 const { ordinalSelection } = require('./ordinalSelection');
 const { resolveOperationalPeriod } = require('./intentRouting');
-const { isContextualProductReference } = require('../utils/productReference');
+const { isContextualProductReference, extractProductReference } = require('../utils/productReference');
 const { V3_SKILLS } = require('./v3Skills');
 
 const INTENTS = Object.freeze(['PRODUCT_SEARCH', 'INVENTORY_LOOKUP', 'LOW_STOCK', 'REPLENISHMENT',
@@ -29,7 +29,7 @@ const sourceNumbers = message => normalize(message).replace(/\b[a-z]{2,}(?:-[a-z
 const requestedHorizon = message => {
   const source = normalize(message), duration = source.match(/\b(\d+|un|uno|una|siete|catorce)\s+dias?\b/);
   return duration ? (duration[1] === 'un' ? 1 : words[duration[1]] || Number(duration[1]))
-    : /\bmanana\b/.test(source) ? 1 : /\bdos semanas\b/.test(source) ? 14 : /\b(?:una|esta) semana\b/.test(source) ? 7 : null;
+    : /\bmanana\b/.test(source) ? 1 : /\b(?:dos|2) semanas\b/.test(source) ? 14 : /\b(?:una|esta) semana\b/.test(source) ? 7 : null;
 };
 const PRODUCT_INTENTS = ['PRODUCT_SEARCH', 'INVENTORY_LOOKUP', 'FORECAST', 'CROSS_SELL', 'CREATE_SALE'];
 function validateNlu(text, message) {
@@ -63,8 +63,40 @@ function validateNlu(text, message) {
 }
 
 // Lexical composition, not a list of individual sentences: sales action + superlative.
-function highPrecisionMessage(message) {
+function highPrecisionMessage(message, { allowImplicitReference = false } = {}) {
   const t = normalize(message);
+  // Read-only sentence shapes feed the same specialist/entity resolvers. Never
+  // infer quantities, identifiers or a target from a conversational suffix.
+  const read = normalize(require('../utils/conversationalInput').normalizeConversationalInput(message))
+    .replace(/\bqeda\b/g, 'queda').replace(/^y\s+/, '')
+    .replace(/^(?:ya[, ]+(?:pero\s+)?)?ahora\s+dime\s+si\s+/, '')
+    .replace(/^(?:crees?|considera)\s+que\s+/, '')
+    .replace(/^(?:masomenos|mas o menos)\s+/, '');
+  const quantityForecast = read.match(/^(?:cuanto|que cantidad)\s+(?:(?:crees?|considera)\s+que\s+)?(?:(?:se\s+)?(?:vendera|venderia|venda|vendamos|venderemos|vendere|salga|saldra)|se espera vender)\s+(?:de\s+)?(.+)$/)
+    || read.match(/^cuanto\s+(.+?)\s+voy a vender(\s+.*)?$/);
+  const subjectForecast = read.match(/^(.+?)\s+cuanto\s+(?:(?:crees?|considera)\s+que\s+)?(?:se\s+)?(?:vendera|venderia|venda|salga|saldra)(\s+.*)?$/);
+  const forecastReference = quantityForecast ? `${quantityForecast[1]}${quantityForecast[2] || ''}`
+    : subjectForecast ? `${subjectForecast[1]}${subjectForecast[2] || ''}` : null;
+  if (forecastReference) {
+    if (isContextualProductReference(forecastReference) && requestedHorizon(message) === null) return message;
+    if (/^(?:en|para|de aqui|esta semana|estas? \d+)\b/.test(forecastReference))
+      return allowImplicitReference ? `pronostico ${forecastReference}` : message;
+    if (!/\b(?:y|ademas|global|negocio|todos)\b/.test(forecastReference)) return `pronostico de ${forecastReference}`;
+  }
+  const stockAndReorder = read.match(/^(.+?\bstock\b.+?)\s+y\s+(?:si\s+)?(?:ya\s+)?deberia comprar mas$/);
+  if (stockAndReorder) {
+    const ref = extractProductReference(stockAndReorder[1]);
+    if (ref) return `debo reponer ${ref}`;
+  }
+  const reorder = read.match(/^(?:(?:ya\s+)?(?:debo|deberia|tengo que)\s+|ya toca\s+)(?:reponer|reabastecer|pedir|comprar mas)(la|lo)?(?:\s+(.+))?$/);
+  const subjectReorder = read.match(/^(.+?)\s+(?:ya toca reponer(?:la|lo)?|(?:ya\s+)?deberia reponerse|necesita reposicion|(?:todavia|aun) aguanta)$/);
+  const enough = read.match(/^me alcanza\s+(.+?)(?:\s+o repongo)?$/);
+  if (reorder || subjectReorder || enough) {
+    const ref = reorder ? reorder[2] || (reorder[1] ? 'esa' : null) : (subjectReorder || enough)[1];
+    if (ref && !/\b(?:y|ademas)\b/.test(ref)) return `debo reponer ${/^(?:el )?stock$/.test(ref) ? 'esa' : ref}`;
+  }
+  const subjectStock = read.match(/^(.+?)\s+cuanto\s+(?:tiene|queda|hay) de stock$/);
+  if (subjectStock) return `stock de ${subjectStock[1]}`;
   const sales = /\b(?:vende|venden|vendo|vendio|vendieron|vendido|vendidos|sale|salen|salida|compran)\b/.test(t);
   const ranking = /\bmas\b/.test(t) || /\btop\b/.test(t);
   if (sales && ranking && /\b(?:que|cual|cuales|producto|productos|cosa|cosas|lo|top)\b/.test(t)
@@ -186,4 +218,4 @@ async function semanticPlan({ message, memory, binding, execution }) {
     return clarification('MISSING_INTENT');
   }
 }
-module.exports = { INTENTS, SCHEMA, PROMPT, validateNlu, highPrecisionMessage, fallbackDecision, nluPlan, semanticPlan };
+module.exports = { INTENTS, SCHEMA, PROMPT, validateNlu, requestedHorizon, highPrecisionMessage, fallbackDecision, nluPlan, semanticPlan };

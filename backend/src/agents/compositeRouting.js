@@ -2,9 +2,16 @@
 const { normalize, isOutOfDomain } = require('./domainGate');
 // Split only independent request starts. Product conjunctions (pan y leche),
 // comparisons, and "y por qué" remain owned by their existing domain router.
-const splitRequests = message => String(message).split(/\s+y\s+(?=(?:(?:luego|despues|después|ademas|además)\s+)?(?:q\b|que\b|qué\b|cual(?:es)?\b|quien(?:es)?\b|cu[aá]nt[oa]s?\b|stock\b|inventario\b|ventas\b|clientes\b|proveedores\b|productos\b|salud\b|margen\b|pron[oó]stico\b|forecast\b|dime\b|dame\b|cu[eé]ntame\b|recomi[eé]ndame\b|explicame\b|precio\b|capital\b|de esos\b|predice\b))/i)
+const splitRequests = message => String(message).split(/(?:\s+y\s+|[?.!]\s+adem[aá]s,?\s*)(?=[¿]?(?:(?:luego|despues|después|ademas|además)\s+)?(?:q\b|que\b|qué\b|cual(?:es)?\b|quien(?:es)?\b|cu[aá]nt[oa]s?\b|stock\b|inventario\b|ventas\b|clientes\b|proveedores\b|productos\b|salud\b|margen\b|pron[oó]stico\b|forecast\b|dime\b|dame\b|cu[eé]ntame\b|recomi[eé]ndame\b|explicame\b|precio\b|capital\b|de esos\b|predice\b))/i)
   .map(part => part.trim().replace(/^(?:primero|luego|despu[eé]s|adem[aá]s)\s+(?=dime|dame|stock|ventas)/i, ''));
-const writeClause = message => /\b(?:vende|vender|venta de|compra \d|comprar \d|confirma\w*|hazlo|borra|elimina|ajusta|crea|crear)\b/.test(normalize(message));
+const writeClause = message => {
+  const source = normalize(message);
+  const forecast = /^pronostico\b/.test(require('./languageNlu').highPrecisionMessage(message, { allowImplicitReference: true }));
+  // The infinitive in a parsed forecast ("se espera vender") is not a sale
+  // command. Every other mutation/confirmation signal still blocks composition.
+  return /\b(?:vende|vender|venta de|compra \d|comprar \d|confirma\w*|hazlo|borra|elimina|ajusta|crea|crear)\b/.test(
+    forecast ? source.replace(/\bvender\b/g, '') : source);
+};
 const clarify = () => ({ clarificationQuestion: 'La consulta compuesta contiene partes que no puedo relacionar con seguridad. Indícalas por separado; no asumiré relaciones entre entidades o resultados.' });
 function groundedCoversComposite(message) {
   const parts = splitRequests(message);
@@ -20,7 +27,7 @@ function groundedCoversComposite(message) {
   });
 }
 function compositePlan(message, memory, binding, route) {
-  const shared = require('./specialistRouting').sharedProductPlan(message);
+  const shared = require('./specialistRouting').sharedProductPlan(message, memory);
   if (shared) return shared;
   const parts = splitRequests(message);
   if (parts.length < 2) return null;
