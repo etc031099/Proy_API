@@ -18,7 +18,7 @@ const context = () => createAgentRequestContext(authenticatedRequest());
 const expectCode = code => error => error instanceof AgentError && error.code === code;
 const invoke = (skillId, args, agentId = 'analyst') => validateSkillInvocation({ agentId, skillId, args, context: context() });
 
-test('registry contains current identities and planned read-only specialists without enabling execution', () => {
+test('registry preserves legacy identities and keeps only unimplemented specialists planned', () => {
   assert.deepEqual(AGENT_IDS, ['coordinator', 'operations', 'analyst', 'sales', 'inventory', 'forecast', 'customers', 'procurement', 'associations']);
   assert.deepEqual(AGENTS.map(agent => agent.id), AGENT_IDS);
   assert.equal(new Set(AGENTS.map(agent => agent.id)).size, AGENT_IDS.length);
@@ -33,7 +33,7 @@ test('registry contains current identities and planned read-only specialists wit
   assert.equal(getAgentDefinition('analyst').llmPolicy.preferredMode, 'hybrid');
   assert.equal(getAgentDefinition('analyst').status, 'LEGACY_ACTIVE');
   assert.deepEqual(PLANNED_SPECIALIST_IDS.map(id => getAgentDefinition(id).displayName),
-    ['Ventas', 'Inventario', 'Pronóstico', 'Clientes', 'Compras y proveedores', 'Productos relacionados']);
+    ['Ventas', 'Clientes', 'Compras y proveedores', 'Productos relacionados']);
   assert.deepEqual(getAgentDefinition('operations').allowedActionSkills,
     ['create_product', 'create_sale', 'create_purchase', 'create_inventory_alert', 'create_stock_alert_rule']);
   for (const id of PLANNED_SPECIALIST_IDS) {
@@ -57,7 +57,7 @@ test('registry contains current identities and planned read-only specialists wit
   for (const agent of AGENTS.filter(item => item.id !== 'operations')) assert.equal(agent.capabilities.canWrite, false);
 });
 
-test('adding specialist identities does not expand current routing destinations', () => {
+test('planned identities stay excluded from generic routing and legacy follow-ups', () => {
   const { validateRoutingOutput } = require('../src/agents/routing');
   for (const targetAgent of PLANNED_SPECIALIST_IDS) {
     assert.throws(() => validateRoutingOutput({ intent: 'business_query', targetAgent, requiresClarification: false }),

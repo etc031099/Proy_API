@@ -8,6 +8,7 @@ const { resolveOperationalPeriod } = require('./intentRouting');
 const { addCalendarDays } = require('../utils/operationalClock');
 const { contextBinding, TTL_MS } = require('./memory');
 const { extractProductReference, isContextualProductReference } = require('../utils/productReference');
+const { specialistPlan, agentForTask, requestedIntent } = require('./specialistRouting');
 const clean = text => normalize(text).replace(/\bq\b/g, 'que').replace(/\bd\b/g, 'de')
   .replace(/\bprodcutos\b/g, 'productos').replace(/\bstan\b/g, 'estan').replace(/\breposision\b/g, 'reposicion')
   .replace(/\bclietnes\b/g, 'clientes').replace(/\boy\b/g, 'hoy').replace(/\bstok\b/g, 'stock')
@@ -22,7 +23,8 @@ const productRef = (message, memory = {}) => {
   const reference = extractProductReference(message);
   return isContextualProductReference(reference) ? memory.selectedProduct?.key || reference : reference;
 };
-const task = (skillId, args = {}, extra = {}) => ({ skillId, agent: V3_SKILLS[skillId].agents[0], args: { limit: 5, ...args }, ...extra });
+const task = (skillId, args = {}, extra = {}) => ({ skillId, agent: agentForTask(skillId, args), args: { limit: 5, ...args },
+  requestedIntent: skillId === 'get_product_forecast' ? 'forecast' : args.flag === 'should_reorder' ? 'replenishment' : null, ...extra });
 const naturalStockReference = message => {
   const normalized = clean(message).replace(/[¿?¡!.]/g, '').trim().replace(/\s+disponibles?$/, '');
   if (/\b(?:y|ademas)\b/.test(normalized) && /\b(?:ventas?|margen|pronostico|prediccion|forecast|proveedor|pedidos? pendientes?)\b/.test(normalized)) return null;
@@ -241,6 +243,8 @@ const routeV3 = (message, state, binding) => {
   if (/^(?:quien gano el partido de ayer|cual es la capital de japon|escribeme una historia(?: de .+)?|que laptop me recomiendas)$/.test(text.replace(/[¿?¡!.]/g, '').trim())) return null;
   if (/^(?:vende|vender|compra|comprar|prepara(?:r)? (?:una )?compra|crea|crear|avisa|avisame|actualiza|ajusta|confirma|confirmar|confirmo|hazlo|correcto|cancela|cancelar|si hazlo|procede|adelante|no lo hagas|no hagas nada|mejor no)\b/.test(text)
     || /^el segundo$/.test(text)) return null;
+  const specialist = specialistPlan(message, memory);
+  if (specialist) return specialist;
   const groundedPlan = require('./groundedRouting').buildGroundedPlan(message, binding);
   if (groundedPlan) return groundedPlan;
   const referenceOnly = /^(?:y )?(?:del?|de la|de ese|de este)\b/.test(text) || isContextualProductReference(message);
@@ -248,7 +252,8 @@ const routeV3 = (message, state, binding) => {
     return { clarificationQuestion: '¿A qué producto te refieres? Indica su nombre o código.' };
   if (referenceOnly && memory.lastProductTask) {
     const reference = productRef(message, memory) || (isContextualProductReference(message) ? memory.selectedProduct?.key || message : null);
-    if (reference) return { tasks: [task(memory.lastProductTask.skillId, { ...memory.lastProductTask.args, productRef: reference })] };
+    if (reference) return { tasks: [task(memory.lastProductTask.skillId, { ...memory.lastProductTask.args, productRef: reference },
+      { requestedIntent: memory.lastProductTask.requestedIntent })] };
   }
   if (isContextualProductReference(message) && memory.selectedProduct)
     return { tasks: [task('get_inventory_intelligence', { mode: 'detail', productRef: memory.selectedProduct.key })] };
@@ -515,12 +520,13 @@ const compactV3State = (value, now = Date.now()) => {
     ? { type: row.type, id: row.id, key: row.key, label: row.label } : null;
   const tasks = (value.pending?.tasks || []).slice(0, 4).map(item => {
     if (!V3_SKILLS[item?.skillId]) return null;
-    try { return { skillId: item.skillId, agent: V3_SKILLS[item.skillId].agents[0], args: validateSkillArgs(require('./skills').getSkillDefinition(item.skillId).inputSchema, item.args),
+    try { return { skillId: item.skillId, agent: agentForTask(item.skillId, item.args), args: validateSkillArgs(require('./skills').getSkillDefinition(item.skillId).inputSchema, item.args),
+      requestedIntent: requestedIntent(item.requestedIntent) || (item.args.flag === 'should_reorder' ? 'replenishment' : item.skillId === 'get_product_forecast' ? 'forecast' : null),
       ...(['customer', 'supplier'].includes(item.fromPrevious) ? { fromPrevious: item.fromPrevious } : {}) }; } catch { return null; }
   }).filter(Boolean);
   let lastProductTask = null;
   if (V3_SKILLS[value.lastProductTask?.skillId] && value.lastProductTask?.args?.productRef) {
-    try { lastProductTask = { skillId: value.lastProductTask.skillId,
+    try { lastProductTask = { skillId: value.lastProductTask.skillId, requestedIntent: requestedIntent(value.lastProductTask.requestedIntent),
       args: validateSkillArgs(require('./skills').getSkillDefinition(value.lastProductTask.skillId).inputSchema, value.lastProductTask.args) }; } catch { /* Discard invalid restored references. */ }
   }
   return { binding: value.binding, expiresAt: value.expiresAt,
@@ -1009,7 +1015,7 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
     resolution.taskIndex = memory.pending.taskIndex;
     return candidateView(resolution, memory.pending.tasks, memory.pending.field);
   }
-  if (selected && (!plan || plan.lookup || choiceLike || chooseOther)) {
+  if (selected && (!plan || plan.lookup || choiceLike || chooseOther || memory.pending && match)) {
     scope[`selected${selected.type[0].toUpperCase()}${selected.type.slice(1)}`] = selected;
     if (memory.pending) plan = { responseMode: memory.pending.responseMode, tasks: memory.pending.tasks.map((item, i) => {
       const target = memory.pending.taskIndex || 0;
@@ -1079,12 +1085,23 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
     }
     if (plan.lookup) return candidateView({ type: 'product', query: plan.lookup, candidates: [] }, [], 'productRef');
   }
-  if (plan.clarificationQuestion) return { answer: plan.clarificationQuestion, clarification: true, intent: 'v3_clarification', agent: 'coordinator',
-    ...(plan.suggestions ? { suggestions: plan.suggestions } : {}) };
+  if (plan.clarificationQuestion) {
+    if (plan.specialist) { scope.pending = null; scope.ranking = null; save(); }
+    const response = () => ({ answer: plan.clarificationQuestion, clarification: true, intent: 'v3_clarification', agent: plan.specialist || 'coordinator',
+      ...(plan.suggestions ? { suggestions: plan.suggestions } : {}) });
+    return plan.specialist && execution ? execution.runAgent(plan.specialist, response) : response();
+  }
   if (plan.tasks.length > 4) return { answer: 'Indica qué dominio deseas priorizar.', clarification: true, intent: 'v3_clarification', agent: 'coordinator' };
   // Resolve every new product reference before dispatch. Already displayed or
   // resolved identities reuse compact context and are revalidated by the service.
-  plan = { ...plan, tasks: plan.tasks.map(row => ({ ...row, args: { ...row.args } })) };
+  plan = { ...plan, tasks: plan.tasks.map(row => {
+    const intent = requestedIntent(row.requestedIntent) || (row.args.flag === 'should_reorder' ? 'replenishment' : null);
+    const args = { ...row.args };
+    // A yes/no question about one SKU must retrieve it even when the answer is
+    // false or unknown; should_reorder is a list filter, not the user's intent.
+    if (row.skillId === 'get_inventory_intelligence' && args.mode === 'detail' && intent === 'replenishment') delete args.flag;
+    return { ...row, requestedIntent: intent, agent: agentForTask(row.skillId, args), args };
+  }) };
   for (let taskIndex = 0; taskIndex < plan.tasks.length; taskIndex++) {
     const current = plan.tasks[taskIndex], refs = current.args.productRefs?.split('|')
       || (current.args.productRef ? [current.args.productRef] : []);
@@ -1134,13 +1151,16 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
       }
       const displayArgs = current.pendingOnly ? { ...current.args, pendingOnly: true } : current.args;
       onPublicResult?.(current.skillId, result, displayArgs, responseMode);
-      previous = result; answers.push(renderV3(current.skillId, result, displayArgs, responseMode));
+      const conclusion = current.agent === 'inventory'
+        ? require('./inventorySpecialist').renderInventoryConclusion(result, current.requestedIntent)
+        : current.agent === 'forecast' ? require('./forecastSpecialist').renderForecastConclusion(result, current.requestedIntent, displayArgs) : null;
+      previous = result; answers.push([conclusion, renderV3(current.skillId, result, displayArgs, responseMode)].filter(Boolean).join('\n\n'));
       if (responseMode === 'inventory-nearest-minimum' && current.skillId === 'get_inventory_intelligence') {
         nearestMinimumRows.push(...(result.data.items || []));
       }
       let rankedEntities = [];
       scope.lastFamily = current.skillId;
-      if (current.args.productRef) scope.lastProductTask = { skillId: current.skillId, args: current.args };
+      if (current.args.productRef) scope.lastProductTask = { skillId: current.skillId, args: current.args, requestedIntent: current.requestedIntent };
       if (current.skillId === 'get_supplier_intelligence' && !current.args.productRef && current.args.mode !== 'alternatives') {
         // An explicit supplier comparison supersedes a product from an older domain.
         scope.selectedProduct = null;

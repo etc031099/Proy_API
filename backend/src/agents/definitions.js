@@ -1,40 +1,42 @@
 const { AgentError, TOKEN_BUDGETS, EXECUTION_LIMITS, deepFreeze } = require('./contracts');
 const { V3_IDS, V3_SKILLS } = require('./v3Skills');
-const { PLANNED_SPECIALIST_IDS } = require('./identity');
+const { SPECIALIST_IDS } = require('./identity');
 
 const SPECIALIST_CONTRACTS = {
   sales: { displayName: 'Ventas', role: 'Consulta de ventas, transacciones y anomalías.', families: ['sales', 'transactions', 'sales_anomalies'] },
   inventory: { displayName: 'Inventario', role: 'Consulta de stock, riesgo, reposición e historial operacional.', families: ['inventory', 'stock', 'replenishment', 'operational_history'] },
-  forecast: { displayName: 'Pronóstico', role: 'Consulta Ridge LIVE aprobado, modelos activos y evaluación.', families: ['ridge_live', 'forecast_status', 'forecast_evaluation'] },
+  forecast: { displayName: 'Pronóstico', role: 'Consulta Ridge LIVE aprobado 7d/14d, modelos activos y disponibilidad.', families: ['ridge_live', 'forecast_status'] },
   customers: { displayName: 'Clientes', role: 'Consulta RFM, clustering y actividad de clientes.', families: ['customer_rfm', 'customer_clustering', 'customer_activity'] },
   procurement: { displayName: 'Compras y proveedores', role: 'Consulta proveedores, compras, recepción y desempeño de entrega.', families: ['suppliers', 'purchases', 'receiving', 'supplier_performance'] },
   associations: { displayName: 'Productos relacionados', role: 'Consulta FP-Growth y recomendaciones de cross-sell.', families: ['fp_growth', 'cross_sell'] }
 };
 const ALL_SKILL_FAMILIES = Object.freeze([...new Set([
   ...Object.values(SPECIALIST_CONTRACTS).flatMap(item => item.families), 'business_summary', 'product_catalog',
-  'operational_alerts', 'operational_writes', 'destructive_ml'
+  'forecast_evaluation', 'operational_alerts', 'operational_writes', 'destructive_ml'
 ])]);
 const OPERATIONS_FAMILIES = Object.freeze(['sales', 'transactions', 'inventory', 'stock', 'operational_history',
   'suppliers', 'product_catalog', 'operational_alerts', 'operational_writes']);
 const ANALYST_FAMILIES = Object.freeze(ALL_SKILL_FAMILIES.filter(family => !['operational_writes', 'destructive_ml'].includes(family)));
-const plannedSpecialists = PLANNED_SPECIALIST_IDS.map(id => {
+const plannedSpecialists = SPECIALIST_IDS.map(id => {
   const contract = SPECIALIST_CONTRACTS[id];
+  const active = ['inventory', 'forecast'].includes(id);
   return {
-    id, version: '1.0.0', status: 'PLANNED', displayName: contract.displayName, role: contract.role,
+    id, version: '1.0.0', status: active ? 'ACTIVE' : 'PLANNED', displayName: contract.displayName, role: contract.role,
     description: contract.role, responsibilities: [contract.role], capabilities: { readOnly: true, canRead: true, canWrite: false },
     allowedSkillFamilies: contract.families,
     prohibitedSkillFamilies: ALL_SKILL_FAMILIES.filter(family => !contract.families.includes(family)),
-    // Identity registration does not grant executable skills or provider calls.
-    allowedSkills: [], allowedActionSkills: [], llmPolicy: { preferredMode: 'deterministic-first', providerEnabled: false },
-    limits: { maxInputTokens: 0, responseTargetTokens: 0, providerMaxOutputTokens: 0, maxSkillCalls: 0, maxLlmCalls: 0 }
+    // Only the two implemented READ specialists receive a skill. No provider calls.
+    allowedSkills: id === 'inventory' ? ['get_inventory_intelligence'] : id === 'forecast' ? ['get_product_forecast'] : [],
+    allowedActionSkills: [], llmPolicy: { preferredMode: 'deterministic-first', providerEnabled: false },
+    limits: { maxInputTokens: 0, responseTargetTokens: 0, providerMaxOutputTokens: 0, maxSkillCalls: active ? EXECUTION_LIMITS.maxSkillCalls : 0, maxLlmCalls: 0 }
   };
 });
 
 const AGENTS = deepFreeze([
   {
-    id: 'coordinator', version: '1.0.0', status: 'ACTIVE', displayName: 'Coordinador', role: 'Clasifica intención y coordina consultas.',
+    id: 'coordinator', version: '1.0.0', status: 'ACTIVE', displayName: 'Coordinador', role: 'Agente Orquestador: entiende intención, resuelve entidades y delega consultas con evidencia.',
     description: 'Interpreta la solicitud y delega al especialista adecuado.',
-    responsibilities: ['Interpretar intención', 'Pedir aclaraciones', 'Delegar tareas'],
+    responsibilities: ['Interpretar intención', 'Resolver ambigüedad', 'Preservar intención y contexto', 'Delegar al especialista autorizado', 'Combinar evidencia coherente'],
     capabilities: { readOnly: true, canRead: false, canWrite: false },
     allowedSkillFamilies: [], prohibitedSkillFamilies: ALL_SKILL_FAMILIES,
     allowedSkills: [], allowedActionSkills: [],

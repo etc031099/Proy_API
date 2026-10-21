@@ -107,6 +107,10 @@ const validateSkillInvocation = invocation => {
   if (!agent.allowedSkills.includes(skillId) || !skill.allowedAgents.includes(agentId) || !skill.readOnly) {
     throw new AgentError('AGENT_SKILL_NOT_ALLOWED');
   }
+  if (agentId === 'forecast' && (args?.mode === 'evaluation' || args?.asOfDate !== undefined
+    || args?.horizonDays !== undefined && ![7, 14].includes(args.horizonDays))) {
+    throw new AgentError('AGENT_SKILL_NOT_ALLOWED');
+  }
   return Object.freeze({ agent, skill, args: validateSkillArgs(skill.inputSchema, args), context });
 };
 
