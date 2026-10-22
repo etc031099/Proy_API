@@ -157,4 +157,3 @@ export async function registerSaleWithImpacts<T>(options: {
   }
   return response;
 }
-
