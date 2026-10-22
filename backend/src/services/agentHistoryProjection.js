@@ -24,7 +24,7 @@ const shape = {
     responseDiagnostic: { providerResponseReceived: true, httpStatus: true, contentPresent: true, contentLength: true,
       provider: true, model: true, finishReason: true, usagePresent: true, usageParseResult: true,
       validationResult: true, validationPassed: true, validationReason: true, validationField: true,
-      validationLayer: true, entityReason: true, schemaReason: true, schemaField: true, limitationReason: true, limitationCode: true, unsupportedNumbers: [true],
+      validationLayer: true, entityReason: true, labelledEntityType: true, schemaReason: true, schemaField: true, limitationReason: true, limitationCode: true, unsupportedNumbers: [true],
       unsupportedNumberDetails: [{ value: true, pattern: true }] },
     contextMetrics: { bytes: true, chars: true, estimatedTokens: true, tokenCountIsEstimate: true } },
   v3Views: [{ kind: true, title: true, subtitle: true, metrics: [{ label: true, value: true }],

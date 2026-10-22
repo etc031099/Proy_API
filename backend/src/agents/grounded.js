@@ -184,6 +184,7 @@ const handleGrounded = async ({ message, context, service, run, execution, resol
       grounded.responseDiagnostic = safeGroundedDiagnostic({ ...(error.responseDiagnostic || grounded.responseDiagnostic), validationResult: 'REJECTED',
         validationReason: error.validationReason || error.responseDiagnostic?.validationReason || 'PROVIDER_UNAVAILABLE',
         validationField: error.validationField, validationLayer: error.validationLayer, entityReason: error.entityReason,
+        labelledEntityType: error.labelledEntityType,
         schemaReason: error.schemaReason, schemaField: error.schemaField, unsupportedNumbers: error.unsupportedNumbers,
         unsupportedNumberDetails: error.unsupportedNumberDetails,
         limitationReason: error.limitationReason, limitationCode: error.limitationCode });

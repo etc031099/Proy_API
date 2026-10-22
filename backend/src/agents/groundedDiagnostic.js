@@ -27,6 +27,9 @@ const safeGroundedDiagnostic = (source = {}) => ({
   ...(safeSchemaField(source.schemaField) ? { schemaField: source.schemaField } : {}),
   ...(source.validationReason === 'UNKNOWN_ENTITY' && ['UNKNOWN_IDENTIFIER', 'UNKNOWN_NAME_AFTER_ACTION',
     'UNKNOWN_LABELLED_ENTITY', 'UNKNOWN_PURCHASE_ENTITY'].includes(source.entityReason) ? { entityReason: source.entityReason } : {}),
+  ...(source.validationReason === 'UNKNOWN_ENTITY' && source.entityReason === 'UNKNOWN_LABELLED_ENTITY'
+    && ['PRODUCT', 'CUSTOMER', 'SUPPLIER', 'UNKNOWN'].includes(source.labelledEntityType)
+    ? { labelledEntityType: source.labelledEntityType } : {}),
   ...(source.validationReason === 'LIMITATION_NOT_ALLOWED' && LIMITATION_REASONS.includes(source.limitationReason)
     ? { limitationReason: source.limitationReason } : {}),
   ...(source.validationReason === 'LIMITATION_NOT_ALLOWED' && isLimitationCode(source.limitationCode)

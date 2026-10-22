@@ -138,17 +138,18 @@ const contextMetrics = context => ({ bytes: Buffer.byteLength(JSON.stringify(con
 // Names must come from the cited facts, not the question or another observation.
 // Ordinary prose may paraphrase facts; catalogue identities may not be invented.
 const entityWords = facts => {
-  const words = new Set();
+  const words = new Set(), identities = [];
   const visit = value => {
     if (Array.isArray(value)) return value.forEach(visit);
     if (!isPlainObject(value)) return;
     for (const [key, item] of Object.entries(value)) {
-      if (/^(?:name|displayName|productName|customerName|supplierName|recommendedProduct)$/.test(key) && typeof item === 'string')
+      if (/^(?:name|displayName|productName|customerName|supplierName|recommendedProduct)$/.test(key) && typeof item === 'string') {
         for (const word of require('./domainGate').normalize(item).match(/[\p{L}]+/gu) || []) words.add(word);
-      else if (item && typeof item === 'object') visit(item);
+        identities.push(require('./domainGate').normalize(item).match(/[\p{L}\p{N}]+/gu) || []);
+      } else if (item && typeof item === 'object') visit(item);
     }
   };
-  facts.forEach(visit); return words;
+  facts.forEach(visit); return { words, identities };
 };
 const proseWords = new Set('el la los las un una no sin en para hay son si es esta este esa ese estos estas antes con su sus se seleccionado consultado observado recomendado candidato disponible nuevo existente tiene requiere necesita merece presenta podria puede del de'.split(' '));
 
@@ -182,7 +183,7 @@ const validateGroundedOutput = (text, context) => {
     const citedFacts = row.evidenceRefs.map(ref => refs.get(ref).facts);
     const inventory = row.evidenceRefs.flatMap(ref => refs.get(ref).skillId === 'get_inventory_intelligence'
       ? refs.get(ref).facts?.items || [] : []);
-    const names = entityWords(citedFacts);
+    const { words: names, identities } = entityWords(citedFacts);
     const numericFacts = numericEvidence(row.evidenceRefs.flatMap(ref => {
       const evidence = refs.get(ref), scope = evidence.scope || {};
       return [evidence.facts, { asOfDate: scope.asOfDate, frozenCutoff: scope.frozenCutoff,
@@ -199,7 +200,8 @@ const validateGroundedOutput = (text, context) => {
         || /(?:isolation forest).{0,45}(?:significa|demuestra|confirma|detecta) (?:el )?fraude|probabilidad de fraude|churn (?:predicho|confirmado)|\b(?:ejecuta|registra|confirma) (?:la |una )?(?:venta|compra)/i.test(claims)
         || /(?:asociacion|asociación|regla).{0,40}(?:demuestra|prueba|garantiza|implica).{0,20}causa/i.test(claims)
         || /(?:FP.?Growth|lift).{0,80}(?:demuestra|prueba|garantiza).{0,30}(?:causa|ventas)/i.test(claims)) fail('UNSUPPORTED_SEMANTIC_CLAIM', path);
-      const unknownEntity = entityReason => fail('UNKNOWN_ENTITY', path, { entityReason });
+      const unknownEntity = (entityReason, labelledEntityType) => fail('UNKNOWN_ENTITY', path,
+        { entityReason, ...(labelledEntityType ? { labelledEntityType } : {}) });
       if ((value.match(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/gi) || []).some(sku => !skus.has(sku.toUpperCase()))) unknownEntity('UNKNOWN_IDENTIFIER');
       const remaining = value.replace(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/g, '')
         .replace(/\bMA28\b/g, allowed.includes('MOVING_AVERAGE_28') ? '' : 'MA28');
@@ -224,9 +226,27 @@ const validateGroundedOutput = (text, context) => {
         return !names.has(n) && !proseWords.has(n) && !advisoryTerm(n); })) unknownEntity('UNKNOWN_NAME_AFTER_ACTION');
       const purchaseNames = prose.matchAll(/\b(?:Compra|Comprar|compra|comprar)\s+(?:a(?:l)?\s+)([A-ZÁÉÍÓÚÑ][\p{L}]+)/gu);
       if ([...purchaseNames].some(([, word]) => !names.has(require('./domainGate').normalize(word)))) unknownEntity('UNKNOWN_PURCHASE_ENTITY');
-      const labelled = require('./domainGate').normalize(prose).matchAll(/\b(?:producto|cliente|proveedor|marca)\s+[«“"]?([\p{L}]+)/gu);
-      if ([...labelled].some(([, word]) => !names.has(word) && !proseWords.has(word)
-        && !/^(?:seleccionado|consultado|observado|tiene|requiere|necesita|merece|presenta|podria|puede|con|del|de|en|es|esta|sin)$/.test(word))) unknownEntity('UNKNOWN_LABELLED_ENTITY');
+      // An explicit named buy/sell target must match a cited identity as a whole
+      // (possibly abbreviated), not merely share the brand's first word.
+      const targets = prose.matchAll(/\b(?:[Cc]ompra(?:r)?|[Vv]ende(?:r)?)\s+(?!a(?:l)?\s)([A-ZÁÉÍÓÚÑ][\p{L}\p{N} -]*)/gu);
+      for (const [, target] of targets) {
+        const tokens = require('./domainGate').normalize(target.split(/\s+(?:para|antes|con|en|mañana|hoy)\b/u)[0]).match(/[\p{L}\p{N}]+/gu) || [];
+        if (!identities.some(identity => {
+          let index = 0;
+          for (const token of identity) if (token === tokens[index]) index++;
+          return tokens.length > 0 && index === tokens.length;
+        })) unknownEntity('UNKNOWN_LABELLED_ENTITY', 'PRODUCT');
+      }
+      // Keep sentence boundaries: stripping periods previously turned
+      // "este producto. Considera..." into a supposed product named Considera.
+      const labelledProse = prose.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+      const labelled = labelledProse.matchAll(/\b(producto|cliente|proveedor|marca)\s+([«“"]?)([\p{L}]+)/gu);
+      for (const [, label, quote, word] of labelled) {
+        const genericContinuation = !quote && (proseWords.has(word)
+          || /^(?:y|e|o|u|por|porque|a|al|que|si|aunque|mientras|pero|pues)$/.test(word));
+        if (!names.has(word) && !genericContinuation)
+          unknownEntity('UNKNOWN_LABELLED_ENTITY', { producto: 'PRODUCT', cliente: 'CUSTOMER', proveedor: 'SUPPLIER' }[label] || 'UNKNOWN');
+      }
       // An estimated coverage/risk is not evidence of a certain future stockout.
       if (/\b(?:te quedaras|se quedara|nos quedaremos|quedara|quedaran) sin (?:stock|existencias)\b/.test(require('./domainGate').normalize(value)))
         fail('UNSUPPORTED_SEMANTIC_CLAIM', path);

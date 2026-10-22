@@ -123,6 +123,15 @@ it('A6.2.2 displays closed entity rejection category and advisory field without 
   expect(screen.getByText('UNKNOWN_NAME_AFTER_ACTION')).toBeTruthy();
   expect(screen.getByText('observations[0].advisoryRecommendation')).toBeTruthy();
 });
+it('A6.2.3 displays the sanitized labelled entity type without names or prose', () => {
+  render(<AgentActivity response={{ ...response, grounded: { route: 'GROUNDED_LLM', responseDiagnostic: {
+    validationResult: 'REJECTED', validationReason: 'UNKNOWN_ENTITY', validationField: 'observations[0].advisoryRecommendation',
+    entityReason: 'UNKNOWN_LABELLED_ENTITY', labelledEntityType: 'SUPPLIER', finishReason: 'stop', contentPresent: true } } }} />);
+  fireEvent.click(screen.getByText('Diagnóstico de síntesis'));
+  expect(screen.getByText('UNKNOWN_LABELLED_ENTITY')).toBeTruthy();
+  expect(screen.getByText('SUPPLIER')).toBeTruthy();
+  expect(screen.getByText('observations[0].advisoryRecommendation')).toBeTruthy();
+});
 it('J2M displays safe limitation diagnostics without generated prose', () => {
   render(<AgentActivity response={{ ...response, grounded: { route: 'GROUNDED_LLM', responseDiagnostic: {
     validationResult: 'REJECTED', validationReason: 'LIMITATION_NOT_ALLOWED', validationField: 'limitations[0]',

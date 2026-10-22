@@ -86,6 +86,7 @@ export function AgentActivity({ response }: { response?: AgentResponse }) {
           <div><dt>Estado de síntesis</dt><dd>Rechazada</dd></div>
           <div><dt>Motivo técnico</dt><dd>{response.grounded.responseDiagnostic.validationReason}</dd></div>
             {response.grounded.responseDiagnostic.entityReason && <div><dt>Validación de entidad</dt><dd>{response.grounded.responseDiagnostic.entityReason}</dd></div>}
+            {response.grounded.responseDiagnostic.labelledEntityType && <div><dt>Tipo de entidad</dt><dd>{response.grounded.responseDiagnostic.labelledEntityType}</dd></div>}
           {response.grounded.responseDiagnostic.schemaReason && <div><dt>Validación de estructura</dt><dd>{response.grounded.responseDiagnostic.schemaReason}</dd></div>}
           {response.grounded.responseDiagnostic.schemaField && <div><dt>Campo de estructura</dt><dd>{response.grounded.responseDiagnostic.schemaField}</dd></div>}
           {response.grounded.responseDiagnostic.limitationReason && <div><dt>Validación de limitación</dt><dd>{response.grounded.responseDiagnostic.limitationReason}</dd></div>}
