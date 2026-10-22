@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ForecastEvaluationPanel } from '@/components/business-intelligence/ForecastEvaluationPanel';
 import { BusinessIntelligenceDashboard } from '@/components/business-intelligence/BusinessIntelligenceDashboard';
@@ -122,6 +122,9 @@ describe('forecast ML evidence and operative method', () => {
     fireEvent.click(await screen.findByRole('tab', { name: 'Predicción' }));
     const historyError = await screen.findByRole('alert');
     expect(historyError.textContent).toMatch(/pronósticos siguen disponibles/);
+    fireEvent.click(within(screen.getByLabelText('Pronóstico Ridge LIVE')).getByText('Detalles técnicos'));
+    const diagnosticPanel = await screen.findByLabelText('Estado del ML');
+    fireEvent.click(await within(diagnosticPanel).findByText('Ver estado de Health'));
     expect(await screen.findByText('Ensamblado Health')).toBeTruthy();
     expect(screen.getByText(/En LIVE, Ridge se utiliza para 7 y 14 días cuando el registry proporciona un artefacto ACTIVE aprobado\. MA28 se conserva como baseline estadístico; 1 día no tiene fallback\./)).toBeTruthy();
     const historical = screen.getByText('Evidencia histórica y comparación de modelos').closest('details');
