@@ -72,7 +72,7 @@ export async function registerCustomerSaleImpact<T>(options: {
     const after = await captureCustomerImpactSnapshot(individualCustomerId);
     if (capture !== activeCustomerCapture) return response;
     publishCustomerImpact(makeCustomerImpactEvent({ businessContext: context, transactionId: metadata.transactionId,
-      displayName: options.displayName || 'Cliente', occurredAt: metadata.occurredAt || new Date().toISOString(), before, after }));
+      customerKind: 'IDENTIFIED', displayName: options.displayName || 'Cliente', occurredAt: metadata.occurredAt || new Date().toISOString(), before, after }));
   }
   return response;
 }

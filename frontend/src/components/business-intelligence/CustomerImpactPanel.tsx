@@ -21,6 +21,9 @@ const status = (row: CustomerImpactSnapshot | null) => !row ? 'No capturado'
     : row.captureStatus === 'ASSIGNED' ? 'Asignación actual disponible' : 'Elegible';
 function pair<T>(before: T | null | undefined, after: T | null | undefined, format: (value: T | null) => string, changed?: boolean): string {
   const left = before === undefined ? null : before, right = after === undefined ? null : after;
+  if (left === null && right === null) return 'No disponible';
+  if (left === null) return `Actual: ${format(right)}`;
+  if (right === null) return `BEFORE: ${format(left)}`;
   const suffix = changed === true ? ' · Sin cambio' : '';
   return `${format(left)} → ${format(right)}${suffix}`;
 }
@@ -125,16 +128,24 @@ export function CustomerImpactPanel() {
     <CardContent className="space-y-4 text-sm">
       {state.loading && <p role="status">Verificando contexto de la comparación…</p>}
       {state.message && <div role="alert" className="space-y-2"><p>{state.message}</p><Button variant="outline" size="sm" onClick={() => { retries.current = 0; if (event) void verify(event, false); }}>Reintentar verificación</Button></div>}
-      {event && state.verified && <>
+      {event && state.verified && event.customerKind === 'CONSUMER_FINAL' && <section className="rounded-lg border p-3 text-sm">
+        <h3 className="font-semibold">Sin atribución individual</h3>
+        <p className="mt-1">La venta {event.transactionId ? `#${event.transactionId}` : ''} corresponde a {event.displayName}. No se calcula RFM ni se asigna un cluster individual a Consumer Final.</p>
+      </section>}
+      {event && state.verified && event.customerKind !== 'CONSUMER_FINAL' && !event.customerRef && <section className="rounded-lg border p-3 text-sm">
+        <h3 className="font-semibold">Inferencia RFM no disponible</h3>
+        <p className="mt-1">La venta se asocia a {event.displayName}, pero no se obtuvo una asignación individual verificable. No se inventan valores RFM ni un cluster.</p>
+      </section>}
+      {event && state.verified && event.customerRef && <>
           <section className="rounded-lg border p-3"><h3 className="font-semibold">Cambio RFM</h3><dl className="mt-2 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <div><dt className="text-muted-foreground">Recencia · días</dt><dd>{pair(before?.recency, after?.recency, value => number(value, 0))}</dd></div>
             <div><dt className="text-muted-foreground">Frecuencia 90 días · compras/tickets</dt><dd>{pair(before?.frequency, after?.frequency, value => number(value, 0))}</dd></div>
             <div><dt className="text-muted-foreground">Monetario 90 días · PEN</dt><dd>{pair(before?.monetary, after?.monetary, money)}</dd></div>
             <div><dt className="text-muted-foreground">Segmento RFM</dt><dd>{pair(before?.rfmSegment, after?.rfmSegment, value => value || 'No disponible')}</dd></div>
           </dl></section>
-        <section className="rounded-lg border p-3" aria-label="Entradas K-Means BEFORE y AFTER"><h3 className="font-semibold">Entradas K-Means</h3>
+        <section className="rounded-lg border p-3" aria-label={before && after ? 'Entradas K-Means BEFORE y AFTER' : before ? 'Entradas K-Means BEFORE' : 'Entradas actuales K-Means'}><h3 className="font-semibold">Entradas K-Means</h3>
           <p className="mt-1 text-xs text-muted-foreground">RFM bruto → log1p → StandardScaler → K-Means. Valores devueltos por la misma inferencia.</p>
-          <div className="mt-2 overflow-x-auto"><table className="w-full text-xs"><caption className="sr-only">Vector K-Means · BEFORE → AFTER</caption>
+          <div className="mt-2 overflow-x-auto"><table className="w-full text-xs"><caption className="sr-only">{before && after ? 'Vector K-Means · BEFORE → AFTER' : before ? 'Vector K-Means · BEFORE disponible' : 'Vector actual K-Means'}</caption>
             <thead className="text-left"><tr><th className="p-2">Feature</th><th className="p-2">Bruto</th><th className="p-2">log1p</th><th className="p-2">Escalado</th></tr></thead>
             <tbody>{CUSTOMER_FEATURE_ORDER.map((name, index) => <tr key={name} className="border-t"><th scope="row" className="p-2 text-left font-medium">{name}</th>
               {(['rawValue', 'log1pValue', 'scaledValue'] as const).map(field => <td key={field} className="p-2">{pair(inputBefore?.[index][field], inputAfter?.[index][field], value => number(value, 6))}</td>)}
@@ -164,7 +175,8 @@ export function CustomerImpactPanel() {
           <p>Origen {pair(before?.assignmentSource, after?.assignmentSource, value => value || 'No disponible')}</p>
           <p>Comparación observacional: otros cambios concurrentes pueden afectar las lecturas.</p>
         </details>
-        {event.captureStatus !== 'COMPLETE' && <p className="text-muted-foreground">Captura parcial: BEFORE/AFTER no disponible en uno de los momentos.</p>}
+        {!before && after && <p className="rounded-md bg-muted/50 p-3 text-xs">BEFORE histórico durable no disponible. Los valores marcados como actuales son una lectura posterior del cliente; no reconstruyen el estado anterior y pueden incluir cambios concurrentes.</p>}
+        {event.captureStatus !== 'COMPLETE' && <p className="text-muted-foreground">Captura parcial: {before && !after ? 'AFTER no disponible.' : after && !before ? 'BEFORE no disponible.' : 'BEFORE y AFTER no disponibles.'}</p>}
       </>}
     </CardContent>
   </Card>;

@@ -35,6 +35,7 @@ export type CustomerImpactEvent = {
   businessContext: CustomerImpactContext;
   transactionId: string | null;
   customerRef: string | null;
+  customerKind?: 'IDENTIFIED' | 'CONSUMER_FINAL';
   displayName: string;
   occurredAt: string;
   before: CustomerImpactSnapshot | null;
@@ -94,6 +95,9 @@ export function isCustomerImpactEvent(value: unknown): value is CustomerImpactEv
   return event.version === 1 && isContext(event.businessContext)
     && (event.transactionId === null || typeof event.transactionId === 'string')
     && (event.customerRef === null || typeof event.customerRef === 'string')
+    && (event.customerKind === undefined || ['IDENTIFIED', 'CONSUMER_FINAL'].includes(event.customerKind))
+    && (event.customerKind !== 'CONSUMER_FINAL' || event.customerRef === null)
+    && event.customerRef !== 'CONSUMER_FINAL'
     && typeof event.displayName === 'string' && typeof event.occurredAt === 'string'
     && Number.isFinite(Date.parse(event.occurredAt))
     && (event.before === null || isSnapshot(event.before)) && (event.after === null || isSnapshot(event.after))

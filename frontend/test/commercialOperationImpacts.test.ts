@@ -188,7 +188,7 @@ describe('P4-B1 commercial operation impacts', () => {
     expect(readLatestInventoryImpact()?.operationId).toBe('sale-B');
     expect(readLatestForecastImpactSale()?.transactionId).toBe('sale-B');
     expect(readLatestSalesImpact()?.transactionId).toBe('sale-B');
-    expect(readLatestCustomerImpact()).toBeNull();
+    await vi.waitFor(() => expect(readLatestCustomerImpact()).toMatchObject({ transactionId: 'sale-B', customerKind: 'CONSUMER_FINAL' }));
   });
 
   it('Consumer Final is not converted into an individual customer or RFM request', async () => {
@@ -199,5 +199,7 @@ describe('P4-B1 commercial operation impacts', () => {
         customerId: null, total: null, currency: 'PEN' }) });
     expect(apiClient.getCustomerClustering).not.toHaveBeenCalled();
     expect(readLatestInventoryImpact()?.counterparty).toBeNull();
+    await vi.waitFor(() => expect(readLatestCustomerImpact()).toMatchObject({ transactionId: 'sale-final', customerRef: null, customerKind: 'CONSUMER_FINAL',
+      captureStatus: 'BOTH_UNAVAILABLE', displayName: 'Consumidor final' }));
   });
 });

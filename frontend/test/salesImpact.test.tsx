@@ -2,6 +2,7 @@ import { act, cleanup, render, screen, fireEvent } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { apiClient } from '@/lib/api';
 import { SalesImpactPanel } from '@/components/business-intelligence/SalesImpactPanel';
+import { provisionalComparison, SalesIsolationForestImpact } from '@/components/business-intelligence/SalesIsolationForestImpact';
 import { publishCompletedSaleImpact, readLatestSalesImpact, SALES_IMPACT_SESSION_KEY } from '@/lib/salesImpactChannel';
 import { captureSalesImpactSnapshot, isSalesImpactEvent, makeSalesImpactEvent, waitForSalesImpactBefore, type SalesImpactSnapshot } from '@/lib/salesImpactSnapshot';
 import { provisionalFixture } from './fixtures/salesProvisional';
@@ -149,7 +150,7 @@ describe('SalesImpact temporal commercial comparison', () => {
     vi.spyOn(apiClient, 'getIntelligenceRevision').mockResolvedValue(revision as never);
     vi.spyOn(apiClient, 'getSalesImpactAnalytics');
     const before = snapshot({ revenue: { value: 33, currency: 'PEN' }, units: 3, tickets: 1, averageTicket: { value: 33, currency: 'PEN' }, grossMarginAmount: { value: 10, currency: 'PEN' }, grossMarginPercent: 30 });
-    const after = snapshot({ revenue: { value: 45, currency: 'PEN' }, units: 4, tickets: 2, averageTicket: { value: 22.5, currency: 'PEN' }, grossMarginAmount: { value: 18, currency: 'PEN' }, grossMarginPercent: 40 });
+    const after = snapshot({ dataVersion: 185, revenue: { value: 45, currency: 'PEN' }, units: 4, tickets: 2, averageTicket: { value: 22.5, currency: 'PEN' }, grossMarginAmount: { value: 18, currency: 'PEN' }, grossMarginPercent: 40 });
     sessionStorage.setItem(SALES_IMPACT_SESSION_KEY, JSON.stringify(event(before, after)));
     render(<SalesImpactPanel />);
     expect(await screen.findByText(/33.*45/)).toBeTruthy();
@@ -158,6 +159,29 @@ describe('SalesImpact temporal commercial comparison', () => {
     expect(screen.getByText(/10.*30%.*18.*40%/)).toBeTruthy();
     expect(screen.getByText(/El modelo permanece congelado/)).toBeTruthy();
     expect(apiClient.getSalesImpactAnalytics).not.toHaveBeenCalled();
+  });
+
+  it('shows current daily Isolation Forest evidence without attributing a score to the sale or inventing BEFORE', () => {
+    const current = provisionalFixture();
+    expect(provisionalComparison(null, current).comparable).toBe(false);
+    render(<SalesIsolationForestImpact before={null} after={current} />);
+    expect(screen.getByText(/El endpoint no asocia el score a un transactionId individual/)).toBeTruthy();
+    expect(screen.getByText(/Score diario: -0\.4 · Clasificación provisional: Dentro del patrón/)).toBeTruthy();
+    expect(document.body.textContent).not.toContain('No evaluable → -0.4');
+    expect(screen.getByText(/Una señal atípica no implica fraude/)).toBeTruthy();
+    expect(screen.getByText(/No se afirma que esta venta haya causado reentrenamiento/)).toBeTruthy();
+  });
+
+  it('keeps the real sale ID separate from the verified daily provisional evaluation', () => {
+    const transactionId = '507f1f77bcf86cd799439011';
+    const evaluation = provisionalFixture();
+    const saved = makeSalesImpactEvent({ businessContext: context, transactionId, occurredAt: '2026-10-20T10:00:00Z',
+      saleTotal: { value: 12, currency: 'PEN' }, before: null, after: snapshot({ isolationForest: evaluation }) });
+    expect(isSalesImpactEvent(saved)).toBe(true);
+    expect(saved.transactionId).toBe(transactionId);
+    expect(saved.after?.isolationForest?.modelIdentity.artifactHash).toBe(evaluation.modelIdentity.artifactHash);
+    expect(saved.after?.isolationForest?.inference?.anomalyScore).toBe(evaluation.inference?.anomalyScore);
+    expect(saved.after?.isolationForest?.aggregate?.tickets).toBe(2);
   });
 
   it('does not show incomplete margin as a total and keeps its cost coverage visible', async () => {

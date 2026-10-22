@@ -14,7 +14,7 @@ const reasonText: Record<string, string> = { NO_TICKETS: 'Sin tickets para evalu
   DATE_MISMATCH: 'La fecha no coincide con el día operativo actual.', INVALID_DATE: 'Fecha no válida.' };
 
 export function provisionalComparison(before: SalesProvisionalEvaluation | null, after: SalesProvisionalEvaluation | null) {
-  if (!before || !after) return { comparable: true, issue: null, concurrent: false };
+  if (!before || !after) return { comparable: false, issue: null, concurrent: false };
   if (!sameCustomerImpactContext(before.businessContext, after.businessContext)) return { comparable: false, issue: 'Los contextos de ambas capturas no coinciden.', concurrent: false };
   if (before.localDate !== after.localDate || before.modelInput && after.modelInput && before.modelInput.weekday !== after.modelInput.weekday)
     return { comparable: false, issue: 'Cambió la fecha local entre capturas; no se comparan días distintos.', concurrent: false };
@@ -43,9 +43,14 @@ export function SalesIsolationForestImpact({ before, after }: { before: SalesPro
   ];
   return <section aria-label="Evaluación provisional del día en curso" className="space-y-3 border-t pt-3">
     <div className="flex flex-wrap items-center gap-2"><h3 className="text-sm font-semibold">Impacto en Isolation Forest</h3><Badge variant="outline">EVALUACIÓN PROVISIONAL</Badge></div>
-    <p className="text-xs text-muted-foreground">Evaluación provisional: qué evaluaría el modelo si el día cerrara en este momento.</p>
+    <p className="text-xs text-muted-foreground">Evaluación provisional del agregado diario de ventas. El endpoint no asocia el score a un transactionId individual; por eso este score no se atribuye a la venta identificada arriba.</p>
     {comparison.issue && <p role="alert" className="text-sm">{comparison.issue}</p>}
     {comparison.comparable && <div className="grid gap-2 md:grid-cols-2">{rows.map(([title, value]) => <div key={title} className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">{title}</p><p className="mt-1 text-sm font-medium">{value}</p></div>)}</div>}
+    {!comparison.comparable && after && <div className="grid gap-2 md:grid-cols-2 rounded-lg border p-3 text-sm" aria-label="Evaluación diaria actual">
+      <p>Periodo evaluado: {after.localDate} · {after.aggregate ? `${after.aggregate.tickets} tickets, ${after.aggregate.units} unidades` : 'agregado no disponible'}.</p>
+      <p>Score diario: {after.inference ? numeric(after.inference.anomalyScore) : 'No evaluable'} · Clasificación provisional: {label(after)}.</p>
+    </div>}
+    {!comparison.comparable && !after && before && <p className="text-xs text-muted-foreground">Solo hay una captura anterior; no se presenta como evaluación posterior a esta venta.</p>}
     {!before && <p className="text-xs text-muted-foreground">La evaluación inicial no pudo capturarse.</p>}
     {!after && <p className="text-xs text-muted-foreground">La evaluación posterior todavía no está disponible.</p>}
     {before?.reason === 'NO_TICKETS' && <p className="text-xs">No existía actividad suficiente antes de la venta.</p>}
@@ -66,9 +71,9 @@ export function SalesIsolationForestImpact({ before, after }: { before: SalesPro
         <div><dt>Fecha local</dt><dd>{model.localDate}</dd></div></dl>
       <p className="mt-2 text-xs">Revisión {before?.revision || 'No capturada'} → {after?.revision || 'No capturada'} · observado {before?.observedAt || 'No capturado'} → {after?.observedAt || 'No capturado'}</p>
     </details>}
-    <div className="space-y-1 text-xs text-muted-foreground"><p>El modelo permanece congelado. La venta modifica las entradas utilizadas para inferencia, no el entrenamiento.</p>
+    <div className="space-y-1 text-xs text-muted-foreground"><p>El modelo permanece congelado. No se afirma que esta venta haya causado reentrenamiento.</p>
       <p>El día actual todavía está abierto; el resultado no equivale a una evaluación histórica certificada.</p>
       <p>Una señal atípica no implica fraude ni confirma una causa. Un score menor indica mayor rareza relativa; no es una probabilidad.</p>
-      <p>La comparación es observacional y vuelve a ejecutar inferencia antes y después de la venta.</p></div>
+      <p>Cuando existen ambas capturas válidas, la comparación es observacional entre agregados del mismo día; pueden influir otras operaciones concurrentes.</p></div>
   </section>;
 }

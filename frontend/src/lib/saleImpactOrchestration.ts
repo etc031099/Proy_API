@@ -111,12 +111,14 @@ async function performSaleWithImpacts<T>(options: SaleImpactOptions<T>, scopedAc
       if (individualCustomerId) void captureCustomerImpactSnapshot(individualCustomerId).then(customerAfter => {
         if (readLatestInventoryImpact()?.operationId !== metadata.transactionId) return;
         publishCustomerImpact(makeCustomerImpactEvent({ businessContext: verifiedContext, transactionId: metadata.transactionId,
-          displayName: options.displayName || 'Cliente', occurredAt, before: null, after: customerAfter }));
+          customerKind: 'IDENTIFIED', displayName: options.displayName || 'Cliente', occurredAt, before: null, after: customerAfter }));
       }).catch(() => {
         if (readLatestInventoryImpact()?.operationId !== metadata.transactionId) return;
         publishCustomerImpact(makeCustomerImpactEvent({ businessContext: verifiedContext,
-          transactionId: metadata.transactionId, displayName: options.displayName || 'Cliente', occurredAt, before: null, after: null }));
+          transactionId: metadata.transactionId, customerKind: 'IDENTIFIED', displayName: options.displayName || 'Cliente', occurredAt, before: null, after: null }));
       });
+      else publishCustomerImpact(makeCustomerImpactEvent({ businessContext: verifiedContext, transactionId: metadata.transactionId,
+        customerKind: 'CONSUMER_FINAL', displayName: options.displayName || 'Consumer Final', occurredAt, before: null, after: null }));
     });
   } catch { /* Analytics publication must never turn a confirmed sale into a failed UI result. */ }
 

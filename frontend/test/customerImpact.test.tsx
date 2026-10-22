@@ -3,8 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CustomerImpactPanel } from '@/components/business-intelligence/CustomerImpactPanel';
 import { apiClient } from '@/lib/api';
-import { clearLatestCustomerImpact, CUSTOMER_IMPACT_SESSION_KEY, readLatestCustomerImpact, registerCustomerSaleImpact } from '@/lib/customerImpactChannel';
-import { captureCustomerImpactSnapshot, isCustomerImpactEvent } from '@/lib/customerImpactSnapshot';
+import { clearLatestCustomerImpact, CUSTOMER_IMPACT_SESSION_KEY, publishCustomerImpact, readLatestCustomerImpact, registerCustomerSaleImpact } from '@/lib/customerImpactChannel';
+import { captureCustomerImpactSnapshot, isCustomerImpactEvent, makeCustomerImpactEvent } from '@/lib/customerImpactSnapshot';
 import type { CustomerClusterAssignment, CustomerClustering } from '@/types/customerClustering';
 
 const context = { businessId: 'demo-v3', scenarioId: 'minimarket-pasco-v3', datasetVersion: 'seed-v1' };
@@ -63,6 +63,18 @@ describe('CustomerImpact observational sale flow', () => {
     expect(readLatestCustomerImpact()).toBeNull();
   });
 
+  it('explains Consumer Final without rendering individual RFM or K-Means values', async () => {
+    vi.spyOn(apiClient, 'getIntelligenceRevision').mockResolvedValue(revision() as never);
+    const read = vi.spyOn(apiClient, 'getCustomerClustering');
+    publishCustomerImpact(makeCustomerImpactEvent({ businessContext: context, transactionId: 'sale-final-ui',
+      customerKind: 'CONSUMER_FINAL', displayName: 'Consumidor final', occurredAt: '2026-10-20T18:00:00.000Z', before: null, after: null }));
+    render(<CustomerImpactPanel />);
+    expect(await screen.findByText(/corresponde a Consumidor final/)).toBeTruthy();
+    expect(screen.getByText(/No se calcula RFM ni se asigna un cluster individual a Consumer Final/)).toBeTruthy();
+    expect(screen.queryByText('Cambio RFM')).toBeNull();
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it('does not block a successful sale when BEFORE capture fails and preserves an incomplete event', async () => {
     vi.spyOn(apiClient, 'getCustomerClustering').mockRejectedValueOnce(new Error('temporary'))
       .mockResolvedValueOnce(response(clustering()));
@@ -84,19 +96,23 @@ describe('CustomerImpact observational sale flow', () => {
   });
 
   it('allows a newer partial transaction to replace an older complete same-context event', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-20T18:00:00.000Z'));
     vi.spyOn(apiClient, 'getCustomerClustering').mockResolvedValueOnce(response(clustering()))
       .mockResolvedValueOnce(response(clustering({ frequency: 6 })))
       .mockRejectedValueOnce(new Error('temporary'))
       .mockRejectedValueOnce(new Error('temporary'));
     const completeSale = { customerMongoId: '507f1f77bcf86cd799439011', displayName: 'Cliente', getContext: () => context,
       submit: async () => ({ success: true }), isSuccessful: (value: { success: boolean }) => value.success,
-      getMetadata: () => ({ transactionId: 'sale-complete' }) };
+      getMetadata: () => ({ transactionId: '507f1f77bcf86cd799439011' }) };
     await registerCustomerSaleImpact(completeSale);
     const previous = readLatestCustomerImpact();
     await registerCustomerSaleImpact({ ...completeSale, displayName: 'Cliente',
-      submit: async () => ({ success: true }), getMetadata: () => ({ transactionId: 'sale-partial' }) });
-    expect(readLatestCustomerImpact()).not.toEqual(previous);
-    expect(readLatestCustomerImpact()).toMatchObject({ transactionId: 'sale-partial', captureStatus: 'BOTH_UNAVAILABLE',
+      submit: async () => ({ success: true }), getMetadata: () => ({ transactionId: '507f1f77bcf86cd799439012' }) });
+    const next = readLatestCustomerImpact();
+    expect(next).not.toEqual(previous);
+    expect(next?.occurredAt).toBe(previous?.occurredAt);
+    expect(next).toMatchObject({ transactionId: '507f1f77bcf86cd799439012', captureStatus: 'BOTH_UNAVAILABLE',
       before: null, after: null });
   });
 
@@ -152,6 +168,18 @@ describe('CustomerImpact observational sale flow', () => {
       submit: async () => ({ success: true }), isSuccessful: value => value.success, getMetadata: () => ({ transactionId: 'partial' }) });
     render(<CustomerImpactPanel />);
     expect(await screen.findByText('Comparación parcial: falta la captura BEFORE o AFTER.')).toBeTruthy();
+    expect(screen.getAllByText('Actual: 12').length).toBeGreaterThan(0);
+    expect(document.body.textContent).not.toContain('No disponible → 12');
+    expect(screen.getByText(/BEFORE histórico durable no disponible/)).toBeTruthy();
+  });
+
+  it('does not mislabel a missing identified-customer capture as Consumer Final', async () => {
+    vi.spyOn(apiClient, 'getIntelligenceRevision').mockResolvedValue(revision() as never);
+    publishCustomerImpact(makeCustomerImpactEvent({ businessContext: context, transactionId: 'sale-customer-unavailable',
+      customerKind: 'IDENTIFIED', displayName: 'Cliente identificado', occurredAt: '2026-10-20T18:00:00.000Z', before: null, after: null }));
+    render(<CustomerImpactPanel />);
+    expect(await screen.findByText(/no se obtuvo una asignación individual verificable/)).toBeTruthy();
+    expect(screen.queryByText(/No se calcula RFM ni se asigna/)).toBeNull();
   });
 
   it('states clearly when both captures failed instead of implying only one is missing', async () => {
@@ -160,7 +188,7 @@ describe('CustomerImpact observational sale flow', () => {
     await registerCustomerSaleImpact({ customerMongoId: '507f1f77bcf86cd799439011', displayName: 'Cliente', getContext: () => context,
       submit: async () => ({ success: true }), isSuccessful: value => value.success, getMetadata: () => ({ transactionId: 'both-missing' }) });
     render(<CustomerImpactPanel />);
-    expect(await screen.findByText('No se obtuvieron capturas BEFORE ni AFTER para esta venta.')).toBeTruthy();
+    expect(await screen.findByText(/no se obtuvo una asignación individual verificable/)).toBeTruthy();
   });
 
   it('excludes the explicit Consumer Final code without assignment or fictional event', async () => {
