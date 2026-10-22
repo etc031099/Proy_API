@@ -37,21 +37,22 @@ const saleCommand = /^(?:(?:quiero|quisiera)\s+)?(?:vende|vender|registra(?=\s+\
 // A bounded narrative is only an admission clarification, never a write intent.
 // Reuse parseAction after replacing this prefix; questions remain READs.
 const saleNarrative = message => /[¿?]/.test(message) ? null
-  : /^(?:(?:ya\s+)?vend[ií]|acabo de vender)\s+(?=\d+\s|uno\s|una\s|dos\s|tres\s|cuatro\s|cinco\s|seis\s|siete\s|ocho\s|nueve\s|diez\s)/i.test(message.trim())
-    ? message.trim().replace(/^(?:(?:ya\s+)?vend[ií]|acabo de vender)\s+/i, 'vende ') : null;
-const ambiguousMovement = message => /^(?:ayer\s+)?salieron\s+\d+\s+|^comprame\b/i.test(normalize(message.trim()));
+  : /^(?:(?:ya\s+)?vend[ií]|acabo de vender|(?:ayer\s+)?salieron)\s+(?=\d+\s|uno\s|una\s|dos\s|tres\s|cuatro\s|cinco\s|seis\s|siete\s|ocho\s|nueve\s|diez\s)/i.test(message.trim())
+    ? message.trim().replace(/^(?:(?:ya\s+)?vend[ií]|acabo de vender|(?:ayer\s+)?salieron)\s+/i, 'vende ') : null;
+const ambiguousMovement = message => !saleNarrative(message) && /^(?:ayer\s+)?salieron\b/i.test(normalize(message.trim()));
 const actionIntent = message => {
   const value = normalize(message.trim());
   if (/^(?:(?:crea(?:r)?|configura|registra|quiero)(?: una)? alerta\b|avisame\b)/.test(value)) return 'create_stock_alert_rule';
   if (/^(?:crea(?:r)?|agrega|anade|registra)(?: un)? producto\b/.test(value) || /^(?:agrega|anade)\s+/.test(value)) return 'create_product';
   if (saleCommand.test(value)) return 'create_sale';
-  if (/^(?:(?:quiero|quisiera) )?(?:compre|comprar|compra|compr|pedir|prepara(?:r)?(?: una)? compra|registra(?:r)?(?: una)? compra)\b/.test(value)) return 'create_purchase';
+  if (/^(?:(?:quiero|quisiera) )?(?:compre|comprar|compra|comprame|compr|pedir|prepara(?:r)?(?: una)? compra|registra(?:r)?(?: una)? compra)\b/.test(value)) return 'create_purchase';
   return null;
 };
 const commandLength = message => (/^(?:crea(?:r)?|agrega|añade|registra)(?: un)? producto\b|^(?:(?:quiero|quisiera) )?(?:vende|vender|compre|comprar|compra|compr|pedir)\b|^(?:registra(?:r)?(?: una)? (?:venta|compra)|prepara(?:r)?(?: una)? compra)\b/iu.exec(message.trim()) || [''])[0].length;
 const money = text => /(?:USD|d[oó]lares|\$)/i.test(text) ? 'USD' : /(?:EUR|euros|€)/i.test(text) ? 'EUR' : /(?:PEN|S\/|soles)/i.test(text) ? 'PEN' : undefined;
 function parseAction(message, action) {
   message = require('../agents/supplierReference').supplierLanguage(message);
+  if (action === 'create_purchase') message = message.trim().replace(/^c[oó]mprame\b/i, 'compra');
   if (action === 'create_stock_alert_rule') return parseStockRule(message);
   // Feed every admitted sale spelling through the same existing quantity and
   // product parser (including direct JSON validation), not a second pipeline.

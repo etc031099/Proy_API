@@ -127,6 +127,35 @@ test('A6.1 narrative clarification still resolves ambiguity before preview and c
   assert.equal((await f.snapshot()).operationDraft.pendingActionId, preview.pendingAction.pendingActionId);
 });
 
+test('A6.2.1 comprame keeps PURCHASE through product choice, quantity and supplier without asking SALE', async t => {
+  const f = fixture(t);
+  let result = await f.send('cómprame coca');
+  assert.equal(result.agent, 'operations'); assert.equal(result.requiresClarification, true);
+  assert.doesNotMatch(result.answer, /venta o una compra/);
+  assert.equal((await f.snapshot()).operationDraft.action, 'create_purchase');
+  assert.equal(f.prepared.length, 0);
+  result = await f.send('opción 1');
+  assert.match(result.answer, /Cuántas unidades/);
+  assert.deepEqual((await f.snapshot()).operationDraft.missingFields, ['quantity']);
+  result = await f.send('10');
+  if (!result.pendingAction) result = await f.send('opción 1');
+  assert.equal(result.pendingAction.action, 'create_purchase');
+  assert.equal(result.pendingAction.items[0].quantity, 10);
+  assert.equal(f.confirmations.length, 0);
+});
+
+test('A6.2.1 yesterday movement is a SALE narrative with exact quantity/reference, not a historical write', async t => {
+  const f = fixture(t), result = await f.send('ayer salieron 4 lays');
+  assert.equal(result.agent, 'operations'); assert.equal(result.requiresClarification, true);
+  assert.match(result.answer, /registrar una venta de 4 unidades de lays/);
+  assert.doesNotMatch(result.answer, /venta o una compra/);
+  const draft = (await f.snapshot()).operationDraft;
+  assert.equal(draft.action, 'create_sale'); assert.deepEqual(draft.items, [{ ref: 'lays', quantity: 4 }]);
+  assert.deepEqual(draft.missingFields, ['registrationIntent']);
+  assert.equal(draft.date, undefined); assert.equal(f.resolutions.length, 0);
+  await f.send('confirmar'); assert.equal(f.prepared.length, 0); assert.equal(f.confirmations.length, 0);
+});
+
 for (const [message, quantities, refs] of [
   ['vende 1 coca cola, 1 papas lays y 2 leches', [1, 1, 2], ['coca cola', 'papas lays', 'leches']],
   ['registra una venta de 2 coca colas, 3 aguas y 1 paquete de galletas', [2, 3, 1], ['coca colas', 'aguas', 'paquete de galletas']],

@@ -67,7 +67,10 @@ export interface AgentResponse {
     contextEntityType?: 'product'; contextEntityId?: string; semanticFallbackUsed: boolean };
   semanticClassification?: ProviderStageUsage;
   groundedAnswer?: ProviderStageUsage;
-  grounded?: { route: string; responseDiagnostic?: {
+  grounded?: { route: string; generation?: {
+    required: boolean; providerConfigured: boolean; groundedGenerationEnabled: boolean; attempted: boolean;
+    status: 'NOT_ATTEMPTED' | 'SUCCEEDED' | 'FAILED' | 'REJECTED'; reason: string | null;
+  }; responseDiagnostic?: {
     validationResult: 'ACCEPTED' | 'REJECTED'; validationReason: string; validationField?: string;
     validationLayer?: 'SCHEMA' | 'GROUNDING'; schemaReason?: string; schemaField?: string;
     limitationReason?: string; limitationCode?: string;

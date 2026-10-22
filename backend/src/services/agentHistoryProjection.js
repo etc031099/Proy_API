@@ -19,6 +19,7 @@ const shape = {
     cachedInputTokens: true, cacheMissInputTokens: true, reasoningTokens: true, latencyMs: true, finishReason: true,
     accepted: true, fallbackReason: true, estimatedCostUsd: true, estimatedCostRangeUsd: { min: true, max: true } },
   grounded: { route: true, responseIntent: true, domains: [true], skills: [true], noHistoricalSkuData: true,
+    generation: { required: true, providerConfigured: true, groundedGenerationEnabled: true, attempted: true, status: true, reason: true },
     failures: [{ skillId: true, kind: true, code: true, httpStatus: true }],
     responseDiagnostic: { providerResponseReceived: true, httpStatus: true, contentPresent: true, contentLength: true,
       provider: true, model: true, finishReason: true, usagePresent: true, usageParseResult: true,

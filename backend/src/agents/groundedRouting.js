@@ -6,7 +6,7 @@ const { deepFreeze } = require('./contracts');
 
 const B = 'get_business_analytics', I = 'get_inventory_intelligence', F = 'get_product_forecast';
 const C = 'get_customer_intelligence', S = 'get_supplier_intelligence', M = 'get_cross_sell_recommendations', H = 'get_business_health';
-const requestsInterpretation = message => /\b(?:que harias|que hago|que te preocupa|como esta|hacerle caso|recomiendas? comprar|significa ese riesgo|orientame|aconsejame)\b/
+const requestsInterpretation = message => /\b(?:que harias|que hago|que te preocupa|deberia preocuparme|explicame en palabras simples|como esta|hacerle caso|recomiendas? comprar|significa ese riesgo|orientame|aconsejame)\b/
   .test(normalize(message).replace(/\bq\b/g, 'que'));
 
 // Only open analytical requests. Simple stock, period, forecast, concepts and
@@ -68,6 +68,7 @@ const buildGroundedPlan = (message, binding, memory = {}) => {
     const customer = classification.responseIntent === 'customer_interpretation';
     let ref = customer ? message.match(/\bCLI-\d+\b/i)?.[0] || (/\b(?:este|ese) cliente\b/.test(normalize(message)) ? memory.selectedCustomer?.key : null)
       : message.match(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/)?.[0]
+        || normalize(message).match(/\bsegun (?:los )?datos que tienes de\s+(.+?)(?:,|\s+explicame\b|$)/)?.[1]
         || normalize(message).replace(/\bq\b/g, 'que').match(/\b(?:sabes de|hago con|harias con)\s+(.+?)(?:,|$)/)?.[1]
         || require('../utils/productReference').extractProductReference(message);
     if (!customer && ref) ref = require('./specialistRouting').resolveSpecialistReference(ref, memory);

@@ -602,3 +602,39 @@ it('renders a changed preview with quantity three and sends no automatic confirm
   expect(await screen.findByRole('region', { name: 'Acción pendiente' })).toBeTruthy();
   expect(screen.getByText('Venta de 3 unidades')).toBeTruthy(); expect(apiClient.decideAgentAction).not.toHaveBeenCalled();
 });
+
+it('A6.2.1 distinguishes required but unavailable synthesis from a deterministic answer', () => {
+  render(<AgentActivity response={{ ...response, grounded: { route: 'GROUNDED_LLM', generation: {
+    required: true, providerConfigured: false, groundedGenerationEnabled: false, attempted: false,
+    status: 'NOT_ATTEMPTED', reason: 'PROVIDER_UNAVAILABLE' } } }} />);
+  expect(screen.queryByText('Respuesta determinística · 0 tokens IA')).toBeNull();
+  expect(screen.getByText('Respuesta factual · síntesis no realizada')).toBeTruthy();
+  const section = screen.getByRole('region', { name: 'Síntesis grounded' });
+  expect(within(section).getByText('Proveedor no habilitado o no configurado')).toBeTruthy();
+  expect(within(section).getByText('Llamadas de síntesis: 0')).toBeTruthy();
+});
+
+it('A6.2.1 identifies a successful grounded synthesis with its reported calls and tokens', () => {
+  render(<AgentActivity response={{ ...response, usage: { ...response.usage, totalLlmCalls: 1, totalTokens: 460 },
+    grounded: { route: 'GROUNDED_LLM', generation: { required: true, providerConfigured: true,
+      groundedGenerationEnabled: true, attempted: true, status: 'SUCCEEDED', reason: null } },
+    groundedAnswer: { provider: 'deepseek', model: 'deepseek-flash', calls: 1, inputTokens: 400,
+      outputTokens: 60, totalTokens: 460, accepted: true, finishReason: 'stop', fallbackReason: null,
+      latencyMs: 25, estimatedCostUsd: null } }} />);
+  const section = screen.getByRole('region', { name: 'Síntesis grounded' });
+  expect(within(section).getByText('Completada con evidencia verificada')).toBeTruthy();
+  expect(within(section).getByText('Llamadas de síntesis: 1')).toBeTruthy();
+  expect(within(section).getByText('Tokens de síntesis: 460')).toBeTruthy();
+});
+
+it('A6.2.1 failed synthesis preserves unknown tokens instead of displaying a fabricated zero', () => {
+  render(<AgentActivity response={{ ...response, usage: { ...response.usage, totalLlmCalls: 1, totalTokens: null },
+    grounded: { route: 'GROUNDED_LLM', generation: { required: true, providerConfigured: true,
+      groundedGenerationEnabled: true, attempted: true, status: 'FAILED', reason: 'PROVIDER_FAILED' } },
+    groundedAnswer: { provider: 'deepseek', model: 'deepseek-flash', calls: 1, inputTokens: null,
+      outputTokens: null, totalTokens: null, accepted: false, finishReason: null, fallbackReason: 'NETWORK',
+      latencyMs: 25, estimatedCostUsd: null } }} />);
+  const section = screen.getByRole('region', { name: 'Síntesis grounded' });
+  expect(within(section).getByText('Falló el proveedor; se conservaron los hechos')).toBeTruthy();
+  expect(within(section).getByText('Tokens de síntesis: —')).toBeTruthy();
+});

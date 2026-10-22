@@ -16,7 +16,7 @@ const req = (businessId = V3.businessId) => ({ user: { _id: '507f1f77bcf86cd7994
 const clock = () => new Date('2026-10-20T17:00:00Z');
 const sku = 'BEB-GAS-001';
 const query = rows => ({ select() { return this; }, sort() { return this; }, limit() { return this; }, lean() { return this; }, maxTimeMS() { return Promise.resolve(rows); } });
-function fixture({ reorder = true, throughActions = false, neutralProvider } = {}) {
+function fixture({ reorder = true, throughActions = false, neutralProvider, inventoryPartial = false } = {}) {
   const calls = [], scopes = [];
   const products = [{ _id: '507f1f77bcf86cd799439012', sku, name: 'Coca-Cola Sabor Original 500 ml' },
     { _id: '507f1f77bcf86cd799439013', sku: 'BEB-GAS-002', name: 'Coca-Cola Sin Azúcar 500 ml' }];
@@ -33,12 +33,12 @@ function fixture({ reorder = true, throughActions = false, neutralProvider } = {
     snapshotHash: 'a'.repeat(64), observationsClosedThrough: '2026-10-19', capturedAtUtc: clock().toISOString() } } });
   const mlClient = { intelligence: async (domain, payload) => {
     calls.push({ domain, payload });
-    const partial = domain === 'inventory' && reorder === null;
+    const partial = domain === 'inventory' && (reorder === null || inventoryPartial);
     const inventoryRow = { sku, productName: products[0].name,
       stock: { onHand: 14, incoming: 0, inventoryPosition: 14 }, coverage: { daysCover: 1.78 }, risk: { level: 'HIGH' },
       inventoryPolicy: { configuredMinimumStock: 5, safetyStock: 8, reorderPoint: 59 },
       recommendation: { shouldReorder: reorder, recommendedQty: reorder === null ? null : reorder ? 102 : 0,
-        ...(partial ? { status: 'PARTIAL', availabilityStatus: 'PARTIAL', reasonCode: 'FORECAST_HORIZON_UNAVAILABLE' } : {}) } };
+        ...(reorder === null ? { status: 'PARTIAL', availabilityStatus: 'PARTIAL', reasonCode: 'FORECAST_HORIZON_UNAVAILABLE' } : {}) } };
     if (domain === 'forecast') { assert.equal(payload.useLiveRidge, true); assert.ok([7, 14].includes(payload.horizonDays)); }
     const data = domain === 'forecast' ? { items: [{ sku, horizonDays: payload.horizonDays, status: 'READY',
       predictionUnits: payload.horizonDays === 14 ? 108.27 : 55.5, activeModelStatus: 'ACTIVE', modelVersion: 1,
@@ -587,7 +587,8 @@ test('A6.1 shared contextual replenishment and two-week forecast retain the sele
 });
 
 for (const question of ['con todo lo que sabes de coca cola, qué harías?', 'qué harías con esta coca cola?',
-  'viendo lo q tengo y lo q probablemente venda q hago con coca?'])
+  'viendo lo q tengo y lo q probablemente venda q hago con coca?',
+  'según los datos que tienes de coca cola, explícame en palabras simples si debería preocuparme por este producto y por qué'])
   test(`A6.2 open product interpretation shares resolver and produces one grounded answer: ${question}`, async () => {
     const requests = [];
     const neutralProvider = require('../src/agents/providers/deepseekProvider').createDeepSeekProvider({ env: { DEEPSEEK_API_KEY: 'offline-only' },
@@ -602,7 +603,7 @@ for (const question of ['con todo lo que sabes de coca cola, qué harías?', 'qu
         ], limitations: [] }) } }], usage: { prompt_tokens: 400, completion_tokens: 60, total_tokens: 460,
           prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 400 } }) };
       } });
-    const f = fixture({ throughActions: true, neutralProvider }), conversationId = randomUUID();
+    const f = fixture({ throughActions: true, neutralProvider, inventoryPartial: true }), conversationId = randomUUID();
     let result = await f.runtime.handle(req(), { message: question, conversationId });
     assert.equal(result.requiresClarification, true); assert.equal(requests.length, 0); assert.equal(f.calls.length, 0);
     const state = snapshot(await f.runtime.getContextSnapshot(req(), conversationId));
@@ -612,6 +613,7 @@ for (const question of ['con todo lo que sabes de coca cola, qué harías?', 'qu
     assert.equal(result.requiresClarification, false, result.answer);
     assert.equal(requests.length, 1); assert.equal(result.usage.totalLlmCalls, 1);
     assert.equal(result.usage.totalTokens, 460); assert.equal(result.groundedAnswer.accepted, true);
+    assert.equal(result.grounded.generation.status, 'SUCCEEDED');
     assert.equal(result.semanticClassification, undefined);
     assert.deepEqual(f.calls.map(row => row.domain), ['inventory', 'forecast']);
     assert.deepEqual(ids(result), ['coordinator', 'inventory', 'forecast', 'analyst']);

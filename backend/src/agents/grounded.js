@@ -43,6 +43,14 @@ const usablePartialSalesComparison = result => result?.status === 'PARTIAL'
   && (costCoveragePartial(result.data?.costCoverage) || costCoveragePartial(result.data?.comparisonCostCoverage))
   && [result.data?.costCoverage, result.data?.comparisonCostCoverage].filter(Boolean)
     .every(coverage => coverage.unsupportedCurrency === false) && salesComparisonAvailable(result);
+// PARTIAL is not the same as unusable. For a selected-product interpretation,
+// retain the partial marker/limitations while using only validated known fields.
+const usablePartialProductInventory = (result, plan) => plan.responseIntent === 'product_interpretation'
+  && result.status === 'PARTIAL' && result.data?.items?.length > 0
+  && result.data.items.every(row => typeof row.sku === 'string'
+    && [row.stock?.onHand, row.coverage?.daysCover, row.recommendation?.recommendedQty]
+      .every(value => typeof value === 'number' && Number.isFinite(value) && value >= 0)
+    && ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].includes(row.risk?.level));
 const salesEvolutionLimitation = (result, plan) => {
   const data = result?.data || {}, kpis = data.kpis || {};
   const period = data.period || result?.metadata?.period;
@@ -79,6 +87,10 @@ const handleGrounded = async ({ message, context, service, run, execution, resol
   if (!binding) return null;
   const plan = resolvedPlan || buildGroundedPlan(message, binding);
   if (plan.clarificationQuestion) return { answer: plan.clarificationQuestion, clarification: true, intent: 'grounded_clarification', agent: 'coordinator' };
+  const available = execution.groundedProviderAvailability?.();
+  const enabled = available?.groundedGenerationEnabled ?? execution.hasGroundedProvider();
+  const generation = { required: true, providerConfigured: available?.providerConfigured ?? enabled,
+    groundedGenerationEnabled: enabled, attempted: false, status: 'NOT_ATTEMPTED', reason: 'INSUFFICIENT_EVIDENCE' };
   const responseAgent = plan.tasks.length === 1 ? plan.tasks[0].agent : 'coordinator';
   const results = [], facts = [], failures = [];
   let incomplete = false;
@@ -104,6 +116,9 @@ const handleGrounded = async ({ message, context, service, run, execution, resol
       facts.push(renderV3(task.skillId, result, args));
       if (result.status === 'PARTIAL' && plan.responseIntent === 'sales_evolution'
         && usablePartialSalesComparison(result)) continue;
+      if (task.skillId === 'get_inventory_intelligence' && usablePartialProductInventory(result, plan)) {
+        failures.push({ skillId: task.skillId, kind: 'PARTIAL', code: 'PARTIAL' }); continue;
+      }
       if (['PARTIAL', 'NO_DATA'].includes(result.status)) {
         incomplete = true; failures.push({ skillId: task.skillId, kind: result.status, code: result.status });
       }
@@ -119,13 +134,15 @@ const handleGrounded = async ({ message, context, service, run, execution, resol
     return { intent: plan.responseIntent, agent: responseAgent,
       answer: `No pude preparar un contexto de análisis seguro; se conservan los hechos obtenidos.\n\n${facts.map(fact => fact.split('\n').slice(0, 2).join('\n')).join('\n')}`,
       grounded: { route: plan.route, responseIntent: plan.responseIntent, domains: plan.domains, skills: plan.skills,
+        generation: { ...generation, reason: 'CONTEXT_REJECTED' },
         failures, responseDiagnostic: diagnostic } };
   }
   const grounded = { route: plan.route, responseIntent: plan.responseIntent, domains: plan.domains,
-    skills: plan.skills, failures, contextMetrics: contextMetrics(compact), noHistoricalSkuData: compact.noHistoricalSkuData };
+    skills: plan.skills, failures, generation, contextMetrics: contextMetrics(compact), noHistoricalSkuData: compact.noHistoricalSkuData };
   const businessResult = results.find(row => row.skillId === 'get_business_analytics')?.result;
   if (plan.responseIntent === 'sales_evolution' && !salesComparisonAvailable(businessResult)) {
     grounded.interpretationMode = 'DETERMINISTIC_LIMITATION';
+    generation.required = false; generation.reason = 'COMPARISON_UNAVAILABLE';
     const answer = salesEvolutionLimitation(businessResult, plan);
     return { intent: plan.responseIntent, agent: responseAgent, grounded,
       answer: [answer, ...renderLimitations(compact.allowedLimitations.map(row => row.code))].join('\n\n') };
@@ -140,23 +157,30 @@ const handleGrounded = async ({ message, context, service, run, execution, resol
   if (['customer_retention', 'customer_interpretation'].includes(plan.responseIntent)) notes.push('El valor del cliente y su inactividad son señales distintas; no hay una probabilidad de abandono calculada. K-Means es exploratorio.');
   if (plan.noHistoricalSkuData) notes.push('No hay historial directo de SKU nuevos: cualquier propuesta sería exploratoria, no un pronóstico validado.');
   if (incomplete) notes.push('No hay datos suficientes para una interpretación completa; se conservan los hechos obtenidos.');
-  else if (!execution.hasGroundedProvider()) notes.push('La interpretación adicional aún no está habilitada; estos son los datos verificados.');
+  else if (!generation.groundedGenerationEnabled || !generation.providerConfigured) {
+    generation.reason = 'PROVIDER_UNAVAILABLE';
+    notes.push('La síntesis solicitada no está disponible porque el proveedor no está habilitado o configurado; se conservan los datos verificados.');
+  }
   else if (!compact.evidence.some(row => row.facts && (row.status === 'READY'
     || plan.responseIntent === 'sales_evolution' && row.skillId === 'get_business_analytics'
       && row.status === 'PARTIAL' && usablePartialSalesComparison(businessResult))))
     notes.push('No hay datos suficientes para generar una interpretación.');
   else {
     try {
+      generation.attempted = true;
       const generated = await execution.generateGrounded({ maxTokens: 600, temperature: 0,
         messages: [{ role: 'system', content: systemPrompt },
           { role: 'user', content: JSON.stringify(compact) }] });
       grounded.responseDiagnostic = { ...generated.responseDiagnostic, provider: generated.provider, model: generated.model };
       const interpreted = validateGroundedOutput(generated.text, compact);
       execution.recordGroundedSynthesis(true);
+      generation.status = 'SUCCEEDED'; generation.reason = null;
       grounded.responseDiagnostic = safeGroundedDiagnostic({ ...grounded.responseDiagnostic, validationResult: 'ACCEPTED', validationReason: 'NONE' });
       answer = interpreted.observations.map(row => `${row.interpretation} ${row.advisoryRecommendation}`).join('\n');
       notes.push(...renderLimitations([...new Set([...interpreted.limitations, ...compact.allowedLimitations.map(row => row.code)])]));
     } catch (error) {
+      generation.status = error.validationReason ? 'REJECTED' : 'FAILED';
+      generation.reason = error.validationReason ? 'GROUNDING_REJECTED' : 'PROVIDER_FAILED';
       grounded.responseDiagnostic = safeGroundedDiagnostic({ ...(error.responseDiagnostic || grounded.responseDiagnostic), validationResult: 'REJECTED',
         validationReason: error.validationReason || error.responseDiagnostic?.validationReason || 'PROVIDER_UNAVAILABLE',
         validationField: error.validationField, validationLayer: error.validationLayer,

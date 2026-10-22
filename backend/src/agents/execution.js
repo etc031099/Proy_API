@@ -138,6 +138,8 @@ const createAgentExecution = options => {
     async generateStructured(input) { return runLlmCall('generateStructured', input); },
     async generateWithTools(input) { return runLlmCall('generateWithTools', input); },
     hasGroundedProvider: () => Boolean(neutralProvider),
+    groundedProviderAvailability: () => ({ providerConfigured: Boolean(neutralProvider) && neutralProvider.configured !== false,
+      groundedGenerationEnabled: Boolean(neutralProvider) }),
     hasSemanticProvider: () => neutralProvider?.provider === 'deepseek',
     recordLanguageDecision(diagnostic) {
       languageDecision = { ...diagnostic, ...(languageDecision || {}),

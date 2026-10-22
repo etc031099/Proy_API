@@ -7,7 +7,7 @@ const configuredGroundedProvider = (env = process.env) => {
   if (String(env.AGENT_ENABLED).toLowerCase() !== 'true' || selectedProvider(env) !== 'deepseek') return null;
   const model = ['deepseek-flash', 'deepseek-v4-pro'].includes(env.DEEPSEEK_MODEL) ? env.DEEPSEEK_MODEL : 'deepseek-flash';
   let client;
-  return Object.freeze({ provider: 'deepseek', model,
+  return Object.freeze({ provider: 'deepseek', model, configured: Boolean(String(env.DEEPSEEK_API_KEY || '').trim()),
     generate: async request => (client ||= createDeepSeekProvider({ env })).generate(request) });
 };
 module.exports = { selectedProvider, configuredGroundedProvider };

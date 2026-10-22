@@ -49,7 +49,7 @@ test('A6.2 certification sample reuses 100 prior NLU cases plus 50 focused utter
 
 for (const row of bank.cases) test(`A6.2 ${row.category}: ${row.message}`, async t => {
   const f = setup();
-  if (row.category === 'writeExplicit') t.mock.method(Product, 'find', productFind);
+  if (row.category === 'writeExplicit' || row.message === 'comprame coca') t.mock.method(Product, 'find', productFind);
   if (['grounded', 'deterministic'].includes(row.category)) {
     await f.run('stock de BEB-GAS-001');
     if (/cliente/.test(row.message)) await f.run('cuál es el RFM de CLI-001');
@@ -74,6 +74,10 @@ for (const row of bank.cases) test(`A6.2 ${row.category}: ${row.message}`, async
   } else if (row.category === 'writeAmbiguous') {
     assert.equal(result.agent, 'operations'); assert.equal(result.requiresClarification, true);
     assert.equal(f.prepared.length, 0); assert.equal(result.usage.totalLlmCalls, 0);
+    if (row.message === 'comprame coca') {
+      assert.equal((await f.snapshot()).operationDraft.action, 'create_purchase');
+      assert.doesNotMatch(result.answer, /venta o una compra/);
+    }
   } else if (row.category === 'writeExplicit') {
     assert.equal(result.agent, 'operations'); assert.equal(result.pendingAction.status, 'PENDING');
     assert.equal(f.prepared.length, 1); assert.equal(result.usage.totalLlmCalls, 0);

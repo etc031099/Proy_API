@@ -43,9 +43,22 @@ export function AgentActivity({ response }: { response?: AgentResponse }) {
   const actions = Array.isArray(response.actions) ? response.actions : [];
   const evidence = Array.isArray(response.evidence) ? response.evidence : [];
   const confirmedAction = response.pendingAction?.status === 'EXECUTED' ? response.pendingAction : null;
+  const generation = response.grounded?.generation;
+  const synthesisRequired = generation?.required === true;
   return <aside aria-label="Actividad multiagente" className="rounded-xl border bg-card p-5 min-w-0 space-y-5 break-words">
     <h2 className="font-semibold">Actividad de esta respuesta</h2>
-    {u.totalLlmCalls === 0 && <p className="rounded-lg bg-emerald-500/10 p-3 text-sm font-medium">Respuesta determinística · 0 tokens IA</p>}
+    {u.totalLlmCalls === 0 && <p className={`rounded-lg ${synthesisRequired ? 'bg-amber-500/10' : 'bg-emerald-500/10'} p-3 text-sm font-medium`}>
+      {synthesisRequired ? 'Respuesta factual · síntesis no realizada' : 'Respuesta determinística · 0 tokens IA'}</p>}
+    {synthesisRequired && <section aria-label="Síntesis grounded" className="space-y-1 text-sm">
+      <p className="font-medium">Síntesis grounded</p>
+      <p>{generation.status === 'SUCCEEDED' ? 'Completada con evidencia verificada'
+        : generation.status === 'REJECTED' ? 'Respuesta generada rechazada; se conservaron los hechos'
+          : generation.status === 'FAILED' ? 'Falló el proveedor; se conservaron los hechos'
+            : generation.reason === 'PROVIDER_UNAVAILABLE' ? 'Proveedor no habilitado o no configurado'
+              : 'No realizada: evidencia insuficiente o contexto no disponible'}</p>
+      <p>Llamadas de síntesis: {metric(response.groundedAnswer?.calls ?? (generation.attempted ? null : 0))}</p>
+      <p>Tokens de síntesis: {metric(response.groundedAnswer?.totalTokens ?? (generation.attempted ? null : 0))}</p>
+    </section>}
     {u.provider && u.provider !== 'none' && <section aria-label="Proveedor de inteligencia artificial" className="space-y-1 text-sm">
       <p className="font-medium">Respuesta asistida por IA</p>
       <p>Proveedor: {u.provider === 'deepseek' ? 'DeepSeek' : u.provider === 'gemini' ? 'Gemini' : u.provider}</p>
