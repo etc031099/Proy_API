@@ -1,6 +1,6 @@
 const { createActionContext, randomUUID, zeroUsage } = require('./contracts');
 const { performance } = require('node:perf_hooks');
-const { actionIntent, parseAction, extractionSchema, validateExtraction, numericWords } = require('./actionInput');
+const { actionIntent, saleNarrative, parseAction, extractionSchema, validateExtraction, numericWords } = require('./actionInput');
 const { createAgentExecution } = require('../agents/execution');
 const { redact } = require('../services/agentHistoryProjection');
 const { compactDraft, updateDraft, resolveDraft, applyResolution, TTL_MS } = require('./operationDraft');
@@ -64,7 +64,14 @@ const withActionAssistant = (runtime, service, options = {}) => {
     for (const [key, draft] of drafts) if (draft.expiresAt <= now()) drafts.delete(key);
     const draftKey = keyFor(req, input.conversationId);
     let previous = drafts.get(draftKey);
+    // Registration admission is distinct from confirming an executable preview.
+    // Only this scoped, expiring draft can supply omitted items in the answer.
+    if (previous?.missingFields?.includes('registrationIntent')
+      && /^(?:si[, ]+)?(?:registra(?:r)?(?: (?:esta|la) venta)?|registrala)[.!]?$/.test(normalized)) {
+      input = { ...input, message: `vende ${previous.items.map(item => `${item.quantity} de ${item.ref}`).join(', ')}` };
+    }
     const explicit = actionIntent(input.message);
+    const narrative = saleNarrative(input.message);
     const contextualQuantity = /^(?:vende|vender|compra|comprar|compre)\s+([\p{L}\d]+)(?:\s+unidades?)?[.!]?$/iu.exec(input.message.trim());
     if (!previous && v3State?.selectedProduct?.key && contextualQuantity
       && ['create_sale', 'create_purchase'].includes(explicit)) {
@@ -97,7 +104,7 @@ const withActionAssistant = (runtime, service, options = {}) => {
       ? pendingQuestionType(input.message) : null;
     // A newer READ owns subsequent selections. Keep the frozen PendingAction
     // intact; only an explicit new action can re-enter the write flow.
-    const newRead = !explicit && (/^(?:mejor\s+)?(?:dame|muestrame|busca|dime|cuanto|que|resume|explica|lista|cuales)\b/.test(normalized) || /[¿?]/.test(input.message)
+    const newRead = !explicit && !narrative && (/^(?:mejor\s+)?(?:dame|muestrame|busca|dime|cuanto|que|resume|explica|lista|cuales)\b/.test(normalized) || /[¿?]/.test(input.message)
       || require('../agents/groundedRouting').classifyGrounded(input.message).route === 'GROUNDED_LLM')
       && !/que me falta|que datos|que proveedores/.test(normalized)
       && !(previous?.selection?.slot === 'product' && /^busca(?:r)?\b/.test(normalized))
@@ -106,14 +113,14 @@ const withActionAssistant = (runtime, service, options = {}) => {
       drafts.set(draftKey, { ...previous, readSuspended: true });
       return runtime.handle(req, input);
     }
-    if (previous?.readSuspended && !explicit && !decision && !pendingQuestion
+    if (previous?.readSuspended && !explicit && !narrative && !decision && !pendingQuestion
       && !/^(?:mejor|me equivoque|cambia|cantidad|pon)\b/.test(normalized)) return runtime.handle(req, input);
     if (explicit === 'create_stock_alert_rule' && require('../agents/intentRouting').tenantScopeViolation(input.message))
       return runtime.handle(req, input); // Preserve the deterministic F9 denial before resolving any product.
     const contextual = (previous?.selection?.slot === 'product' && /^busca(?:r)?\b/.test(normalized)) || /que me falta|que datos|que proveedores|^(?:me equivoque|mejor|cambia|cantidad|pon|en vez|no es|opcion|el |la |si\b|no\b|cancel|confirm|hazlo|crear proveedor|elegir proveedor|continuar sin)/.test(normalized)
       || /^(?:\d+|sku\b|proveedor\b|precio de compra\b|categoria\b)/.test(normalized);
     if (previous && !explicit && !decision && !contextual && !pendingQuestion && /^(?:muestrame|busca|dime|cuanto|que|resume|explica|lista|cuales)\b|[¿?]/.test(normalized)) previous = undefined;
-    const skillId = explicit || previous?.action;
+    const skillId = explicit || (narrative ? 'create_sale' : previous?.action);
     const candidateCommand = /^(?:ver mas|siguiente|anterior|anteriores|refinar busqueda|mas especifico)$/.test(normalized);
     // Read-only ML paging is not an operation-draft command. Active drafts keep
     // their existing selection flow; do not prepare/cancel a write for analytics.
@@ -145,6 +152,22 @@ const withActionAssistant = (runtime, service, options = {}) => {
       return response('La consulta compuesta mezcla operaciones o confirmaciones con otras peticiones. Envíalas por separado; la venta necesita su propio preview y confirmación. No se ejecutó ninguna operación.', undefined, true);
     }
     if (selectionActionProblem) return response(selectionActionProblem, undefined, true);
+    if (narrative) {
+      let proposed;
+      try { proposed = parseAction(narrative, 'create_sale'); }
+      catch (error) {
+        if (error.code !== 'ACTION_VALIDATION_FAILED') throw error;
+      }
+      if (!proposed?.items?.length || proposed.items.some(item => !Number.isSafeInteger(item.quantity) || !item.ref))
+        return response('Indica el producto y una cantidad entera válida si deseas registrar una venta; no se preparó ninguna operación.', undefined, true);
+      if (previous?.pendingActionId)
+        return response('Ya hay una operación pendiente. Revísala o cancélala antes de indicar explícitamente otra venta; no se preparó una nueva operación.', undefined, true);
+      const draft = compactDraft({ ...proposed, missingFields: ['registrationIntent'], updatedAt: now(), expiresAt: now() + TTL_MS }, now());
+      if (draft && (drafts.size < 1000 || drafts.has(key))) drafts.set(key, draft);
+      return response(`¿Quieres registrar una venta de ${proposed.items.map(item => `${units(item.quantity)} de ${item.ref}`).join(', ')}? Indica «registra esta venta» para preparar el preview. Todavía no se registró ninguna venta.`, undefined, true);
+    }
+    if (previous?.missingFields?.includes('registrationIntent') && !explicit && decision !== 'cancel')
+      return response('Indica «registra esta venta» si deseas preparar el preview de esos productos y cantidades. Todavía no hay una venta para confirmar.', undefined, true);
     if (!previous && candidateCommand) return response('No hay una lista de opciones vigente. Inicia nuevamente la búsqueda.', undefined, true);
     if (pendingQuestion) {
       const pending = await service.get(context, previous.pendingActionId);

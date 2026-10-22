@@ -554,6 +554,38 @@ for (const question of [
   assert.equal(result.requiresClarification, true); assert.equal(f.calls.length, 0); assert.equal(result.actions.length, 0);
 });
 
+test('A6.1 stock plus implicit forecast resolves one shared candidate for both specialists after restart', async () => {
+  const f = fixture({ throughActions: true }), conversationId = randomUUID();
+  const first = await f.runtime.handle(req(), { message:
+    'cuánto stock tengo de coca cola y cuánto se venderá en 14 días?', conversationId });
+  assert.equal(first.requiresClarification, true); assert.ok(first.suggestions.length >= 2);
+  assert.equal(first.usage.totalLlmCalls, 0); assert.equal(f.calls.length, 0);
+  assert.deepEqual(f.lookups, ['coca cola']);
+  const state = JSON.parse(JSON.stringify(snapshot(await f.runtime.getContextSnapshot(req(), conversationId))));
+  assert.deepEqual(state.v3Context.pending.tasks.map(row => row.args.productRef), ['coca cola', 'coca cola']);
+  const resumed = f.restart(); await resumed.restoreContext(req(), conversationId, state);
+  const result = await resumed.handle(req(), { message: sku, conversationId });
+  assert.equal(result.requiresClarification, false);
+  assert.deepEqual(ids(result), ['coordinator', 'inventory', 'forecast']);
+  assert.deepEqual(result.actions.map(row => row.skillId), ['get_inventory_intelligence', 'get_product_forecast']);
+  assert.deepEqual(f.calls.map(row => row.payload.skus), [[sku], [sku]]);
+  assert.equal(f.calls[1].payload.horizonDays, 14); assert.equal(result.usage.totalLlmCalls, 0);
+  assert.equal(f.lookups.filter(ref => ref === 'coca cola').length, 1);
+});
+
+test('A6.1 shared contextual replenishment and two-week forecast retain the selected product', async () => {
+  const f = fixture({ throughActions: true }), conversationId = randomUUID();
+  await f.runtime.handle(req(), { message: `stock de ${sku}`, conversationId });
+  f.calls.length = 0; f.lookups.length = 0;
+  const result = await f.runtime.handle(req(), { message:
+    'esta coca cola necesita reposición y cuánto venderá en dos semanas?', conversationId });
+  assert.equal(result.requiresClarification, false);
+  assert.deepEqual(ids(result), ['coordinator', 'inventory', 'forecast']);
+  assert.deepEqual(f.calls.map(row => row.payload.skus), [[sku], [sku]]);
+  assert.equal(f.calls[1].payload.horizonDays, 14); assert.equal(result.usage.totalLlmCalls, 0);
+  assert.equal(f.lookups.length, 0);
+});
+
 test('A4.3 shared-product grammar does not consume unrelated, historical, write or cross-product clauses', () => {
   const { sharedProductPlan, specialistPlan } = require('../src/agents/specialistRouting');
   for (const question of [

@@ -33,7 +33,12 @@ const extractionSchema = schema({
 }, ['action']);
 // One command grammar for admission and extraction. A sales noun or future
 // infinitive alone is never a write; the command must lead the utterance.
-const saleCommand = /^(?:(?:quiero|quisiera)\s+)?(?:vende|vender|(?:registra(?:r)?|crea(?:r)?|anota(?:r)?)(?:\s+(?:una|la))?\s+venta)\b/i;
+const saleCommand = /^(?:(?:quiero|quisiera)\s+)?(?:vende|vender|registra(?=\s+\d+\b)|(?:registra(?:r)?|crea(?:r)?|anota(?:r)?)(?:\s+(?:una|la))?\s+venta)\b/i;
+// A bounded narrative is only an admission clarification, never a write intent.
+// Reuse parseAction after replacing this prefix; questions remain READs.
+const saleNarrative = message => /[¿?]/.test(message) ? null
+  : /^(?:(?:ya\s+)?vend[ií]|acabo de vender)\s+(?=\d+\s|uno\s|una\s|dos\s|tres\s|cuatro\s|cinco\s|seis\s|siete\s|ocho\s|nueve\s|diez\s)/i.test(message.trim())
+    ? message.trim().replace(/^(?:(?:ya\s+)?vend[ií]|acabo de vender)\s+/i, 'vende ') : null;
 const actionIntent = message => {
   const value = normalize(message.trim());
   if (/^(?:(?:crea(?:r)?|configura|registra|quiero)(?: una)? alerta\b|avisame\b)/.test(value)) return 'create_stock_alert_rule';
@@ -197,4 +202,4 @@ function parseStockRule(message) {
   return { action: 'create_stock_alert_rule', ...(ref && !/^(?:este|ese|el|este producto|ese producto|el producto)$/.test(ref) ? { items: [{ ref }] } : {}),
     ...(condition ? { operator: inclusive ? '<=' : '<', threshold } : {}) };
 }
-module.exports = { actionIntent, parseAction, resolveAction, resolveReference, trustedUnique, uncertainSingle, refineSingle, numericWords, integerToken, extractionSchema, validateExtraction: value => validateArgs(extractionSchema, value) };
+module.exports = { actionIntent, saleNarrative, parseAction, resolveAction, resolveReference, trustedUnique, uncertainSingle, refineSingle, numericWords, integerToken, extractionSchema, validateExtraction: value => validateArgs(extractionSchema, value) };

@@ -31,6 +31,17 @@ test('A6 explicit shared composition dispatches exactly Inventory + Forecast', (
   assert.deepEqual(plan.tasks.map(task => task.agent), ['inventory', 'forecast']);
 });
 
+for (const message of ['cuánto vendí esta semana?', 'cuántas papas lays vendí?', 'qué vendí hoy?', 'ventas de papas lays', 'cómo fueron las ventas?'])
+  test(`A6.1 analytical sales questions remain Sales with zero LLM: ${message}`, async () => {
+    const { rows } = require('./helpers/j2sProductFixture');
+    const f = fixture({ productRows: [...rows, { ...rows[0], _id: '507f1f77bcf86cd799439099', sku: 'SNA-PAP-001', name: 'Papas Lays' }] });
+    const result = await f.run(message);
+    assert.ok(result.participants.some(row => row.agentId === 'sales'), result.answer);
+    assert.ok(!result.participants.some(row => row.agentId === 'operations'));
+    assert.equal(result.usage.totalLlmCalls, 0); assert.equal(f.providerCalls.length, 0);
+    assert.equal(f.prepared.length, 0); assert.equal(f.mutations.length, 0);
+  });
+
 test('A6 grounded reads belong to specialists; synthesis and historical health remain compatible', () => {
   const plan = buildGroundedPlan('Stock, inventario y demanda: ¿qué debería priorizar?', binding);
   assert.deepEqual(plan.tasks.map(task => task.agent), ['inventory', 'forecast']);

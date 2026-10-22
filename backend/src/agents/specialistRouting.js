@@ -36,7 +36,7 @@ const sharedProductPlan = (message, memory = {}) => {
   const plans = parts.map(part => singleSpecialistPlan(part, memory, true));
   if (plans.some(plan => plan?.tasks?.length !== 1)) return null;
   const tasks = plans.flatMap(plan => plan.tasks);
-  if (!tasks.some(row => row.agent === 'inventory' && row.requestedIntent === 'replenishment')
+  if (!tasks.some(row => row.agent === 'inventory' && ['stock', 'replenishment'].includes(row.requestedIntent))
     || !tasks.some(row => row.agent === 'forecast' && row.requestedIntent === 'forecast')) return null;
   const refs = tasks.map(row => row.args.productRef);
   if (!refs[0] || refs[1] && normalizeProductReference(refs[0]) !== normalizeProductReference(refs[1])) return null;

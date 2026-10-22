@@ -16,7 +16,7 @@ const catalog = [
   supplierPrices: vendorRows.map((vendor, n) => ({ supplierId: vendor._id, purchasePrice: price - 1 + n })) }));
 
 function fixture(t, { products = catalog, vendors = vendorRows } = {}) {
-  const prepared = [], confirmations = [], pending = new Map();
+  const prepared = [], confirmations = [], resolutions = [], pending = new Map();
   const copy = value => value ? structuredClone(value) : null;
   const req = { businessId: 'SYNTHETIC-MULTI', user: { _id: id(999), businessId: 'SYNTHETIC-MULTI', role: 'user', isActive: true } };
   t.mock.method(Product, 'findOne', filter => {
@@ -35,6 +35,7 @@ function fixture(t, { products = catalog, vendors = vendorRows } = {}) {
   t.mock.method(Transaction, 'create', () => assert.fail('No real transaction may be written by these tests'));
   const resolver = async (model, context, ref, type, offset = 0) => {
     assert.equal(context.businessId, req.businessId);
+    resolutions.push(ref);
     const rows = model === Product ? products : vendors;
     const exact = rows.find(row => row._id === ref || row.sku === ref);
     if (exact) return { value: copy(exact), confidence: 'EXACT' };
@@ -70,10 +71,61 @@ function fixture(t, { products = catalog, vendors = vendorRows } = {}) {
   const runtime = { handle: async () => ({ answer: 'Lectura', usage: { totalLlmCalls: 0 } }), getContextSnapshot: async () => ({}) };
   const adapter = withActionAssistant(runtime, service, { resolver, supplierLookup: configuredSuppliers });
   const conversationId = randomUUID();
-  return { prepared, confirmations, pending, send: message => adapter.handle(req, { message, conversationId }),
+  return { prepared, confirmations, resolutions, pending, send: message => adapter.handle(req, { message, conversationId }),
     snapshot: () => adapter.getContextSnapshot(req, conversationId),
     restore: state => adapter.restoreContext(req, conversationId, state), products };
 }
+
+for (const message of ['vendi 3 papas lays', 'vendí 3 papas lays', 'ya vendi 3 papas lays', 'acabo de vender 3 papas lays'])
+  test(`A6.1 narrative sale asks registration intent before resolver/preview: ${message}`, async t => {
+    const f = fixture(t);
+    const result = await f.send(message);
+    assert.equal(result.agent, 'operations'); assert.equal(result.requiresClarification, true);
+    assert.equal(result.usage.totalLlmCalls, 0); assert.match(result.answer, /registrar una venta de 3 unidades de papas lays/i);
+    assert.equal(result.pendingAction, undefined); assert.equal(f.prepared.length, 0); assert.equal(f.confirmations.length, 0);
+    assert.equal(f.resolutions.length, 0);
+    const state = await f.snapshot();
+    assert.deepEqual(state.operationDraft.items, [{ quantity: 3, ref: 'papas lays' }]);
+    assert.deepEqual(state.operationDraft.missingFields, ['registrationIntent']);
+    await f.send('confirmar'); assert.equal(f.prepared.length, 0); assert.equal(f.confirmations.length, 0);
+    await f.send('sí'); assert.equal(f.prepared.length, 0);
+    const preview = await f.send('sí, registra esta venta');
+    assert.equal(preview.pendingAction.status, 'PENDING'); assert.equal(f.prepared.length, 1);
+    assert.equal(preview.pendingAction.items[0].sku, 'LAYS-001'); assert.equal(preview.pendingAction.items[0].quantity, 3);
+    assert.equal(f.confirmations.length, 0);
+    await f.send('confirmar'); assert.equal(f.confirmations.length, 1);
+  });
+
+for (const message of ['vende 3 papas lays', 'registra 3 papas lays', 'registra la venta de 3 papas lays', 'quiero vender 3 papas lays'])
+  test(`A6.1 explicit sale still prepares only a preview: ${message}`, async t => {
+    const f = fixture(t), result = await f.send(message);
+    assert.equal(result.agent, 'operations'); assert.equal(result.pendingAction.status, 'PENDING');
+    assert.equal(result.pendingAction.items[0].quantity, 3); assert.equal(result.pendingAction.items[0].sku, 'LAYS-001');
+    assert.equal(result.usage.totalLlmCalls, 0); assert.equal(f.confirmations.length, 0);
+  });
+
+test('A6.1 narrative draft remains restorable and cancellable without a preview', async t => {
+  const f = fixture(t); await f.send('vendí 3 papas lays');
+  const state = JSON.parse(JSON.stringify(await f.snapshot()));
+  const resumed = fixture(t); await resumed.restore(state);
+  const result = await resumed.send('registra esta venta');
+  assert.equal(result.pendingAction.items[0].quantity, 3); assert.equal(resumed.confirmations.length, 0);
+  const cancelled = fixture(t); await cancelled.send('vendí 3 papas lays');
+  await cancelled.send('cancelar'); assert.equal((await cancelled.snapshot()).operationDraft, null);
+  assert.equal(cancelled.prepared.length, 0);
+});
+
+test('A6.1 narrative clarification still resolves ambiguity before preview and cannot confirm another action', async t => {
+  const f = fixture(t); await f.send('vendí 3 coca cola');
+  assert.equal(f.resolutions.length, 0);
+  const selection = await f.send('registra esta venta');
+  assert.equal(selection.requiresClarification, true); assert.equal(f.prepared.length, 0);
+  const preview = await f.send('opción 1');
+  assert.equal(preview.pendingAction.items[0].quantity, 3); assert.equal(f.confirmations.length, 0);
+  await f.send('vendí 2 papas lays');
+  assert.equal(f.prepared.length, 1); assert.equal(f.confirmations.length, 0);
+  assert.equal((await f.snapshot()).operationDraft.pendingActionId, preview.pendingAction.pendingActionId);
+});
 
 for (const [message, quantities, refs] of [
   ['vende 1 coca cola, 1 papas lays y 2 leches', [1, 1, 2], ['coca cola', 'papas lays', 'leches']],
