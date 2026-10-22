@@ -7,7 +7,7 @@ const clean = (value, max) => typeof value === 'string'
   ? require('../services/agentHistoryProjection').redact(value).slice(0, max) : '';
 const normalize = message => message.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
   .replace(/[¿?!.]/g, '').trim();
-const isExplanation = message => /^(?:por (?:q|que)(?: (?:ese|esa|el|ella|dices eso|el primero|la primera|el segundo|la segunda|el tercero|la tercera))?|como sabes|de donde sale eso|explicame eso|estas seguro|que significa eso)$/.test(normalize(message));
+const isExplanation = message => /^(?:por (?:q|que)(?: (?:ese|esa|el|ella|dices eso|el primero|la primera|el segundo|la segunda|el tercero|la tercera))?|como sabes|de donde sale eso|explicame eso|estas seguro|que significa eso|esa prediccion la inventaste)$/.test(normalize(message));
 // Only public projections of successful skill results. No provider text, prompt,
 // private reasoning, raw result documents or arbitrary metadata enter this cache.
 function compactExplanation(value, now = Date.now()) {
@@ -49,6 +49,8 @@ const notes = {
   get_business_health: 'Son señales descriptivas consultadas de ventas, inventario, clientes y proveedores cuando están disponibles; no existe un score global.'
 };
 function explainPrevious(message, value, context) {
+  if (/^por que (?:usan|usamos|usa) ridge$/.test(normalize(message)))
+    return { intent: 'explain_contract', agent: 'forecast', answer: `${notes.get_product_forecast} El contrato aprobado no permite inferir una comparación nueva con otros modelos; para eso se necesita su evidencia de evaluación.` };
   if (!isExplanation(message)) return null;
   const saved = compactExplanation(value);
   const clarify = answer => ({ intent: 'explain_previous', agent: 'coordinator', clarification: true, answer });

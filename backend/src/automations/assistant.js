@@ -1,6 +1,6 @@
 const { createActionContext, randomUUID, zeroUsage } = require('./contracts');
 const { performance } = require('node:perf_hooks');
-const { actionIntent, saleNarrative, parseAction, extractionSchema, validateExtraction, numericWords } = require('./actionInput');
+const { actionIntent, saleNarrative, ambiguousMovement, parseAction, extractionSchema, validateExtraction, numericWords } = require('./actionInput');
 const { createAgentExecution } = require('../agents/execution');
 const { redact } = require('../services/agentHistoryProjection');
 const { compactDraft, updateDraft, resolveDraft, applyResolution, TTL_MS } = require('./operationDraft');
@@ -72,6 +72,7 @@ const withActionAssistant = (runtime, service, options = {}) => {
     }
     const explicit = actionIntent(input.message);
     const narrative = saleNarrative(input.message);
+    const ambiguousWrite = ambiguousMovement(input.message);
     const contextualQuantity = /^(?:vende|vender|compra|comprar|compre)\s+([\p{L}\d]+)(?:\s+unidades?)?[.!]?$/iu.exec(input.message.trim());
     if (!previous && v3State?.selectedProduct?.key && contextualQuantity
       && ['create_sale', 'create_purchase'].includes(explicit)) {
@@ -104,7 +105,7 @@ const withActionAssistant = (runtime, service, options = {}) => {
       ? pendingQuestionType(input.message) : null;
     // A newer READ owns subsequent selections. Keep the frozen PendingAction
     // intact; only an explicit new action can re-enter the write flow.
-    const newRead = !explicit && !narrative && (/^(?:mejor\s+)?(?:dame|muestrame|busca|dime|cuanto|que|resume|explica|lista|cuales)\b/.test(normalized) || /[¿?]/.test(input.message)
+    const newRead = !explicit && !narrative && !ambiguousWrite && (/^(?:mejor\s+)?(?:dame|muestrame|busca|dime|cuanto|que|resume|explica|lista|cuales)\b/.test(normalized) || /[¿?]/.test(input.message)
       || require('../agents/groundedRouting').classifyGrounded(input.message).route === 'GROUNDED_LLM')
       && !/que me falta|que datos|que proveedores/.test(normalized)
       && !(previous?.selection?.slot === 'product' && /^busca(?:r)?\b/.test(normalized))
@@ -113,7 +114,7 @@ const withActionAssistant = (runtime, service, options = {}) => {
       drafts.set(draftKey, { ...previous, readSuspended: true });
       return runtime.handle(req, input);
     }
-    if (previous?.readSuspended && !explicit && !narrative && !decision && !pendingQuestion
+    if (previous?.readSuspended && !explicit && !narrative && !ambiguousWrite && !decision && !pendingQuestion
       && !/^(?:mejor|me equivoque|cambia|cantidad|pon)\b/.test(normalized)) return runtime.handle(req, input);
     if (explicit === 'create_stock_alert_rule' && require('../agents/intentRouting').tenantScopeViolation(input.message))
       return runtime.handle(req, input); // Preserve the deterministic F9 denial before resolving any product.
@@ -130,11 +131,12 @@ const withActionAssistant = (runtime, service, options = {}) => {
     }
     const unspecifiedRegistration = !previous && !explicit
       && /^(?:quiero|quisiera)\s+registrar\s+\d+\b/.test(numericWords(normalized));
-    if (!skillId && !decision && !candidateCommand && !unspecifiedRegistration) return runtime.handle(req, input);
+    if (!skillId && !decision && !candidateCommand && !unspecifiedRegistration && !ambiguousWrite) return runtime.handle(req, input);
     const started = performance.now(), conversationId = input.conversationId || randomUUID();
     const context = createActionContext(req, { conversationId }), key = keyFor(req, conversationId);
     let pendingAction, answer, clarification = false, previewShown = false, execution, suggestions = [], suggestionsExpiresAt, suggestionsPagination, suggestionsEntityType;
     if (unspecifiedRegistration) return response('¿Quieres registrar una venta o una compra? Indica el tipo de operación junto con los productos y cantidades; no se preparó ni ejecutó ninguna operación.', undefined, true);
+    if (ambiguousWrite) return response('¿Quieres registrar una venta o una compra? Indica explícitamente la operación, el producto y la cantidad para preparar un preview. No se preparó ni ejecutó ninguna operación.', undefined, true);
     if (previous && /^me equivoque\b/.test(normalized)) {
       if (previous.pendingActionId) {
         const pending = await service.get(context, previous.pendingActionId);

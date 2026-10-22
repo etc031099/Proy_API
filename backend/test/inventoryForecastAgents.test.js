@@ -586,6 +586,39 @@ test('A6.1 shared contextual replenishment and two-week forecast retain the sele
   assert.equal(f.lookups.length, 0);
 });
 
+for (const question of ['con todo lo que sabes de coca cola, qué harías?', 'qué harías con esta coca cola?',
+  'viendo lo q tengo y lo q probablemente venda q hago con coca?'])
+  test(`A6.2 open product interpretation shares resolver and produces one grounded answer: ${question}`, async () => {
+    const requests = [];
+    const neutralProvider = require('../src/agents/providers/deepseekProvider').createDeepSeekProvider({ env: { DEEPSEEK_API_KEY: 'offline-only' },
+      fetchImpl: async (_url, options) => {
+        const body = JSON.parse(options.body); requests.push(body);
+        assert.equal(body.tools, undefined);
+        const context = JSON.parse(body.messages[1].content);
+        assert.deepEqual(context.evidence.map(row => row.skillId), ['get_inventory_intelligence', 'get_product_forecast']);
+        assert.ok(context.evidence.every(row => row.facts.items.every(item => item.sku === sku)));
+        return { ok: true, status: 200, json: async () => ({ model: 'deepseek-flash', choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({ observations: [
+          { evidenceRefs: ['E1', 'E2'], interpretation: 'Coca-Cola tiene stock 14 y riesgo alto.', advisoryRecommendation: 'Revisa su reposición con el pronóstico disponible; la cantidad sugerida es 102.' }
+        ], limitations: [] }) } }], usage: { prompt_tokens: 400, completion_tokens: 60, total_tokens: 460,
+          prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 400 } }) };
+      } });
+    const f = fixture({ throughActions: true, neutralProvider }), conversationId = randomUUID();
+    let result = await f.runtime.handle(req(), { message: question, conversationId });
+    assert.equal(result.requiresClarification, true); assert.equal(requests.length, 0); assert.equal(f.calls.length, 0);
+    const state = snapshot(await f.runtime.getContextSnapshot(req(), conversationId));
+    assert.equal(state.v3Context.pending.responseMode, 'grounded-product');
+    const resumed = f.restart(); await resumed.restoreContext(req(), conversationId, state);
+    result = await resumed.handle(req(), { message: sku, conversationId });
+    assert.equal(result.requiresClarification, false, result.answer);
+    assert.equal(requests.length, 1); assert.equal(result.usage.totalLlmCalls, 1);
+    assert.equal(result.usage.totalTokens, 460); assert.equal(result.groundedAnswer.accepted, true);
+    assert.equal(result.semanticClassification, undefined);
+    assert.deepEqual(f.calls.map(row => row.domain), ['inventory', 'forecast']);
+    assert.deepEqual(ids(result), ['coordinator', 'inventory', 'forecast', 'analyst']);
+    assert.match(result.answer, /stock 14/); assert.match(result.answer, /102/);
+    assert.equal((await resumed.getContextSnapshot(req(), conversationId)).v3Context.selectedProduct.key, sku);
+  });
+
 test('A4.3 shared-product grammar does not consume unrelated, historical, write or cross-product clauses', () => {
   const { sharedProductPlan, specialistPlan } = require('../src/agents/specialistRouting');
   for (const question of [

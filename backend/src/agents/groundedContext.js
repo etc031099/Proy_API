@@ -36,7 +36,7 @@ const cleanText = (value, max = 120) => String(value)
 const COMMON = 'items total summary available status availabilityStatus reasonCodes availability limitations currency name displayName sku productName customerCode customerName supplierCode supplierName categoryCode categoryName metric metricName count value amount';
 const FIELDS = {
   get_business_analytics: 'kpis revenueCents units tickets averageTicketCents cogsCents grossMarginCents grossMarginPct trends percentChange revenue unitsSold grossMargin totalRevenue totalUnits totalTickets marginIntelligence highMarginProducts highRevenueLowMargin lowRevenueHighMargin comparisonMode previousPeriod previousValue absoluteChange comparisonAvailable comparableDurations comparisonWarning startDate endDate equalDuration',
-  get_inventory_intelligence: 'stock onHand incoming incomingUnits inventoryPosition minStock minStockLevel daysCover coverage coverageDays safetyStock reorderPoint rop recommendation recommendedQty shouldReorder risk riskLevel riskCounts critical high medium low abc xyz classification supplier preferredSupplierCode singleSource dependency pendingPurchases forecast stockoutRisk',
+  get_inventory_intelligence: 'stock onHand incoming incomingUnits inventoryPosition minStock minStockLevel daysCover coverage coverageDays safetyStock reorderPoint rop recommendation recommendedQty shouldReorder risk riskLevel riskCounts critical high medium low abc xyz classification supplier preferredSupplierCode singleSource dependency pendingPurchases forecast stockoutRisk reasonCodes',
   get_product_forecast: 'method horizons horizonDays totalExpectedUnits expectedUnitsNext7d expectedUnitsNext14d predictionUnits modelFamily recipeId modelVersion activeModelStatus featureVersion dataVersion trainedDataVersion observationsThrough forecastStartDate forecastEndDate forecastSource selectedOperationalMethod algorithm modelType modelStatus modelEvaluation metrics test wape mae rmse baseline features featureCount temporalValidation selectionReason analysisCutoff learningType',
   get_customer_intelligence: 'segment recency frequency monetary lastPurchaseDate lastPurchaseAt lastCompletedSaleDate recentActivity activity rfm90d raw recencyDays frequency90d monetary90dCents spendCents averageTicketCents trends preferences categories products cluster clusterName clusterAssignment clusterSource learningType algorithm k sampleCount metrics silhouetteMean subsampleAriMean clusters size',
   get_supplier_intelligence: 'purchaseSpendCents orderCount completedOrderCount pendingOrderCount receivedOrderCount incomingUnits receivedUnits leadTime punctuality delays dependency products categories alternatives exclusiveProducts averageDays meanDays lateShare receivedOrders pendingOrders preferredSupplierCode',
@@ -135,6 +135,23 @@ const contextMetrics = context => ({ bytes: Buffer.byteLength(JSON.stringify(con
   chars: JSON.stringify(context).length, estimatedTokens: Math.ceil(Buffer.byteLength(JSON.stringify(context), 'utf8') / 3),
   tokenCountIsEstimate: true });
 
+// Names must come from the cited facts, not the question or another observation.
+// Ordinary prose may paraphrase facts; catalogue identities may not be invented.
+const entityWords = facts => {
+  const words = new Set();
+  const visit = value => {
+    if (Array.isArray(value)) return value.forEach(visit);
+    if (!isPlainObject(value)) return;
+    for (const [key, item] of Object.entries(value)) {
+      if (/^(?:name|displayName|productName|customerName|supplierName|recommendedProduct)$/.test(key) && typeof item === 'string')
+        for (const word of require('./domainGate').normalize(item).match(/[\p{L}]+/gu) || []) words.add(word);
+      else if (item && typeof item === 'object') visit(item);
+    }
+  };
+  facts.forEach(visit); return words;
+};
+const proseWords = new Set('el la los las un una no sin en para hay son si es esta este esa ese estos estas antes con su sus se seleccionado consultado observado recomendado candidato disponible nuevo existente tiene requiere necesita merece presenta podria puede del de'.split(' '));
+
 const validateGroundedOutput = (text, context) => {
   const fail = (reason = 'OUTPUT_SCHEMA_INVALID', validationField, diagnostic = {}) => {
     throw Object.assign(new Error('GROUNDED_INVALID_RESPONSE'), { validationReason: reason, validationLayer: 'GROUNDING', ...(validationField ? { validationField } : {}), ...diagnostic });
@@ -144,26 +161,45 @@ const validateGroundedOutput = (text, context) => {
   for (const [index, row] of output.observations.entries()) {
     if (row.evidenceRefs.some(ref => !refs.has(ref))) fail('EVIDENCE_REFERENCE_INVALID', `observations[${index}].evidenceRefs`);
     const allowed = JSON.stringify(row.evidenceRefs.map(ref => refs.get(ref).facts));
+    const citedFacts = row.evidenceRefs.map(ref => refs.get(ref).facts);
+    const names = entityWords(citedFacts);
     const numericFacts = numericEvidence(row.evidenceRefs.flatMap(ref => {
       const evidence = refs.get(ref), scope = evidence.scope || {};
       return [evidence.facts, { asOfDate: scope.asOfDate, frozenCutoff: scope.frozenCutoff,
         observationsClosedThrough: scope.observationsClosedThrough, period: scope.period }];
     }), { analysisWindowDays: row.evidenceRefs.map(ref => refs.get(ref).scope?.analysisWindowDays).filter(Number.isSafeInteger) });
-    const skus = new Set(allowed.match(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/g) || []);
+    const skus = new Set((allowed.match(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/gi) || []).map(code => code.toUpperCase()));
     for (const field of ['interpretation', 'advisoryRecommendation']) {
       const value = row[field];
       const path = `observations[${index}].${field}`;
       if (value.split('\n').some(line => cleanText(line, 900) !== line)) fail('UNSAFE_CONTENT', path);
-      const claims = value.replace(/no (?:fue |esta |es )?aprobado|no (?:demuestra|prueba|garantiza|implica)/gi, '[negado]');
+      const claims = value.replace(/no (?:es|representa|calcula) (?:una? )?probabilidad de (?:fraude|abandono)/gi, '[negado]')
+        .replace(/no (?:fue |esta |es )?aprobado|no (?:demuestra|prueba|garantiza|implica)/gi, '[negado]');
       if (/(?:fraude confirmado|probabilidad de abandono|1\s*[-−]\s*WAPE|causa(?:lidad)? (?:demostrada|confirmada)|MA28 es (?:ML|machine learning)|HGB.*28.*aprobado|\b(?:confirmo|ejecut[eé]|registr[eé]) (?:la |una )?(?:venta|compra))/i.test(claims)
+        || /(?:isolation forest).{0,45}(?:significa|demuestra|confirma|detecta) (?:el )?fraude|probabilidad de fraude|churn (?:predicho|confirmado)|\b(?:ejecuta|registra|confirma) (?:la |una )?(?:venta|compra)/i.test(claims)
+        || /(?:asociacion|asociación|regla).{0,40}(?:demuestra|prueba|garantiza|implica).{0,20}causa/i.test(claims)
         || /(?:FP.?Growth|lift).{0,80}(?:demuestra|prueba|garantiza).{0,30}(?:causa|ventas)/i.test(claims)) fail('UNSUPPORTED_SEMANTIC_CLAIM', path);
-      if ((value.match(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/g) || []).some(sku => !skus.has(sku))) fail('UNKNOWN_ENTITY', path);
+      if ((value.match(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/gi) || []).some(sku => !skus.has(sku.toUpperCase()))) fail('UNKNOWN_ENTITY', path);
       const remaining = value.replace(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/g, '')
         .replace(/\bMA28\b/g, allowed.includes('MOVING_AVERAGE_28') ? '' : 'MA28');
       const details = unsupportedNumberDetails(remaining, numericFacts);
       const rejected = [...new Set(details.map(detail => detail.value))].slice(0, 3);
       if (rejected.length) fail('UNSUPPORTED_NUMBER', path, { unsupportedNumbers: rejected,
         unsupportedNumberDetails: rejected.map(value => details.find(detail => detail.value === value)) });
+      const prose = value.replace(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/gi, '');
+      const mentioned = [...prose.matchAll(/(?:^|\s)([A-ZÁÉÍÓÚÑ][\p{L}]+)(?=\s+(?:tiene|presenta|requiere|merece|necesita|vende|compra)\b)/gu),
+        ...prose.matchAll(/\b(?:Revisa|Revisar|Prioriza|Priorizar|Consulta|Consultar)\s+([A-ZÁÉÍÓÚÑ][\p{L}]+)/gu)].map(match => match[1]);
+      if (mentioned.some(word => { const n = require('./domainGate').normalize(word); return !names.has(n) && !proseWords.has(n); })) fail('UNKNOWN_ENTITY', path);
+      const labelled = require('./domainGate').normalize(prose).matchAll(/\b(?:producto|cliente|proveedor|marca)\s+[«“"]?([\p{L}]+)/gu);
+      if ([...labelled].some(([, word]) => !names.has(word) && !proseWords.has(word)
+        && !/^(?:seleccionado|consultado|observado|tiene|requiere|necesita|merece|presenta|podria|puede|con|del|de|en|es|esta|sin)$/.test(word))) fail('UNKNOWN_ENTITY', path);
+      const inventory = row.evidenceRefs.flatMap(ref => refs.get(ref).skillId === 'get_inventory_intelligence'
+        ? refs.get(ref).facts?.items || [] : []);
+      if (/\b(?:esta agotado|esta sin stock|no hay stock)\b/.test(require('./domainGate').normalize(value).replace(/\bno esta agotado\b/g, '[negado]'))
+        && !inventory.some(item => item.stock?.onHand === 0)) fail('UNSUPPORTED_SEMANTIC_CLAIM', path);
+      const levels = { alto: 'HIGH', critico: 'CRITICAL', medio: 'MEDIUM', bajo: 'LOW' };
+      if (inventory.length && [...require('./domainGate').normalize(value).matchAll(/\b(?:tiene|presenta|es de) riesgo (alto|critico|medio|bajo)\b/g)]
+        .some(([, level]) => !inventory.some(item => item.risk?.level === levels[level]))) fail('UNSUPPORTED_SEMANTIC_CLAIM', path);
     }
   }
   validateLimitations(output.limitations, context);

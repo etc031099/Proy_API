@@ -30,7 +30,7 @@ const commercialPlan = (message, memory, binding) => {
   if (/clientes/.test(text) && /mejores|mas compran|frecuencia|tiempo sin comprar|distribuid|actividad/.test(text))
     return make('get_customer_intelligence', { mode: /actividad/.test(text) ? 'summary' : 'rank',
       metric: /frecuencia/.test(text) ? 'tickets' : /sin comprar/.test(text) ? 'recency' : 'spend' });
-  if (/anomali|anomal[ao]s?|atipic|isolation/.test(text) && !/histor|congelad|cutoff|score|algoritmo|metodo|accuracy|estabilidad|contaminacion|entren/.test(text)) {
+  if (/anomali|anomal[ao]s?|atipic|isolation/.test(text) && !/histor|congelad|cutoff|score|algoritmo|metodo|accuracy|estabilidad|contaminacion|entren|fraude/.test(text)) {
     if (/manana|proxima|futur/.test(text)) return { clarificationQuestion: 'Isolation Forest no predice anomalías futuras.' };
     if (/ayer|semana|mes|\d{4}-\d{2}-\d{2}/.test(text)) return null; // existing bounded historical-period path
     return make('get_business_analytics', { mode: 'provisional' });

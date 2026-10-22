@@ -47,7 +47,7 @@ test('J2K labels do not authorize inline citations, quantified entities or body 
   assert.doesNotThrow(() => validateGroundedOutput(JSON.stringify(out), context));
   out.observations[0].advisoryRecommendation = '#2 Reponer 40 unidades.';
   assert.throws(() => validateGroundedOutput(JSON.stringify(out), context), error => error.unsupportedNumbers.includes(40));
-  const supported = { evidence: [{ ref: 'E1', facts: { stock: 2, supplierCount: 1 } }] };
+  const supported = { evidence: [{ ref: 'E1', facts: { productName: 'Cocinero', stock: 2, supplierCount: 1 } }] };
   assert.doesNotThrow(() => validateGroundedOutput(output('Stock 2; hay 1 proveedor.'), supported));
 });
 test('J2K logs/public diagnostics contain only bounded numbers and allowlisted categories', t => {

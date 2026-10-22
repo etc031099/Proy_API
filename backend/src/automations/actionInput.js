@@ -39,6 +39,7 @@ const saleCommand = /^(?:(?:quiero|quisiera)\s+)?(?:vende|vender|registra(?=\s+\
 const saleNarrative = message => /[¿?]/.test(message) ? null
   : /^(?:(?:ya\s+)?vend[ií]|acabo de vender)\s+(?=\d+\s|uno\s|una\s|dos\s|tres\s|cuatro\s|cinco\s|seis\s|siete\s|ocho\s|nueve\s|diez\s)/i.test(message.trim())
     ? message.trim().replace(/^(?:(?:ya\s+)?vend[ií]|acabo de vender)\s+/i, 'vende ') : null;
+const ambiguousMovement = message => /^(?:ayer\s+)?salieron\s+\d+\s+|^comprame\b/i.test(normalize(message.trim()));
 const actionIntent = message => {
   const value = normalize(message.trim());
   if (/^(?:(?:crea(?:r)?|configura|registra|quiero)(?: una)? alerta\b|avisame\b)/.test(value)) return 'create_stock_alert_rule';
@@ -202,4 +203,4 @@ function parseStockRule(message) {
   return { action: 'create_stock_alert_rule', ...(ref && !/^(?:este|ese|el|este producto|ese producto|el producto)$/.test(ref) ? { items: [{ ref }] } : {}),
     ...(condition ? { operator: inclusive ? '<=' : '<', threshold } : {}) };
 }
-module.exports = { actionIntent, saleNarrative, parseAction, resolveAction, resolveReference, trustedUnique, uncertainSingle, refineSingle, numericWords, integerToken, extractionSchema, validateExtraction: value => validateArgs(extractionSchema, value) };
+module.exports = { actionIntent, saleNarrative, ambiguousMovement, parseAction, resolveAction, resolveReference, trustedUnique, uncertainSingle, refineSingle, numericWords, integerToken, extractionSchema, validateExtraction: value => validateArgs(extractionSchema, value) };

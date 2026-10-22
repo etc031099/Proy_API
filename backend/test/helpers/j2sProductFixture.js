@@ -23,13 +23,13 @@ function query(value) {
     async *cursor() { for (const row of value) yield structuredClone(project(row)); } };
 }
 const productFind = filter => query(rows.filter(row => matches(row, filter)));
-function fixture({ now = Date.now, memoryTtl, productRows = rows, contactRows = [], neutralProvider, mlTransform, legacyModels } = {}) {
+function fixture({ now = Date.now, memoryTtl, productRows = rows, contactRows = [], neutralProvider, mlTransform, legacyModels, forecastRegistryService } = {}) {
   const calls = [], catalogReads = [], providerCalls = [], events = [], prepared = [], mutations = [], pending = new Map();
   const previewArgs = new Map(), confirmations = [];
   const request = { businessId: V3.businessId, user: { _id: id(999), businessId: V3.businessId, role: 'user', isActive: true } };
   const scenario = { businessId: V3.businessId, scenarioId: V3.scenarioId, status: 'completed', sourceSha256: V3.datasetSha256,
     metadata: { datasetVersion: V3.datasetVersion, referenceDate: V3.referenceDate, timezone: V3.timezone } };
-  const service = createV3IntelligenceService({ clock: () => new Date('2026-10-15T17:00:00Z'),
+  const service = createV3IntelligenceService({ clock: () => new Date('2026-10-15T17:00:00Z'), forecastRegistryService,
     models: { HistoricalScenario: { findOne: () => query(scenario) }, Product: { find: filter => {
       catalogReads.push(filter); return query(productRows.filter(row => matches(row, filter))); } }, Contact: {
       find: filter => query(contactRows.filter(row => matches(row, filter))),

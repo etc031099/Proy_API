@@ -206,11 +206,11 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, neutralProv
       try {
         // Access-scope requests are rejected before consulting conversation snapshots, routing LLM, or skills.
         const securityPlan = tenantScopeViolation(message);
-        const { isOutOfDomain, OUT_OF_DOMAIN_ANSWER } = require('./domainGate');
+        const { isOutOfDomain, isUnsafeControlRequest, OUT_OF_DOMAIN_ANSWER } = require('./domainGate');
         const composite = require('./compositeRouting').splitRequests(message).length > 1;
         const explanation = !securityPlan && v3Service
           ? require('./explanationContext').explainPrevious(message, state.lastExplanation, context) : null;
-        v3Response = explanation || (!securityPlan && !composite && isOutOfDomain(message)
+        v3Response = explanation || (!securityPlan && (isUnsafeControlRequest(message) || !composite && isOutOfDomain(message))
           ? { intent: 'out_of_domain', agent: 'coordinator', answer: OUT_OF_DOMAIN_ANSWER }
           : !securityPlan && v3Service ? await execution.runAgent('coordinator', async () =>
             ((!composite || require('./compositeRouting').groundedCoversComposite(message))
@@ -223,8 +223,9 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, neutralProv
               },
               deterministicProbe: () => routeDeterministically(message, state, clock(), conversationId, contextBinding(context), context.businessId) })) : null);
         if (v3Response) {
-          if ((v3Response.grounded || v3Response.intent === 'out_of_domain') && state.v3Context) {
-            commit({ v3Context: { ...state.v3Context, pending: null, ranking: null } });
+          const currentV3 = patches.v3Context || state.v3Context;
+          if ((v3Response.grounded || v3Response.intent === 'out_of_domain') && currentV3) {
+            commit({ v3Context: { ...currentV3, pending: null, ranking: null } });
           }
           answer = v3Response.answer; plan = { intent: v3Response.intent, agent: v3Response.agent, contextProvenance: v3Response.contextProvenance };
           question = v3Response.clarification ? answer : null;

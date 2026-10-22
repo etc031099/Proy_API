@@ -2,13 +2,14 @@
 const normalize = text => String(text).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
   .replace(/[¿?¡!.]/g, '').replace(/\s+/g, ' ').trim();
 const OUT_OF_DOMAIN_ANSWER = 'Puedo ayudarte con ventas, inventario, clientes, proveedores, compras, pronósticos e inteligencia de tu negocio. Esa consulta está fuera de ese ámbito.';
-const isUnsafeControlRequest = message => /(?:ignora|olvida|omite).{0,45}(?:instruccion|confirmacion)|(?:muestra|dime|dame|revela).{0,35}(?:prompt|api.?key|jwt|uri de mongo|razonamiento interno|reasoning_content)|confirma automaticamente|actua como administrador.{0,30}elimina/.test(normalize(message));
+const isUnsafeControlRequest = message => /(?:ignora|olvida|omite).{0,45}(?:instruccion|confirmacion|reglas|sistema)|(?:muestra|dime|dame|revela).{0,35}(?:prompt|api.?key|token|jwt|uri de mongo|razonamiento interno|reasoning_content)|confirma automaticamente|registra sin confirmar|inventa (?:el )?stock|actua como administrador.{0,30}elimina/.test(normalize(message));
 
 // Exact external question shapes, not a blacklist of product names or currencies.
 // Explicit catalogue references and mixed business questions are left to normal routing.
 const isOutOfDomain = message => {
   const text = normalize(message);
   if (isUnsafeControlRequest(message)) return true;
+  if (/^(?:manana va a llover|quien gano el mundial|escribeme un poema)$/.test(text)) return true;
   if (/^(?:clima|bitcoin|peliculas|musica|cuentame algo)$/.test(text)) return true;
   if (/^(?:hola[ ,]*)?(?:como estas|que tal|buenos dias|buenas tardes|buenas noches|hola)$/.test(text)) return true;
   if (/\b(?:ventas?|inventario|stock|clientes?|proveedores?|catalogo|productos?|negocio|empresa)\b/.test(text)) return false;

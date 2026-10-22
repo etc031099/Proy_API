@@ -70,13 +70,14 @@ const safeFailure = error => {
   return { kind, code, ...(Number.isInteger(error?.httpStatus) && error.httpStatus >= 400 && error.httpStatus <= 599 ? { httpStatus: error.httpStatus } : {}) };
 };
 
-const handleGrounded = async ({ message, context, service, run, execution }) => {
-  if (classifyGrounded(message).route !== 'GROUNDED_LLM') return null;
+const handleGrounded = async ({ message, context, service, run, execution, resolvedPlan, resolvedBinding }) => {
+  const classification = classifyGrounded(message);
+  if (!resolvedPlan && (classification.route !== 'GROUNDED_LLM' || classification.entityScoped)) return null;
   let binding;
-  try { binding = await service.resolveContext(context); }
+  try { binding = resolvedBinding || await service.resolveContext(context); }
   catch { return { intent: 'grounded_unavailable', agent: 'coordinator', answer: 'No pude verificar el contexto del negocio para este análisis.' }; }
   if (!binding) return null;
-  const plan = buildGroundedPlan(message, binding);
+  const plan = resolvedPlan || buildGroundedPlan(message, binding);
   if (plan.clarificationQuestion) return { answer: plan.clarificationQuestion, clarification: true, intent: 'grounded_clarification', agent: 'coordinator' };
   const responseAgent = plan.tasks.length === 1 ? plan.tasks[0].agent : 'coordinator';
   const results = [], facts = [], failures = [];
@@ -136,7 +137,7 @@ const handleGrounded = async ({ message, context, service, run, execution }) => 
   const reasons = { NO_DATA: 'sin datos', PARTIAL: 'datos parciales', TIMEOUT: 'tiempo de espera agotado', INVALID_REQUEST: 'solicitud inválida',
     INVALID_RESPONSE: 'respuesta analítica incompatible', UNAVAILABLE: 'servicio no disponible', INTERNAL_ERROR: 'error interno', DEPENDENCY_UNAVAILABLE: 'faltan los productos de inventario necesarios' };
   for (const failure of failures) notes.push(`${labels[failure.skillId] || 'Consulta analítica'}: ${reasons[failure.kind]}.`);
-  if (plan.responseIntent === 'customer_retention') notes.push('El valor del cliente y su inactividad son señales distintas; no hay una probabilidad de abandono calculada. K-Means es exploratorio.');
+  if (['customer_retention', 'customer_interpretation'].includes(plan.responseIntent)) notes.push('El valor del cliente y su inactividad son señales distintas; no hay una probabilidad de abandono calculada. K-Means es exploratorio.');
   if (plan.noHistoricalSkuData) notes.push('No hay historial directo de SKU nuevos: cualquier propuesta sería exploratoria, no un pronóstico validado.');
   if (incomplete) notes.push('No hay datos suficientes para una interpretación completa; se conservan los hechos obtenidos.');
   else if (!execution.hasGroundedProvider()) notes.push('La interpretación adicional aún no está habilitada; estos son los datos verificados.');
@@ -154,7 +155,7 @@ const handleGrounded = async ({ message, context, service, run, execution }) => 
       execution.recordGroundedSynthesis(true);
       grounded.responseDiagnostic = safeGroundedDiagnostic({ ...grounded.responseDiagnostic, validationResult: 'ACCEPTED', validationReason: 'NONE' });
       answer = interpreted.observations.map(row => `${row.interpretation} ${row.advisoryRecommendation}`).join('\n');
-      notes.push(...renderLimitations(interpreted.limitations));
+      notes.push(...renderLimitations([...new Set([...interpreted.limitations, ...compact.allowedLimitations.map(row => row.code)])]));
     } catch (error) {
       grounded.responseDiagnostic = safeGroundedDiagnostic({ ...(error.responseDiagnostic || grounded.responseDiagnostic), validationResult: 'REJECTED',
         validationReason: error.validationReason || error.responseDiagnostic?.validationReason || 'PROVIDER_UNAVAILABLE',

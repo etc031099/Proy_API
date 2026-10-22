@@ -224,6 +224,8 @@ const machineLearningPlan = (text, message, binding, memory) => {
 };
 
 const routeV3 = (message, state, binding) => {
+  if (require('./groundedRouting').classifyGrounded(message).entityScoped)
+    return require('./groundedRouting').buildGroundedPlan(message, binding, state);
   message = require('./languageNlu').highPrecisionMessage(message);
   const { isOutOfDomain, OUT_OF_DOMAIN_ANSWER } = require('./domainGate');
   if (isOutOfDomain(message)) return { clarificationQuestion: OUT_OF_DOMAIN_ANSWER };
@@ -549,7 +551,7 @@ const compactV3State = (value, now = Date.now()) => {
       items: (value.ranking.items || []).slice(0, 5).map(entity).filter(Boolean) } : null,
     pending: tasks.length && ['productRef', 'productRefs', 'customerRef', 'supplierRef', 'categoryRef', 'subcategoryRef'].includes(value.pending?.field) ? {
       tasks, field: value.pending.field, query: String(value.pending.query || '').slice(0, 100), type: value.pending.type,
-      responseMode: value.pending.responseMode === 'minimal' ? 'minimal' : null,
+      responseMode: ['minimal', 'grounded-product', 'grounded-customer'].includes(value.pending.responseMode) ? value.pending.responseMode : null,
       taskIndex: Number.isInteger(value.pending.taskIndex) && value.pending.taskIndex >= 0 && value.pending.taskIndex < tasks.length ? value.pending.taskIndex : 0,
       selectionIndex: Number.isSafeInteger(value.pending.selectionIndex) && value.pending.selectionIndex >= 0 && value.pending.selectionIndex < 5 ? value.pending.selectionIndex : 0,
       offset: Number.isSafeInteger(value.pending.offset) ? Math.max(0, value.pending.offset) : 0 } : null };
@@ -1088,7 +1090,7 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
         taskIndex: plan.tasks.indexOf(current) }, plan.tasks, 'productRef');
     }
   }
-  if (!selected && !choiceLike && !plan?.lookup) await useSemanticFallback();
+  if (!selected && !choiceLike && (!plan?.lookup || require('./groundedRouting').requestsInterpretation(message))) await useSemanticFallback();
   if (!plan && language.likelySpecialistQuery(message)) plan = {
     clarificationQuestion: '¿Deseas consultar existencias, reposición o un pronóstico? Indica el producto y el horizonte si corresponde.'
   };
@@ -1200,6 +1202,21 @@ const handleV3 = async ({ message, state, context, service, run, commit, executi
       }
     }
     if (refs.length) current.args[current.args.productRefs ? 'productRefs' : 'productRef'] = current.args.productRefs ? refs.join('|') : refs[0];
+  }
+  if (['grounded-product', 'grounded-customer'].includes(responseMode)) {
+    const customer = responseMode === 'grounded-customer';
+    const resolvedPlan = { route: 'GROUNDED_LLM', responseIntent: customer ? 'customer_interpretation' : 'product_interpretation',
+      domains: customer ? ['customers'] : ['inventory', 'forecast'], skills: plan.tasks.map(row => row.skillId), tasks: plan.tasks };
+    // After selection, use a bounded intent rather than persisting the raw question.
+    const question = memory.pending ? customer ? 'Explica la situación del cliente seleccionado.' : 'Explica la situación del producto seleccionado.' : message;
+    const result = await require('./grounded').handleGrounded({ message: question, context, service, run, execution,
+      resolvedPlan, resolvedBinding: binding });
+    scope.pending = null; scope.lastFamily = plan.tasks[0].skillId;
+    scope.readRecommendation = null;
+    const forecast = plan.tasks.find(row => row.skillId === 'get_product_forecast');
+    if (forecast) scope.lastProductTask = { skillId: forecast.skillId, args: forecast.args, requestedIntent: 'forecast' };
+    save();
+    return result;
   }
   const visibleProductList = ['inventory-condition-list', 'inventory-filter'].includes(responseMode);
   if (visibleProductList) { scope.ranking = null; scope.selectedProduct = null; }

@@ -85,6 +85,10 @@ function highPrecisionMessage(message, { allowImplicitReference = false } = {}) 
     .replace(/^(?:ya[, ]+(?:pero\s+)?)?ahora\s+dime\s+si\s+/, '')
     .replace(/^(?:crees?|considera)\s+que\s+/, '')
     .replace(/^(?:masomenos|mas o menos)\s+/, '');
+  if (allowImplicitReference && /^necesito comprar mas$/.test(read)) return 'debo reponer esa';
+  if (/^quien me (?:trae|entrega) mas rapido/.test(read)) return 'proveedores entregar mas rapido';
+  if (/^quien me la provee$/.test(read)) return 'quien lo provee';
+  if (/\bcliente\b/.test(read) && /deberia preocuparme/.test(read)) return 'clientes en riesgo';
   // Recognize the READ relationship before generic "con/de" extraction. Feed
   // one canonical intent to the existing specialist and product resolver; never
   // interpret a purchase command or merge independent clauses into a product.
@@ -226,7 +230,9 @@ function nluPlan(v, message, memory, binding) {
       if (![7, 14].includes(horizonDays)) return { clarificationQuestion: 'Ridge LIVE está aprobado únicamente para 7 y 14 días; 1 día no está aprobado. ¿Cuál deseas consultar?' };
       const forecast = make('get_product_forecast', { mode: ref ? 'detail' : 'summary', horizonDays, ...(ref ? { productRef: ref } : {}) },
         v.intent === 'FORECAST_MODEL_STATUS' ? 'model_status' : 'forecast');
-      return v.intent === 'INVENTORY_FORECAST' ? { tasks: [...make('get_inventory_intelligence',
+      return v.intent === 'INVENTORY_FORECAST' ? {
+        ...(require('./groundedRouting').requestsInterpretation(message) ? { responseMode: 'grounded-product' } : {}),
+        tasks: [...make('get_inventory_intelligence',
         { mode: 'detail', metric: 'reorder', productRef: ref }, 'replenishment').tasks, ...forecast.tasks] } : forecast;
     }
     case 'FORECAST_METHOD': return make('get_product_forecast', { mode: 'method' }, 'method');
