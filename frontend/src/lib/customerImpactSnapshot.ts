@@ -30,12 +30,22 @@ export type CustomerImpactSnapshot = {
   binding?: CustomerImpactContext | null;
 };
 
+export type CustomerRfmEvidence = {
+  customerRef: string;
+  recency: number | null;
+  frequency: number;
+  monetary: number;
+  rfmSegment: string | null;
+  asOf: string | null;
+};
+
 export type CustomerImpactEvent = {
   version: 1;
   businessContext: CustomerImpactContext;
   transactionId: string | null;
   customerRef: string | null;
   customerKind?: 'IDENTIFIED' | 'CONSUMER_FINAL';
+  rfmOnly?: CustomerRfmEvidence | null;
   displayName: string;
   occurredAt: string;
   before: CustomerImpactSnapshot | null;
@@ -83,9 +93,24 @@ export async function captureCustomerImpactSnapshot(customerMongoId: string): Pr
   }
 }
 
+/** Read authenticated current RFM separately when the individual K-Means contract is unavailable. */
+export async function captureCustomerRfmEvidence(customerRef: string): Promise<CustomerRfmEvidence | null> {
+  if (!customerRef || customerRef === 'CONSUMER_FINAL') return null;
+  try {
+    const response = await apiClient.getCustomerAnalytics(customerRef);
+    const data = response.success ? response.data : null;
+    const item = data?.item;
+    if (!data || data.mode !== 'LIVE' || !item?.customerId || !Number.isFinite(item.frequency)
+      || !Number.isFinite(item.monetary?.value)) return null;
+    return { customerRef: item.customerId, recency: finiteOrNull(item.recency), frequency: item.frequency!,
+      monetary: item.monetary!.value!, rfmSegment: typeof item.segment === 'string' ? item.segment : null,
+      asOf: typeof data.asOf === 'string' ? data.asOf : null };
+  } catch { return null; }
+}
+
 export function makeCustomerImpactEvent(input: Omit<CustomerImpactEvent, 'version' | 'customerRef' | 'captureStatus'>): CustomerImpactEvent {
   const before = input.before, after = input.after;
-  return { ...input, version: 1, customerRef: after?.customerRef || before?.customerRef || null,
+  return { ...input, version: 1, customerRef: after?.customerRef || before?.customerRef || input.rfmOnly?.customerRef || null,
     captureStatus: before && after ? 'COMPLETE' : before ? 'AFTER_UNAVAILABLE' : after ? 'BEFORE_UNAVAILABLE' : 'BOTH_UNAVAILABLE' };
 }
 
@@ -97,6 +122,11 @@ export function isCustomerImpactEvent(value: unknown): value is CustomerImpactEv
     && (event.customerRef === null || typeof event.customerRef === 'string')
     && (event.customerKind === undefined || ['IDENTIFIED', 'CONSUMER_FINAL'].includes(event.customerKind))
     && (event.customerKind !== 'CONSUMER_FINAL' || event.customerRef === null)
+    && (event.rfmOnly == null || Boolean(event.customerKind !== 'CONSUMER_FINAL' && event.rfmOnly.customerRef === event.customerRef
+      && (event.rfmOnly.recency === null || finiteOrNull(event.rfmOnly.recency) !== null)
+      && finiteOrNull(event.rfmOnly.frequency) !== null && finiteOrNull(event.rfmOnly.monetary) !== null
+      && (event.rfmOnly.rfmSegment === null || typeof event.rfmOnly.rfmSegment === 'string')
+      && (event.rfmOnly.asOf === null || typeof event.rfmOnly.asOf === 'string')))
     && event.customerRef !== 'CONSUMER_FINAL'
     && typeof event.displayName === 'string' && typeof event.occurredAt === 'string'
     && Number.isFinite(Date.parse(event.occurredAt))

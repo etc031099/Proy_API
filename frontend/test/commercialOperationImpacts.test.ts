@@ -29,6 +29,7 @@ function configureReads() {
     data: { inventoryMovements: [{ movementType: 'purchase', quantityDelta: 2, stockBefore: 10, stockAfter: 12, occurredAt }] } } as never);
   vi.spyOn(apiClient, 'getSalesImpactAnalytics').mockRejectedValue(new Error('optional analytics unavailable'));
   vi.spyOn(apiClient, 'getCustomerClustering').mockRejectedValue(new Error('optional analytics unavailable'));
+  vi.spyOn(apiClient, 'getCustomerAnalytics').mockRejectedValue(new Error('optional customer detail unavailable'));
   vi.spyOn(apiClient, 'getBusinessIntelligenceForecast').mockRejectedValue(new Error('optional analytics unavailable'));
   vi.spyOn(apiClient, 'getForecastMlUpdateStatus').mockResolvedValue({ httpStatus: 503 } as never);
 }
@@ -189,6 +190,23 @@ describe('P4-B1 commercial operation impacts', () => {
     expect(readLatestForecastImpactSale()?.transactionId).toBe('sale-B');
     expect(readLatestSalesImpact()?.transactionId).toBe('sale-B');
     await vi.waitFor(() => expect(readLatestCustomerImpact()).toMatchObject({ transactionId: 'sale-B', customerKind: 'CONSUMER_FINAL' }));
+  });
+
+  it('preserves confirmed current RFM when individual K-Means inference fails', async () => {
+    configureReads();
+    vi.spyOn(apiClient, 'getIntelligenceRevision').mockResolvedValue({ success: true, data: { ...context, dataVersion: '184' } } as never);
+    vi.spyOn(apiClient, 'getCustomerAnalytics').mockResolvedValue({ success: true, data: { mode: 'LIVE', asOf: '2026-10-22',
+      item: { customerId: 'CUS-CARMEN', displayName: 'Carmen Rivera León', recency: 0, frequency: 28,
+        monetary: { value: 334.85, currency: 'PEN' }, segment: 'AT_RISK' } } } as never);
+    const submit = vi.fn(async () => ({ success: true, transactionId: 'sale-carmen', occurredAt }));
+    await registerSaleWithImpacts({ products: [product], customerId: '507f1f77bcf86cd799439011', displayName: 'Carmen Rivera León',
+      submit, isSuccessful: value => value.success, getMetadata: value => ({ transactionId: value.transactionId,
+        occurredAt: value.occurredAt, customerId: '507f1f77bcf86cd799439011', total: 20, currency: 'PEN' }) });
+    await vi.waitFor(() => expect(readLatestCustomerImpact()).toMatchObject({ transactionId: 'sale-carmen', customerRef: 'CUS-CARMEN',
+      rfmOnly: { recency: 0, frequency: 28, monetary: 334.85, rfmSegment: 'AT_RISK', asOf: '2026-10-22' }, after: null }));
+    expect(submit).toHaveBeenCalledOnce();
+    expect(apiClient.getCustomerClustering).toHaveBeenCalledWith('507f1f77bcf86cd799439011');
+    expect(apiClient.getCustomerAnalytics).toHaveBeenCalledWith('507f1f77bcf86cd799439011');
   });
 
   it('Consumer Final is not converted into an individual customer or RFM request', async () => {

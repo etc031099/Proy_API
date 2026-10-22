@@ -1,6 +1,6 @@
 import { readForecastImpactSnapshot, uniqueForecastImpactProducts, type ForecastImpactProduct } from './forecastImpactSnapshot';
 import { publishConfirmedInventoryOperation, type InventoryImpactSnapshot, type InventoryImpactType } from './inventoryImpactSnapshot';
-import { captureCustomerImpactSnapshot, makeCustomerImpactEvent, type CustomerImpactSnapshot } from './customerImpactSnapshot';
+import { captureCustomerImpactSnapshot, captureCustomerRfmEvidence, makeCustomerImpactEvent, type CustomerImpactSnapshot } from './customerImpactSnapshot';
 import { clearLatestCustomerImpact, publishCustomerImpact } from './customerImpactChannel';
 import { type SalesImpactSnapshot } from './salesImpactSnapshot';
 import { clearLatestForecastImpactSale, publishForecastImpactSale, readLatestForecastImpactSale } from './forecastImpactChannel';
@@ -108,10 +108,12 @@ async function performSaleWithImpacts<T>(options: SaleImpactOptions<T>, scopedAc
       const verifiedContext = after.context;
       if (!verifiedContext.businessId || !verifiedContext.scenarioId || !verifiedContext.datasetVersion) return;
       publishForecastImpactSale({ ...pendingForecast, context: verifiedContext });
-      if (individualCustomerId) void captureCustomerImpactSnapshot(individualCustomerId).then(customerAfter => {
+      if (individualCustomerId) void captureCustomerImpactSnapshot(individualCustomerId).then(async customerAfter => {
+        if (readLatestInventoryImpact()?.operationId !== metadata.transactionId) return;
+        const rfmOnly = customerAfter ? null : await captureCustomerRfmEvidence(individualCustomerId);
         if (readLatestInventoryImpact()?.operationId !== metadata.transactionId) return;
         publishCustomerImpact(makeCustomerImpactEvent({ businessContext: verifiedContext, transactionId: metadata.transactionId,
-          customerKind: 'IDENTIFIED', displayName: options.displayName || 'Cliente', occurredAt, before: null, after: customerAfter }));
+          customerKind: 'IDENTIFIED', displayName: options.displayName || 'Cliente', occurredAt, before: null, after: customerAfter, rfmOnly }));
       }).catch(() => {
         if (readLatestInventoryImpact()?.operationId !== metadata.transactionId) return;
         publishCustomerImpact(makeCustomerImpactEvent({ businessContext: verifiedContext,

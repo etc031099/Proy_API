@@ -182,6 +182,22 @@ describe('CustomerImpact observational sale flow', () => {
     expect(screen.queryByText(/No se calcula RFM ni se asigna/)).toBeNull();
   });
 
+  it('shows current rule RFM separately when the verified K-Means assignment is unavailable', async () => {
+    vi.spyOn(apiClient, 'getIntelligenceRevision').mockResolvedValue(revision() as never);
+    publishCustomerImpact(makeCustomerImpactEvent({ businessContext: context, transactionId: 'sale-rfm-only', customerKind: 'IDENTIFIED',
+      displayName: 'Carmen Rivera León', occurredAt: '2026-10-22T18:00:00.000Z', before: null, after: null,
+      rfmOnly: { customerRef: 'CUS-CARMEN', recency: 0, frequency: 28, monetary: 334.85, rfmSegment: 'AT_RISK', asOf: '2026-10-22' } }));
+    render(<CustomerImpactPanel />);
+    expect(await screen.findByText('RFM actual del cliente')).toBeTruthy();
+    expect(screen.getByText('0')).toBeTruthy();
+    expect(screen.getByText('28')).toBeTruthy();
+    expect(screen.getByText(/334[,.]85/)).toBeTruthy();
+    expect(screen.getByText('En riesgo')).toBeTruthy();
+    expect(screen.getByText('Asignación K-Means no disponible')).toBeTruthy();
+    expect(screen.queryByText(/Cluster \d/)).toBeNull();
+    expect(screen.queryByText('Inferencia RFM no disponible')).toBeNull();
+  });
+
   it('states clearly when both captures failed instead of implying only one is missing', async () => {
     vi.spyOn(apiClient, 'getIntelligenceRevision').mockResolvedValue(revision() as never);
     vi.spyOn(apiClient, 'getCustomerClustering').mockRejectedValue(new Error('unavailable'));

@@ -19,6 +19,8 @@ const money = (value: number | null) => value === null ? 'No disponible'
 const status = (row: CustomerImpactSnapshot | null) => !row ? 'No capturado'
   : row.captureStatus === 'INSUFFICIENT_HISTORY' ? 'Historial insuficiente'
     : row.captureStatus === 'ASSIGNED' ? 'Asignación actual disponible' : 'Elegible';
+const rfmLabels: Record<string, string> = { AT_RISK: 'En riesgo', INACTIVE: 'Inactivo', NEW: 'Nuevo', LOYAL: 'Fiel',
+  TOP_HIGH_VALUE: 'Alto valor', POTENTIAL: 'Potencial', INSUFFICIENT_HISTORY: 'Historial insuficiente' };
 function pair<T>(before: T | null | undefined, after: T | null | undefined, format: (value: T | null) => string, changed?: boolean): string {
   const left = before === undefined ? null : before, right = after === undefined ? null : after;
   if (left === null && right === null) return 'No disponible';
@@ -132,11 +134,22 @@ export function CustomerImpactPanel() {
         <h3 className="font-semibold">Sin atribución individual</h3>
         <p className="mt-1">La venta {event.transactionId ? `#${event.transactionId}` : ''} corresponde a {event.displayName}. No se calcula RFM ni se asigna un cluster individual a Consumer Final.</p>
       </section>}
-      {event && state.verified && event.customerKind !== 'CONSUMER_FINAL' && !event.customerRef && <section className="rounded-lg border p-3 text-sm">
+      {event && state.verified && event.rfmOnly && <>
+        <section className="rounded-lg border p-3"><h3 className="font-semibold">RFM actual del cliente</h3><dl className="mt-2 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div><dt className="text-muted-foreground">Recencia · días</dt><dd>{number(event.rfmOnly.recency, 0)}</dd></div>
+          <div><dt className="text-muted-foreground">Frecuencia 90 días · compras/tickets</dt><dd>{number(event.rfmOnly.frequency, 0)}</dd></div>
+          <div><dt className="text-muted-foreground">Monetario 90 días · PEN</dt><dd>{money(event.rfmOnly.monetary)}</dd></div>
+          <div><dt className="text-muted-foreground">Segmento RFM por reglas</dt><dd>{event.rfmOnly.rfmSegment ? rfmLabels[event.rfmOnly.rfmSegment] || event.rfmOnly.rfmSegment : 'No disponible'}</dd></div>
+        </dl><p className="mt-2 text-xs text-muted-foreground">Lectura actual al {event.rfmOnly.asOf || 'fecha no disponible'}, obtenida del detalle del cliente.</p></section>
+        <section className="rounded-lg border p-3 text-sm"><h3 className="font-semibold">Asignación K-Means no disponible</h3>
+          <p className="mt-1">No se recibió una inferencia individual verificable. No se muestra cluster, distancia, vector transformado ni artifact como si estuvieran disponibles.</p>
+          <p className="mt-1 text-xs text-muted-foreground">BEFORE histórico no disponible; el RFM actual no reconstruye el estado previo a la venta.</p></section>
+      </>}
+      {event && state.verified && event.customerKind !== 'CONSUMER_FINAL' && !event.customerRef && !event.rfmOnly && <section className="rounded-lg border p-3 text-sm">
         <h3 className="font-semibold">Inferencia RFM no disponible</h3>
         <p className="mt-1">La venta se asocia a {event.displayName}, pero no se obtuvo una asignación individual verificable. No se inventan valores RFM ni un cluster.</p>
       </section>}
-      {event && state.verified && event.customerRef && <>
+      {event && state.verified && event.customerRef && !event.rfmOnly && <>
           <section className="rounded-lg border p-3"><h3 className="font-semibold">Cambio RFM</h3><dl className="mt-2 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <div><dt className="text-muted-foreground">Recencia · días</dt><dd>{pair(before?.recency, after?.recency, value => number(value, 0))}</dd></div>
             <div><dt className="text-muted-foreground">Frecuencia 90 días · compras/tickets</dt><dd>{pair(before?.frequency, after?.frequency, value => number(value, 0))}</dd></div>
