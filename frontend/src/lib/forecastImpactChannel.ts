@@ -99,7 +99,7 @@ function isSnapshot(value: unknown): value is import('./forecastImpactSnapshot')
         if (!inference || inference.horizonDays !== days || typeof inference.status !== 'string') return false;
         const textFields = ['artifactHash', 'dataVersion', 'revision', 'snapshotHash', 'observationsThrough',
           'observationsClosedThrough', 'dataCutoff', 'featureVersion', 'featureHash', 'trainedDataVersion',
-          'trainedAt', 'forecastStartDate', 'forecastEndDate', 'updatedAt'] as const;
+          'trainedAt', 'forecastStartDate', 'forecastEndDate', 'updatedAt', 'modelFamily', 'activeModelStatus'] as const;
         return textFields.every(key => inference[key] === null || typeof inference[key] === 'string')
           && (inference.modelVersion === null || Number.isSafeInteger(inference.modelVersion) && inference.modelVersion > 0)
           && (inference.predictionUnits === null || typeof inference.predictionUnits === 'number' && Number.isFinite(inference.predictionUnits))

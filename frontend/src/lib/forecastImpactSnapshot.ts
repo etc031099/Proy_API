@@ -5,6 +5,8 @@ import { readRidgeFeatureInputs, RIDGE_FEATURE_VERSION, type RidgeFeatureInputs 
 export type ForecastImpactInference = {
   horizonDays: 7 | 14;
   status: string;
+  modelFamily?: string | null;
+  activeModelStatus?: string | null;
   predictionUnits: number | null;
   modelVersion: number | null;
   artifactHash: string | null;
@@ -101,7 +103,8 @@ export async function readForecastImpactSnapshot(
       const featuresComparable = Boolean(envelopeComparable && value?.status === 'READY' && value.activeModelStatus === 'ACTIVE'
         && value.featureVersion === RIDGE_FEATURE_VERSION && features?.sku === product.sku);
       if (!envelopeComparable || !value) return null;
-      return { horizonDays: days, status: value.status, predictionUnits: liveRidgeUnits(value),
+      return { horizonDays: days, status: value.status, modelFamily: value.modelFamily ?? null,
+        activeModelStatus: value.activeModelStatus ?? null, predictionUnits: liveRidgeUnits(value),
         modelVersion: value.modelVersion ?? null, artifactHash: value.artifactHash ?? null,
         dataVersion: value.dataVersion ?? null, revision: value.dataVersion ?? null,
         snapshotHash: value.snapshotHash ?? null, observationsThrough: value.observationsThrough ?? null,

@@ -321,7 +321,7 @@ function BusinessIntelligenceContent() {
           <Card><CardHeader className="pb-3"><CardTitle>Pronóstico por producto</CardTitle><CardDescription>Selecciona un producto para consultar P7 y P14; son valores directos del modelo Ridge.</CardDescription></CardHeader><CardContent className="pt-0"><ProductSearchPicker id="intelligence-product-search" selected={selected} onSelect={chooseProduct} /></CardContent></Card>
           {!selected && <EmptyProductState />}
           {selected && <ForecastPanel product={selected} forecasts={forecastByHorizon} horizon={horizon} setHorizon={setHorizon} activeModels={activeForecastModels} onRetry={() => { apiClient.invalidateIntelligenceReads(); setDetailRetry(value => value + 1); }} />}
-          <ForecastImpactDetailCard impact={forecastImpact} />
+          <ForecastImpactDetailCard impact={forecastImpact} inventoryImpact={inventoryImpact} />
           {preparation}
           <ForecastMlUpdateHistoryPanel refreshToken={mlHistoryRefreshToken} />
           <ForecastReplayEvidencePanel />

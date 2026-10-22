@@ -83,6 +83,7 @@ describe('forecast impact observation', () => {
     vi.spyOn(apiClient, 'getForecastMlUpdateStatus');
     vi.spyOn(apiClient, 'getForecastModelDiagnostics');
     vi.spyOn(apiClient, 'getBusinessIntelligenceForecast');
+    vi.spyOn(apiClient, 'getProductOperationDetail');
     vi.spyOn(apiClient, 'analyzeMlTestScenario');
     vi.spyOn(apiClient, 'createMlTestCheckpoint');
     vi.spyOn(apiClient, 'restoreMlTestCheckpoint');
@@ -91,7 +92,7 @@ describe('forecast impact observation', () => {
 
   it('keeps the no-operation state compact instead of rendering unavailable comparison rows', () => {
     render(<Harness />);
-    expect(screen.getByText(/Sin una operación reciente para comparar/)).toBeTruthy();
+    expect(screen.getByText(/Sin venta reciente disponible/)).toBeTruthy();
     expect(screen.queryByText('Revisión')).toBeNull();
     expect(screen.queryByText('Señales pendientes 7d')).toBeNull();
   });
@@ -190,7 +191,31 @@ describe('forecast impact observation', () => {
     expect(readLatestForecastImpactSale()?.baselineUnavailable).toBe(true);
     render(<Harness />);
     expect(await screen.findByText('Estado previo no disponible; la venta sí se registró.')).toBeTruthy();
-    expect(document.body.textContent).toContain('No disponible → 174');
+    expect(document.body.textContent).not.toContain('No disponible → 174');
+    expect(document.body.textContent).toContain('Captura BEFORE histórica');
+    expect(document.body.textContent).toContain('No disponible; no se presenta como cambio');
+  });
+
+  it('loads durable movement and Ridge evidence only when expanded and binds it to the exact transaction and SKU', async () => {
+    const transactionId = '507f1f77bcf86cd799439011';
+    const before = baseline();
+    const sale: ForecastImpactSaleMessage = { version: 2, type: 'SALE_COMPLETED', transactionId,
+      occurredAt: '2026-10-19T17:00:00Z', hasCustomer: false, customerRef: null, baseline: before,
+      baselineUnavailable: false, context: before.context, products: [products[0]] };
+    vi.mocked(apiClient.getProductOperationDetail).mockResolvedValue({ httpStatus: 200, data: {
+      operation: { operationId: `SALE:${transactionId}`, sourceId: transactionId, type: 'SALE' },
+      facts: { product: { sku: 'SKU-A', name: 'Producto A' } },
+      inventoryMovements: [{ quantityDelta: -1, stockBefore: 12, stockAfter: 11, occurredAt: sale.occurredAt }],
+      ridgeEvidence: { status: 'persisted', horizons: [{ eventType: 'SALE_COMPLETED', horizonDays: 7, dataVersion: '174', historicalCorrection: false }] },
+      traceability: { revision: '174', relationQuality: 'EXACT' },
+    } } as never);
+    render(<ForecastImpactDetailCard impact={{ baseline: before, after: baseline('174'), sale, pendingSale: null,
+      allowUnknownScope: false, loadingAfter: false, error: null, retryAfterSale: vi.fn() }} />);
+    expect(apiClient.getProductOperationDetail).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText(`Evidencia de la transacción · SKU-A`));
+    await waitFor(() => expect(apiClient.getProductOperationDetail).toHaveBeenCalledWith('SKU-A', `SALE:${transactionId}`, expect.any(AbortSignal)));
+    expect(await screen.findByText(/stock 12 → 11/)).toBeTruthy();
+    expect(screen.getByText(/Ridge 7d · dataVersion 174/)).toBeTruthy();
   });
 
   it('retries a failed AFTER read without losing the BEFORE baseline', async () => {
@@ -219,10 +244,10 @@ describe('forecast impact observation', () => {
     act(() => publishForecastImpactSale(sale));
     await waitFor(() => expect(document.body.textContent).toContain('173 → 174'));
     expect(document.body.textContent).toContain('90 → 91');
-    expect(document.body.textContent?.match(/v1 → v1/g)).toHaveLength(4);
+    expect(document.body.textContent?.match(/ACTIVE · RIDGE_REGRESSION · v1 → ACTIVE · RIDGE_REGRESSION · v1/g)).toHaveLength(4);
     expect(document.body.textContent).toContain('4.9 → 4.92');
     expect(document.body.textContent).toContain('5.9 → 11.92');
-    expect(screen.getByText(/2 productos afectados · 3 unidades/)).toBeTruthy();
+    expect(document.body.textContent).toContain('2 producto(s) · 3 unidad(es)');
     expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenCalledWith('SKU-A', 7);
     expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenCalledWith('SKU-A', 14);
     expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenCalledWith('SKU-B', 7);
@@ -321,7 +346,7 @@ describe('forecast impact observation', () => {
     expect(screen.getAllByText('0 de 8 modificadas')).toHaveLength(2);
     expect(screen.getAllByText('0 de 6 modificadas')).toHaveLength(2);
     expect(screen.getAllByText('0 de 13 modificadas')).toHaveLength(2);
-    const table = screen.getByRole('table', { name: 'Entradas Ridge 7d BEFORE y AFTER', hidden: true });
+    const table = screen.getByRole('table', { name: 'Entradas vigentes Ridge 7d', hidden: true });
     expect(within(table).getAllByRole('row', { hidden: true })).toHaveLength(28);
     expect(screen.getByText(/La venta añadió evidencia pendiente, pero el día actual todavía está abierto/)).toBeTruthy();
     expect(document.body.textContent).toContain('4.9 → 4.9');
@@ -380,8 +405,12 @@ describe('forecast impact observation', () => {
     const before = baseline(), after = baseline('174', 91);
     (side === 'BEFORE' ? before : after).forecasts['SKU-A'].inferences![7]!.featureInputs = null;
     renderComparison(before, after);
-    expect(screen.getAllByText('Comparación no disponible')).toHaveLength(3);
-    expect(screen.getByText(/La comparación de entradas está incompleta/)).toBeTruthy();
+    if (side === 'BEFORE') {
+      expect(screen.getAllByText('13 entradas actuales')).toHaveLength(1);
+      expect(screen.getByText(/BEFORE histórico no disponible; no se calcula diferencia/)).toBeTruthy();
+    } else {
+      expect(screen.getAllByText('Lectura actual no disponible')).toHaveLength(3);
+    }
     expect(document.body.textContent).toContain('173 → 174');
     expect(screen.queryByText(/por eso P7 y P14 permanecieron iguales/)).toBeNull();
   });
@@ -425,8 +454,8 @@ describe('forecast impact observation', () => {
     const before = baseline(), after = baseline('174', 91);
     after.forecasts['SKU-B'].inferences![14]!.featureInputs!.currentUnits = 50;
     renderComparison(before, after, [products[0], products[1]]);
-    const a = screen.getByText('Producto A · SKU-A').closest('details')!;
-    const b = screen.getByText('Producto B · SKU-B').closest('details')!;
+    const a = screen.getByText('Producto A · SKU-A').closest('article')!;
+    const b = screen.getByText('Producto B · SKU-B').closest('article')!;
     expect(within(a).getAllByText('0 de 13 modificadas')).toHaveLength(2);
     expect(within(a).queryByText('1 de 13 modificadas')).toBeNull();
     expect(within(b).getByText('1 de 13 modificadas')).toBeTruthy();
