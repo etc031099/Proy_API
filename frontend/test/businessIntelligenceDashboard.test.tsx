@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BusinessIntelligenceDashboard } from '@/components/business-intelligence/BusinessIntelligenceDashboard';
 import { apiClient } from '@/lib/api';
 import { getTranslation } from '@/i18n/dict';
+import { clearLatestForecastImpactSale, publishForecastImpactSale } from '@/lib/forecastImpactChannel';
 import type { BusinessSummary, CertifiedForecastReplayEvidence, ForecastActiveModels, ForecastResponse, InventorySummary, ProductInventory } from '@/types/businessIntelligence';
 
 // Epoch maintenance/remount behavior is tested independently with real API
@@ -89,7 +90,7 @@ function forecastCardText(days: 7 | 14) {
 }
 
 describe('business intelligence dashboard', () => {
-  beforeEach(() => { vi.restoreAllMocks(); mockOverview();
+  beforeEach(() => { vi.restoreAllMocks(); clearLatestForecastImpactSale(); mockOverview();
     vi.spyOn(apiClient, 'getForecastModelDiagnostics').mockResolvedValue({ httpStatus: 200, data: activeForecastFixture });
     vi.spyOn(apiClient, 'getHealthDiagnostics').mockResolvedValue({ httpStatus: 200, data: { httpStatus: 200,
       dependencyStatus: { inventory: 'READY', forecast: 'READY', supplier: 'READY', healthAssembly: 'READY' }, reasonCode: null, elapsedMs: 12 } });
@@ -172,21 +173,46 @@ describe('business intelligence dashboard', () => {
     expect(screen.queryByText('Cargando inventario y ranking…')).toBeNull();
   });
 
-  it('renders inventory charts while the general summary is still loading', async () => {
+  it('loads the summary before starting the heavier inventory ranking request', async () => {
     const summaryRead = deferred<Awaited<ReturnType<typeof apiClient.getBusinessIntelligenceSummary>>>();
     const inventoryRead = deferred<Awaited<ReturnType<typeof apiClient.getInventoryAnalytics>>>();
     vi.spyOn(apiClient, 'getBusinessIntelligenceSummary').mockReturnValue(summaryRead.promise);
     vi.spyOn(apiClient, 'getInventoryAnalytics').mockReturnValue(inventoryRead.promise);
     render(<BusinessIntelligenceDashboard />);
 
-    await act(async () => { inventoryRead.resolve(success(inventoryFixture)); await inventoryRead.promise; });
-    expect(await screen.findByText('Panorama de inventario')).toBeTruthy();
+    expect(apiClient.getInventoryAnalytics).not.toHaveBeenCalled();
     expect(screen.getByRole('status', { name: 'Cargando resumen general' })).toBeTruthy();
     expect(screen.queryByText('Ventas')).toBeTruthy();
 
     await act(async () => { summaryRead.resolve(success(summaryFixture)); await summaryRead.promise; });
     expect(await screen.findByLabelText('Actividad de hoy')).toBeTruthy();
+    expect(apiClient.getInventoryAnalytics).toHaveBeenCalledTimes(1);
+    await act(async () => { inventoryRead.resolve(success(inventoryFixture)); await inventoryRead.promise; });
+    expect(await screen.findByText('Panorama de inventario')).toBeTruthy();
     expect(screen.queryByRole('status', { name: 'Cargando resumen general' })).toBeNull();
+  });
+
+  it('restores the latest sale metadata on Summary without reading Ridge forecasts until Prediction opens', async () => {
+    vi.spyOn(apiClient, 'getIntelligenceRevision').mockResolvedValue(success({ businessId: 'business-1', scenarioId: 'scenario-1', datasetVersion: 'v1', dataVersion: '83', asOf: temporal.asOf }));
+    vi.spyOn(apiClient, 'getBusinessIntelligenceForecast').mockResolvedValue(success(forecastFixture));
+    publishForecastImpactSale({ version: 2, type: 'SALE_COMPLETED', transactionId: 'sale-12345678',
+      occurredAt: '2026-10-20T18:00:00Z', hasCustomer: false, customerRef: null,
+      products: [{ sku: 'PAN-FRE-001', name: 'Pan francés', quantity: 2 }], baseline: null,
+      baselineUnavailable: true, context: { businessId: 'business-1', scenarioId: 'scenario-1', datasetVersion: 'v1' } });
+    render(<BusinessIntelligenceDashboard />);
+
+    expect(await screen.findByText(/12345678/)).toBeTruthy();
+    expect(apiClient.getBusinessIntelligenceForecast).not.toHaveBeenCalled();
+    expect(apiClient.getIntelligenceRevision).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Predicción' }));
+    await waitFor(() => expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenCalledTimes(2));
+    expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenNthCalledWith(1, 'PAN-FRE-001', 7);
+    expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenNthCalledWith(2, 'PAN-FRE-001', 14);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Resumen' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Predicción' }));
+    expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenCalledTimes(2);
   });
 
   it('keeps summary visible when the independent inventory request fails', async () => {

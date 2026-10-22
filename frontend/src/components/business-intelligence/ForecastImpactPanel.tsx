@@ -35,9 +35,11 @@ function reasonCopy(value: string | null): string {
   return value ? copy[value] || 'Estado informado por el servicio.' : 'Estado no disponible.';
 }
 
-export function useForecastImpact() {
+export function useForecastImpact(enabled = true) {
   const [state, setState] = useState<ForecastImpactState>({ baseline: null, after: null, sale: null,
     pendingSale: null, allowUnknownScope: false, loadingAfter: false, error: null });
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const afterRequest = useRef(0);
   const refreshAfterSale = useCallback(async (sale: ForecastImpactSaleMessage, allowUnknownScope = false) => {
     const requestId = ++afterRequest.current;
@@ -83,17 +85,32 @@ export function useForecastImpact() {
     const channel = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(FORECAST_IMPACT_CHANNEL);
     if (channel) channel.onmessage = event => { if (isForecastImpactSaleMessage(event.data)
       && mayReplaceImpact(event.data, readLatestForecastImpactSale())) {
-      saveLatestForecastImpactSale(event.data); void refreshAfterSale(event.data, true);
+      saveLatestForecastImpactSale(event.data);
+      if (enabled) void refreshAfterSale(event.data, true);
+      else setState({ baseline: event.data.baseline, after: null, sale: event.data, pendingSale: event.data,
+        allowUnknownScope: true, loadingAfter: false, error: event.data.baselineUnavailable ? 'Estado previo no disponible; la venta sí se registró.' : null });
     } };
     const onLocalImpact = (event: Event) => { const detail = (event as CustomEvent<unknown>).detail;
       if (isForecastImpactSaleMessage(detail) && mayReplaceImpact(detail, readLatestForecastImpactSale())) {
-        saveLatestForecastImpactSale(detail); void refreshAfterSale(detail, true);
+        saveLatestForecastImpactSale(detail);
+        if (enabled) void refreshAfterSale(detail, true);
+        else setState({ baseline: detail.baseline, after: null, sale: detail, pendingSale: detail,
+          allowUnknownScope: true, loadingAfter: false, error: detail.baselineUnavailable ? 'Estado previo no disponible; la venta sí se registró.' : null });
       } };
     window.addEventListener(FORECAST_IMPACT_LOCAL_EVENT, onLocalImpact);
     const saved = readLatestForecastImpactSale();
-    if (saved) void refreshAfterSale(saved);
+    if (saved) {
+      const current = stateRef.current;
+      const sameSale = current.sale?.transactionId === saved.transactionId && current.sale?.occurredAt === saved.occurredAt;
+      if (enabled) {
+        if (!sameSale || !current.after) void refreshAfterSale(saved);
+      } else if (!sameSale || !current.after) {
+        setState({ baseline: saved.baseline, after: null, sale: saved, pendingSale: saved,
+          allowUnknownScope: true, loadingAfter: false, error: saved.baselineUnavailable ? 'Estado previo no disponible; la venta sí se registró.' : null });
+      }
+    }
     return () => { channel?.close(); window.removeEventListener(FORECAST_IMPACT_LOCAL_EVENT, onLocalImpact); };
-  }, [refreshAfterSale]);
+  }, [enabled, refreshAfterSale]);
 
   return { ...state, retryAfterSale: () => {
     const sale = state.sale || state.pendingSale;

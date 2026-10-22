@@ -111,6 +111,8 @@ function RecentOperationStrip({ forecastImpact, inventoryImpact, onNavigate }: {
 function BusinessIntelligenceContent() {
   const scenarioUi = useMlTestScenarioUiState();
   const tab = scenarioUi.tab as TabKey;
+  const activeTab = useRef<TabKey>(tab);
+  activeTab.current = tab;
   const setTab = scenarioUi.setTab as React.Dispatch<React.SetStateAction<TabKey>>;
   const [mlHistoryRefreshToken, setMlHistoryRefreshToken] = useState(0);
   const [summary, setSummary] = useState<BusinessSummary | null>(null);
@@ -120,7 +122,7 @@ function BusinessIntelligenceContent() {
   const [summaryError, setSummaryError] = useState(false);
   const [inventoryError, setInventoryError] = useState(false);
   const [selected, setSelected] = useState<ProductOption | null>(null);
-  const forecastImpact = useForecastImpact();
+  const forecastImpact = useForecastImpact(tab === 'forecast');
   const inventoryImpact = useInventoryImpact();
   const [horizon, setHorizon] = useState<Horizon>(7);
   const [forecastByHorizon, setForecastByHorizon] = useState<Partial<Record<RidgeHorizon, ForecastRead>>>({});
@@ -158,11 +160,15 @@ function BusinessIntelligenceContent() {
     } catch {
       if (requestId === inventoryRequest.current) { setInventory(null); setInventoryError(true); setInventoryState('error'); } }
   }, []);
-  const loadOverview = useCallback(() => {
-    void loadSummary();
-    void loadInventory();
+  const loadOverview = useCallback((prioritizeInventory = false) => {
+    if (prioritizeInventory) {
+      void loadSummary();
+      void loadInventory();
+      return;
+    }
+    void loadSummary().then(() => { if (activeTab.current === 'summary') loadInventory(); });
   }, [loadInventory, loadSummary]);
-  useEffect(() => { if (tab === 'summary' || tab === 'inventory') void loadOverview(); }, [tab, loadOverview]);
+  useEffect(() => { if (tab === 'summary' || tab === 'inventory') void loadOverview(tab === 'inventory'); }, [tab, loadOverview]);
   useEffect(() => () => { summaryRequest.current++; inventoryRequest.current++; detailsRequest.current++; }, []);
 
   useEffect(() => {
