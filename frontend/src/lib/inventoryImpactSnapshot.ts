@@ -96,6 +96,7 @@ export type InventoryImpactEvent = {
 export async function recordInventoryOperation<T>(options: {
   type: InventoryImpactType;
   products: InventoryImpactProduct[];
+  beforeSnapshot?: InventoryImpactSnapshot;
   submit: () => Promise<T>;
   isSuccessful: (response: T) => boolean;
   getMetadata: (response: T) => { operationId: string | null; occurredAt?: string | null; reference?: string | null };
@@ -103,7 +104,7 @@ export async function recordInventoryOperation<T>(options: {
 }): Promise<T> {
   const products = uniqueInventoryImpactProducts(options.products);
   let baseline: InventoryImpactSnapshot;
-  try { baseline = await readInventoryImpactSnapshot(products.map(({ sku, name }) => ({ sku, name }))); }
+  try { baseline = options.beforeSnapshot || await readInventoryImpactSnapshot(products.map(({ sku, name }) => ({ sku, name }))); }
   catch { baseline = unavailableInventoryImpactSnapshot(products); }
   const response = await options.submit();
   if (options.isSuccessful(response) && products.length > 0) {

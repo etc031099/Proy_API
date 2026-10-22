@@ -45,6 +45,7 @@ export default defineConfig({
       'test/intelligenceReadCache.test.ts',
       'test/businessIntelligenceExtended.component.test.tsx',
       'test/associationImpact.test.tsx',
+      'test/saleImpactOrchestration.test.ts',
     ],
     environment: 'jsdom',
     setupFiles: ['./test/setup.ts'],

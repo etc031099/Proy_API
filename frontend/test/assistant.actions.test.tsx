@@ -92,6 +92,23 @@ it('preview is visible and confirmation sends only bound action ID and conversat
   finish({ success: true, data: { ...pending, status: 'EXECUTED' } });
   expect(await screen.findByText(/Estado: Ejecutada/)).toBeTruthy(); expect(screen.queryByRole('button', { name: 'Confirmar' })).toBeNull();
 });
+it('sale confirmation delegates to the shared impact orchestrator without duplicating the action write', async () => {
+  const sale = { ...pending, action: 'create_sale' as const, items: [
+    { sku: 'SKU-001', name: 'Producto', quantity: 1, price: 10, total: 10, stock: 4, resultingStock: 3 }
+  ] };
+  const executed = { ...sale, status: 'EXECUTED' as const, result: { id: 'sale-1', type: 'sale' as const } };
+  const onConfirmSale = vi.fn(async (_action: PendingActionPreview, confirm: () => Promise<PendingActionPreview>) => confirm());
+  vi.mocked(apiClient.decideAgentAction).mockResolvedValue({ success: true, data: executed });
+  render(<PendingActionCard action={sale} conversationId="conversation" onConfirmSale={onConfirmSale} />);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }));
+
+  expect(await screen.findByText(/Estado: Ejecutada/)).toBeTruthy();
+  expect(onConfirmSale).toHaveBeenCalledTimes(1);
+  expect(onConfirmSale.mock.calls[0][0]).toMatchObject({ pendingActionId: sale.pendingActionId, action: 'create_sale' });
+  expect(apiClient.decideAgentAction).toHaveBeenCalledTimes(1);
+  expect(apiClient.decideAgentAction).toHaveBeenCalledWith(sale.pendingActionId, 'conversation', 'confirm');
+});
 it('cancel is explicit and never sends product arguments', async () => {
   vi.mocked(apiClient.decideAgentAction).mockResolvedValue({ success: true, data: { ...pending, status: 'CANCELLED' } });
   render(<PendingActionCard action={pending} conversationId="conversation" />);

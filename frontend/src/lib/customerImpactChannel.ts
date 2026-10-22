@@ -1,4 +1,4 @@
-import { captureCustomerImpactSnapshot, isCustomerImpactEvent, makeCustomerImpactEvent, sameCustomerImpactContext, type CustomerImpactContext, type CustomerImpactEvent } from './customerImpactSnapshot';
+import { captureCustomerImpactSnapshot, isCustomerImpactEvent, makeCustomerImpactEvent, sameCustomerImpactContext, type CustomerImpactContext, type CustomerImpactEvent, type CustomerImpactSnapshot } from './customerImpactSnapshot';
 
 export const CUSTOMER_IMPACT_CHANNEL = 'business-intelligence-customer-sale-impact-v1';
 export const CUSTOMER_IMPACT_SESSION_KEY = 'business-intelligence.latest-customer-impact.v1';
@@ -44,13 +44,15 @@ export function clearLatestCustomerImpact(): void {
 export async function registerCustomerSaleImpact<T>(options: {
   customerMongoId: string | null;
   displayName: string;
+  beforeSnapshot?: CustomerImpactSnapshot | null;
   getContext: () => CustomerImpactContext;
   submit: () => Promise<T>;
   isSuccessful: (response: T) => boolean;
   getMetadata: (response: T) => { transactionId: string | null; occurredAt?: string | null };
 }): Promise<T> {
   const individualCustomerId = options.customerMongoId !== 'CONSUMER_FINAL' ? options.customerMongoId : null;
-  const before = individualCustomerId ? await captureCustomerImpactSnapshot(individualCustomerId) : null;
+  const before = options.beforeSnapshot !== undefined ? options.beforeSnapshot
+    : individualCustomerId ? await captureCustomerImpactSnapshot(individualCustomerId) : null;
   const response = await options.submit();
   if (options.isSuccessful(response)) {
     const context = options.getContext();

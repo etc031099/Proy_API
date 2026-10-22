@@ -20,9 +20,11 @@ export interface ForecastImpactSaleMessage {
 export function publishForecastImpactSale(message: ForecastImpactSaleMessage): void {
   try { if (typeof window !== 'undefined') window.sessionStorage.setItem(FORECAST_IMPACT_SESSION_KEY, JSON.stringify(message)); } catch { /* Session storage is an optional recovery channel. */ }
   if (typeof BroadcastChannel === 'undefined') return;
-  const channel = new BroadcastChannel(FORECAST_IMPACT_CHANNEL);
-  channel.postMessage(message);
-  channel.close();
+  try {
+    const channel = new BroadcastChannel(FORECAST_IMPACT_CHANNEL);
+    channel.postMessage(message);
+    channel.close();
+  } catch { /* The completed sale remains successful when cross-tab delivery is unavailable. */ }
 }
 
 export function isForecastImpactSaleMessage(value: unknown): value is ForecastImpactSaleMessage {

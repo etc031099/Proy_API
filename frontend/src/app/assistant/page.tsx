@@ -14,23 +14,34 @@ import { assistantDisplayText, isTechnicalAgentQuestion } from '@/lib/assistantP
 import { useAuth } from '@/contexts/AuthContext';
 import { activeConversationKey, readActiveConversation, writeActiveConversation } from '@/lib/agentHistory';
 import { apiClient, AgentApiError, agentErrorMessage } from '@/lib/api';
+import { registerSaleWithImpacts } from '@/lib/saleImpactOrchestration';
 import type { AgentMessageRequest, AgentResponse, AgentConversationList, HistoryPagination, PendingActionPreview } from '@/types/agent';
 
 const suggestions = ['Muéstrame los productos con stock bajo', '¿Cuánto vendimos este mes?',
   '¿Cuáles son los productos más vendidos?', '¿Qué productos debería reponer?',
   'Resume cómo está mi negocio y qué debería vigilar'];
 interface Message { id: number | string; role: 'user' | 'assistant'; text: string; response?: AgentResponse; status?: string }
+const textConfirmations = new Set(['confirmar', 'confirma', 'confirmalo', 'confirmo', 'confimra', 'si confirmar', 'si confirma',
+  'si hazlo', 'si procede', 'hazlo', 'procede', 'adelante', 'acepto', 'de acuerdo', 'ok confirma', 'correcto confirma',
+  'confirm', 'ok confirm', 'yes confirm']);
+function isTextConfirmation(value: string): boolean {
+  if (/[?¿]/.test(value)) return false;
+  return textConfirmations.has(value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    .trim().replace(/[,.!]+/g, ' ').replace(/\s+/g, ' ').trim());
+}
 
-function MessageBody({ message: m, question, disabled, busy, onSelect, onActivity, onActionChange }: {
+function MessageBody({ message: m, question, disabled, busy, onSelect, onActivity, onActionChange, onConfirmSale }: {
   message: Message; question: string; disabled: boolean; busy: boolean;
   onSelect: (message: string) => void; onActivity: (response: AgentResponse) => void;
   onActionChange: (action: PendingActionPreview) => void;
+  onConfirmSale: (action: PendingActionPreview, confirm: () => Promise<PendingActionPreview>) => Promise<PendingActionPreview>;
 }) {
   return <>
     <p className="whitespace-pre-wrap break-words text-sm">{assistantDisplayText(m.text, m.response, question)}</p>
     {m.response?.v3Views?.length ? <V3ResponseCards views={m.response.v3Views} response={m.response} technical={isTechnicalAgentQuestion(question, m.response)} disabled={disabled} onSelect={onSelect} />
       : m.response && <ActionSuggestions response={m.response} disabled={disabled} onSelect={onSelect} />}
-    {m.response?.pendingAction && <PendingActionCard action={m.response.pendingAction} conversationId={m.response.conversationId} disabled={busy} onActionChange={onActionChange} />}
+    {m.response?.pendingAction && <PendingActionCard action={m.response.pendingAction} conversationId={m.response.conversationId} disabled={busy}
+      onActionChange={onActionChange} onConfirmSale={onConfirmSale} />}
     {m.status === 'failed' && <p className="text-xs text-muted-foreground">Consulta no completada.</p>}
     {m.status === 'pending' && <p className="text-xs text-muted-foreground">No hay un resultado confirmado para esta consulta.</p>}
     {m.response && <button className="mt-3 text-xs underline underline-offset-4" onClick={() => onActivity(m.response!)}>
@@ -52,6 +63,8 @@ export default function AssistantPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<{ text: string; retryable: boolean }>();
   const inFlight = useRef(false);
+  const retrySaleImpactAction = useRef<PendingActionPreview | undefined>(undefined);
+  const currentPendingSale = useRef<PendingActionPreview | undefined>(undefined);
   const nextId = useRef(0);
   const lastRequest = useRef<{ input: AgentMessageRequest; key: string } | undefined>(undefined);
   const [history, setHistory] = useState<AgentConversationList>();
@@ -66,6 +79,7 @@ export default function AssistantPage() {
     const epoch = ++epochRef.current;
     inFlight.current = false; setLoading(false); setHistoryBusy(false); setHistoryError(undefined);
     setMessages([]); setConversationId(undefined); setActivity(undefined); setHistory(undefined);
+    currentPendingSale.current = undefined; retrySaleImpactAction.current = undefined;
     if (!storageKey) return;
     void apiClient.listAgentConversations().then(async result => {
       if (historyEpoch.current !== epoch || !result.data) return;
@@ -97,7 +111,11 @@ export default function AssistantPage() {
       const restored = result.data.messages;
       setMessages(previous => olderPage ? [...restored.filter(row => !previous.some(existing => existing.id === row.id)), ...previous] : restored);
       if (!olderPage) {
-        setActivity([...restored].reverse().find(message => message.response)?.response);
+        const latestResponse = [...restored].reverse().find(message => message.response)?.response;
+        setActivity(latestResponse);
+        currentPendingSale.current = latestResponse?.pendingAction?.action === 'create_sale'
+          && latestResponse.pendingAction.status === 'PENDING' && latestResponse.pendingAction.requiresConfirmation
+          ? latestResponse.pendingAction : undefined;
         setConversationId(id); setError(undefined); lastRequest.current = undefined;
         if (storageKey) writeActiveConversation(storageKey, id);
       }
@@ -124,12 +142,36 @@ export default function AssistantPage() {
     const request = retry && lastRequest.current ? lastRequest.current : {
       input: { message, ...(conversationId ? { conversationId } : {}) }, key: crypto.randomUUID() };
     lastRequest.current = request;
+    const pendingSale = retry ? retrySaleImpactAction.current : isTextConfirmation(message)
+      ? currentPendingSale.current : undefined;
+    if (!retry) retrySaleImpactAction.current = pendingSale;
     if (!retry) { const id = ++nextId.current; setMessages(previous => [...previous, { id, role: 'user', text: message }]); setDraft(''); }
     try {
-      const result = await apiClient.sendAgentMessage(request.input, request.key);
+      const sendRequest = () => apiClient.sendAgentMessage(request.input, request.key);
+      const result = pendingSale ? await registerSaleWithImpacts({
+        products: (pendingSale.items || []).map(item => ({ sku: item.sku, name: item.name, quantity: item.quantity })),
+        customerId: pendingSale.customerId || null,
+        displayName: String(pendingSale.fields.contact || 'Cliente'),
+        actionKey: pendingSale.pendingActionId,
+        submit: sendRequest,
+        isSuccessful: value => value.success === true && value.data?.pendingAction?.status === 'EXECUTED'
+          && value.data.pendingAction.result?.type === 'sale',
+        getMetadata: value => {
+          const result = value.data?.pendingAction?.result;
+          return { transactionId: result?.id || null, occurredAt: result?.occurredAt || null,
+            customerId: result?.customerId || pendingSale.customerId || null,
+            total: typeof result?.total === 'number' && Number.isFinite(result.total) ? result.total : null,
+            currency: result?.currency || null };
+        },
+      }) : await sendRequest();
       if (identity.current !== scope) return;
       if (!result.success || !result.data) throw new AgentApiError(500);
       const response = result.data;
+      if (response.pendingAction?.action === 'create_sale' && response.pendingAction.status === 'PENDING'
+        && response.pendingAction.requiresConfirmation) currentPendingSale.current = response.pendingAction;
+      else if (pendingSale && response.pendingAction?.pendingActionId === pendingSale.pendingActionId
+        && response.pendingAction.status !== 'PENDING') currentPendingSale.current = undefined;
+      if (pendingSale) retrySaleImpactAction.current = undefined;
       setConversationId(response.conversationId); setActivity(response);
       if (storageKey) writeActiveConversation(storageKey, response.conversationId);
       const answer = response.requiresClarification ? response.clarificationQuestion || response.answer : response.answer;
@@ -151,6 +193,7 @@ export default function AssistantPage() {
   function reset() {
     if (inFlight.current) return;
     setMessages([]); setConversationId(undefined); setActivity(undefined); setError(undefined); setDraft(''); lastRequest.current = undefined;
+    currentPendingSale.current = undefined; retrySaleImpactAction.current = undefined;
     setMessagePagination(undefined); historyEpoch.current++;
     if (storageKey) writeActiveConversation(storageKey);
   }
@@ -183,7 +226,19 @@ export default function AssistantPage() {
               <MessageBody message={m} question={[...messages.slice(0, index)].reverse().find(previous => previous.role === 'user')?.text || ''}
                 disabled={loading || historyBusy || m !== messages[messages.length - 1]}
                 busy={loading || historyBusy} onSelect={message => void send(message)} onActivity={setActivity}
+                onConfirmSale={(action, confirm) => registerSaleWithImpacts({
+                  products: (action.items || []).map(item => ({ sku: item.sku, name: item.name, quantity: item.quantity })),
+                  customerId: action.customerId || null, displayName: String(action.fields.contact || 'Cliente'),
+                  actionKey: action.pendingActionId, submit: confirm,
+                  isSuccessful: value => value.status === 'EXECUTED' && value.result?.type === 'sale',
+                  getMetadata: value => ({ transactionId: value.result?.id || null, occurredAt: value.result?.occurredAt || null,
+                    customerId: value.result?.customerId || action.customerId || null,
+                    total: typeof value.result?.total === 'number' && Number.isFinite(value.result.total) ? value.result.total : null,
+                    currency: value.result?.currency || null }),
+                })}
                 onActionChange={action => {
+                  if (action.action === 'create_sale' && action.pendingActionId === currentPendingSale.current?.pendingActionId
+                    && action.status !== 'PENDING') currentPendingSale.current = undefined;
                   setMessages(current => current.map(message => message.id === m.id && message.response?.pendingAction?.pendingActionId === action.pendingActionId
                     ? { ...message, response: { ...message.response, pendingAction: action } } : message));
                   setActivity(current => current?.pendingAction?.pendingActionId === action.pendingActionId

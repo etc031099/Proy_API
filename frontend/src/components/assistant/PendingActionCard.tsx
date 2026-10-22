@@ -8,8 +8,9 @@ const labels: Record<string, string> = { name: 'Nombre', sku: 'SKU', price: 'Pre
   resultingStock: 'Stock resultante', minStockLevel: 'Stock mínimo', category: 'Categoría', costPrice: 'Costo', description: 'Descripción',
   total: 'Total', paymentMethod: 'Pago', contact: 'Cliente / Proveedor', supplierCosts: 'Proveedor y precio de compra' };
 const statuses = { PENDING: 'Pendiente', CONFIRMED: 'Confirmada', EXECUTED: 'Ejecutada', CANCELLED: 'Cancelada', EXPIRED: 'Expirada', FAILED: 'Fallida' };
-export function PendingActionCard({ action, conversationId, disabled = false, onActionChange }: {
+export function PendingActionCard({ action, conversationId, disabled = false, onActionChange, onConfirmSale }: {
   action: PendingActionPreview; conversationId: string; disabled?: boolean; onActionChange?: (action: PendingActionPreview) => void;
+  onConfirmSale?: (action: PendingActionPreview, confirm: () => Promise<PendingActionPreview>) => Promise<PendingActionPreview>;
 }) {
   const [current, setCurrent] = useState(action);
   const [busy, setBusy] = useState(false);
@@ -31,10 +32,15 @@ export function PendingActionCard({ action, conversationId, disabled = false, on
     if (lock.current || disabled || expired || current.status !== 'PENDING') return;
     lock.current = true; setBusy(true); setError('');
     try {
-      const result = await apiClient.decideAgentAction(current.pendingActionId, conversationId, decision);
-      if (!result.data) throw new Error();
-      setCurrent(result.data);
-      onActionChange?.(result.data);
+      const confirm = async () => {
+        const result = await apiClient.decideAgentAction(current.pendingActionId, conversationId, decision);
+        if (!result.data) throw new Error();
+        return result.data;
+      };
+      const result = decision === 'confirm' && current.action === 'create_sale' && onConfirmSale
+        ? await onConfirmSale(current, confirm) : await confirm();
+      setCurrent(result);
+      onActionChange?.(result);
     } catch { setError('No se pudo confirmar el estado. Puedes reintentar la misma confirmación sin crear otra acción.'); }
     finally { lock.current = false; setBusy(false); }
   }

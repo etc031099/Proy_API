@@ -6,6 +6,8 @@ import { apiClient, AgentApiError } from '@/lib/api';
 import type { AgentResponse } from '@/types/agent';
 import { AgentActivity } from '@/components/assistant/AgentActivity';
 import { V3ResponseCards } from '@/components/assistant/V3ResponseCards';
+import { readLatestForecastImpactSale, clearLatestForecastImpactSale } from '@/lib/forecastImpactChannel';
+import * as saleImpactOrchestration from '@/lib/saleImpactOrchestration';
 vi.mock('@/components/ProtectedRoute', () => ({ ProtectedRoute: ({ children }: { children: ReactNode }) => <>{children}</> }));
 vi.mock('@/components/Layout', () => ({ Layout: ({ children }: { children: ReactNode }) => <main>{children}</main> }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'user-a', businessId: 'business-a' } }) }));
@@ -25,7 +27,7 @@ const response: AgentResponse = {
     totalThoughtTokens: 0, totalCachedInputTokens: 0, totalToolUseTokens: 0, totalProviderLatencyMs: 0,
     totalLatencyMs: 100, toolSelectionCycles: 0, metricsComplete: true, agents: [] }
 };
-beforeEach(() => { send.mockReset(); localStorage.clear(); vi.mocked(apiClient.listAgentConversations).mockResolvedValue({ success: true,
+beforeEach(() => { send.mockReset(); localStorage.clear(); clearLatestForecastImpactSale(); vi.mocked(apiClient.listAgentConversations).mockResolvedValue({ success: true,
   data: { items: [], pagination: { page: 1, limit: 10, total: 0, totalPages: 1 } } }); });
 function submit(text = 'stock bajo') { fireEvent.change(screen.getByLabelText('Tu consulta'), { target: { value: text } }); fireEvent.click(screen.getByRole('button', { name: 'Enviar' })); }
 it.each(['create_sale', 'create_purchase'] as const)('A6 %s confirmation refreshes activity without counting a write as a skill', async action => {
@@ -47,6 +49,29 @@ it.each(['create_sale', 'create_purchase'] as const)('A6 %s confirmation refresh
   expect(activity.getByText('Skills ejecutadas').nextElementSibling?.textContent).toBe('0');
   expect(activity.getByText('Llamadas IA').nextElementSibling?.textContent).toBe('0');
   expect(apiClient.decideAgentAction).toHaveBeenCalledTimes(1);
+});
+it('A5.3 textual sale confirmation captures and publishes the completed sale once', async () => {
+  const orchestrate = vi.spyOn(saleImpactOrchestration, 'registerSaleWithImpacts');
+  const pending: NonNullable<AgentResponse['pendingAction']> = { pendingActionId: 'a5333333-3333-4333-8333-333333333333',
+    action: 'create_sale', summary: 'Registrar venta', fields: { contact: 'Cliente demo', currency: 'PEN' }, customerId: null,
+    items: [{ sku: 'PAN-FRE-001', name: 'Pan Francés', quantity: 2, stock: 20, resultingStock: 18, price: 2, total: 4 }],
+    requiresConfirmation: true, expiresAt: '2099-01-01T00:00:00Z', status: 'PENDING' };
+  const executed = { ...pending, status: 'EXECUTED' as const,
+    result: { id: 'sale-text-1', type: 'sale' as const, occurredAt: '2026-10-22T15:30:00.000Z', customerId: null,
+      total: 4, currency: 'PEN', items: [{ sku: 'PAN-FRE-001', name: 'Pan Francés', quantity: 2, stock: 18 }] } };
+  send.mockResolvedValueOnce({ success: true, data: { ...response, answer: 'Revisa la venta.', pendingAction: pending } })
+    .mockResolvedValueOnce({ success: true, data: { ...response, answer: 'Venta registrada.', pendingAction: executed } });
+  render(<AssistantPage />); submit('vende 2 panes');
+  await screen.findByRole('region', { name: 'Acción pendiente' });
+  submit('Sí, confirma.');
+  await screen.findByText(/Estado: Ejecutada/);
+  expect(send).toHaveBeenCalledTimes(2);
+  expect(send.mock.calls[1][0].message).toBe('Sí, confirma.');
+  expect(apiClient.decideAgentAction).not.toHaveBeenCalled();
+  expect(orchestrate).toHaveBeenCalledTimes(1);
+  expect(readLatestForecastImpactSale()).toMatchObject({ transactionId: 'sale-text-1', products: [
+    { sku: 'PAN-FRE-001', name: 'Pan Francés', quantity: 2 }
+  ] });
 });
 
 it('A6 pending or cancelled previews never claim a confirmed action', () => {

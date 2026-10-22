@@ -132,9 +132,12 @@ export interface V3DisplayView {
 export interface PendingActionPreview {
   pendingActionId: string; action: string; summary: string; expiresAt: string;
   requiresConfirmation: boolean; status: 'PENDING' | 'CONFIRMED' | 'EXECUTED' | 'CANCELLED' | 'EXPIRED' | 'FAILED';
+  /** Scoped contact reference used only to capture the pre-sale customer impact. */
+  customerId?: string | null;
   fields: Record<string, string | number>;
   items?: { sku: string; name: string; quantity: number; stock: number; resultingStock: number; price: number; total: number }[];
-  result?: { id: string; type?: 'sale' | 'purchase'; currency?: string; total?: number; sku?: string; name?: string; stock?: number; needsSupplierSetup?: boolean;
+  result?: { id: string; type?: 'sale' | 'purchase'; currency?: string; total?: number; customerId?: string | null; occurredAt?: string;
+    sku?: string; name?: string; stock?: number; needsSupplierSetup?: boolean;
     ruleConfigured?: boolean; operator?: '<' | '<='; threshold?: number; alreadyExists?: boolean;
     items?: { sku: string; name: string; quantity: number; stock: number }[] };
 }

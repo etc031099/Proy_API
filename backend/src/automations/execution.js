@@ -10,6 +10,7 @@ const canonical = value => Array.isArray(value) ? value.map(canonical) : value &
 const hashArgs = args => createHash('sha256').update(JSON.stringify(canonical(args))).digest('hex');
 const view = row => ({ pendingActionId: row.pendingActionId, action: row.actionSkillId, summary: row.summary,
   fields: row.preview.fields, ...(row.preview.items ? { items: row.preview.items } : {}),
+  ...(row.actionSkillId === 'create_sale' ? { customerId: row.validatedArgs?.customerId ? String(row.validatedArgs.customerId) : null } : {}),
   expiresAt: new Date(row.expiresAt).toISOString(), requiresConfirmation: row.requiresConfirmation, status: row.status,
   ...(row.status === 'EXECUTED' ? { result: row.result } : {}), usage: zeroUsage() });
 const createActionService = ({ repository = createActionRepository(), executors = createActionExecutors(), clock = () => new Date() } = {}) => {
