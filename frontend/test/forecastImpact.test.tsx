@@ -190,7 +190,11 @@ describe('forecast impact observation', () => {
       submit: async () => ({ success: true }), isSuccessful: result => result.success, onSuccess });
     expect(readLatestForecastImpactSale()?.baselineUnavailable).toBe(true);
     render(<Harness />);
-    expect(await screen.findByText('Estado previo no disponible; la venta sí se registró.')).toBeTruthy();
+    expect(await screen.findByText('Venta registrada correctamente.')).toBeTruthy();
+    expect(screen.getByText(/La lectura actual se completó/)).toBeTruthy();
+    expect(screen.getByText(/No existe una captura BEFORE histórica válida/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Reintentar lectura' })).toBeNull();
+    expect(apiClient.getProductOperationDetail).not.toHaveBeenCalled();
     expect(document.body.textContent).not.toContain('No disponible → 174');
     expect(document.body.textContent).toContain('Captura BEFORE histórica');
     expect(document.body.textContent).toContain('No disponible; no se presenta como cambio');
@@ -218,6 +222,78 @@ describe('forecast impact observation', () => {
     expect(screen.getByText(/Ridge 7d · dataVersion 174/)).toBeTruthy();
   });
 
+  it('keeps a missing BEFORE informational when the current Ridge read is partial', async () => {
+    setSnapshotMocks('174', 91, 4.92);
+    vi.mocked(apiClient.getBusinessIntelligenceForecast).mockRejectedValueOnce(new Error('temporary read failure'));
+    publishForecastImpactSale({ version: 2, type: 'SALE_COMPLETED', transactionId: 'partial-current-sale',
+      occurredAt: '2026-10-19T17:00:00Z', hasCustomer: false, customerRef: null, baseline: null,
+      baselineUnavailable: true, context: { businessId: 'demo', scenarioId: 'v3', datasetVersion: 'v1' }, products: [products[0]] });
+    render(<Harness />);
+    expect(await screen.findByText('Venta registrada correctamente.')).toBeTruthy();
+    expect(screen.getByText(/La lectura actual está incompleta o no pudo validarse/)).toBeTruthy();
+    expect(screen.getByText(/No existe una captura BEFORE histórica válida/)).toBeTruthy();
+    expect(screen.queryByText(/La lectura actual se completó/)).toBeNull();
+    expect(screen.getByRole('alert').textContent).toContain('La lectura actual quedó incompleta');
+    expect(screen.getByRole('button', { name: 'Reintentar lectura' })).toBeTruthy();
+  });
+
+  it('offers a manual retry for temporary durable evidence failure without re-reading Ridge', async () => {
+    const transactionId = '507f1f77bcf86cd799439011';
+    const before = baseline();
+    vi.mocked(apiClient.getProductOperationDetail)
+      .mockResolvedValueOnce({ httpStatus: 503 } as never)
+      .mockResolvedValueOnce({ httpStatus: 200, data: {
+        operation: { operationId: `SALE:${transactionId}`, sourceId: transactionId, type: 'SALE' },
+        facts: { product: { sku: 'SKU-A', name: 'Producto A' } },
+        inventoryMovements: [{ quantityDelta: -1, stockBefore: 12, stockAfter: 11, occurredAt: '2026-10-19T17:00:00Z' }],
+        ridgeEvidence: { status: 'persisted', horizons: [{ eventType: 'SALE_COMPLETED', horizonDays: 7, dataVersion: '174', historicalCorrection: false }] },
+        traceability: { revision: '174', relationQuality: 'EXACT' },
+      } } as never);
+    render(<ForecastImpactDetailCard impact={{ baseline: before, after: baseline('174'), sale: {
+      version: 2, type: 'SALE_COMPLETED', transactionId, occurredAt: '2026-10-19T17:00:00Z', hasCustomer: false,
+      customerRef: null, baseline: before, baselineUnavailable: false, context: before.context, products: [products[0]],
+    }, pendingSale: null, allowUnknownScope: false, loadingAfter: false, error: null, retryAfterSale: vi.fn() }} />);
+    fireEvent.click(screen.getByText('Evidencia de la transacción · SKU-A'));
+    expect(await screen.findByText(/No se pudo cargar temporalmente la evidencia durable/)).toBeTruthy();
+    const forecastReadCount = vi.mocked(apiClient.getBusinessIntelligenceForecast).mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Reintentar evidencia durable' }));
+    expect(await screen.findByText(/Ridge 7d · dataVersion 174/)).toBeTruthy();
+    expect(apiClient.getProductOperationDetail).toHaveBeenCalledTimes(2);
+    expect(apiClient.getBusinessIntelligenceForecast).toHaveBeenCalledTimes(forecastReadCount);
+  });
+
+  it('shows absent durable evidence as unavailable without an error or retry action', async () => {
+    const before = baseline();
+    vi.mocked(apiClient.getProductOperationDetail).mockResolvedValueOnce({ httpStatus: 404 } as never);
+    render(<ForecastImpactDetailCard impact={{ baseline: before, after: baseline('174'), sale: {
+      version: 2, type: 'SALE_COMPLETED', transactionId: '507f1f77bcf86cd799439011', occurredAt: '2026-10-19T17:00:00Z',
+      hasCustomer: false, customerRef: null, baseline: before, baselineUnavailable: false, context: before.context, products: [products[0]],
+    }, pendingSale: null, allowUnknownScope: false, loadingAfter: false, error: null, retryAfterSale: vi.fn() }} />);
+    fireEvent.click(screen.getByText('Evidencia de la transacción · SKU-A'));
+    expect(await screen.findByText(/No hay detalle durable registrado/)).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reintentar evidencia durable' })).toBeNull();
+  });
+
+  it.each([
+    { name: 'authorization failure', response: { httpStatus: 401 }, message: /permisos o sesión/ },
+    { name: 'contract mismatch', response: { httpStatus: 200, data: {
+      operation: { operationId: 'SALE:507f1f77bcf86cd799439011', sourceId: '507f1f77bcf86cd799439011', type: 'SALE' },
+      facts: { product: { sku: 'OTHER-SKU', name: 'Otro producto' } },
+    } }, message: /no coincide con la transacción y el producto/ },
+  ])('keeps genuine durable $name visible without treating it as missing BEFORE', async ({ response, message }) => {
+    const before = baseline();
+    vi.mocked(apiClient.getProductOperationDetail).mockResolvedValueOnce(response as never);
+    render(<ForecastImpactDetailCard impact={{ baseline: before, after: baseline('174'), sale: {
+      version: 2, type: 'SALE_COMPLETED', transactionId: '507f1f77bcf86cd799439011', occurredAt: '2026-10-19T17:00:00Z',
+      hasCustomer: false, customerRef: null, baseline: before, baselineUnavailable: false, context: before.context, products: [products[0]],
+    }, pendingSale: null, allowUnknownScope: false, loadingAfter: false, error: null, retryAfterSale: vi.fn() }} />);
+    fireEvent.click(screen.getByText('Evidencia de la transacción · SKU-A'));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toMatch(message);
+    expect(screen.queryByRole('button', { name: 'Reintentar evidencia durable' })).toBeNull();
+  });
+
   it('retries a failed AFTER read without losing the BEFORE baseline', async () => {
     setSnapshotMocks('174', 91, 4.92);
     vi.mocked(apiClient.getBusinessIntelligenceForecast).mockRejectedValueOnce(new Error('temporary read failure'));
@@ -226,7 +302,8 @@ describe('forecast impact observation', () => {
       hasCustomer: false, customerRef: null, baseline: savedBaseline, baselineUnavailable: false, context: savedBaseline.context,
       products: [{ sku: 'SKU-A', name: 'Producto A', quantity: 1 }] });
     render(<Harness />);
-    expect(await screen.findByText('La lectura posterior quedó incompleta.')).toBeTruthy();
+    expect(await screen.findByText('La lectura actual quedó incompleta o no pudo validarse.')).toBeTruthy();
+    expect(screen.getByRole('alert').textContent).toContain('La lectura actual quedó incompleta');
     fireEvent.click(screen.getByRole('button', { name: 'Reintentar lectura' }));
     await waitFor(() => expect(document.body.textContent).toContain('173 → 174'));
     expect(document.body.textContent).toContain('4.9 → 4.92');

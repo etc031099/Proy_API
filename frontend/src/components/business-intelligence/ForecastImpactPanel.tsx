@@ -34,10 +34,9 @@ export function useForecastImpact(enabled = true) {
     const requestId = ++afterRequest.current;
     const hasSaleScope = Boolean(sale.context.businessId && sale.context.scenarioId && sale.context.datasetVersion);
     setState({ baseline: null, after: null, sale: null, pendingSale: sale, allowUnknownScope, loadingAfter: true,
-      error: sale.baselineUnavailable ? 'Estado previo no disponible; la venta sí se registró.' : null });
+      error: null });
     if (!hasSaleScope) {
-      setState(current => requestId === afterRequest.current ? { ...current, loadingAfter: true,
-        error: 'Venta confirmada; esperando contexto verificable para leer el estado posterior.' } : current);
+      setState(current => requestId === afterRequest.current ? { ...current, loadingAfter: false, error: null } : current);
       return;
     }
     try {
@@ -62,11 +61,10 @@ export function useForecastImpact(enabled = true) {
         return;
       }
       setState(current => requestId === afterRequest.current ? { ...current, sale, pendingSale: null, baseline: sale.baseline,
-        after: snapshot, loadingAfter: false, error: !snapshot.complete ? 'La lectura posterior quedó incompleta.'
-          : sale.baselineUnavailable ? 'Estado previo no disponible; la venta sí se registró.' : null } : current);
+        after: snapshot, loadingAfter: false, error: !snapshot.complete ? 'La lectura actual quedó incompleta o no pudo validarse.' : null } : current);
     } catch {
       setState(current => requestId === afterRequest.current ? { ...current, sale: null, baseline: null, after: null,
-        loadingAfter: false, error: 'No se pudo leer ni validar el estado posterior. Reintenta la lectura.' } : current);
+        loadingAfter: false, error: 'No se pudo consultar ni validar la lectura actual. Puedes reintentar.' } : current);
     }
   }, []);
 
@@ -77,14 +75,14 @@ export function useForecastImpact(enabled = true) {
       saveLatestForecastImpactSale(event.data);
       if (enabled) void refreshAfterSale(event.data, true);
       else setState({ baseline: event.data.baseline, after: null, sale: event.data, pendingSale: event.data,
-        allowUnknownScope: true, loadingAfter: false, error: event.data.baselineUnavailable ? 'Estado previo no disponible; la venta sí se registró.' : null });
+        allowUnknownScope: true, loadingAfter: false, error: null });
     } };
     const onLocalImpact = (event: Event) => { const detail = (event as CustomEvent<unknown>).detail;
       if (isForecastImpactSaleMessage(detail) && mayReplaceImpact(detail, readLatestForecastImpactSale())) {
         saveLatestForecastImpactSale(detail);
         if (enabled) void refreshAfterSale(detail, true);
         else setState({ baseline: detail.baseline, after: null, sale: detail, pendingSale: detail,
-          allowUnknownScope: true, loadingAfter: false, error: detail.baselineUnavailable ? 'Estado previo no disponible; la venta sí se registró.' : null });
+          allowUnknownScope: true, loadingAfter: false, error: null });
       } };
     window.addEventListener(FORECAST_IMPACT_LOCAL_EVENT, onLocalImpact);
     const saved = readLatestForecastImpactSale();
@@ -95,7 +93,7 @@ export function useForecastImpact(enabled = true) {
         if (!sameSale || !current.after) void refreshAfterSale(saved);
       } else if (!sameSale || !current.after) {
         setState({ baseline: saved.baseline, after: null, sale: saved, pendingSale: saved,
-          allowUnknownScope: true, loadingAfter: false, error: saved.baselineUnavailable ? 'Estado previo no disponible; la venta sí se registró.' : null });
+          allowUnknownScope: true, loadingAfter: false, error: null });
       }
     }
     return () => { channel?.close(); window.removeEventListener(FORECAST_IMPACT_LOCAL_EVENT, onLocalImpact); };
@@ -251,7 +249,9 @@ function SaleOperationEvidence({ sale, sku, currentInventory, inventoryCapturedA
 }) {
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState<ProductOperationDetail | null>(null);
-  const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'unavailable'>('idle');
+  const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'unavailable' | 'retryable-error' | 'authorization-error' | 'contract-error'>('idle');
+  const [httpStatus, setHttpStatus] = useState<number | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
   useEffect(() => {
     if (!open) return;
     let current = true;
@@ -262,24 +262,42 @@ function SaleOperationEvidence({ sale, sku, currentInventory, inventoryCapturedA
       return () => { current = false; controller.abort(); };
     }
     const operationId = `SALE:${transactionId}`;
-    setDetail(null); setStatus('loading');
+    setDetail(null); setStatus('loading'); setHttpStatus(null);
     void apiClient.getProductOperationDetail(sku, operationId, controller.signal).then(response => {
       if (!current) return;
+      setHttpStatus(response.httpStatus);
+      if (response.httpStatus === 404) { setDetail(null); setStatus('unavailable'); return; }
+      if (response.httpStatus === 401 || response.httpStatus === 403) {
+        setDetail(null); setStatus('authorization-error'); return;
+      }
+      if (response.httpStatus !== 200) {
+        setDetail(null);
+        setStatus(response.httpStatus === 0 || [408, 425, 429].includes(response.httpStatus) || response.httpStatus >= 500
+          ? 'retryable-error' : 'contract-error');
+        return;
+      }
       const candidate = response.httpStatus === 200 ? response.data : null;
-      const exactMatch = candidate?.operation.operationId === operationId
+      const exactMatch = Boolean(candidate && candidate.operation?.operationId === operationId
+        && typeof candidate.operation.sourceId === 'string'
         && candidate.operation.sourceId.toLowerCase() === transactionId.toLowerCase()
-        && candidate.operation.type === 'SALE' && candidate.facts.product.sku === sku;
-      if (!candidate || !exactMatch) { setDetail(null); setStatus('unavailable'); return; }
+        && candidate.operation.type === 'SALE' && candidate.facts?.product?.sku === sku);
+      if (!candidate || !exactMatch) { setDetail(null); setStatus('contract-error'); return; }
       setDetail(candidate); setStatus('ready');
-    }).catch(() => { if (current) { setDetail(null); setStatus('unavailable'); } });
+    }).catch(() => { if (current) { setDetail(null); setHttpStatus(0); setStatus('retryable-error'); } });
     return () => { current = false; controller.abort(); };
-  }, [open, sale.transactionId, sku]);
+  }, [open, retryCount, sale.transactionId, sku]);
 
   return <details className="rounded-lg border p-3" onToggle={(event: SyntheticEvent<HTMLDetailsElement>) => setOpen(event.currentTarget.open)}>
     <summary className="cursor-pointer text-sm font-medium">Evidencia de la transacción · {sku}</summary>
     <div className="mt-3 space-y-3 text-sm">
       {status === 'loading' && <p role="status">Consultando movimiento y señal persistidos para esta transacción…</p>}
-      {status === 'unavailable' && <p role="status">No hay detalle durable verificable para este ID y producto. No se infiere un movimiento ni una señal.</p>}
+      {status === 'unavailable' && <p role="status">No hay detalle durable registrado para este ID y producto. No se infiere un movimiento ni una señal.</p>}
+      {status === 'retryable-error' && <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-destructive">
+        <span>No se pudo cargar temporalmente la evidencia durable{httpStatus ? ` (HTTP ${httpStatus})` : ''}. La venta sigue confirmada.</span>
+        <Button type="button" size="sm" variant="outline" onClick={() => setRetryCount(value => value + 1)}>Reintentar evidencia durable</Button>
+      </div>}
+      {status === 'authorization-error' && <p role="alert" className="text-sm text-destructive">No se pudo acceder a la evidencia durable por permisos o sesión (HTTP {httpStatus}). La venta sigue confirmada.</p>}
+      {status === 'contract-error' && <p role="alert" className="text-sm text-destructive">La respuesta de evidencia durable no coincide con la transacción y el producto solicitados. La venta sigue confirmada.</p>}
       {detail && <>
         <section aria-label={`Movimiento durable ${sku}`} className="rounded-md bg-muted/30 p-3">
           <h4 className="font-medium">Movimiento de inventario ligado por transactionId</h4>
@@ -333,6 +351,17 @@ export function ForecastImpactDetailCard({ impact, inventoryImpact }: { impact: 
       {sale && <div className="rounded-lg border bg-muted/30 p-3 text-sm"><p className="font-medium">Venta confirmada · {localDate(sale.occurredAt)}</p>
         <p className="break-all text-xs text-muted-foreground">transactionId: {sale.transactionId || 'No disponible'}</p>
         <p className="mt-1">{sale.products.map(item => `${item.name} (${item.sku}) × ${item.quantity}`).join(' · ') || 'Productos no disponibles'} · {sale.products.reduce((sum, item) => sum + item.quantity, 0)} unidad(es)</p></div>}
+      {sale?.baselineUnavailable && <section role="status" className="rounded-lg border bg-muted/30 p-3 text-sm">
+        <h3 className="font-medium">Venta registrada correctamente.</h3>
+        <p className="mt-1">{after?.complete
+          ? 'La lectura actual se completó; cada pronóstico se muestra solo cuando existe evidencia Ridge ACTIVE válida.'
+          : loadingAfter ? 'La lectura actual todavía está en curso.'
+            : after ? 'La lectura actual está incompleta o no pudo validarse; no se presenta como completa.'
+              : error ? 'La lectura actual no está disponible; revisa el aviso de error para reintentar.'
+                : 'La lectura actual todavía no está disponible.'}
+          {' '}{baseline ? 'La captura BEFORE histórica es parcial; solo se comparan los datos disponibles.'
+            : 'No existe una captura BEFORE histórica válida para comparar antes y después.'}</p>
+      </section>}
       {error && <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-destructive"><span>{error}</span>{(sale || pendingSale) && <Button type="button" size="sm" variant="outline" disabled={loadingAfter} onClick={impact.retryAfterSale}>Reintentar lectura</Button>}</div>}
       <section aria-label="Lecturas actuales Ridge"><h3 className="mb-2 text-sm font-semibold">Revisión y estado consultados</h3><dl className="divide-y rounded-lg border px-3">
         {!baseline && <EvidenceValue label="Captura BEFORE histórica" value="No disponible; no se presenta como cambio" />}<EvidenceOrComparison label="Revisión de datos" before={baseline?.revision} after={after?.revision} />
