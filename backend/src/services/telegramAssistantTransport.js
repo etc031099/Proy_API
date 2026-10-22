@@ -32,15 +32,18 @@ const parseUpdate = update => {
     ...(callback ? { callbackToken: callback.data, callbackQueryId: callback.id, callbackMessageId: message.message_id } : {}),
     fingerprint: createHash('sha256').update(JSON.stringify([message.chat.id, actor.id, message.message_id, callback?.data || message.text])).digest('hex') };
 };
-const createTelegramConversations = () => {
+const createTelegramConversations = (config = readTelegramConfig) => {
   const { logAgentEvent } = require('../controllers/agentMessagesController');
+  const actionService = require('../automations/execution').createActionService();
   const runtime = require('../automations/assistant').withActionAssistant(
-    require('../agents/orchestrator').createAgentOrchestrator({ onEvent: logAgentEvent }), {}, { readOnly: true });
-  return require('./agentConversationService').createAgentConversationService({ runtime, durableTransport: true });
+    require('../agents/orchestrator').createAgentOrchestrator({ onEvent: logAgentEvent }), actionService,
+    { sourceChannel: 'telegram', readOnly: true, requireCustomerDecision: true,
+      telegramOperationsEnabled: () => config().operationsEnabled });
+  return require('./agentConversationService').createAgentConversationService({ runtime, actionService, sourceChannel: 'telegram', durableTransport: true });
 };
 const createTelegramAssistantTransport = ({ config = readTelegramConfig, repository = createTelegramTransportRepository(),
   loadUser = async (id, session) => require('../models/User').findById(id).select('_id businessId role isActive').session(session || null).lean(),
-  conversations = createTelegramConversations(), telegram = require('./telegramService') } = {}) => {
+  conversations = createTelegramConversations(config), telegram = require('./telegramService') } = {}) => {
   const authorize = async (settings, identity, session) => {
     const binding = settings.bindings.find(row => row.chatId === identity.chatId && row.telegramUserId === identity.telegramUserId);
     if (!binding) fail('TELEGRAM_UNAUTHORIZED');
@@ -53,12 +56,12 @@ const createTelegramAssistantTransport = ({ config = readTelegramConfig, reposit
   return Object.freeze({
     async admit(update) {
       const settings = config();
-      if (!settings.enabled || settings.mode !== 'webhook' || settings.operationsEnabled) fail('TELEGRAM_CHANNEL_DISABLED');
+      if (!settings.enabled || settings.mode !== 'webhook') fail('TELEGRAM_CHANNEL_DISABLED');
       const parsed = parseUpdate(update);
       const { binding, req } = await authorize(settings, parsed);
       await repository.assertReady();
       const result = await repository.admit(binding, parsed,
-        (durable, text, key, session) => conversations.enqueueTransportMessage(req, durable.conversationId, text, key, session));
+        (durable, text, key, session) => conversations.enqueueTransportMessage(req, durable.conversationId, text, key, session), settings);
       if (parsed.callbackQueryId) {
         // Answer only after full binding/token validation and durable consumption. No LLM involved.
         await telegram.answerCallbackQuery(parsed.callbackQueryId);
@@ -67,7 +70,7 @@ const createTelegramAssistantTransport = ({ config = readTelegramConfig, reposit
     },
     async recover() {
       const settings = config();
-      if (!settings.enabled || settings.mode !== 'webhook' || settings.operationsEnabled) return;
+      if (!settings.enabled || settings.mode !== 'webhook') return;
       await repository.assertReady();
       await Promise.all((await repository.pending()).map(async receipt => {
         const claim = await repository.claim(receipt._id);
@@ -75,15 +78,28 @@ const createTelegramAssistantTransport = ({ config = readTelegramConfig, reposit
         try {
           const { binding, req } = await authorize(settings, claim.binding);
           if (!sameBinding(claim.binding, binding) || claim.receipt.bindingGeneration !== binding.bindingGeneration) fail('TELEGRAM_BINDING_REVOKED');
+          const isAction = ['CONFIRM_ACTION', 'CANCEL_ACTION'].includes(claim.receipt.control);
+          if (isAction && req.user.role !== 'admin') fail('TELEGRAM_UNAUTHORIZED');
+          if (isAction && !config().operationsEnabled) fail('TELEGRAM_CALLBACK_INVALID');
+          const actionInput = { conversationId: claim.binding.conversationId, transportControl: claim.receipt.control, pendingActionId: claim.receipt.pendingActionId };
           let saved = await conversations.transportRequest(req, claim.binding.conversationId, claim.receipt.requestKey);
           if (saved.status === 'failed') { await repository.reject(claim, 'TELEGRAM_READ_FAILED'); return; }
           if (claim.reconcile && saved.status !== 'completed') {
-            await repository.uncertain(claim); return; // Never regenerate an uncertain read/provider call.
+            if (isAction && await conversations.reconcileTransportAction(req, actionInput, claim.receipt.requestKey))
+              saved = await conversations.transportRequest(req, claim.binding.conversationId, claim.receipt.requestKey);
+            else { await repository.uncertain(claim); return; } // Never repeat an uncertain skill/write.
           }
           if (saved.status !== 'completed') {
+            if (isAction) {
+              const freshSettings = config();
+              if (!freshSettings.enabled || freshSettings.mode !== 'webhook' || !freshSettings.operationsEnabled) fail('TELEGRAM_CALLBACK_INVALID');
+              const fresh = await authorize(freshSettings, claim.binding);
+              if (!sameBinding(claim.binding, fresh.binding) || fresh.binding.bindingGeneration !== claim.receipt.bindingGeneration) fail('TELEGRAM_BINDING_REVOKED');
+              if (fresh.req.user.role !== 'admin') fail('TELEGRAM_UNAUTHORIZED');
+            }
             await repository.invoke(claim); // Durable INVOKING before any skill/provider, outside the transaction.
             await conversations.send(req, { message: saved.text, conversationId: claim.binding.conversationId,
-              transportControl: claim.receipt.control }, claim.receipt.requestKey);
+              transportControl: claim.receipt.control, pendingActionId: claim.receipt.pendingActionId }, claim.receipt.requestKey);
             saved = await conversations.transportRequest(req, claim.binding.conversationId, claim.receipt.requestKey);
           }
           if (!saved.response) fail('TELEGRAM_HISTORY_UNCERTAIN');

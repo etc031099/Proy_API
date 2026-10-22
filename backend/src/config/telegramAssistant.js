@@ -6,8 +6,8 @@ const readTelegramConfig = (env = process.env) => {
   const mode = env.TELEGRAM_UPDATES_MODE || 'disabled';
   if (!['disabled', 'webhook', 'legacy_polling'].includes(mode)) fail();
   const enabled = env.TELEGRAM_ASSISTANT_ENABLED === 'true';
-  // A.8.2A has no commercial runtime. Even accidental configuration cannot enable writes.
-  if (env.TELEGRAM_ASSISTANT_OPERATIONS_ENABLED === 'true') fail();
+  const operationsEnabled = env.TELEGRAM_ASSISTANT_OPERATIONS_ENABLED === 'true';
+  if (operationsEnabled && !enabled) fail();
   if (enabled && mode !== 'webhook' || !enabled && mode === 'webhook') fail();
   let bindings = [];
   if (enabled) {
@@ -33,7 +33,7 @@ const readTelegramConfig = (env = process.env) => {
     });
   }
   return Object.freeze({ enabled, mode, secret: enabled ? env.TELEGRAM_WEBHOOK_SECRET : null,
-    operationsEnabled: false, bindings: Object.freeze(bindings) });
+    operationsEnabled, bindings: Object.freeze(bindings) });
 };
 const legacyPollingEnabled = () => {
   try { const config = readTelegramConfig(); return !config.enabled && config.mode === 'legacy_polling'; }

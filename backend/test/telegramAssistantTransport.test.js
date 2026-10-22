@@ -23,15 +23,43 @@ const update = (id = 1, text = 'vende 2 productos') => ({ update_id: id,
 
 const { fixture } = require('./helpers/telegramTransportFixture');
 
-test('flags default disabled; webhook and explicit bindings required; operations cannot be enabled', () => {
+test('flags default disabled; webhook, bindings and explicit operations enablement are required', () => {
   assert.equal(readTelegramConfig({}).enabled, false); assert.equal(readTelegramConfig({}).mode, 'disabled');
+  assert.equal(readTelegramConfig({}).operationsEnabled, false);
   for (const change of [{ TELEGRAM_UPDATES_MODE: 'legacy_polling' }, { TELEGRAM_WEBHOOK_SECRET: '' },
     { TELEGRAM_ASSISTANT_BINDINGS: '[]' }, { TELEGRAM_ASSISTANT_BINDINGS: '{}' }, { TELEGRAM_BOT_TOKEN: 'bad/token' },
-    { TELEGRAM_ASSISTANT_ENABLED: 'yes' }, { TELEGRAM_ASSISTANT_OPERATIONS_ENABLED: 'true' },
+    { TELEGRAM_ASSISTANT_ENABLED: 'yes' },
     { NODE_RED_WEBHOOK_SECRET: 'a'.repeat(40) }, { JWT_SECRET: 'a'.repeat(40) }])
     assert.throws(() => readTelegramConfig({ ...environment(), ...change }), { code: 'TELEGRAM_CONFIGURATION_INVALID' });
   assert.equal(readTelegramConfig(environment()).operationsEnabled, false);
+  assert.equal(readTelegramConfig({ ...environment(), TELEGRAM_ASSISTANT_OPERATIONS_ENABLED: 'true' }).operationsEnabled, true);
+  assert.throws(() => readTelegramConfig({ ...environment(), TELEGRAM_ASSISTANT_ENABLED: 'false', TELEGRAM_UPDATES_MODE: 'disabled',
+    TELEGRAM_ASSISTANT_OPERATIONS_ENABLED: 'true' }), { code: 'TELEGRAM_CONFIGURATION_INVALID' });
   assert.throws(() => readTelegramConfig({ ...environment(), TELEGRAM_ASSISTANT_BINDINGS: JSON.stringify([mapping, mapping]) }));
+});
+
+test('durable keyboard output inserts multiple callback tokens with ordered session writes', async () => {
+  const session = { id: 'mongo-session' };
+  const binding = { _id: 'binding-id', active: true, bindingGeneration: 1, chatId: '123', telegramUserId: '123',
+    systemUserId: mapping.systemUserId, businessId: mapping.businessId, conversationId: randomUUID() };
+  const receipt = { _id: 'receipt-id', ownerToken: 'owner', status: 'PROCESSING', requestKey: randomUUID() };
+  let tokenInsert, receiptUpdate;
+  const repository = createTelegramTransportRepository({
+    BindingModel: { findOneAndUpdate: () => ({ lean: async () => binding }), updateOne: async () => ({}) },
+    ReceiptModel: { findOne: () => ({ session: () => ({ lean: async () => receipt }) }),
+      updateOne: async (_filter, update) => { receiptUpdate = update; } },
+    CallbackModel: { create: async (documents, options) => { tokenInsert = { documents, options }; } },
+    transact: async work => work(session)
+  });
+  const claim = { binding, receipt };
+  await repository.output(claim, [
+    { token: 'opaque-one', purpose: 'CONFIRM_ACTION', position: 0 },
+    { token: 'opaque-two', purpose: 'CANCEL_ACTION', position: 1 }
+  ]);
+  assert.equal(tokenInsert.documents.length, 2);
+  assert.equal(tokenInsert.options.session, session);
+  assert.equal(tokenInsert.options.ordered, true);
+  assert.equal(receiptUpdate.$set.status, 'OUTPUT_READY');
 });
 
 test('private text only: groups, impersonated actors, bots, callbacks, commands and media denied', () => {

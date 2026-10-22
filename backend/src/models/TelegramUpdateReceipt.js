@@ -9,7 +9,8 @@ const schema = new mongoose.Schema({
   // Only a collision fingerprint; never store incoming text, raw updates or commercial DTOs here.
   fingerprint: { type: String, required: true },
   status: { type: String, enum: ['RECEIVED', 'PROCESSING', 'OUTPUT_READY', 'COMPLETED', 'FAILED', 'UNCERTAIN', 'DELIVERY_UNKNOWN'], required: true },
-  control: { type: String, enum: ['start', 'transfer', 'candidate', 'page', 'refine', 'cancel'] },
+  control: { type: String, enum: ['start', 'transfer', 'candidate', 'page', 'refine', 'cancel', 'CONFIRM_ACTION', 'CANCEL_ACTION'] },
+  pendingActionId: String,
   callbackQueryId: String, callbackMessageId: Number, callbackExpiresAt: Date, keyboardRequestKey: String,
   callbackAcked: Boolean,
   ownerToken: String, leaseUntil: Date, invocationStarted: { type: Boolean, default: false },

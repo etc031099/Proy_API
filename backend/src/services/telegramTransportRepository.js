@@ -36,7 +36,7 @@ const createTelegramTransportRepository = ({ BindingModel = Binding, ReceiptMode
       }
     }
   },
-  async admit(expected, update, enqueue) {
+  async admit(expected, update, enqueue, { operationsEnabled = false } = {}) {
     // Initial concurrent upserts can race on a unique key. Retry the whole short transaction once.
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
@@ -56,8 +56,10 @@ const createTelegramTransportRepository = ({ BindingModel = Binding, ReceiptMode
           if (update.callbackToken) {
             token = await Tokens.findOne({ token: update.callbackToken, bindingId: binding._id }).session(session).lean();
             if (!token || !sameBinding({ ...token, active: true }, expected) || token.sourceChannel !== 'telegram'
-              || !['candidate', 'page', 'refine', 'cancel'].includes(token.purpose)
-              || typeof token.selectionMessage !== 'string' || !token.selectionMessage.trim() || token.selectionMessage.length > 2000
+              || !['candidate', 'page', 'refine', 'cancel', 'CONFIRM_ACTION', 'CANCEL_ACTION'].includes(token.purpose)
+              || (['CONFIRM_ACTION', 'CANCEL_ACTION'].includes(token.purpose)
+                ? !operationsEnabled || !require('../agents/contracts').isTraceId(token.pendingActionId)
+                : typeof token.selectionMessage !== 'string' || !token.selectionMessage.trim() || token.selectionMessage.length > 2000)
               || token.conversationId !== binding.conversationId || !Number.isFinite(new Date(token.expiresAt).getTime())
               || new Date(token.expiresAt) <= new Date(clock())
               || token.messageId !== update.callbackMessageId) fail('TELEGRAM_CALLBACK_INVALID');
@@ -76,9 +78,10 @@ const createTelegramTransportRepository = ({ BindingModel = Binding, ReceiptMode
             await Tokens.updateOne({ _id: token._id }, { $set: { consumedRequestKey: requestKey } }, { session });
             await Binding.updateOne({ _id: binding._id }, { $set: { keyboardClaimKey: requestKey } }, { session });
           }
-          if (enqueue) await enqueue(binding, token?.selectionMessage || update.text, requestKey, session);
+          if (enqueue) await enqueue(binding, token?.selectionMessage || (token?.purpose === 'CONFIRM_ACTION' ? 'Confirmar operación'
+            : token?.purpose === 'CANCEL_ACTION' ? 'Cancelar operación' : update.text), requestKey, session);
           await Receipt.create([{ updateId: update.updateId, fingerprint: update.fingerprint,
-            control: token?.purpose || update.control, callbackQueryId: update.callbackQueryId,
+            control: token?.purpose || update.control, pendingActionId: token?.pendingActionId, callbackQueryId: update.callbackQueryId,
             callbackMessageId: update.callbackMessageId, callbackExpiresAt: token?.expiresAt, keyboardRequestKey: token?.keyboardRequestKey,
             requestKey, bindingId: binding._id, bindingGeneration: binding.bindingGeneration,
             sequence: changed.nextSequence, status: 'RECEIVED' }], { session });
@@ -144,7 +147,7 @@ const createTelegramTransportRepository = ({ BindingModel = Binding, ReceiptMode
       if (choices.length) await Tokens.create(choices.map(choice => ({ ...choice, bindingId: binding._id, chatId: binding.chatId,
         sourceChannel: 'telegram',
         telegramUserId: binding.telegramUserId, systemUserId: binding.systemUserId, businessId: binding.businessId,
-        conversationId: binding.conversationId, bindingGeneration: binding.bindingGeneration, keyboardRequestKey: receipt.requestKey })), { session });
+        conversationId: binding.conversationId, bindingGeneration: binding.bindingGeneration, keyboardRequestKey: receipt.requestKey })), { session, ordered: true });
       await Binding.updateOne({ _id: binding._id }, { $set: { keyboardRequestKey: receipt.requestKey, keyboardClaimKey: null } }, { session });
       await Receipt.updateOne({ _id: receipt._id }, { $set: { status: 'OUTPUT_READY', leaseUntil: new Date(clock() + 120000) } }, { session });
     });

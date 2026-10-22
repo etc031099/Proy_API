@@ -5,7 +5,7 @@ const { redact, publicResponse, snapshot, titleFor } = require('./agentHistoryPr
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 const summary = row => Object.fromEntries(['conversationId', 'title', 'lastMessageAt', 'messageCount', 'status', 'createdAt', 'updatedAt'].map(key => [key, row[key]]));
 
-const createAgentConversationService = ({ runtime, repository = createAgentHistoryRepository(), actionService, durableTransport = false,
+const createAgentConversationService = ({ runtime, repository = createAgentHistoryRepository(), actionService, sourceChannel = 'assistant', durableTransport = false,
   onError = () => console.error('[AgentHistoryDiagnostic] persistence_failed') }) => {
   const queues = new Map();
   const scopeFor = req => { const context = createAgentRequestContext(req); return { userId: context.userId, businessId: context.businessId }; };
@@ -43,6 +43,20 @@ const createAgentConversationService = ({ runtime, repository = createAgentHisto
       const assistant = user.status === 'completed' ? await repository.findRequest(scope, key, 'assistant') : null;
       return { status: user.status, text: user.text, ...(assistant?.response ? { response: publicResponse(assistant.response) } : {}) };
     },
+    async reconcileTransportAction(req, input, requestKey) {
+      if (sourceChannel !== 'telegram' || !isTraceId(requestKey)) fail('AGENT_INVALID_REQUEST');
+      const scope = scopeFor(req), id = input.conversationId;
+      return serialized(scope, id, async () => {
+        const conversation = await owned(scope, id);
+        const user = await repository.findRequest(scope, requestKey, 'user');
+        if (!user || user.conversationId !== id || user.status !== 'pending') return false;
+        const result = await runtime.recoverTelegramAction(req, input);
+        if (!result) return false;
+        await repository.complete(scope, id, requestKey, publicResponse(result), snapshot({
+          ...conversation.contextSnapshot, operationDraft: null }), true);
+        return true;
+      });
+    },
     async send(req, input, requestKey = randomUUID()) {
       if (!isTraceId(requestKey)) fail('AGENT_INVALID_REQUEST');
       const scope = scopeFor(req);
@@ -75,8 +89,10 @@ const createAgentConversationService = ({ runtime, repository = createAgentHisto
           if (durableTransport) await runtime.forgetConversation?.(req, id);
           if (conversation?.contextSnapshot) await runtime.restoreContext?.(req, id, snapshot(conversation.contextSnapshot));
           req.agentActionRequestId = requestKey;
-          result = await runtime.handle(req, { message: input.message, conversationId: id,
-            ...(durableTransport && input.transportControl ? { transportControl: input.transportControl } : {}) });
+          result = durableTransport && sourceChannel === 'telegram' && ['CONFIRM_ACTION', 'CANCEL_ACTION'].includes(input.transportControl)
+            ? await runtime.handleTelegramAction(req, { conversationId: id, transportControl: input.transportControl, pendingActionId: input.pendingActionId })
+            : await runtime.handle(req, { message: input.message, conversationId: id,
+              ...(durableTransport && input.transportControl ? { transportControl: input.transportControl } : {}) });
           if (result.code && !['AGENT_CLARIFICATION_REQUIRED', 'AGENT_UNSUPPORTED_QUERY'].includes(result.code)) {
             fail(result.code);
           }

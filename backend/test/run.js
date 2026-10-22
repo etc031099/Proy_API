@@ -61,6 +61,7 @@ require('./inventoryAlertChannels.test');
 require('./telegramPreferences.test');
 require('./telegramRecovery.test');
 require('./telegramAssistantTransport.test');
+require('./telegramOperations.test');
 require('./telegramReads.test');
 require('./minimarketV3Definitions.test');
 require('./minimarketV3Generator.test');

@@ -5,10 +5,11 @@ const schema = new mongoose.Schema({
   chatId: String, telegramUserId: String, systemUserId: mongoose.Schema.Types.ObjectId, businessId: String,
   conversationId: String, sourceChannel: { type: String, enum: ['telegram'], default: 'telegram' },
   bindingGeneration: Number, keyboardRequestKey: String,
-  purpose: { type: String, enum: ['candidate', 'page', 'refine', 'cancel'], required: true },
+  purpose: { type: String, enum: ['candidate', 'page', 'refine', 'cancel', 'CONFIRM_ACTION', 'CANCEL_ACTION'], required: true },
+  pendingActionId: String,
   label: { type: String, required: true, maxlength: 100 },
   position: Number,
-  selectionMessage: { type: String, required: true, maxlength: 2000 },
+  selectionMessage: { type: String, maxlength: 2000 },
   expiresAt: { type: Date, required: true }, messageId: Number,
   consumedRequestKey: String
 }, { timestamps: true, strict: 'throw', autoCreate: false, autoIndex: false });

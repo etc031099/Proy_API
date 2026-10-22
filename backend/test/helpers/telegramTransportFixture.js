@@ -10,10 +10,10 @@ const Callback = require('../../src/models/TelegramCallbackToken');
 const Conversation = require('../../src/models/AgentConversation');
 const Message = require('../../src/models/AgentConversationMessage');
 const mapping = { chatId: '123', telegramUserId: '123', systemUserId: 'aaaaaaaaaaaaaaaaaaaaaaaa', businessId: 'DEMO', bindingGeneration: 1 };
-const environment = (mappings = [mapping]) => ({ AGENT_ENABLED: 'true', TELEGRAM_ASSISTANT_ENABLED: 'true', TELEGRAM_UPDATES_MODE: 'webhook',
-  TELEGRAM_ASSISTANT_OPERATIONS_ENABLED: 'false', TELEGRAM_BOT_TOKEN: '123456789:abcdefghijklmnopqrstuvwxyzABCDE12345',
+const environment = (mappings = [mapping], operationsEnabled = false) => ({ AGENT_ENABLED: 'true', TELEGRAM_ASSISTANT_ENABLED: 'true', TELEGRAM_UPDATES_MODE: 'webhook',
+  TELEGRAM_ASSISTANT_OPERATIONS_ENABLED: String(operationsEnabled), TELEGRAM_BOT_TOKEN: '123456789:abcdefghijklmnopqrstuvwxyzABCDE12345',
   TELEGRAM_WEBHOOK_SECRET: 'a'.repeat(40), TELEGRAM_ASSISTANT_BINDINGS: JSON.stringify(mappings) });
-const fixture = ({ runtime, mappings = [mapping] } = {}) => {
+const fixture = ({ runtime, mappings = [mapping], operationsEnabled = false, actionService, actionOptions = {}, userRole = 'user' } = {}) => {
   let state = { bindings: [], receipts: [], conversations: [], messages: [], tokens: [] }, tail = Promise.resolve();
   let userOverride, failComplete = false, conversationCalls = 0, now = Date.now(), failSend = false, failAdmission = false;
   const sent = [], acks = [], calls = [];
@@ -90,11 +90,12 @@ const fixture = ({ runtime, mappings = [mapping] } = {}) => {
     }
   };
   const make = (core = runtime) => {
-    const runtime = withActionAssistant(core || { handle: async (_req, input) => { calls.push(input.message); return { answer: 'Respuesta de lectura', participants: [], actions: [], evidence: [] }; },
-      getContextSnapshot: async () => ({}) }, { prepare: () => { throw Error('Forbidden write'); } }, { readOnly: true });
-    const conversations = createAgentConversationService({ runtime, durableTransport: true, repository: historyRepository, onError: () => {} });
-    return createTelegramAssistantTransport({ config: () => readTelegramConfig(environment(mappings)), repository, conversations,
-      loadUser: async id => userOverride !== undefined ? userOverride : { _id: id, businessId: mappings.find(row => row.systemUserId === id)?.businessId, role: 'user', isActive: true },
+    const wrapped = withActionAssistant(core || { handle: async (_req, input) => { calls.push(input.message); return { answer: 'Respuesta de lectura', participants: [], actions: [], evidence: [] }; },
+      getContextSnapshot: async () => ({}) }, actionService || { prepare: () => { throw Error('Forbidden write'); } },
+      { readOnly: true, sourceChannel: 'telegram', telegramOperationsEnabled: () => operationsEnabled, ...actionOptions });
+    const conversations = createAgentConversationService({ runtime: wrapped, actionService, sourceChannel: 'telegram', durableTransport: true, repository: historyRepository, onError: () => {} });
+    return createTelegramAssistantTransport({ config: () => readTelegramConfig(environment(mappings, operationsEnabled)), repository, conversations,
+      loadUser: async id => userOverride !== undefined ? userOverride : { _id: id, businessId: mappings.find(row => row.systemUserId === id)?.businessId, role: userRole, isActive: true },
       telegram: { answerCallbackQuery: async id => acks.push(id), sendMessage: async (chat, text, extra) => {
         sent.push({ chat, text, ...extra }); if (failSend) throw Error('uncertain network response'); return { message_id: sent.length };
       } } });
