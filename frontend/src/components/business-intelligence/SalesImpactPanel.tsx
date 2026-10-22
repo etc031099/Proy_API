@@ -114,10 +114,10 @@ export function SalesImpactPanel() {
     <CardContent className="space-y-3">
       {state.checking && <p role="status" className="text-xs text-muted-foreground">Verificando el contexto de la comparación…</p>}
       {state.message && <div role="alert" className="flex flex-wrap items-center gap-2 text-xs"><span>{state.message}</span><button type="button" className="underline" onClick={() => void verify(event)}>Reintentar verificación</button></div>}
-    {state.verified && <><h3 className="text-sm font-semibold">Cambios comerciales</h3>{(before || after) && <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">{metrics.map(metric => <div key={metric.label} className="min-w-0 rounded-lg border p-3">
+    {state.verified && <>{(before || after) && <details className="rounded-lg border p-3"><summary className="cursor-pointer text-sm font-semibold">Evidencia comercial de las capturas</summary><div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">{metrics.map(metric => <div key={metric.label} className="min-w-0 rounded-lg border p-3">
         <p className="text-xs text-muted-foreground">{metric.label}</p><p className="mt-1 break-words text-sm font-semibold">{metric.value}</p>
         {metric.note && <p className="mt-1 text-xs text-muted-foreground">{metric.note}</p>}
-      </div>)}</div>}{!commercialComparable && <p className="text-xs text-muted-foreground">La captura comercial es parcial; los valores disponibles se muestran como lecturas, no como diferencias verificadas.</p>}<SalesIsolationForestImpact before={event.isolationForestImpact?.before || null} after={event.isolationForestImpact?.after || null} /></>}
+      </div>)}</div>{!commercialComparable && <p className="mt-2 text-xs text-muted-foreground">La captura comercial es parcial; los valores disponibles se muestran como lecturas, no como diferencias verificadas.</p>}</details>}<SalesIsolationForestImpact before={event.isolationForestImpact?.before || null} after={event.isolationForestImpact?.after || null} /></>}
       {state.verified && event.captureStatus !== 'COMPLETE' && <p className="text-xs text-muted-foreground">
         {event.captureStatus === 'AFTER_PENDING' ? 'La venta se completó; se está capturando el estado posterior.' : 'Comparación parcial: uno o ambos momentos no pudieron capturarse.'}
       </p>}

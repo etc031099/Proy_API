@@ -4,12 +4,12 @@ import type { SalesProvisionalEvaluation } from '@/types/salesAnomalies';
 import { sameCustomerImpactContext } from '@/lib/customerImpactSnapshot';
 import { Badge } from '@/components/ui/badge';
 
-const numeric = (value: number | null | undefined) => value == null ? 'No evaluable'
-  : new Intl.NumberFormat('es-PE', { maximumFractionDigits: 8 }).format(value);
-const label = (row: SalesProvisionalEvaluation | null) => !row ? 'No capturado'
+const number = (value: number | null | undefined, digits = 8) => value == null ? 'No disponible'
+  : new Intl.NumberFormat('es-PE', { maximumFractionDigits: digits }).format(value);
+const label = (row: SalesProvisionalEvaluation | null) => !row ? 'No disponible'
   : row.status === 'NOT_EVALUABLE' ? 'No evaluable'
     : row.inference?.label === 'ANOMALOUS_SIGNAL' ? 'Señal atípica' : 'Dentro del patrón';
-const reasonText: Record<string, string> = { NO_TICKETS: 'Sin tickets para evaluar.', INVALID_AVERAGE_TICKET: 'Ticket promedio no válido para el modelo.',
+const reasons: Record<string, string> = { NO_TICKETS: 'Sin tickets para evaluar.', INVALID_AVERAGE_TICKET: 'Ticket promedio no válido para el modelo.',
   INVALID_DAILY_AGGREGATE: 'Agregado diario no válido.', UNSUPPORTED_CURRENCY: 'La evaluación requiere importes en PEN.',
   DATE_MISMATCH: 'La fecha no coincide con el día operativo actual.', INVALID_DATE: 'Fecha no válida.' };
 
@@ -28,52 +28,37 @@ export function provisionalComparison(before: SalesProvisionalEvaluation | null,
 
 export function SalesIsolationForestImpact({ before, after }: { before: SalesProvisionalEvaluation | null; after: SalesProvisionalEvaluation | null }) {
   const comparison = provisionalComparison(before, after);
-  const model = after || before;
-  const inputChanged = Boolean(before?.modelInput && after?.modelInput &&
-    (before.modelInput.weekdayLogTicketsDeviation !== after.modelInput.weekdayLogTicketsDeviation
-      || before.modelInput.weekdayLogAverageTicketDeviation !== after.modelInput.weekdayLogAverageTicketDeviation));
-  const sameScore = Boolean(before?.inference && after?.inference && before.inference.anomalyScore === after.inference.anomalyScore);
-  const sameRegion = Boolean(before?.inference?.regionSignature && before.inference.regionSignature === after?.inference?.regionSignature);
-  const pair = (left: number | null | undefined, right: number | null | undefined) => `${numeric(left)} → ${numeric(right)}`;
-  const rows = [
-    ['Desviación de tickets vs patrón del día de semana', pair(before?.modelInput?.weekdayLogTicketsDeviation, after?.modelInput?.weekdayLogTicketsDeviation)],
-    ['Desviación de ticket promedio vs patrón del día de semana', pair(before?.modelInput?.weekdayLogAverageTicketDeviation, after?.modelInput?.weekdayLogAverageTicketDeviation)],
-    ['Score Isolation Forest', pair(before?.inference?.anomalyScore, after?.inference?.anomalyScore)],
-    ['Resultado', `${label(before)} → ${label(after)}`],
-  ];
-  return <section aria-label="Evaluación provisional del día en curso" className="space-y-3 border-t pt-3">
-    <div className="flex flex-wrap items-center gap-2"><h3 className="text-sm font-semibold">Impacto en Isolation Forest</h3><Badge variant="outline">EVALUACIÓN PROVISIONAL</Badge></div>
-    <p className="text-xs text-muted-foreground">Evaluación provisional del agregado diario de ventas. El endpoint no asocia el score a un transactionId individual; por eso este score no se atribuye a la venta identificada arriba.</p>
+  const current = after || null;
+  const featureRows = current?.modelInput ? [
+    ['weekdayLogTicketsDeviation', 'log1p(tickets) − mediana TRAIN del mismo día de semana', current.modelInput.weekdayLogTicketsDeviation],
+    ['weekdayLogAverageTicketDeviation', 'log1p(ticket promedio) − mediana TRAIN del mismo día de semana', current.modelInput.weekdayLogAverageTicketDeviation],
+  ] as const : [];
+
+  return <section aria-label="Nuevos datos e inferencia de Isolation Forest" className="space-y-3 border-t pt-3">
+    <div className="flex flex-wrap items-center gap-2"><h3 className="text-sm font-semibold">Nuevos datos e inferencia de Isolation Forest</h3><Badge variant="outline">MODELO CONGELADO</Badge><Badge variant="outline">EVALUACIÓN PROVISIONAL</Badge></div>
+    <p className="text-xs text-muted-foreground">La venta registrada actualiza el agregado operativo del día. El score evalúa ese agregado diario; no está atribuido a un transactionId ni demuestra que esta venta haya causado el resultado.</p>
     {comparison.issue && <p role="alert" className="text-sm">{comparison.issue}</p>}
-    {comparison.comparable && <div className="grid gap-2 md:grid-cols-2">{rows.map(([title, value]) => <div key={title} className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">{title}</p><p className="mt-1 text-sm font-medium">{value}</p></div>)}</div>}
-    {!comparison.comparable && after && <div className="grid gap-2 md:grid-cols-2 rounded-lg border p-3 text-sm" aria-label="Evaluación diaria actual">
-      <p>Periodo evaluado: {after.localDate} · {after.aggregate ? `${after.aggregate.tickets} tickets, ${after.aggregate.units} unidades` : 'agregado no disponible'}.</p>
-      <p>Score diario: {after.inference ? numeric(after.inference.anomalyScore) : 'No evaluable'} · Clasificación provisional: {label(after)}.</p>
-    </div>}
-    {!comparison.comparable && !after && before && <p className="text-xs text-muted-foreground">Solo hay una captura anterior; no se presenta como evaluación posterior a esta venta.</p>}
-    {!before && <p className="text-xs text-muted-foreground">La evaluación inicial no pudo capturarse.</p>}
-    {!after && <p className="text-xs text-muted-foreground">La evaluación posterior todavía no está disponible.</p>}
-    {before?.reason === 'NO_TICKETS' && <p className="text-xs">No existía actividad suficiente antes de la venta.</p>}
-    {after?.status === 'NOT_EVALUABLE' && <p className="text-xs">El estado posterior no es evaluable con los datos disponibles.</p>}
-    {[['Antes', before], ['Después', after]].map(([moment, value]) => {
-      const row = value as SalesProvisionalEvaluation | null;
-      return row?.status === 'NOT_EVALUABLE' ? <p key={String(moment)} className="text-xs text-muted-foreground">{String(moment)}: {reasonText[row.reason || ''] || 'No evaluable.'}</p> : null;
-    })}
-    {comparison.comparable && inputChanged && sameScore && <p className="text-xs">{sameRegion
-      ? 'Las entradas del modelo cambiaron, pero la inferencia permaneció en la misma región del bosque.'
-      : 'Las entradas del modelo cambiaron, pero el score permaneció igual.'}</p>}
-    {comparison.concurrent && <p className="text-xs">Durante la ventana de comparación pudieron registrarse otros cambios operativos.</p>}
-    {model && <details className="rounded-lg bg-muted/40 p-3"><summary className="cursor-pointer text-xs font-semibold">{before && after && comparison.comparable ? 'Modelo sin cambios' : 'Modelo congelado'}</summary>
-      <dl className="mt-2 grid gap-2 text-xs sm:grid-cols-2"><div><dt>Versión</dt><dd>{model.modelVersion}</dd></div>
-        <div><dt>Artifact</dt><dd>{model.modelIdentity.artifact} · {model.modelIdentity.artifactHash.slice(0, 12)}</dd></div>
-        <div><dt>Referencia semanal TRAIN</dt><dd>{model.modelIdentity.weeklyReferenceHash.slice(0, 12)}</dd></div>
-        <div><dt>Umbral</dt><dd>{model.modelIdentity.threshold}</dd></div><div><dt>Corte de entrenamiento</dt><dd>{model.modelIdentity.trainingCutoff}</dd></div>
-        <div><dt>Fecha local</dt><dd>{model.localDate}</dd></div></dl>
-      <p className="mt-2 text-xs">Revisión {before?.revision || 'No capturada'} → {after?.revision || 'No capturada'} · observado {before?.observedAt || 'No capturado'} → {after?.observedAt || 'No capturado'}</p>
+    {current ? <>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">Periodo diario evaluado</p><p className="mt-1 text-sm font-medium">{current.localDate} · día de semana {current.modelInput?.weekday ?? 'No disponible'}</p><p className="mt-1 text-xs text-muted-foreground">Agregado disponible: {current.aggregate ? `${number(current.aggregate.tickets, 0)} tickets · ${number(current.aggregate.units, 0)} unidades` : 'No disponible'}</p></div>
+        <div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">Inferencia sobre el día</p><p className="mt-1 text-sm font-medium">Score {number(current.inference?.anomalyScore)} · umbral {number(current.modelIdentity.threshold)}</p><p className="mt-1 text-xs">{label(current)}{current.inference ? ` · decisionFunction ${number(current.inference.decisionFunction)}` : ''}</p></div>
+      </div>
+      {featureRows.length > 0 ? <details className="rounded-lg border p-3"><summary className="cursor-pointer text-xs font-semibold">Características utilizadas ({featureRows.length})</summary>
+        <div className="mt-2 overflow-x-auto"><table className="w-full min-w-[34rem] text-xs"><caption className="sr-only">Features reales utilizadas en la inferencia provisional</caption><thead><tr className="text-left text-muted-foreground"><th scope="col" className="py-1 pr-3">Feature</th><th scope="col" className="py-1 pr-3">Transformación / referencia</th><th scope="col" className="py-1 text-right">Valor actual</th></tr></thead><tbody>{featureRows.map(([name, description, value]) => <tr className="border-t" key={name}><th scope="row" className="py-2 pr-3 text-left font-medium">{name}</th><td className="py-2 pr-3 text-muted-foreground">{description}</td><td className="py-2 text-right tabular-nums">{number(value)}</td></tr>)}</tbody></table></div>
+        <p className="mt-2 text-xs text-muted-foreground">Las medianas TRAIN se ajustaron solo con datos de entrenamiento; el endpoint no expone sus valores individuales. Huella de referencia: {current.modelIdentity.weeklyReferenceHash.slice(0, 12)}.</p>
+      </details> : <p className="text-xs text-muted-foreground">No hay features ni score disponibles para esta evaluación: {reasons[current.reason || ''] || 'estado no evaluable'}.</p>}
+      <details className="rounded-lg bg-muted/40 p-3"><summary className="cursor-pointer text-xs font-semibold">Identidad y estado del modelo</summary>
+        <dl className="mt-2 grid gap-2 text-xs sm:grid-cols-2"><div><dt>Versión</dt><dd>{current.modelVersion}</dd></div><div><dt>Artifact</dt><dd>{current.modelIdentity.artifact} · {current.modelIdentity.artifactHash.slice(0, 12)}</dd></div>
+          <div><dt>Referencia semanal TRAIN</dt><dd>{current.modelIdentity.weeklyReferenceHash.slice(0, 12)}</dd></div><div><dt>Corte de entrenamiento</dt><dd>{current.modelIdentity.trainingCutoff}</dd></div><div><dt>Corte histórico</dt><dd>{current.modelIdentity.analysisCutoff}</dd></div></dl>
+        <p className="mt-2 text-xs">Revisión {current.revision} · observada {current.observedAt}. El modelo y sus referencias permanecen congelados; no hay reentrenamiento por operación.</p>
+      </details>
+    </> : <p className="text-xs text-muted-foreground">La evaluación diaria posterior no está disponible; no se presenta una lectura anterior como resultado de esta venta.</p>}
+    {!before && <p className="text-xs text-muted-foreground">No se capturó una evaluación BEFORE; no se reconstruye ni se inventa una comparación.</p>}
+    {before?.reason === 'NO_TICKETS' && <p className="text-xs text-muted-foreground">La captura BEFORE existía, pero aún no había tickets: no tenía features ni score evaluable.</p>}
+    {comparison.concurrent && <p className="text-xs text-muted-foreground">Entre capturas pudieron registrarse otras operaciones del mismo día.</p>}
+    {before && after && comparison.comparable && <details className="rounded-lg border p-3"><summary className="cursor-pointer text-xs font-semibold">Capturas diarias anterior y posterior</summary>
+      <p className="mt-2 text-xs">Antes: score {number(before.inference?.anomalyScore)} · {label(before)}. Después: score {number(after.inference?.anomalyScore)} · {label(after)}. Es una comparación observacional entre agregados diarios.</p>
     </details>}
-    <div className="space-y-1 text-xs text-muted-foreground"><p>El modelo permanece congelado. No se afirma que esta venta haya causado reentrenamiento.</p>
-      <p>El día actual todavía está abierto; el resultado no equivale a una evaluación histórica certificada.</p>
-      <p>Una señal atípica no implica fraude ni confirma una causa. Un score menor indica mayor rareza relativa; no es una probabilidad.</p>
-      <p>Cuando existen ambas capturas válidas, la comparación es observacional entre agregados del mismo día; pueden influir otras operaciones concurrentes.</p></div>
+    <p className="text-xs text-muted-foreground">El score es de rareza relativa, no una probabilidad de fraude. Un score menor indica mayor atipicidad; la señal no confirma una causa. El día abierto sigue siendo provisional.</p>
   </section>;
 }

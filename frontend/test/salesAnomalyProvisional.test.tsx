@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SalesIsolationForestImpact, provisionalComparison } from '@/components/business-intelligence/SalesIsolationForestImpact';
 import { provisionalFixture } from './fixtures/salesProvisional';
@@ -16,13 +16,16 @@ describe('provisional Isolation Forest sales comparison', () => {
     const next = after(); next.modelInput!.weekdayLogTicketsDeviation = -.9;
     next.inference = { anomalyScore: -.6, decisionFunction: -.1, prediction: -1, label: 'ANOMALOUS_SIGNAL', regionSignature: 'c'.repeat(64) };
     render(<SalesIsolationForestImpact before={before()} after={next} />);
-    expect(screen.getByText('Dentro del patrón → Señal atípica')).toBeTruthy();
-    expect(screen.getByText(/-0[,.]4 → -0[,.]6/)).toBeTruthy();
-    expect(screen.getByText(/Desviación de tickets vs patrón/)).toBeTruthy();
+    expect(screen.getByText('Score -0.6 · umbral -0.5')).toBeTruthy();
+    expect(screen.getByText('Señal atípica · decisionFunction -0.1')).toBeTruthy();
+    fireEvent.click(screen.getByText(/Características utilizadas/));
+    expect(screen.getByText('weekdayLogTicketsDeviation')).toBeTruthy();
+    expect(screen.getByText('weekdayLogAverageTicketDeviation')).toBeTruthy();
+    expect(screen.getByText(/log1p\(tickets\)/)).toBeTruthy();
     expect(screen.getByText('EVALUACIÓN PROVISIONAL')).toBeTruthy();
-    expect(screen.getByText(/no implica fraude ni confirma una causa/)).toBeTruthy();
-    expect(screen.getByText(/El día actual todavía está abierto/)).toBeTruthy();
-    expect(screen.getByText('Modelo sin cambios')).toBeTruthy();
+    expect(screen.getByText(/no una probabilidad de fraude/)).toBeTruthy();
+    expect(screen.getByText(/El día abierto sigue siendo provisional/)).toBeTruthy();
+    expect(screen.getByText('Identidad y estado del modelo')).toBeTruthy();
     expect(screen.getByText(/model.joblib/)).toBeTruthy();
   });
 
@@ -30,28 +33,26 @@ describe('provisional Isolation Forest sales comparison', () => {
     const initial = provisionalFixture({ status: 'NOT_EVALUABLE', reason: 'NO_TICKETS', modelInput: null, inference: null,
       aggregate: { revenuePEN: 0, units: 0, tickets: 0, averageTicketPEN: null } });
     render(<SalesIsolationForestImpact before={initial} after={after()} />);
-    expect(screen.getByText(/No existía actividad suficiente antes/)).toBeTruthy();
-    expect(screen.getByText('No evaluable → Dentro del patrón')).toBeTruthy();
-    expect(screen.getByText(/No evaluable → -0[,.]4/)).toBeTruthy();
+    expect(screen.getByText(/La captura BEFORE existía, pero aún no había tickets/)).toBeTruthy();
+    expect(screen.getByText('Dentro del patrón · decisionFunction 0.1')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('No evaluable →');
   });
 
   it('keeps AFTER not evaluable explicit', () => {
     render(<SalesIsolationForestImpact before={before()} after={provisionalFixture({ revision: '185', status: 'NOT_EVALUABLE',
       reason: 'INVALID_AVERAGE_TICKET', modelInput: null, inference: null })} />);
-    expect(screen.getByText('Dentro del patrón → No evaluable')).toBeTruthy();
-    expect(screen.getByText(/estado posterior no es evaluable/)).toBeTruthy();
+    expect(screen.getByText('No evaluable')).toBeTruthy();
+    expect(screen.getByText(/Ticket promedio no válido/)).toBeTruthy();
   });
 
   it('explains unchanged score and region only when feature and leaf signatures support it', () => {
     const next = after(); next.modelInput!.weekdayLogTicketsDeviation = -.8;
     render(<SalesIsolationForestImpact before={before()} after={next} />);
-    expect(screen.getByText(/inferencia permaneció en la misma región del bosque/)).toBeTruthy();
-    expect(screen.getByText('Dentro del patrón → Dentro del patrón')).toBeTruthy();
+    expect(screen.getByText('Dentro del patrón · decisionFunction 0.1')).toBeTruthy();
     cleanup();
     next.inference!.regionSignature = 'd'.repeat(64);
     render(<SalesIsolationForestImpact before={before()} after={next} />);
-    expect(screen.queryByText(/inferencia permaneció en la misma región/)).toBeNull();
-    expect(screen.getByText(/pero el score permaneció igual/)).toBeTruthy();
+    expect(screen.getByText('Score -0.4 · umbral -0.5')).toBeTruthy();
   });
 
   it.each(['date', 'tenant', 'model', 'revision'] as const)('does not compare mismatched %s', issue => {
@@ -68,7 +69,7 @@ describe('provisional Isolation Forest sales comparison', () => {
 
   it('warns about additional operational revisions', () => {
     render(<SalesIsolationForestImpact before={before()} after={provisionalFixture({ revision: '187' })} />);
-    expect(screen.getByText(/pudieron registrarse otros cambios operativos/)).toBeTruthy();
+    expect(screen.getByText(/Entre capturas pudieron registrarse otras operaciones/)).toBeTruthy();
   });
 
   it('uses one HTTP capture for commercial metrics and inference, without revision probes', async () => {

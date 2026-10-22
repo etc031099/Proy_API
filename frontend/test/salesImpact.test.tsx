@@ -153,11 +153,12 @@ describe('SalesImpact temporal commercial comparison', () => {
     const after = snapshot({ dataVersion: 185, revenue: { value: 45, currency: 'PEN' }, units: 4, tickets: 2, averageTicket: { value: 22.5, currency: 'PEN' }, grossMarginAmount: { value: 18, currency: 'PEN' }, grossMarginPercent: 40 });
     sessionStorage.setItem(SALES_IMPACT_SESSION_KEY, JSON.stringify(event(before, after)));
     render(<SalesImpactPanel />);
+    fireEvent.click(await screen.findByText('Evidencia comercial de las capturas'));
     expect(await screen.findByText(/33.*45/)).toBeTruthy();
     expect(screen.getByText('3 → 4')).toBeTruthy();
     expect(screen.getByText('1 → 2')).toBeTruthy();
     expect(screen.getByText(/10.*30%.*18.*40%/)).toBeTruthy();
-    expect(screen.getByText(/El modelo permanece congelado/)).toBeTruthy();
+    expect(screen.getByText('Nuevos datos e inferencia de Isolation Forest')).toBeTruthy();
     expect(apiClient.getSalesImpactAnalytics).not.toHaveBeenCalled();
   });
 
@@ -165,11 +166,11 @@ describe('SalesImpact temporal commercial comparison', () => {
     const current = provisionalFixture();
     expect(provisionalComparison(null, current).comparable).toBe(false);
     render(<SalesIsolationForestImpact before={null} after={current} />);
-    expect(screen.getByText(/El endpoint no asocia el score a un transactionId individual/)).toBeTruthy();
-    expect(screen.getByText(/Score diario: -0\.4 · Clasificación provisional: Dentro del patrón/)).toBeTruthy();
+    expect(document.body.textContent).toContain('El score evalúa ese agregado diario; no está atribuido a un transactionId');
+    expect(screen.getByText('Score -0.4 · umbral -0.5')).toBeTruthy();
     expect(document.body.textContent).not.toContain('No evaluable → -0.4');
-    expect(screen.getByText(/Una señal atípica no implica fraude/)).toBeTruthy();
-    expect(screen.getByText(/No se afirma que esta venta haya causado reentrenamiento/)).toBeTruthy();
+    expect(screen.getByText(/no una probabilidad de fraude/)).toBeTruthy();
+    expect(screen.getByText(/no hay reentrenamiento por operación/)).toBeTruthy();
   });
 
   it('keeps the real sale ID separate from the verified daily provisional evaluation', () => {
