@@ -160,10 +160,11 @@ test('missing required index fails closed; indexes additive/idempotent and confl
   const indexes = []; let creates = 0;
   model.collection.listIndexes = () => ({ toArray: async () => indexes });
   model.collection.createIndex = async (key, options) => { creates++; indexes.push({ key, ...options }); };
-  await provisionTelegramTransportIndexes([model]); await provisionTelegramTransportIndexes([model]);
+  const authorization = { expectedDatabaseName: 'synthetic_test', actualDatabaseName: 'synthetic_test', authorized: true };
+  await provisionTelegramTransportIndexes([model], authorization); await provisionTelegramTransportIndexes([model], authorization);
   assert.equal(creates, 3);
   indexes[0].unique = false;
-  await assert.rejects(provisionTelegramTransportIndexes([model]), { code: 'TELEGRAM_INDEX_CONFLICT' });
+  await assert.rejects(provisionTelegramTransportIndexes([model], authorization), { code: 'TELEGRAM_INDEX_CONFLICT' });
   assert.equal(creates, 3); assert.equal(Receipt.schema.indexes().some(([, options]) => options.expireAfterSeconds !== undefined), false);
 });
 
