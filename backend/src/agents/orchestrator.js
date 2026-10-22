@@ -141,6 +141,12 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, neutralProv
       if (state.v3Context) commit({ v3Context: { ...state.v3Context, pending: null, ranking: null } });
     });
   },
+  async clearReadSelection(req, conversationId) {
+    return memory.withConversation(createAgentRequestContext(req, { conversationId }), (state, commit) => commit({
+      lastProductSelection: null, supplierResolution: null, supplierProductListing: null,
+      ...(state.v3Context ? { v3Context: { ...state.v3Context, pending: null, ranking: null } } : {})
+    }));
+  },
   async rememberSupplier(req, conversationId, supplier, product) {
     const safe = require('./memory').compactSupplier(supplier);
     const entity = require('./memory').compactEntity(product);

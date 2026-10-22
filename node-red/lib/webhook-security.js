@@ -4,8 +4,7 @@ const ALLOWED_EVENTS = new Set([
   'transaction.created',
   'product.low_stock',
   'inventory.alert.opened',
-  'inventory.alert.resolved',
-  'telegram.command'
+  'inventory.alert.resolved'
 ]);
 
 const CHAT_ID_PATTERN = /^-?[1-9]\d{0,19}$/;

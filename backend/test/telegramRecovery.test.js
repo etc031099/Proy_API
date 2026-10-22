@@ -97,12 +97,12 @@ test('bot transfer derives chat from validated private update and never forwards
   for (const overrides of [{ chat: { id: -123, type: 'group' } }, { from: { id: 456, is_bot: false } }, { from: { id: 123, is_bot: true } }]) await process(update('/transfer TRF-ABCDEF1234567890', overrides));
   assert.equal(calls.length, 1);
 });
-test('normal start/pairing/commands survive, duplicate normal pairing has safe recovery guidance', async () => {
+test('start/pairing survive but legacy conversation never forwards; duplicate pairing has safe recovery guidance', async () => {
   const replies = [], events = []; let saves = 0;
   const process = createTelegramUpdateProcessor({ send: async (id, text) => replies.push(text), emit: (...args) => events.push(args),
     connections: { findOne: async () => ({ save: async () => { saves++; } }) } });
   await process(update('/start')); await process(update('/stock')); await process(update('/start BILLING-123456'));
-  assert.equal(saves, 1); assert.equal(events[0][0], 'telegram.command'); assert.match(replies.at(-1), /connected successfully/);
+  assert.equal(saves, 1); assert.equal(events.length, 0); assert.match(replies.at(-1), /connected successfully/);
   const duplicate = createTelegramUpdateProcessor({ send: async (id, text) => replies.push(text), connections: { findOne: async () => ({ save: async () => { throw { code: 11000 }; } }) } });
   await duplicate(update('BILLING-123456')); assert.match(replies.at(-1), /Recuperar conexión/);
 });

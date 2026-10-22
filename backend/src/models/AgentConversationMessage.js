@@ -8,7 +8,7 @@ const schema = new mongoose.Schema({
   requestKey: { type: String, required: true, validate: isTraceId },
   role: { type: String, enum: ['user', 'assistant'], required: true },
   text: { type: String, required: true, maxlength: 20000 },
-  status: { type: String, enum: ['pending', 'completed', 'failed'], required: true },
+  status: { type: String, enum: ['queued', 'pending', 'completed', 'failed'], required: true },
   // Allowlisted public response only. No provider request/response or raw DTOs.
   response: { type: mongoose.Schema.Types.Mixed },
   createdAt: { type: Date, default: Date.now, required: true }

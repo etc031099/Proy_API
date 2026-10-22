@@ -60,6 +60,8 @@ require('./inventoryAlertOutboxQueries.test');
 require('./inventoryAlertChannels.test');
 require('./telegramPreferences.test');
 require('./telegramRecovery.test');
+require('./telegramAssistantTransport.test');
+require('./telegramReads.test');
 require('./minimarketV3Definitions.test');
 require('./minimarketV3Generator.test');
 require('./minimarketV3Mongo.test');

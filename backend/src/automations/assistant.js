@@ -43,6 +43,29 @@ const withActionAssistant = (runtime, service, options = {}) => {
   const drafts = new Map(), locks = new Map(), now = options.clock || Date.now;
   const keyFor = (req, id) => JSON.stringify([String(req.user?._id), req.businessId, id]);
   async function handle(req, input, allowProviderExtraction = true) {
+    if (options.readOnly === true) {
+      const context = require('../agents/contracts').createAgentRequestContext(req,
+        input.conversationId ? { conversationId: input.conversationId } : {});
+      const notice = answer => ({ requestId: context.requestId, conversationId: context.conversationId,
+        intent: 'channel_notice', agent: 'coordinator', answer, requiresClarification: false,
+        participants: [], actions: [], evidence: [], usage: { totalLlmCalls: 0, totalSkillCalls: 0, totalTokens: 0 } });
+      if (input.transportControl === 'start') return notice('Tu usuario está autorizado. Puedes consultar tu negocio; las operaciones desde Telegram aún no están habilitadas.');
+      if (input.transportControl === 'transfer') return notice('Gestiona la conexión y recuperación desde Integraciones en la web. Este comando no modifica permisos ni conexiones.');
+      if (input.transportControl === 'cancel') {
+        await runtime.clearReadSelection?.(req, input.conversationId);
+        return notice('Selección cancelada. La conversación y las operaciones no se modificaron.');
+      }
+      if (input.transportControl === 'refine') return notice('Escribe un nombre o código más específico de las opciones de la consulta pendiente.');
+      const message = require('../utils/conversationalInput').normalizeConversationalInput(input.message);
+      const requests = require('../agents/compositeRouting').splitRequests(message);
+      const write = require('../agents/domainGate').isUnsafeControlRequest(message)
+        || actionIntent(message) || saleNarrative(message) || ambiguousMovement(message) || actionDecision(message)
+        || requests.some(require('../agents/compositeRouting').writeClause);
+      if (!['candidate', 'page'].includes(input.transportControl) && write)
+        return notice('Las operaciones desde Telegram todavía no están habilitadas.');
+      const result = await runtime.handle(req, { message, conversationId: input.conversationId });
+      return result?.semanticAction ? notice('Las operaciones desde Telegram todavía no están habilitadas.') : result;
+    }
     let v3State;
     if (req.businessId === require('../services/v3IntelligenceService').V3.businessId && input.conversationId) {
       const snapshot = await runtime.getContextSnapshot?.(req, input.conversationId);

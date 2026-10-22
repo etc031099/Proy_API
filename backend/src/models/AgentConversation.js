@@ -9,6 +9,7 @@ const schema = new mongoose.Schema({
   title: { type: String, required: true, maxlength: 60 },
   lastMessageAt: { type: Date, required: true },
   messageCount: { type: Number, default: 0, min: 0, max: 400 },
+  queuedResponseCount: { type: Number, default: 0, min: 0, max: 200 },
   status: { type: String, enum: ['active', 'archived'], default: 'active' },
   lastIntent: { type: String, maxlength: 40 },
   lastAgent: { type: String, enum: AGENT_IDS },

@@ -1,6 +1,6 @@
 const crypto = require('crypto');
+const { legacyPollingEnabled } = require('../config/telegramAssistant');
 const { TelegramConnection } = require('../models');
-const { emitEvent } = require('./webhookService');
 
 const TELEGRAM_API = 'https://api.telegram.org';
 const CODE_TTL_MS = 10 * 60 * 1000;
@@ -70,15 +70,6 @@ const disconnect = async (businessId) => {
   );
 };
 
-// Menú de botones que aparece en el chat (el usuario solo toca, no escribe).
-const MENU_KEYBOARD = {
-  keyboard: [
-    [{ text: '📦 Stock bajo' }, { text: '💰 Ventas de hoy' }],
-    [{ text: '🧾 Deudas' }, { text: '❓ Ayuda' }]
-  ],
-  resize_keyboard: true
-};
-
 const sendMessage = async (chatId, text, extra = {}) => telegramRequest('sendMessage', {
   chat_id: chatId,
   text,
@@ -110,7 +101,7 @@ const notifyLowStock = async (businessId, product, previousStock) => {
   await connection.save();
 };
 
-const createTelegramUpdateProcessor = ({ send = sendMessage, emit = emitEvent, connections = TelegramConnection,
+const createTelegramUpdateProcessor = ({ send = sendMessage, connections = TelegramConnection,
   recovery = require('./telegramRecovery').telegramRecovery } = {}) => async (update) => {
   const message = update.message;
   const text = message?.text?.trim();
@@ -147,23 +138,16 @@ const createTelegramUpdateProcessor = ({ send = sendMessage, emit = emitEvent, c
         [
           '👋 Bienvenido al bot de tu sistema de Inventario y Facturación.',
           '',
-          'Usa los botones de abajo para consultar tu sistema.',
+          'Este canal permite conectar notificaciones de stock.',
           '',
           'Para recibir alertas de stock, envía el código de conexión que genera tu sistema.'
         ].join('\n'),
-        { reply_markup: MENU_KEYBOARD }
+        { reply_markup: { remove_keyboard: true } }
       );
       return;
     }
 
-    // Forward any other message (comandos escritos o textos de los botones) to Node-RED.
-    // Node-RED only REPLIES (sendMessage), so it never conflicts with this poller.
-    emit('telegram.command', {
-      chatId: String(chatId),
-      text,
-      username: message?.from?.username || null,
-      name: [message?.from?.first_name, message?.from?.last_name].filter(Boolean).join(' ') || null
-    });
+    // Legacy polling handles pairing only; never forward chat text to Node-RED.
     return;
   }
 
@@ -192,7 +176,7 @@ const processUpdate = createTelegramUpdateProcessor();
 let polling = false;
 let offset = 0;
 const pollUpdates = async () => {
-  if (polling || !getToken()) return;
+  if (polling || !getToken() || !legacyPollingEnabled()) return;
   polling = true;
   try {
     const updates = await telegramRequest(
@@ -208,16 +192,19 @@ const pollUpdates = async () => {
     console.error('[Telegram] polling error:', error.category || 'UNAVAILABLE');
   } finally {
     polling = false;
-    if (getToken()) setTimeout(pollUpdates, 1000);
+    if (getToken() && legacyPollingEnabled()) setTimeout(pollUpdates, 1000);
   }
 };
 
 const startPolling = () => {
-  if (getToken()) pollUpdates();
+  if (getToken() && legacyPollingEnabled()) pollUpdates();
 };
+
+const answerCallbackQuery = callbackQueryId => telegramRequest('answerCallbackQuery', { callback_query_id: callbackQueryId });
 
 module.exports = {
   sendMessage,
+  answerCallbackQuery,
   createConnectionCode,
   getConnection,
   disconnect,

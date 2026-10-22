@@ -80,6 +80,13 @@ test('agent configuration defaults off and requires an API key only when enabled
   assert.equal(enabled.geminiModel, 'gemini-3.8-flash');
 });
 
+test('Telegram assistant configuration is validated at startup without enabling it by default', () => {
+  const disabled = validateEnvironment(validEnvironment(), { warn: () => {} });
+  assert.equal(disabled.agentEnabled, false);
+  assertConfigurationError(validEnvironment({ TELEGRAM_ASSISTANT_ENABLED: 'true', TELEGRAM_UPDATES_MODE: 'webhook' }),
+    'Telegram assistant configuration is invalid');
+});
+
 test('agent configuration rejects malformed enable flags, model IDs and timeout bounds', () => {
   assertConfigurationError(validEnvironment({ AGENT_ENABLED: 'yes' }), 'AGENT_ENABLED must be true or false');
   assertConfigurationError(validEnvironment({ GEMINI_MODEL: 'https://internal.example' }), 'GEMINI_MODEL');

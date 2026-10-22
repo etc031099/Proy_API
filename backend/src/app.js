@@ -24,6 +24,7 @@ const transactionRoutes = require('./routes/transactions');
 const reportRoutes = require('./routes/reports');
 const externalRoutes = require('./routes/external');
 const telegramRoutes = require('./routes/telegram');
+const { createTelegramWebhookRoutes } = require('./routes/telegramWebhook');
 const creditPaymentRoutes = require('./routes/creditPayments');
 const mlRoutes = require('./routes/ml');
 const { createBusinessIntelligenceDashboardRoutes } = require('./routes/businessIntelligenceDashboard');
@@ -31,6 +32,7 @@ const { createForecastMlUpdateRoutes } = require('./routes/forecastMlUpdate');
 const { createMlTestAdminRoutes } = require('./routes/mlTestAdmin');
 const createAgentRoutes = require('./routes/agent');
 const { startPolling } = require('./services/telegramService');
+const { startTelegramTransportRecovery } = require('./services/telegramAssistantTransport');
 const { initializeDatabaseBackedServices, databaseStorageStatus } = require('./services/databaseStartup');
 
 // Import middleware
@@ -53,7 +55,7 @@ connectDB().then(async () => {
     // Calendar closure can advance without a sale. This refreshes durable
     // eligibility only; it does not fit a model or run a commercial operation.
     refreshWatermarks: () => require('./services/forecastMlUpdateCoordinator').refreshWatermarks(),
-    startPolling,
+    startPolling: () => { startPolling(); startTelegramTransportRecovery(); },
     onStorageDegraded: ({ reasonCode, stage }) => {
       databaseStorageDegraded = true;
       console.warn(JSON.stringify({ event: reasonCode, stage }));
@@ -93,6 +95,9 @@ app.use(limiter);
 const corsOptions = createCorsOptions(environmentConfiguration.corsAllowedOrigins);
 
 app.use(cors(corsOptions));
+
+// Telegram webhook has its own strict parser and must run before the general API parser.
+app.use('/api/telegram/webhook', createTelegramWebhookRoutes());
 
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
