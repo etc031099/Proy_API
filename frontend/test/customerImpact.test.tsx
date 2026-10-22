@@ -83,7 +83,7 @@ describe('CustomerImpact observational sale flow', () => {
     expect(readLatestCustomerImpact()?.captureStatus).toBe('AFTER_UNAVAILABLE');
   });
 
-  it('does not replace a complete same-context event with a newer partial capture', async () => {
+  it('allows a newer partial transaction to replace an older complete same-context event', async () => {
     vi.spyOn(apiClient, 'getCustomerClustering').mockResolvedValueOnce(response(clustering()))
       .mockResolvedValueOnce(response(clustering({ frequency: 6 })))
       .mockRejectedValueOnce(new Error('temporary'))
@@ -95,8 +95,9 @@ describe('CustomerImpact observational sale flow', () => {
     const previous = readLatestCustomerImpact();
     await registerCustomerSaleImpact({ ...completeSale, displayName: 'Cliente',
       submit: async () => ({ success: true }), getMetadata: () => ({ transactionId: 'sale-partial' }) });
-    expect(readLatestCustomerImpact()).toEqual(previous);
-    expect(readLatestCustomerImpact()?.transactionId).toBe('sale-complete');
+    expect(readLatestCustomerImpact()).not.toEqual(previous);
+    expect(readLatestCustomerImpact()).toMatchObject({ transactionId: 'sale-partial', captureStatus: 'BOTH_UNAVAILABLE',
+      before: null, after: null });
   });
 
   it('renders RFM and frozen K-Means comparisons without claiming retraining', async () => {

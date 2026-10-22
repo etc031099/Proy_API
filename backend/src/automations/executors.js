@@ -48,8 +48,10 @@ const transactionExecutor = type => ({
       }
     }
     return { id: String(result.transaction._id), type, currency: result.snapshot.currency, total: result.snapshot.totalAmount,
+      occurredAt: new Date(result.transaction.date).toISOString(),
       ...(type === 'sale' ? { customerId: result.transaction.customerId ? String(result.transaction.customerId) : null,
-        occurredAt: new Date(result.transaction.date).toISOString() } : {}),
+        } : { supplierId: result.transaction.vendorId ? String(result.transaction.vendorId) : null,
+        supplierName: redact(result.transaction.vendorName || result.transaction.supplierName || '') }),
       items: result.snapshot.items.map(item => ({ sku: item.sku, name: redact(item.name), quantity: item.quantity, stock: item.resultingStock })) };
   }
 });

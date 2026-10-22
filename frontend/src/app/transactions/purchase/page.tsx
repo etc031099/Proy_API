@@ -66,6 +66,7 @@ const getSupplierPurchasePrice = (product: Product | undefined, vendorId: string
 export default function AddPurchasePage() {
   const router = useRouter();
   const [products, setProducts] = useState<Product[]>([]);
+  const [selectedVendorName, setSelectedVendorName] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -98,6 +99,7 @@ export default function AddPurchasePage() {
 
   const handleVendorChange = (vendorId: string) => {
     form.setValue('vendorId', vendorId);
+    setSelectedVendorName(null);
     form.getValues('products').forEach((item, index) => {
       const currentProduct = products.find(product => product._id === item.productId);
       const remainsAvailable = getSupplierPurchasePrice(currentProduct, vendorId) !== undefined;
@@ -163,7 +165,8 @@ export default function AddPurchasePage() {
         isSuccessful: result => result.success,
         getMetadata: result => ({ operationId: typeof result.data?.transaction?._id === 'string' ? result.data.transaction._id : null,
           occurredAt: typeof result.data?.transaction?.date === 'string' ? result.data.transaction.date : null,
-          reference: typeof result.data?.transaction?.invoiceNumber === 'string' ? result.data.transaction.invoiceNumber : null }),
+          reference: typeof result.data?.transaction?.invoiceNumber === 'string' ? result.data.transaction.invoiceNumber : null,
+          counterparty: { role: 'SUPPLIER', id: data.vendorId || null, name: selectedVendorName } }),
       }) : await api.createTransaction(purchaseData);
 
       if (response.success) {
@@ -176,7 +179,10 @@ export default function AddPurchasePage() {
       }
     } catch (err: unknown) {
       console.error('Error creating purchase:', err);
-      setError((err as any).response?.data?.message || 'Error recording purchase');
+      const responseMessage = err && typeof err === 'object' && 'response' in err
+        ? (err as { response?: { data?: { message?: unknown } } }).response?.data?.message
+        : null;
+      setError(typeof responseMessage === 'string' ? responseMessage : 'Error recording purchase');
     } finally {
       setLoading(false);
     }
@@ -229,7 +235,8 @@ export default function AddPurchasePage() {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>{t('transactions.vendor')} *</FormLabel>
-                        <RemoteEntitySelect kind="vendor" label="proveedor" value={field.value || ''} onChange={handleVendorChange} />
+                        <RemoteEntitySelect kind="vendor" label="proveedor" value={field.value || ''} onChange={handleVendorChange}
+                          onSelect={entity => setSelectedVendorName(entity.name || null)} />
                         <FormMessage />
                       </FormItem>
                     )}

@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiClient } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { clearLatestSalesImpact, readLatestSalesImpact, SALES_IMPACT_CHANNEL, saveLatestSalesImpact } from '@/lib/salesImpactChannel';
+import { clearLatestSalesImpact, readLatestSalesImpact, SALES_IMPACT_CHANNEL, SALES_IMPACT_LOCAL_EVENT, saveLatestSalesImpact } from '@/lib/salesImpactChannel';
+import { mayReplaceImpact } from '@/lib/operationImpactIdentity';
 import { sameCustomerImpactContext } from '@/lib/customerImpactSnapshot';
 import type { SalesImpactEvent, SalesImpactMoney, SalesImpactSnapshot } from '@/lib/salesImpactSnapshot';
 import { isSalesImpactEvent } from '@/lib/salesImpactSnapshot';
@@ -34,6 +35,11 @@ export function SalesImpactPanel() {
   const verify = useCallback(async (event: SalesImpactEvent) => {
     const attempt = ++verification.current;
     setState({ event, verified: false, checking: true, message: null });
+    if (!event.businessContext.businessId || !event.businessContext.scenarioId || !event.businessContext.datasetVersion) {
+      if (mounted.current) setState({ event, verified: false, checking: false,
+        message: 'Venta confirmada; esperando contexto verificable para la comparación.' });
+      return;
+    }
     try {
       const response = await apiClient.getIntelligenceRevision();
       if (!mounted.current || attempt !== verification.current) return;
@@ -60,9 +66,14 @@ export function SalesImpactPanel() {
     const channel = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(SALES_IMPACT_CHANNEL);
     if (channel) channel.onmessage = message => {
       const event = message.data as SalesImpactEvent;
-      if (isSalesImpactEvent(event)) void verify(event);
+      if (isSalesImpactEvent(event) && mayReplaceImpact(event, readLatestSalesImpact())) {
+        saveLatestSalesImpact(event); void verify(event);
+      }
     };
-    return () => { mounted.current = false; channel?.close(); };
+    const onLocalImpact = (message: Event) => { const event = (message as CustomEvent<unknown>).detail;
+      if (isSalesImpactEvent(event) && mayReplaceImpact(event, readLatestSalesImpact())) { saveLatestSalesImpact(event); void verify(event); } };
+    window.addEventListener(SALES_IMPACT_LOCAL_EVENT, onLocalImpact);
+    return () => { mounted.current = false; channel?.close(); window.removeEventListener(SALES_IMPACT_LOCAL_EVENT, onLocalImpact); };
   }, [verify]);
 
   const event = state.event;

@@ -8,6 +8,7 @@ import { AgentActivity } from '@/components/assistant/AgentActivity';
 import { V3ResponseCards } from '@/components/assistant/V3ResponseCards';
 import { readLatestForecastImpactSale, clearLatestForecastImpactSale } from '@/lib/forecastImpactChannel';
 import * as saleImpactOrchestration from '@/lib/saleImpactOrchestration';
+import { clearLatestInventoryImpact, readLatestInventoryImpact } from '@/lib/inventoryImpactChannel';
 vi.mock('@/components/ProtectedRoute', () => ({ ProtectedRoute: ({ children }: { children: ReactNode }) => <>{children}</> }));
 vi.mock('@/components/Layout', () => ({ Layout: ({ children }: { children: ReactNode }) => <main>{children}</main> }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'user-a', businessId: 'business-a' } }) }));
@@ -27,17 +28,20 @@ const response: AgentResponse = {
     totalThoughtTokens: 0, totalCachedInputTokens: 0, totalToolUseTokens: 0, totalProviderLatencyMs: 0,
     totalLatencyMs: 100, toolSelectionCycles: 0, metricsComplete: true, agents: [] }
 };
-beforeEach(() => { send.mockReset(); localStorage.clear(); clearLatestForecastImpactSale(); vi.mocked(apiClient.listAgentConversations).mockResolvedValue({ success: true,
+beforeEach(() => { send.mockReset(); localStorage.clear(); clearLatestForecastImpactSale(); clearLatestInventoryImpact(); vi.mocked(apiClient.listAgentConversations).mockResolvedValue({ success: true,
   data: { items: [], pagination: { page: 1, limit: 10, total: 0, totalPages: 1 } } }); });
 function submit(text = 'stock bajo') { fireEvent.change(screen.getByLabelText('Tu consulta'), { target: { value: text } }); fireEvent.click(screen.getByRole('button', { name: 'Enviar' })); }
 it.each(['create_sale', 'create_purchase'] as const)('A6 %s confirmation refreshes activity without counting a write as a skill', async action => {
   const pending: NonNullable<AgentResponse['pendingAction']> = { pendingActionId: '33333333-3333-4333-8333-333333333333',
-    action, summary: 'Revisar operación', fields: { currency: 'PEN', total: 15.06 }, requiresConfirmation: true,
+    action, summary: 'Revisar operación', fields: { currency: 'PEN', total: 15.06, contact: 'Proveedor Demo' },
+    ...(action === 'create_purchase' ? { items: [{ sku: 'SKU-1', name: 'Producto Uno', quantity: 2, stock: 10, resultingStock: 12, price: 5, total: 10 }] } : {}), requiresConfirmation: true,
     expiresAt: '2099-01-01T00:00:00Z', status: 'PENDING' };
   send.mockResolvedValue({ success: true, data: { ...response, pendingAction: pending, actions: [], evidence: [],
     participants: [{ ...response.participants[0], skillCalls: 0 }], usage: { ...response.usage, totalSkillCalls: 0 } } });
   vi.mocked(apiClient.decideAgentAction).mockResolvedValue({ success: true, data: { ...pending, status: 'EXECUTED',
-    result: { id: 'operation-id', type: action === 'create_sale' ? 'sale' : 'purchase', total: 15.06, currency: 'PEN' } } });
+    result: { id: 'operation-id', type: action === 'create_sale' ? 'sale' : 'purchase', total: 15.06, currency: 'PEN',
+      ...(action === 'create_purchase' ? { occurredAt: '2026-10-22T16:00:00.000Z', supplierId: 'vendor-1', supplierName: 'Proveedor Demo',
+        items: [] } : {}) } } });
   render(<AssistantPage />); submit(action === 'create_sale' ? 'vende 1 producto' : 'compra 1 producto');
   fireEvent.click(await screen.findByRole('button', { name: 'Confirmar' }));
   await screen.findByText(`${action} · Ejecutada`);
@@ -48,6 +52,28 @@ it.each(['create_sale', 'create_purchase'] as const)('A6 %s confirmation refresh
   expect(activity.getByText('Respuesta determinística · 0 tokens IA')).toBeTruthy();
   expect(activity.getByText('Skills ejecutadas').nextElementSibling?.textContent).toBe('0');
   expect(activity.getByText('Llamadas IA').nextElementSibling?.textContent).toBe('0');
+  expect(apiClient.decideAgentAction).toHaveBeenCalledTimes(1);
+  if (action === 'create_purchase') {
+    expect(readLatestInventoryImpact()).toMatchObject({ type: 'PURCHASE_CREATED', operationId: 'operation-id',
+      transactionId: 'operation-id', counterparty: { role: 'SUPPLIER', id: 'vendor-1', name: 'Proveedor Demo' },
+      products: [{ sku: 'SKU-1', quantity: 2 }] });
+    expect(readLatestForecastImpactSale()).toBeNull();
+  }
+});
+it('keeps a confirmed Assistant purchase but reports inventory impact unavailable when no verified items exist', async () => {
+  const pending: NonNullable<AgentResponse['pendingAction']> = { pendingActionId: '44444444-4444-4444-8444-444444444444',
+    action: 'create_purchase', summary: 'Revisar compra', fields: { contact: 'Proveedor Demo' }, items: [], requiresConfirmation: true,
+    expiresAt: '2099-01-01T00:00:00Z', status: 'PENDING' };
+  vi.mocked(apiClient.decideAgentAction).mockResolvedValue({ success: true, data: { ...pending, status: 'EXECUTED',
+    result: { id: 'operation-no-items', type: 'purchase', occurredAt: '2026-10-22T16:00:00.000Z', supplierId: 'vendor-1',
+      supplierName: 'Proveedor Demo', items: [] } } });
+  send.mockResolvedValue({ success: true, data: { ...response, pendingAction: pending, actions: [], evidence: [] } });
+  render(<AssistantPage />); submit('compra revisada');
+  fireEvent.click(await screen.findByRole('button', { name: 'Confirmar' }));
+  await screen.findByText('Operación registrada correctamente.');
+  expect(readLatestInventoryImpact()).toMatchObject({ transactionId: 'operation-no-items', products: [],
+    baselineStatus: 'BASELINE_UNAVAILABLE', afterUnavailable: true });
+  expect(readLatestForecastImpactSale()).toBeNull();
   expect(apiClient.decideAgentAction).toHaveBeenCalledTimes(1);
 });
 it('A5.3 textual sale confirmation captures and publishes the completed sale once', async () => {

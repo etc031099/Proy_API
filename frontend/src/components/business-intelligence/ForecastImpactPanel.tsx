@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { clearLatestForecastImpactSale, isForecastImpactSaleMessage, readLatestForecastImpactSale, FORECAST_IMPACT_CHANNEL, type ForecastImpactSaleMessage } from '@/lib/forecastImpactChannel';
+import { clearLatestForecastImpactSale, isForecastImpactSaleMessage, readLatestForecastImpactSale, saveLatestForecastImpactSale, FORECAST_IMPACT_CHANNEL, FORECAST_IMPACT_LOCAL_EVENT, type ForecastImpactSaleMessage } from '@/lib/forecastImpactChannel';
+import { mayReplaceImpact } from '@/lib/operationImpactIdentity';
 import { readForecastImpactSnapshot, type ForecastImpactSnapshot, type ForecastImpactInference } from '@/lib/forecastImpactSnapshot';
 import { compareRidgeInferenceFeatures } from '@/lib/ridgeFeatures';
 
@@ -40,11 +41,16 @@ export function useForecastImpact() {
   const afterRequest = useRef(0);
   const refreshAfterSale = useCallback(async (sale: ForecastImpactSaleMessage, allowUnknownScope = false) => {
     const requestId = ++afterRequest.current;
+    const hasSaleScope = Boolean(sale.context.businessId && sale.context.scenarioId && sale.context.datasetVersion);
     setState({ baseline: null, after: null, sale: null, pendingSale: sale, allowUnknownScope, loadingAfter: true,
       error: sale.baselineUnavailable ? 'Estado previo no disponible; la venta sí se registró.' : null });
+    if (!hasSaleScope) {
+      setState(current => requestId === afterRequest.current ? { ...current, loadingAfter: true,
+        error: 'Venta confirmada; esperando contexto verificable para leer el estado posterior.' } : current);
+      return;
+    }
     try {
       const snapshot = await readForecastImpactSnapshot(sale.products.map(({ sku, name }) => ({ sku, name })));
-      const hasSaleScope = Boolean(sale.context.businessId && sale.context.scenarioId && sale.context.datasetVersion);
       const hasCurrentScope = Boolean(snapshot.context.businessId && snapshot.context.scenarioId && snapshot.context.datasetVersion);
       const scoped = hasSaleScope && hasCurrentScope
         && snapshot.context.businessId === sale.context.businessId
@@ -75,10 +81,18 @@ export function useForecastImpact() {
 
   useEffect(() => {
     const channel = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(FORECAST_IMPACT_CHANNEL);
-    if (channel) channel.onmessage = event => { if (isForecastImpactSaleMessage(event.data)) void refreshAfterSale(event.data, true); };
+    if (channel) channel.onmessage = event => { if (isForecastImpactSaleMessage(event.data)
+      && mayReplaceImpact(event.data, readLatestForecastImpactSale())) {
+      saveLatestForecastImpactSale(event.data); void refreshAfterSale(event.data, true);
+    } };
+    const onLocalImpact = (event: Event) => { const detail = (event as CustomEvent<unknown>).detail;
+      if (isForecastImpactSaleMessage(detail) && mayReplaceImpact(detail, readLatestForecastImpactSale())) {
+        saveLatestForecastImpactSale(detail); void refreshAfterSale(detail, true);
+      } };
+    window.addEventListener(FORECAST_IMPACT_LOCAL_EVENT, onLocalImpact);
     const saved = readLatestForecastImpactSale();
     if (saved) void refreshAfterSale(saved);
-    return () => channel?.close();
+    return () => { channel?.close(); window.removeEventListener(FORECAST_IMPACT_LOCAL_EVENT, onLocalImpact); };
   }, [refreshAfterSale]);
 
   return { ...state, retryAfterSale: () => {

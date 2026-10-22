@@ -37,7 +37,7 @@ const shape = {
   pendingAction: { pendingActionId: true, action: true, summary: true, status: true, expiresAt: true, customerId: true,
     requiresConfirmation: true, fields: { name: true, sku: true, price: true, currency: true, stock: true, resultingStock: true,
       minStockLevel: true, category: true, costPrice: true, description: true, supplierCosts: true, total: true, paymentMethod: true, contact: true },
-    items: [actionItem], result: { id: true, type: true, currency: true, total: true, customerId: true, occurredAt: true, sku: true, name: true, stock: true, needsSupplierSetup: true, items: [actionItem],
+    items: [actionItem], result: { id: true, type: true, currency: true, total: true, customerId: true, supplierId: true, supplierName: true, occurredAt: true, sku: true, name: true, stock: true, needsSupplierSetup: true, items: [actionItem],
       ruleConfigured: true, operator: true, threshold: true, alreadyExists: true } },
   requestId: true, conversationId: true, answer: true, intent: true, agent: true, synthesisStatus: true, synthesisDiagnostic: true,
   requiresClarification: true, clarificationQuestion: true, latencyMs: true,

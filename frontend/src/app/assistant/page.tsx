@@ -15,6 +15,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { activeConversationKey, readActiveConversation, writeActiveConversation } from '@/lib/agentHistory';
 import { apiClient, AgentApiError, agentErrorMessage } from '@/lib/api';
 import { registerSaleWithImpacts } from '@/lib/saleImpactOrchestration';
+import { confirmedPurchaseImpactProducts, publishConfirmedInventoryOperation } from '@/lib/inventoryImpactSnapshot';
 import type { AgentMessageRequest, AgentResponse, AgentConversationList, HistoryPagination, PendingActionPreview } from '@/types/agent';
 
 const suggestions = ['Muéstrame los productos con stock bajo', '¿Cuánto vendimos este mes?',
@@ -153,6 +154,7 @@ export default function AssistantPage() {
         customerId: pendingSale.customerId || null,
         displayName: String(pendingSale.fields.contact || 'Cliente'),
         actionKey: pendingSale.pendingActionId,
+        actionScope: `${scope || 'anonymous'}:${conversationId || request.input.conversationId || 'new'}`,
         submit: sendRequest,
         isSuccessful: value => value.success === true && value.data?.pendingAction?.status === 'EXECUTED'
           && value.data.pendingAction.result?.type === 'sale',
@@ -229,7 +231,9 @@ export default function AssistantPage() {
                 onConfirmSale={(action, confirm) => registerSaleWithImpacts({
                   products: (action.items || []).map(item => ({ sku: item.sku, name: item.name, quantity: item.quantity })),
                   customerId: action.customerId || null, displayName: String(action.fields.contact || 'Cliente'),
-                  actionKey: action.pendingActionId, submit: confirm,
+                  actionKey: action.pendingActionId,
+                  actionScope: `${storageKey || 'anonymous'}:${m.response?.conversationId || conversationId || 'new'}`,
+                  submit: confirm,
                   isSuccessful: value => value.status === 'EXECUTED' && value.result?.type === 'sale',
                   getMetadata: value => ({ transactionId: value.result?.id || null, occurredAt: value.result?.occurredAt || null,
                     customerId: value.result?.customerId || action.customerId || null,
@@ -237,6 +241,15 @@ export default function AssistantPage() {
                     currency: value.result?.currency || null }),
                 })}
                 onActionChange={action => {
+                  if (action.action === 'create_purchase' && action.status === 'EXECUTED'
+                    && action.result?.type === 'purchase') {
+                    const resultItems = Array.isArray(action.result.items) ? action.result.items : [];
+                    const verifiedItems = confirmedPurchaseImpactProducts(resultItems, action.items);
+                    publishConfirmedInventoryOperation({ type: 'PURCHASE_CREATED', operationId: action.result.id,
+                      occurredAt: action.result.occurredAt, counterparty: { role: 'SUPPLIER',
+                        id: action.result.supplierId || null, name: action.result.supplierName || String(action.fields.contact || '') || null },
+                      products: verifiedItems });
+                  }
                   if (action.action === 'create_sale' && action.pendingActionId === currentPendingSale.current?.pendingActionId
                     && action.status !== 'PENDING') currentPendingSale.current = undefined;
                   setMessages(current => current.map(message => message.id === m.id && message.response?.pendingAction?.pendingActionId === action.pendingActionId

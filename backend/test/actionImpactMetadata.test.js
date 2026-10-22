@@ -29,3 +29,15 @@ test('unassociated sale exposes null customer and non-sale actions expose no cus
   assert.equal(view({ ...base, actionSkillId: 'create_sale' }).customerId, null);
   assert.equal(Object.hasOwn(view({ ...base, actionSkillId: 'create_purchase' }), 'customerId'), false);
 });
+
+test('purchase action projection keeps only transaction identity, date and supplier metadata for inventory impact', () => {
+  const row = { pendingActionId: '33333333-3333-4333-8333-333333333333', actionSkillId: 'create_purchase',
+    summary: 'Compra', expiresAt: occurredAt, requiresConfirmation: true, status: 'EXECUTED', preview: { fields: {} },
+    result: { id: 'purchase-1', type: 'purchase', occurredAt: occurredAt.toISOString(), supplierId: customerId,
+      supplierName: 'Proveedor Demo', secret: 'never-project', items: [{ sku: 'SKU-1', name: 'Producto', quantity: 2, stock: 12 }] } };
+  const projected = publicResponse({ pendingAction: view(row) }).pendingAction;
+  assert.deepEqual(projected.result, { id: 'purchase-1', type: 'purchase', occurredAt: occurredAt.toISOString(),
+    supplierId: customerId, supplierName: 'Proveedor Demo', items: [{ sku: 'SKU-1', name: 'Producto', quantity: 2, stock: 12 }] });
+  assert.equal('customerId' in projected, false);
+  assert.equal('secret' in projected.result, false);
+});

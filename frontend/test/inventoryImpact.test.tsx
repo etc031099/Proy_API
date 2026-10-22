@@ -36,6 +36,7 @@ function setReadMocks(afterStock = 16) {
     businessId: 'demo', scenarioId: 'v3', datasetVersion: 'v1', asOf: '2026-10-20', dataVersion: '174',
   } } as never);
   vi.spyOn(apiClient, 'getBusinessIntelligenceProductInventory').mockImplementation(async sku => ({ success: true, data: inventory(sku, afterStock) } as never));
+  vi.spyOn(apiClient, 'getProductOperationDetail').mockResolvedValue({ success: true, data: { inventoryMovements: [] } } as never);
 }
 function baseline(): InventoryImpactSnapshot {
   return { context: { businessId: 'demo', scenarioId: 'v3', datasetVersion: 'v1' }, complete: true,
@@ -87,11 +88,19 @@ describe('InventoryImpact observational flow', () => {
       expect(readLatestInventoryImpact()?.products).toEqual([
         { sku: 'SKU-A', name: 'Producto A', quantity: 5 }, { sku: 'SKU-B', name: 'Producto B', quantity: 1 },
       ]);
-      expect(apiClient.getBusinessIntelligenceProductInventory).toHaveBeenCalledTimes(4);
-      expect(readLatestInventoryImpact()?.after?.complete).toBe(true);
-      for (const sku of ['SKU-A', 'SKU-B']) {
-        expect(readLatestInventoryImpact()?.baseline.products[sku].demand).toEqual(
-          readLatestInventoryImpact()?.after?.products[sku].demand);
+      if (type === 'PURCHASE_CREATED') {
+        expect(apiClient.getBusinessIntelligenceProductInventory).toHaveBeenCalledTimes(2);
+        expect(readLatestInventoryImpact()?.baselineStatus).toBe('BASELINE_UNAVAILABLE');
+        await waitFor(() => expect(readLatestInventoryImpact()?.afterPending).toBe(false));
+        expect(readLatestInventoryImpact()?.after?.complete).toBe(true);
+        expect(readLatestInventoryImpact()?.baseline.products['SKU-A'].demand).toBeNull();
+      } else {
+        expect(apiClient.getBusinessIntelligenceProductInventory).toHaveBeenCalledTimes(4);
+        expect(readLatestInventoryImpact()?.after?.complete).toBe(true);
+        for (const sku of ['SKU-A', 'SKU-B']) {
+          expect(readLatestInventoryImpact()?.baseline.products[sku].demand).toEqual(
+            readLatestInventoryImpact()?.after?.products[sku].demand);
+        }
       }
       clearLatestInventoryImpact();
       await recordInventoryOperation({ type, products, submit: async () => ({ success: false }), isSuccessful: result => result.success,
@@ -157,7 +166,8 @@ describe('InventoryImpact observational flow', () => {
     expect(screen.getByRole('region', { name: 'Reglas derivadas' })).toBeTruthy();
     expect(screen.getByRole('region', { name: 'Clasificación' })).toBeTruthy();
     expect(screen.getByText(/Tasa diaria derivada/).closest('div')?.textContent).toContain('1.2 → 1.2');
-    act(() => publishInventoryImpact(event('PURCHASE_CREATED')));
+    act(() => publishInventoryImpact({ ...event('PURCHASE_CREATED'), operationId: 'purchase-operation',
+      transactionId: 'purchase-operation', occurredAt: '2026-10-20T17:01:00.000Z' }));
     await waitFor(() => expect(document.body.textContent).toContain('Compra inmediata: aumenta el stock.'));
     expect(apiClient.analyzeMlTestScenario).not.toHaveBeenCalled();
     expect(apiClient.createMlTestCheckpoint).not.toHaveBeenCalled();
@@ -232,7 +242,7 @@ describe('InventoryImpact observational flow', () => {
 
   it('serializes one latest event and replaces the prior operation', () => {
     const first = event('SALE');
-    const second = { ...event('INVENTORY_ADJUSTMENT'), operationId: 'new-operation' };
+    const second = { ...event('INVENTORY_ADJUSTMENT'), operationId: 'new-operation', occurredAt: '2026-10-20T17:01:00.000Z' };
     publishInventoryImpact(first);
     publishInventoryImpact(second);
     expect(readLatestInventoryImpact()).toEqual(second);

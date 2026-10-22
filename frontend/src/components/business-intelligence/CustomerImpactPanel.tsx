@@ -4,12 +4,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiClient } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { clearLatestCustomerImpact, CUSTOMER_IMPACT_CHANNEL, readLatestCustomerImpact, saveLatestCustomerImpact } from '@/lib/customerImpactChannel';
+import { clearLatestCustomerImpact, CUSTOMER_IMPACT_CHANNEL, CUSTOMER_IMPACT_LOCAL_EVENT, readLatestCustomerImpact, saveLatestCustomerImpact } from '@/lib/customerImpactChannel';
 import { CUSTOMER_FEATURE_ORDER, isCustomerImpactEvent, readCustomerFeatureInputs, sameCustomerImpactContext, type CustomerImpactEvent, type CustomerImpactSnapshot } from '@/lib/customerImpactSnapshot';
+import { mayReplaceImpact } from '@/lib/operationImpactIdentity';
 
 type ImpactState = { event: CustomerImpactEvent | null; verified: boolean; loading: boolean; message: string | null };
 const RETRY_DELAY_MS = 30000;
 const MAX_RETRIES = 2;
+function invalidateRequest(ref: { current: number }): void { ref.current++; }
 const number = (value: number | null | undefined, digits = 2) => value == null ? 'No disponible'
   : new Intl.NumberFormat('es-PE', { maximumFractionDigits: digits }).format(value);
 const money = (value: number | null) => value === null ? 'No disponible'
@@ -48,13 +50,16 @@ function explainImpact(before: CustomerImpactSnapshot | null, after: CustomerImp
 export function CustomerImpactPanel() {
   const [state, setState] = useState<ImpactState>({ event: null, verified: false, loading: false, message: null });
   const retries = useRef(0);
+  const verification = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mounted = useRef(true);
 
   const verify = useCallback(async (event: CustomerImpactEvent, allowRetry = true) => {
+    const attempt = ++verification.current;
     setState({ event, verified: false, loading: true, message: null });
     try {
       const response = await apiClient.getIntelligenceRevision();
+      if (attempt !== verification.current) return;
       if (!response.success || !response.data) throw new Error('revision unavailable');
       const context = { businessId: response.data.businessId, scenarioId: response.data.scenarioId,
         datasetVersion: response.data.datasetVersion };
@@ -66,6 +71,7 @@ export function CustomerImpactPanel() {
       retries.current = 0;
       if (mounted.current) setState({ event, verified: true, loading: false, message: null });
     } catch {
+      if (attempt !== verification.current) return;
       saveLatestCustomerImpact(event);
       if (mounted.current) setState({ event, verified: false, loading: false,
         message: 'No se pudo confirmar temporalmente el contexto. La comparación se conserva.' });
@@ -83,9 +89,19 @@ export function CustomerImpactPanel() {
     const channel = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(CUSTOMER_IMPACT_CHANNEL);
     if (channel) channel.onmessage = message => {
       const event: unknown = message.data;
-      if (isCustomerImpactEvent(event)) { retries.current = 0; if (timer.current) clearTimeout(timer.current); timer.current = null; void verify(event); }
+      if (isCustomerImpactEvent(event) && mayReplaceImpact({ ...event, operationType: 'SALE' },
+        readLatestCustomerImpact() ? { ...readLatestCustomerImpact()!, operationType: 'SALE' } : null)) {
+        saveLatestCustomerImpact(event); retries.current = 0; if (timer.current) clearTimeout(timer.current); timer.current = null; void verify(event);
+      }
     };
-    return () => { mounted.current = false; channel?.close(); if (timer.current) clearTimeout(timer.current); };
+    const onLocalImpact = (message: Event) => { const event: unknown = (message as CustomEvent<unknown>).detail;
+      if (isCustomerImpactEvent(event) && mayReplaceImpact({ ...event, operationType: 'SALE' },
+        readLatestCustomerImpact() ? { ...readLatestCustomerImpact()!, operationType: 'SALE' } : null)) {
+        saveLatestCustomerImpact(event); retries.current = 0; if (timer.current) clearTimeout(timer.current); timer.current = null; void verify(event);
+      } };
+    window.addEventListener(CUSTOMER_IMPACT_LOCAL_EVENT, onLocalImpact);
+    return () => { mounted.current = false; invalidateRequest(verification); channel?.close(); window.removeEventListener(CUSTOMER_IMPACT_LOCAL_EVENT, onLocalImpact);
+      if (timer.current) clearTimeout(timer.current); };
   }, [verify]);
 
   if (!state.event && !state.loading && !state.message) return <Card>

@@ -1,10 +1,14 @@
 import type { InventoryImpactEvent, InventoryImpactSnapshot } from './inventoryImpactSnapshot';
+import { mayReplaceImpact } from './operationImpactIdentity';
 
 export const INVENTORY_IMPACT_CHANNEL = 'business-intelligence-inventory-operation-v1';
 export const INVENTORY_IMPACT_SESSION_KEY = 'business-intelligence.latest-inventory-impact.v1';
 
 export function publishInventoryImpact(event: InventoryImpactEvent): void {
+  if (!mayReplaceImpact({ ...event, transactionId: event.transactionId || event.operationId },
+    latestInventoryIdentity())) return;
   saveLatestInventoryImpact(event);
+  dispatchLocalInventoryImpact(event);
   if (typeof BroadcastChannel === 'undefined') return;
   try {
     const channel = new BroadcastChannel(INVENTORY_IMPACT_CHANNEL);
@@ -13,9 +17,31 @@ export function publishInventoryImpact(event: InventoryImpactEvent): void {
   } catch { /* Broadcasting is optional; the completed operation must remain successful. */ }
 }
 
+export const INVENTORY_IMPACT_LOCAL_EVENT = 'business-intelligence:inventory-operation-impact';
+export function dispatchLocalInventoryImpact(event: InventoryImpactEvent): void {
+  try {
+    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(INVENTORY_IMPACT_LOCAL_EVENT, { detail: event }));
+  } catch { /* Same-tab delivery is optional; session storage remains the recovery channel. */ }
+}
+
+export function publishInventoryImpactIfCurrent(event: InventoryImpactEvent, expected: InventoryImpactEvent): void {
+  const current = readLatestInventoryImpact();
+  if (!expected.operationId || current?.operationId !== expected.operationId
+    || current.transactionId !== expected.transactionId || current.type !== expected.type
+    || current.occurredAt !== expected.occurredAt) return;
+  publishInventoryImpact(event);
+}
+
 export function saveLatestInventoryImpact(event: InventoryImpactEvent): void {
+  if (!mayReplaceImpact({ ...event, transactionId: event.transactionId || event.operationId },
+    latestInventoryIdentity())) return;
   try { if (typeof window !== 'undefined') window.sessionStorage.setItem(INVENTORY_IMPACT_SESSION_KEY, JSON.stringify(event)); }
   catch { /* Session storage is an optional recovery channel. */ }
+}
+
+function latestInventoryIdentity(): (InventoryImpactEvent & { transactionId: string | null }) | null {
+  const event = readLatestInventoryImpact();
+  return event ? { ...event, transactionId: event.transactionId || event.operationId } : null;
 }
 
 export function isInventoryImpactEvent(value: unknown): value is InventoryImpactEvent {
@@ -23,12 +49,16 @@ export function isInventoryImpactEvent(value: unknown): value is InventoryImpact
   const row = value as Partial<InventoryImpactEvent>;
   return row.version === 1 && ['SALE', 'SALE_CANCELLED', 'PURCHASE_CREATED', 'INVENTORY_ADJUSTMENT'].includes(row.type || '')
     && (row.operationId === null || typeof row.operationId === 'string')
+    && (row.transactionId === undefined || row.transactionId === null || typeof row.transactionId === 'string')
     && typeof row.occurredAt === 'string' && Number.isFinite(Date.parse(row.occurredAt))
     && (row.reference === null || typeof row.reference === 'string') && row.operationSucceeded === true
+    && (row.counterparty === undefined || row.counterparty === null || (typeof row.counterparty === 'object'
+      && ['CUSTOMER', 'SUPPLIER'].includes(row.counterparty.role) && (row.counterparty.id === null || typeof row.counterparty.id === 'string')
+      && (row.counterparty.name === null || typeof row.counterparty.name === 'string')))
     && Array.isArray(row.products) && row.products.every(item => item && typeof item.sku === 'string'
       && typeof item.name === 'string' && Number.isSafeInteger(item.quantity) && item.quantity > 0)
     && isSnapshot(row.baseline) && ['AVAILABLE', 'PARTIAL', 'BASELINE_UNAVAILABLE'].includes(row.baselineStatus || '')
-    && (row.after === null || isSnapshot(row.after)) && isContext(row.context)
+    && (row.after === null || isSnapshot(row.after)) && (row.afterPending === undefined || typeof row.afterPending === 'boolean') && isContext(row.context)
     && contextEqual(row.context, row.baseline.context)
     && (row.after === null || contextEqual(row.context, row.after.context)) && typeof row.afterUnavailable === 'boolean';
 }

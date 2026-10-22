@@ -4,8 +4,8 @@ import { useEffect, useMemo, useState } from 'react';
 import type { AssociationsAnalytics } from '@/types/businessIntelligence';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { FORECAST_IMPACT_CHANNEL, isForecastImpactSaleMessage, readLatestForecastImpactSale, type ForecastImpactSaleMessage } from '@/lib/forecastImpactChannel';
-import { INVENTORY_IMPACT_CHANNEL, isInventoryImpactEvent, readLatestInventoryImpact, sameContext } from '@/lib/inventoryImpactChannel';
+import { FORECAST_IMPACT_CHANNEL, FORECAST_IMPACT_LOCAL_EVENT, isForecastImpactSaleMessage, readLatestForecastImpactSale, type ForecastImpactSaleMessage } from '@/lib/forecastImpactChannel';
+import { INVENTORY_IMPACT_CHANNEL, INVENTORY_IMPACT_LOCAL_EVENT, isInventoryImpactEvent, readLatestInventoryImpact, sameContext } from '@/lib/inventoryImpactChannel';
 import { associationExplanation, makeAssociationImpact, readAssociationImpact, relatedAssociationRules, saveAssociationImpact, type AssociationImpactEvent } from '@/lib/associationImpact';
 
 function latestSale(): ForecastImpactSaleMessage | null {
@@ -24,14 +24,18 @@ export function AssociationImpactPanel({ data, loading = false }: { data: Associ
   const [sale, setSale] = useState(latestSale);
   const [cancellation, setCancellation] = useState(readLatestInventoryImpact);
   useEffect(() => {
-    if (typeof BroadcastChannel === 'undefined') return;
-    const sales = new BroadcastChannel(FORECAST_IMPACT_CHANNEL);
-    const inventory = new BroadcastChannel(INVENTORY_IMPACT_CHANNEL);
-    sales.onmessage = message => { if (isForecastImpactSaleMessage(message.data)) setSale(message.data); };
-    inventory.onmessage = message => {
-      if (isInventoryImpactEvent(message.data) && message.data.type === 'SALE_CANCELLED') setCancellation(message.data);
-    };
-    return () => { sales.close(); inventory.close(); };
+    const sales = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(FORECAST_IMPACT_CHANNEL);
+    const inventory = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(INVENTORY_IMPACT_CHANNEL);
+    const onSale = (value: unknown) => { if (isForecastImpactSaleMessage(value)) setSale(value); };
+    const onInventory = (value: unknown) => { if (isInventoryImpactEvent(value) && value.type === 'SALE_CANCELLED') setCancellation(value); };
+    if (sales) sales.onmessage = message => onSale(message.data);
+    if (inventory) inventory.onmessage = message => onInventory(message.data);
+    const onLocalSale = (message: Event) => onSale((message as CustomEvent<unknown>).detail);
+    const onLocalInventory = (message: Event) => onInventory((message as CustomEvent<unknown>).detail);
+    window.addEventListener(FORECAST_IMPACT_LOCAL_EVENT, onLocalSale);
+    window.addEventListener(INVENTORY_IMPACT_LOCAL_EVENT, onLocalInventory);
+    return () => { sales?.close(); inventory?.close(); window.removeEventListener(FORECAST_IMPACT_LOCAL_EVENT, onLocalSale);
+      window.removeEventListener(INVENTORY_IMPACT_LOCAL_EVENT, onLocalInventory); };
   }, []);
   const event = useMemo<AssociationImpactEvent | null>(() => {
     if (!sale || !data) return null;

@@ -4,12 +4,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { clearLatestInventoryImpact, isInventoryImpactEvent, INVENTORY_IMPACT_CHANNEL, readLatestInventoryImpact, sameContext, saveLatestInventoryImpact } from '@/lib/inventoryImpactChannel';
+import { clearLatestInventoryImpact, isInventoryImpactEvent, INVENTORY_IMPACT_CHANNEL, INVENTORY_IMPACT_LOCAL_EVENT, readLatestInventoryImpact, sameContext, saveLatestInventoryImpact } from '@/lib/inventoryImpactChannel';
 import { readInventoryImpactContext, type InventoryImpactEvent, type InventoryImpactProductSnapshot, type InventoryImpactSnapshot, type InventoryImpactType } from '@/lib/inventoryImpactSnapshot';
+import { mayReplaceImpact } from '@/lib/operationImpactIdentity';
 
 type State = { event: InventoryImpactEvent | null; after: InventoryImpactSnapshot | null; loading: boolean; error: string | null };
+type InventoryImpactIdentity = Omit<InventoryImpactEvent, 'transactionId'> & { transactionId: string | null };
 const IMPACT_CONTEXT_RETRY_DELAY_MS = 30000;
 const MAX_IMPACT_CONTEXT_RETRIES = 2;
+function invalidateRequest(ref: { current: number }): void { ref.current++; }
 const operationLabels: Record<InventoryImpactType, string> = { SALE: 'Venta', SALE_CANCELLED: 'Anulación de venta',
   PURCHASE_CREATED: 'Compra inmediata', INVENTORY_ADJUSTMENT: 'Ajuste de inventario' };
 function number(value: number | null | undefined): string { return typeof value === 'number' && Number.isFinite(value)
@@ -26,6 +29,7 @@ export function useInventoryImpact() {
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryCount = useRef(0);
   const retryOperation = useRef<string | null>(null);
+  const activeRefresh = useRef(0);
   const retryRefresh = useRef<(event: InventoryImpactEvent) => void>(() => {});
   const scheduleRetry = (event: InventoryImpactEvent) => {
     if (retryTimer.current || retryCount.current >= MAX_IMPACT_CONTEXT_RETRIES) return;
@@ -36,16 +40,20 @@ export function useInventoryImpact() {
     }, IMPACT_CONTEXT_RETRY_DELAY_MS);
   };
   const refresh = useCallback(async (event: InventoryImpactEvent) => {
+    const requestId = ++activeRefresh.current;
     const operationKey = `${event.operationId ?? ''}:${event.occurredAt}`;
     if (retryOperation.current !== operationKey) { retryOperation.current = operationKey; retryCount.current = 0; }
     if (retryTimer.current) { clearTimeout(retryTimer.current); retryTimer.current = null; }
     setState({ event: null, after: null, loading: true, error: null });
     if (!event.context.businessId || !event.context.scenarioId || !event.context.datasetVersion) {
-      setState({ event: null, after: null, loading: false, error: 'No se pudo confirmar el contexto del estado previo. La operación se conserva, pero no se mostrarán comparaciones.' });
+      setState({ event, after: event.after, loading: false, error: event.afterPending
+        ? 'Operación confirmada; recopilando evidencia posterior.'
+        : 'No se pudo confirmar el contexto. La operación se conserva sin comparación completa.' });
       return;
     }
     try {
       const currentContext = await readInventoryImpactContext();
+      if (requestId !== activeRefresh.current) return;
       if (!currentContext) {
         setState({ event: null, after: null, loading: false, error: 'No se pudo verificar temporalmente el contexto. La operación se conserva y se reintentará.' });
         scheduleRetry(event);
@@ -65,11 +73,13 @@ export function useInventoryImpact() {
       }
       const verifiedEvent = { ...event, after, afterUnavailable: !after?.complete };
       if (after?.complete) retryCount.current = 0;
-      setState({ event: verifiedEvent, after, loading: false, error: !after?.complete
+      setState({ event: verifiedEvent, after, loading: false, error: event.afterPending
+        ? 'Operación confirmada; recopilando evidencia posterior.' : !after?.complete
         ? 'La operación se registró, pero no fue posible completar la comparación de inventario.'
         : event.baselineStatus === 'AVAILABLE' ? null : event.baselineStatus === 'BASELINE_UNAVAILABLE'
           ? 'Estado previo no disponible; la operación sí se registró.' : 'Comparación parcial: faltó el estado previo de uno o más productos.' });
     } catch {
+      if (requestId !== activeRefresh.current) return;
       const failed = { ...event, after: event.after, afterUnavailable: !event.after?.complete };
       saveLatestInventoryImpact(failed);
       setState({ event: null, after: null, loading: false, error: 'No se pudo verificar temporalmente el contexto. La operación se conserva y se reintentará.' });
@@ -79,13 +89,32 @@ export function useInventoryImpact() {
   retryRefresh.current = refresh;
   useEffect(() => {
     const channel = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(INVENTORY_IMPACT_CHANNEL);
-    if (channel) channel.onmessage = event => { if (isInventoryImpactEvent(event.data)) void refresh(event.data); };
+    if (channel) channel.onmessage = event => { if (isInventoryImpactEvent(event.data)
+      && mayReplaceImpact({ ...event.data, transactionId: event.data.transactionId || event.data.operationId },
+        latestInventoryIdentity())) {
+      saveLatestInventoryImpact(event.data); void refresh(event.data);
+    } };
+    const onLocalImpact = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>).detail;
+      if (isInventoryImpactEvent(detail) && mayReplaceImpact({ ...detail, transactionId: detail.transactionId || detail.operationId },
+        latestInventoryIdentity())) {
+        saveLatestInventoryImpact(detail); void refresh(detail);
+      }
+    };
+    window.addEventListener(INVENTORY_IMPACT_LOCAL_EVENT, onLocalImpact);
     const saved = readLatestInventoryImpact();
     if (saved) void refresh(saved);
-    return () => { channel?.close(); if (retryTimer.current) clearTimeout(retryTimer.current); };
+    return () => { channel?.close(); window.removeEventListener(INVENTORY_IMPACT_LOCAL_EVENT, onLocalImpact);
+      if (retryTimer.current) clearTimeout(retryTimer.current); };
   }, [refresh]);
+  useEffect(() => () => { invalidateRequest(activeRefresh); }, []);
   useEffect(() => () => { if (retryTimer.current) clearTimeout(retryTimer.current); }, []);
   return { ...state, retry: () => { const saved = state.event || readLatestInventoryImpact(); if (saved) { retryCount.current = 0; void refresh(saved); } } };
+}
+
+function latestInventoryIdentity(): InventoryImpactIdentity | null {
+  const event = readLatestInventoryImpact();
+  return event ? { ...event, transactionId: event.transactionId || event.operationId } : null;
 }
 
 function hasContextIdentity(context: InventoryImpactSnapshot['context']): boolean {
@@ -100,20 +129,23 @@ export function InventoryImpactSummaryCard({ impact, onNavigate }: { impact: Ret
   return <Card><CardHeader className="pb-3"><CardTitle>Impacto operativo reciente</CardTitle>
     <CardDescription>La comparación completa está en la pestaña Inventario.</CardDescription></CardHeader>
     <CardContent className="space-y-2 text-sm"><p><span className="font-medium">{operationLabels[event.type]}</span>{event.reference ? ` · ${event.reference}` : ''} · {date(event.occurredAt)}</p>
-      <p className="text-muted-foreground">{event.products.length} producto(s) · {count} unidad(es) · Inventario: {impact.loading ? 'lectura posterior en curso' : impact.after ? 'estado posterior consultado' : 'comparación parcial'}</p>
+      <p className="text-muted-foreground">{event.products.length ? `${event.products.length} producto(s) · ${count} unidad(es)` : 'Productos no disponibles en el resultado confirmado'} · Inventario: {event.afterPending || impact.loading ? 'evidencia posterior en curso' : impact.after ? 'estado posterior consultado' : 'comparación parcial'}</p>
+      {event.counterparty?.name && <p className="text-muted-foreground">{event.counterparty.role === 'SUPPLIER' ? 'Proveedor' : 'Cliente'}: {event.counterparty.name}</p>}
       <Button type="button" size="sm" variant="link" className="h-auto px-0" onClick={onNavigate}>Ver impacto en Inventario</Button></CardContent></Card>;
 }
 
 export function InventoryImpactDetailCard({ impact }: { impact: ReturnType<typeof useInventoryImpact> }) {
   const { event, after, loading, error } = impact;
   if (!event) return <section aria-label="Impacto de última operación" className="rounded-lg border bg-muted/20 px-3 py-2 text-sm text-muted-foreground">{loading ? 'Validando el contexto de la última operación…' : error || 'La próxima venta, anulación, compra inmediata o ajuste de stock se comparará aquí con el estado de inventario.'}</section>;
-  const unavailableBefore = event.baselineStatus !== 'AVAILABLE';
+  const unavailableBefore = event.baselineStatus === 'BASELINE_UNAVAILABLE';
   return <Card><CardHeader><CardTitle>Impacto de la última operación</CardTitle>
-    <CardDescription>{operationLabels[event.type]}{event.reference ? ` · ${event.reference}` : ''} · {date(event.occurredAt)} · {event.products.length} producto(s) · {event.products.reduce((sum, row) => sum + row.quantity, 0)} unidad(es)</CardDescription></CardHeader>
+    <CardDescription>{operationLabels[event.type]}{event.reference ? ` · ${event.reference}` : ''} · {date(event.occurredAt)} · {event.products.length ? `${event.products.length} producto(s) · ${event.products.reduce((sum, row) => sum + row.quantity, 0)} unidad(es)` : 'Productos no disponibles en el resultado confirmado'}</CardDescription></CardHeader>
     <CardContent className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground"><Badge variant="outline">Comparación observacional</Badge><span>Otros cambios concurrentes podrían influir en los valores posteriores; la comparación no es atómica.</span></div>
+      {event.counterparty?.name && <p className="text-sm">{event.counterparty.role === 'SUPPLIER' ? 'Proveedor' : 'Cliente'}: {event.counterparty.name}</p>}
+      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground"><Badge variant="outline">Comparación observacional</Badge><span>Stock BEFORE/AFTER usa el movimiento ligado a esta transacción cuando existe. No se reconstruyen reglas históricas desde el stock actual; otros cambios concurrentes podrían influir en lecturas posteriores.</span></div>
       {error && <div role="status" className="flex flex-wrap items-center gap-2 text-sm"><span>{error}</span>{!loading && !event.afterUnavailable && <Button type="button" size="sm" variant="outline" onClick={impact.retry}>Revalidar contexto</Button>}</div>}
-      {loading && <p role="status" className="text-sm text-muted-foreground">Leyendo el estado posterior del inventario…</p>}
+      {(loading || event.afterPending) && <p role="status" className="text-sm text-muted-foreground">Leyendo el estado posterior del inventario…</p>}
+      {!event.products.length && <p role="status" className="text-sm text-muted-foreground">La compra fue confirmada; no hay productos verificables para comparar el impacto de inventario.</p>}
       <div className="space-y-3">{event.products.map(product => {
         const before = event.baseline.products[product.sku];
         const current = after?.products[product.sku];

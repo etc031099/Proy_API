@@ -102,6 +102,26 @@ describe('SalesImpact temporal commercial comparison', () => {
     expect(apiClient.getSalesImpactAnalytics).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps sale B when overlapping AFTER captures resolve in reverse order', async () => {
+    let resolveA!: (value: unknown) => void;
+    let resolveB!: (value: unknown) => void;
+    vi.spyOn(apiClient, 'getSalesImpactAnalytics')
+      .mockImplementationOnce(() => new Promise(resolve => { resolveA = resolve; }) as never)
+      .mockImplementationOnce(() => new Promise(resolve => { resolveB = resolve; }) as never);
+    publishCompletedSaleImpact({ businessContext: context, transactionId: 'sale-A', occurredAt: '2026-10-22T10:00:00Z',
+      saleTotal: { value: 10, currency: 'PEN' }, before: null });
+    publishCompletedSaleImpact({ businessContext: context, transactionId: 'sale-B', occurredAt: '2026-10-22T10:01:00Z',
+      saleTotal: { value: 20, currency: 'PEN' }, before: null });
+    resolveB(analytics());
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(readLatestSalesImpact()?.transactionId).toBe('sale-B');
+    expect(readLatestSalesImpact()?.after).not.toBeNull();
+    resolveA(analytics());
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(readLatestSalesImpact()?.transactionId).toBe('sale-B');
+    expect(readLatestSalesImpact()?.saleTotal?.value).toBe(20);
+  });
+
   it('uses at most two sales analytics captures for a completed sale and none to create an event on panel mount', async () => {
     const get = vi.spyOn(apiClient, 'getSalesImpactAnalytics').mockResolvedValueOnce(analytics() as never).mockResolvedValueOnce(analytics() as never);
     const before = await captureSalesImpactSnapshot();

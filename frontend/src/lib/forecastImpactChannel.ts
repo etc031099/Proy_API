@@ -1,8 +1,10 @@
 import type { ForecastImpactSnapshot } from './forecastImpactSnapshot';
 import { readRidgeFeatureInputs } from './ridgeFeatures';
+import { mayReplaceImpact } from './operationImpactIdentity';
 
 export const FORECAST_IMPACT_CHANNEL = 'business-intelligence-sale-completed-v2';
 export const FORECAST_IMPACT_SESSION_KEY = 'business-intelligence.latest-sale-impact.v2';
+export const FORECAST_IMPACT_LOCAL_EVENT = 'business-intelligence:forecast-sale-impact';
 
 export interface ForecastImpactSaleMessage {
   version: 2;
@@ -18,13 +20,20 @@ export interface ForecastImpactSaleMessage {
 }
 
 export function publishForecastImpactSale(message: ForecastImpactSaleMessage): void {
-  try { if (typeof window !== 'undefined') window.sessionStorage.setItem(FORECAST_IMPACT_SESSION_KEY, JSON.stringify(message)); } catch { /* Session storage is an optional recovery channel. */ }
+  if (!mayReplaceImpact(message, readLatestForecastImpactSale())) return;
+  saveLatestForecastImpactSale(message);
+  try { if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(FORECAST_IMPACT_LOCAL_EVENT, { detail: message })); } catch { /* Same-tab delivery is optional. */ }
   if (typeof BroadcastChannel === 'undefined') return;
   try {
     const channel = new BroadcastChannel(FORECAST_IMPACT_CHANNEL);
     channel.postMessage(message);
     channel.close();
   } catch { /* The completed sale remains successful when cross-tab delivery is unavailable. */ }
+}
+
+export function saveLatestForecastImpactSale(message: ForecastImpactSaleMessage): void {
+  if (!mayReplaceImpact(message, readLatestForecastImpactSale())) return;
+  try { if (typeof window !== 'undefined') window.sessionStorage.setItem(FORECAST_IMPACT_SESSION_KEY, JSON.stringify(message)); } catch { /* Session storage is an optional recovery channel. */ }
 }
 
 export function isForecastImpactSaleMessage(value: unknown): value is ForecastImpactSaleMessage {
