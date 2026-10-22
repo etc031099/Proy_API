@@ -95,7 +95,7 @@ it('preview is visible and confirmation sends only bound action ID and conversat
 it('sale confirmation delegates to the shared impact orchestrator without duplicating the action write', async () => {
   const sale = { ...pending, action: 'create_sale' as const, items: [
     { sku: 'SKU-001', name: 'Producto', quantity: 1, price: 10, total: 10, stock: 4, resultingStock: 3 }
-  ] };
+  ], customerId: '507f1f77bcf86cd799439011' };
   const executed = { ...sale, status: 'EXECUTED' as const, result: { id: 'sale-1', type: 'sale' as const } };
   const onConfirmSale = vi.fn(async (_action: PendingActionPreview, confirm: () => Promise<PendingActionPreview>) => confirm());
   vi.mocked(apiClient.decideAgentAction).mockResolvedValue({ success: true, data: executed });
@@ -105,7 +105,7 @@ it('sale confirmation delegates to the shared impact orchestrator without duplic
 
   expect(await screen.findByText(/Estado: Ejecutada/)).toBeTruthy();
   expect(onConfirmSale).toHaveBeenCalledTimes(1);
-  expect(onConfirmSale.mock.calls[0][0]).toMatchObject({ pendingActionId: sale.pendingActionId, action: 'create_sale' });
+  expect(onConfirmSale.mock.calls[0][0]).toMatchObject({ pendingActionId: sale.pendingActionId, action: 'create_sale', customerId: sale.customerId });
   expect(apiClient.decideAgentAction).toHaveBeenCalledTimes(1);
   expect(apiClient.decideAgentAction).toHaveBeenCalledWith(sale.pendingActionId, 'conversation', 'confirm');
 });

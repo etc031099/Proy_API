@@ -55,9 +55,12 @@ export function uniqueForecastImpactProducts(products: ForecastImpactProduct[]):
   return [...bySku.values()];
 }
 
-export async function readForecastImpactSnapshot(products: Array<Pick<ForecastImpactProduct, 'sku' | 'name'>>): Promise<ForecastImpactSnapshot> {
+export async function readForecastImpactSnapshot(
+  products: Array<Pick<ForecastImpactProduct, 'sku' | 'name'>>,
+  options: { invalidateCache?: boolean } = {},
+): Promise<ForecastImpactSnapshot> {
   const uniqueProducts = [...new Map(products.map(product => [product.sku, product])).values()];
-  apiClient.invalidateIntelligenceReads();
+  if (options.invalidateCache !== false) apiClient.invalidateIntelligenceReads();
   let failedReads = 0;
   const read = async <T,>(task: () => Promise<T>, extract: (value: T) => unknown): Promise<unknown | null> => {
     try {

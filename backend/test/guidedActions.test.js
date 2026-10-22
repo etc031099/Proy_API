@@ -58,7 +58,7 @@ test('P3A a newer READ keeps ownership of price questions despite an older previ
 const vendor = { _id: 'dddddddddddddddddddddddd', name: 'Distribuidora Inka SAC' };
 const request = (businessId = 'SYNTHETIC', userId = 'aaaaaaaaaaaaaaaaaaaaaaaa') => ({ businessId,
   user: { _id: userId, businessId, role: 'user', isActive: true } });
-function fixture({ products = [p1, p2], suppliers = [vendor], configured = [vendor], clock = Date.now, businessId = 'SYNTHETIC' } = {}) {
+function fixture({ products = [p1, p2], suppliers = [vendor], configured = [vendor], clock = Date.now, businessId = 'SYNTHETIC', requireCustomerDecision = false } = {}) {
   const prepared = [], cancelled = [], confirmed = [], pending = new Map(), argsById = new Map();
   const resolver = async (model, context, ref, type, offset = 0) => {
     assert.equal(context.businessId, businessId);
@@ -70,7 +70,9 @@ function fixture({ products = [p1, p2], suppliers = [vendor], configured = [vend
   };
   const service = {
     async prepare(value) { prepared.push(structuredClone(value.args));
-      const row = { action: value.skillId, summary: 'Revisa la operación', status: 'PENDING', pendingActionId: randomUUID(), expiresAt: new Date(clock() + 600000).toISOString() };
+      const row = { action: value.skillId, summary: 'Revisa la operación', status: 'PENDING', pendingActionId: randomUUID(), expiresAt: new Date(clock() + 600000).toISOString(),
+        ...(value.skillId === 'create_sale' ? { customerId: value.args.customerId || null,
+          fields: { contact: value.args.customerId ? suppliers.find(item => item._id === value.args.customerId)?.name || 'Cliente registrado' : 'Consumidor final' } } : {}) };
       argsById.set(row.pendingActionId, structuredClone(value.args)); pending.set(row.pendingActionId, row); return row; },
     async get(ctx, id) { const row = pending.get(id); return row?.status === 'PENDING' && Date.parse(row.expiresAt) <= clock() ? { ...row, status: 'EXPIRED' } : row; },
     async cancelPendingAction(ctx, id) { cancelled.push(id); const row = pending.get(id); row.status = 'CANCELLED'; return row; },
@@ -85,7 +87,7 @@ function fixture({ products = [p1, p2], suppliers = [vendor], configured = [vend
     },
     async resolvePending() { const rows = [...pending.values()].filter(row => row.status === 'PENDING' && Date.parse(row.expiresAt) > clock()); return rows.length === 1 ? rows[0] : null; }
   };
-  const options = { resolver, supplierLookup: async () => configured, listSuppliers: async () => suppliers, clock };
+  const options = { resolver, supplierLookup: async () => configured, listSuppliers: async () => suppliers, clock, requireCustomerDecision };
   const runtime = { handle: async () => ({ answer: 'Lectura', usage: { totalTokens: 0 } }), getContextSnapshot: async () => ({}) };
   const adapter = withActionAssistant(runtime, service, options), conversationId = randomUUID();
   const send = message => adapter.handle(request(), { message, conversationId });
@@ -688,6 +690,68 @@ test('customer ambiguity requires selection and credit omission requires a real 
   const first = await f.send('Vende 2 COC500 a Juan'); assert.equal(first.suggestions.length, 2);
   assert.equal(first.suggestionsEntityType, 'customer'); assert.equal(f.prepared.length, 0);
   await f.send('1'); assert.equal(f.prepared[0].customerId, vendor._id);
+});
+test('P2 cash sale asks customer decision after product resolution and keeps the draft without a PendingAction', async () => {
+  const f = fixture({ requireCustomerDecision: true });
+  const result = await f.send('vende 1 COC500');
+  assert.match(result.answer, /¿Deseas asociar esta venta a un cliente o registrarla como Consumidor Final\?/);
+  assert.equal(result.pendingAction, undefined); assert.equal(f.prepared.length, 0);
+  assert.match(result.answer, /Consumidor Final/);
+  const draft = await f.adapter.getContextSnapshot(request(), f.conversationId);
+  assert.equal(draft.operationDraft.customerMode, 'AWAITING_DECISION');
+  assert.deepEqual(draft.operationDraft.items, [{ ref: p1._id, requestedRef: 'COC500', quantity: 1 }]);
+  assert.equal(draft.operationDraft.paymentMethod, 'cash');
+});
+test('P2 explicit Consumer Final advances to preview without a fictitious customer id', async () => {
+  const f = fixture({ requireCustomerDecision: true });
+  await f.send('vende 2 COC500');
+  const preview = await f.send('venta normal');
+  assert.equal(f.prepared.length, 1); assert.equal(f.prepared[0].customerId, undefined);
+  assert.equal(preview.pendingAction.customerId, null);
+  assert.equal(preview.pendingAction.fields.contact, 'Consumidor final');
+  assert.equal((await f.adapter.getContextSnapshot(request(), f.conversationId)).operationDraft.customerMode, 'CONSUMER_FINAL');
+});
+test('P2 explicit customer from first message skips the customer decision and resolves the real contact', async () => {
+  const contact = { ...vendor, name: 'Elena Rojas', isActive: true };
+  const f = fixture({ requireCustomerDecision: true, suppliers: [contact] });
+  const preview = await f.send('vende 2 COC500 a Elena Rojas');
+  assert.equal(f.prepared.length, 1); assert.equal(f.prepared[0].customerId, contact._id);
+  assert.equal(preview.pendingAction.customerId, contact._id);
+  assert.equal(preview.pendingAction.fields.contact, contact.name);
+});
+test('P2 customer choice reuses resolver and preserves a multi-product draft through ambiguity selection', async () => {
+  const contacts = [{ ...vendor, name: 'Elena Rojas', isActive: true },
+    { ...vendor, _id: 'eeeeeeeeeeeeeeeeeeeeeeee', name: 'Elena Ruiz', isActive: true }];
+  const f = fixture({ requireCustomerDecision: true, suppliers: contacts });
+  await f.send('vende 1 COC500 y 2 COC1500');
+  await f.send('con cliente');
+  const ambiguous = await f.send('con Elena');
+  assert.equal(ambiguous.pendingAction, undefined); assert.equal(ambiguous.suggestionsEntityType, 'customer');
+  assert.equal(f.prepared.length, 0);
+  const preview = await f.send('1');
+  assert.deepEqual(f.prepared[0].products, [{ productId: p1._id, quantity: 1 }, { productId: p2._id, quantity: 2 }]);
+  assert.equal(f.prepared[0].customerId, contacts[0]._id);
+  assert.equal(preview.pendingAction.fields.contact, contacts[0].name);
+});
+test('P2 credit requires a real customer and blocks Consumer Final', async () => {
+  const contact = { ...vendor, name: 'Elena Rojas', isActive: true };
+  const f = fixture({ requireCustomerDecision: true, suppliers: [contact] });
+  const initial = await f.send('vende 1 COC500 a crédito');
+  assert.match(initial.answer, /cliente registrado.*Consumidor Final no puede usarse/i);
+  assert.equal(initial.pendingAction, undefined); assert.equal(f.prepared.length, 0);
+  const blocked = await f.send('Consumidor Final');
+  assert.match(blocked.answer, /cliente registrado.*Consumidor Final no puede usarse/i);
+  assert.equal(f.prepared.length, 0);
+  const preview = await f.send('con Elena Rojas');
+  assert.equal(f.prepared[0].customerId, contact._id); assert.equal(f.prepared[0].paymentMethod, 'credit');
+  assert.equal(preview.pendingAction.fields.contact, contact.name);
+});
+test('P2 repeated text confirmation still executes a prepared Consumer Final sale once', async () => {
+  const f = fixture({ requireCustomerDecision: true });
+  await f.send('vende 1 COC500'); await f.send('consumidor final');
+  await Promise.all([f.send('confirmar'), f.send('confirmar')]);
+  assert.equal(f.prepared.length, 1); assert.equal(f.confirmed.length, 1);
+  assert.equal(f.confirmed[0].customerId, undefined);
 });
 test('credit accepts a registered customer supplied in the next turn', async () => {
   const f = fixture({ suppliers: [{ ...vendor, name: 'Juan Pérez' }] });

@@ -14,7 +14,8 @@ const { createAgentActionHandler } = require('../controllers/agentActionsControl
 const createAgentRoutes = ({ enabled, providerFactory, orchestrator, historyService, actionService = createActionService(), authenticateMiddleware = authenticate,
   businessAccessMiddleware = checkBusinessAccess } = {}) => {
   const router = express.Router();
-  const runtime = withActionAssistant(orchestrator || createAgentOrchestrator({ onEvent: logAgentEvent }), actionService, { onEvent: logAgentEvent });
+  const runtime = withActionAssistant(orchestrator || createAgentOrchestrator({ onEvent: logAgentEvent }), actionService,
+    { onEvent: logAgentEvent, requireCustomerDecision: true });
   const history = historyService || createAgentConversationService({ runtime, actionService });
   const smokeLimiter = rateLimit({
     windowMs: 60 * 1000,

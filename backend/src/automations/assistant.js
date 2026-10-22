@@ -307,13 +307,38 @@ const withActionAssistant = (runtime, service, options = {}) => {
         if (!supplier) return response('Indica qué proveedor deseas usar; no tengo uno seleccionado en esta conversación.', undefined, true);
         extracted.supplierRef = supplier.id;
       }
-      try { draft = updateDraft(explicit ? undefined : previous, extracted, input.message); }
+      try { draft = updateDraft(explicit ? undefined : previous, extracted, input.message,
+        options.requireCustomerDecision === true && sourceChannel === 'assistant'); }
       catch (error) {
         if (error.code !== 'ACTION_VALIDATION_FAILED') throw error;
         return response('Indica una cantidad entera válida: mayor que cero para ventas/compras, o desde cero para stock, mínimo y umbral.', undefined, true);
       }
       if (extracted.direct && (explicit || !previous)) draft.direct = extracted.direct;
       const resolved = applyResolution(draft, await resolveDraft(draft, context, options), now());
+      if (options.requireCustomerDecision === true && sourceChannel === 'assistant' && skillId === 'create_sale') {
+        const paymentMethod = resolved.args?.paymentMethod || draft.paymentMethod;
+        const hasRealCustomer = Boolean(resolved.args?.customerId || draft.customerRef);
+        if (paymentMethod === 'credit' && !hasRealCustomer) {
+          draft.customerMode = 'CUSTOMER';
+          draft.missingFields = ['customer'];
+          resolved.args = undefined;
+          resolved.missingFields = ['customer'];
+          resolved.clarification = 'Para una venta a crédito debes seleccionar un cliente registrado. Consumidor Final no puede usarse en una venta a crédito.';
+        } else if (resolved.args && !resolved.args.customerId && draft.customerMode !== 'CONSUMER_FINAL') {
+          const askingForCustomer = draft.customerMode === 'CUSTOMER';
+          draft.customerMode = askingForCustomer ? 'CUSTOMER' : 'AWAITING_DECISION';
+          draft.missingFields = [askingForCustomer ? 'customer' : 'customerDecision'];
+          resolved.args = undefined;
+          resolved.missingFields = draft.missingFields;
+          resolved.clarification = askingForCustomer
+            ? 'Indica el nombre del cliente registrado que deseas asociar a esta venta.'
+            : '¿Deseas asociar esta venta a un cliente o registrarla como Consumidor Final?';
+          if (!askingForCustomer) resolved.suggestions = [
+            { label: 'Consumidor Final', message: 'Consumidor Final' },
+            { label: 'Buscar o seleccionar cliente', message: 'Con cliente' },
+          ];
+        }
+      }
       if (draft.selectedProductReference) await runtime.rememberProduct?.(req, conversationId, draft.selectedProductReference);
       if (draft.selectedSupplier) await runtime.rememberSupplier?.(req, conversationId, draft.selectedSupplier, draft.selectedProductReference);
       suggestions = resolved.suggestions || [];

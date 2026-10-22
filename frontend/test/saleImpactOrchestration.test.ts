@@ -113,4 +113,63 @@ describe('shared sale impact orchestration', () => {
     expect(readLatestInventoryImpact()?.operationSucceeded).toBe(true);
     expect(readLatestForecastImpactSale()?.baselineUnavailable).toBe(true);
   });
+
+  it('starts independent BEFORE captures together and waits for all of them before the sale write', async () => {
+    const readCustomer = configureReads();
+    let failInventoryBefore!: (error: Error) => void;
+    vi.mocked(apiClient.getBusinessIntelligenceProductInventory).mockImplementationOnce(() => new Promise((_, reject) => {
+      failInventoryBefore = reject;
+    }) as never);
+    const submit = vi.fn(async () => ({ success: true, transaction: { id: 'sale-before-parallel', date: occurredAt } }));
+    const sale = registerSaleWithImpacts({ products, customerId, displayName: 'Cliente demo', submit,
+      isSuccessful: value => value.success, getMetadata: value => ({ transactionId: value.transaction.id,
+        occurredAt: value.transaction.date, customerId, total: null, currency: null }) });
+
+    // The inventory request is still pending, but the other independent BEFORE
+    // sources have started. The commercial write has not started yet.
+    expect(readCustomer).toHaveBeenCalledOnce();
+    expect(apiClient.getForecastMlUpdateStatus).toHaveBeenCalledOnce();
+    expect(apiClient.getSalesImpactAnalytics).toHaveBeenCalledOnce();
+    expect(apiClient.invalidateIntelligenceReads).toHaveBeenCalledTimes(1);
+    expect(submit).not.toHaveBeenCalled();
+
+    failInventoryBefore(new Error('inventory baseline unavailable'));
+    await sale;
+    expect(submit).toHaveBeenCalledOnce();
+    expect(apiClient.invalidateIntelligenceReads).toHaveBeenCalledTimes(2);
+  });
+
+  it('starts Inventory and Customer AFTER captures together and publishes each only after its capture completes', async () => {
+    configureReads();
+    let rejectInventoryAfter!: (error: Error) => void;
+    vi.mocked(apiClient.getBusinessIntelligenceProductInventory).mockReset()
+      .mockRejectedValueOnce(new Error('inventory BEFORE unavailable'))
+      .mockImplementationOnce(() => new Promise((_, reject) => { rejectInventoryAfter = reject; }) as never);
+    let resolveCustomerAfter!: (value: { success: true; data: CustomerClustering }) => void;
+    vi.mocked(apiClient.getCustomerClustering).mockReset()
+      .mockResolvedValueOnce({ success: true, data: customerClustering(5) } as never)
+      .mockImplementationOnce(() => new Promise(resolve => { resolveCustomerAfter = resolve; }) as never);
+    const submit = vi.fn(async () => ({ success: true, transaction: { id: 'sale-after-parallel', customerId, date: occurredAt } }));
+    const sale = registerSaleWithImpacts({ products, customerId, displayName: 'Cliente demo', submit,
+      isSuccessful: value => value.success, getMetadata: value => ({ transactionId: value.transaction.id,
+        occurredAt: value.transaction.date, customerId, total: null, currency: null }) });
+
+    await new Promise(resolve => setImmediate(resolve));
+    expect(submit).toHaveBeenCalledOnce();
+    expect(apiClient.getBusinessIntelligenceProductInventory).toHaveBeenCalledTimes(2);
+    expect(apiClient.getCustomerClustering).toHaveBeenCalledTimes(2);
+    expect(apiClient.invalidateIntelligenceReads).toHaveBeenCalledTimes(2);
+    expect(readLatestInventoryImpact()).toBeNull();
+    expect(readLatestCustomerImpact()).toBeNull();
+
+    resolveCustomerAfter({ success: true, data: customerClustering(6) });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(readLatestCustomerImpact()).toMatchObject({ transactionId: 'sale-after-parallel', captureStatus: 'COMPLETE' });
+    expect(readLatestInventoryImpact()).toBeNull();
+
+    rejectInventoryAfter(new Error('inventory AFTER unavailable'));
+    await sale;
+    expect(readLatestInventoryImpact()).toMatchObject({ operationId: 'sale-after-parallel', afterUnavailable: true });
+    expect(readLatestCustomerImpact()).toMatchObject({ before: { frequency: 5 }, after: { frequency: 6 } });
+  });
 });

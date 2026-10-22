@@ -53,11 +53,11 @@ it.each(['create_sale', 'create_purchase'] as const)('A6 %s confirmation refresh
 it('A5.3 textual sale confirmation captures and publishes the completed sale once', async () => {
   const orchestrate = vi.spyOn(saleImpactOrchestration, 'registerSaleWithImpacts');
   const pending: NonNullable<AgentResponse['pendingAction']> = { pendingActionId: 'a5333333-3333-4333-8333-333333333333',
-    action: 'create_sale', summary: 'Registrar venta', fields: { contact: 'Cliente demo', currency: 'PEN' }, customerId: null,
+    action: 'create_sale', summary: 'Registrar venta', fields: { contact: 'Elena Rojas', currency: 'PEN' }, customerId: '507f1f77bcf86cd799439011',
     items: [{ sku: 'PAN-FRE-001', name: 'Pan Francés', quantity: 2, stock: 20, resultingStock: 18, price: 2, total: 4 }],
     requiresConfirmation: true, expiresAt: '2099-01-01T00:00:00Z', status: 'PENDING' };
   const executed = { ...pending, status: 'EXECUTED' as const,
-    result: { id: 'sale-text-1', type: 'sale' as const, occurredAt: '2026-10-22T15:30:00.000Z', customerId: null,
+    result: { id: 'sale-text-1', type: 'sale' as const, occurredAt: '2026-10-22T15:30:00.000Z', customerId: '507f1f77bcf86cd799439011',
       total: 4, currency: 'PEN', items: [{ sku: 'PAN-FRE-001', name: 'Pan Francés', quantity: 2, stock: 18 }] } };
   send.mockResolvedValueOnce({ success: true, data: { ...response, answer: 'Revisa la venta.', pendingAction: pending } })
     .mockResolvedValueOnce({ success: true, data: { ...response, answer: 'Venta registrada.', pendingAction: executed } });
@@ -69,6 +69,7 @@ it('A5.3 textual sale confirmation captures and publishes the completed sale onc
   expect(send.mock.calls[1][0].message).toBe('Sí, confirma.');
   expect(apiClient.decideAgentAction).not.toHaveBeenCalled();
   expect(orchestrate).toHaveBeenCalledTimes(1);
+  expect(orchestrate.mock.calls[0][0].customerId).toBe('507f1f77bcf86cd799439011');
   expect(readLatestForecastImpactSale()).toMatchObject({ transactionId: 'sale-text-1', products: [
     { sku: 'PAN-FRE-001', name: 'Pan Francés', quantity: 2 }
   ] });

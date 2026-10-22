@@ -130,6 +130,7 @@ function BusinessIntelligenceContent() {
   const [detailError, setDetailError] = useState(false);
   const [detailRetry, setDetailRetry] = useState(0);
   const [localToolsMounted, setLocalToolsMounted] = useState(false);
+  const [forecastDiagnosticsMounted, setForecastDiagnosticsMounted] = useState(false);
   const detailsRequest = useRef(0);
   const summaryRequest = useRef(0);
   const inventoryRequest = useRef(0);
@@ -306,8 +307,8 @@ function BusinessIntelligenceContent() {
             <CardHeader className="pb-3"><div><CardTitle>Pronóstico Ridge LIVE</CardTitle><CardDescription>Horizontes aprobados: 7 y 14 días. El horizonte de 1 día no está aprobado.</CardDescription></div></CardHeader>
             <CardContent className="space-y-3 pt-0">
               {statusSummary}
-              <details className="border-t pt-2 text-sm"><summary className="cursor-pointer font-medium">Detalles técnicos</summary>
-                <div className="mt-3"><ForecastDiagnosticsPanel showUpdatePanel={false} onForecastModelsChange={setActiveForecastModels} /></div>
+              <details onToggle={event => { if (event.currentTarget.open) setForecastDiagnosticsMounted(true); }} className="border-t pt-2 text-sm"><summary className="cursor-pointer font-medium">Detalles técnicos</summary>
+                {forecastDiagnosticsMounted && <div className="mt-3"><ForecastDiagnosticsPanel showUpdatePanel={false} onForecastModelsChange={setActiveForecastModels} /></div>}
               </details>
             </CardContent>
           </Card>

@@ -18,7 +18,8 @@ const draftSchema = schema({ action: { ...string(30), enum: ['create_product', '
   product: schema(getActionSkill('create_product').inputSchema.properties, []),
   items: { type: 'array', maxItems: 20, items: schema({ ref: string(100), requestedRef: string(100), quantity: { ...integer(1000000), minimum: 1 } }, ['ref']) },
   currency: { ...string(3), enum: ['PEN', 'USD', 'EUR'] }, paymentMethod: { ...string(20), enum: ['cash', 'credit', 'card', 'bank_transfer', 'wallet', 'other'] },
-  customerRef: string(100), supplierRef: string(100), supplierId: objectId, purchasePrice: number(), enrichment: string(20),
+  customerRef: string(100), customerMode: { ...string(24), enum: ['AWAITING_DECISION', 'CONSUMER_FINAL', 'CUSTOMER'] },
+  supplierRef: string(100), supplierId: objectId, purchasePrice: number(), enrichment: string(20),
   selection: selectionSchema, supplierChoices: selectionSchema, productChoices: selectionSchema,
   readSuspended: { type: 'boolean' },
   confirmationReady: { type: 'boolean' },
@@ -52,9 +53,29 @@ function choose(selection, message) {
   const hits = selection.candidates.filter(row => normalize(`${row.name} ${row.sku || ''}`).includes(query));
   return query.length >= 2 && hits.length === 1 ? hits[0] : null;
 }
-function updateDraft(previous, extracted, message) {
+const consumerFinalChoice = text => /^(?:consumidor final|sin cliente|normal|venta normal|no agregues cliente|no agregar cliente|sin asociar cliente)$/.test(text);
+const genericCustomerChoice = text => /^(?:con cliente|cliente|con un cliente|buscar cliente|quiero agregar cliente|agregar cliente|asociar cliente)$/.test(text);
+function customerReferenceChoice(message) {
+  return message.trim().replace(/^(?:con|cliente|buscar cliente|quiero agregar cliente|agregar cliente|asociar(?: a)?)(?:\s+cliente)?\s+/i, '')
+    .replace(/[.!?]+$/, '').trim();
+}
+function updateDraft(previous, extracted, message, customerDecisionEnabled = false) {
   const draft = previous ? structuredClone(previous) : { action: extracted.action };
   const text = normalize(numericWords(message));
+  const awaitingCustomerDecision = previous?.action === 'create_sale' && previous.customerMode === 'AWAITING_DECISION';
+  const awaitingCustomerName = previous?.action === 'create_sale' && previous.customerMode === 'CUSTOMER'
+    && previous.missingFields?.includes('customer') && !previous.selection;
+  if (awaitingCustomerDecision || awaitingCustomerName) {
+    if (consumerFinalChoice(text)) {
+      if (awaitingCustomerName) return draft; // Credit sales must still resolve a real customer.
+      draft.customerMode = 'CONSUMER_FINAL'; delete draft.customerRef; delete draft.missingFields; return draft;
+    }
+    draft.customerMode = 'CUSTOMER';
+    if (genericCustomerChoice(text)) { draft.missingFields = ['customer']; delete draft.customerRef; return draft; }
+    const reference = customerReferenceChoice(message);
+    if (!reference) { draft.missingFields = ['customer']; delete draft.customerRef; return draft; }
+    draft.customerRef = reference; delete draft.missingFields; return draft;
+  }
   if (!draft.selection && draft.supplierChoices && /\bproveedor\b/.test(text) && ordinalSelection(message).matched)
     draft.selection = structuredClone(draft.supplierChoices);
   if (!draft.selection && draft.productChoices && /\bproducto\b/.test(text) && ordinalSelection(message).matched)
@@ -103,7 +124,10 @@ function updateDraft(previous, extracted, message) {
         draft.supplierRef = selected._id;
         delete draft.product.supplierPrices;
       }
-      else draft[slot === 'supplier' ? 'supplierRef' : 'customerRef'] = selected._id;
+      else {
+        draft[slot === 'supplier' ? 'supplierRef' : 'customerRef'] = selected._id;
+        if (slot === 'customer' && customerDecisionEnabled) draft.customerMode = 'CUSTOMER';
+      }
       delete draft.selection;
       return draft;
     }
@@ -169,8 +193,14 @@ function updateDraft(previous, extracted, message) {
     if (changeProduct && draft.items?.length === 1) { draft.items[0].ref = changeProduct[1].replace(/^la de /, ''); delete draft.selection; delete draft.productChoices; }
     if (previous?.missingFields?.includes('product') && !changeProduct && !/que|datos|falta/.test(text)) draft.items[previous.itemIndex || 0].ref = message.trim();
     if (extracted.supplierRef) { draft.supplierRef = extracted.supplierRef; delete draft.selection; delete draft.selectedSupplier; }
-    if (extracted.customerRef && (!previous || /^(?:vende|vender|registra)/.test(text) || /cliente/.test(text))) draft.customerRef = extracted.customerRef;
-    if (previous?.missingFields?.includes('customer') && !extracted.customerRef) draft.customerRef = message.trim();
+    if (extracted.customerRef && (!previous || /^(?:vende|vender|registra)/.test(text) || /cliente/.test(text))) {
+      draft.customerRef = extracted.customerRef;
+      if (customerDecisionEnabled) draft.customerMode = 'CUSTOMER';
+    }
+    if (previous?.missingFields?.includes('customer') && !extracted.customerRef) {
+      draft.customerRef = customerReferenceChoice(message);
+      if (customerDecisionEnabled) draft.customerMode = 'CUSTOMER';
+    }
     const changeSupplier = /^(?:cambia (?:el )?proveedor a|proveedor)\s+(.+)$/.exec(text);
     if (changeSupplier) { draft.supplierRef = changeSupplier[1]; delete draft.selection; delete draft.selectedSupplier; }
     else if (previous?.selection?.slot === 'supplier' && !choose(previous.selection, message) && !/que|datos|falta|cantidad|mejor|cambia|en vez/.test(text)) {

@@ -33,9 +33,12 @@ export function uniqueInventoryImpactProducts(products: InventoryImpactProduct[]
   return [...bySku.values()];
 }
 
-export async function readInventoryImpactSnapshot(products: Array<Pick<InventoryImpactProduct, 'sku' | 'name'>>): Promise<InventoryImpactSnapshot> {
+export async function readInventoryImpactSnapshot(
+  products: Array<Pick<InventoryImpactProduct, 'sku' | 'name'>>,
+  options: { invalidateCache?: boolean } = {},
+): Promise<InventoryImpactSnapshot> {
   const uniqueProducts = [...new Map(products.filter(product => product.sku).map(product => [product.sku, product])).values()];
-  apiClient.invalidateIntelligenceReads();
+  if (options.invalidateCache !== false) apiClient.invalidateIntelligenceReads();
   const [revisionResult, ...inventoryResults] = await Promise.all([
     apiClient.getIntelligenceRevision().catch(() => null),
     ...uniqueProducts.map(product => apiClient.getBusinessIntelligenceProductInventory(product.sku).catch(() => null)),

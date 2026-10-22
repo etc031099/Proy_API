@@ -407,7 +407,7 @@ describe('business intelligence dashboard', () => {
     fireEvent.click(screen.getByText('Herramientas avanzadas de demostración local'));
     await waitFor(() => expect(apiClient.getMlTestControlStatus).toHaveBeenCalledTimes(1));
     const orderedLabels = [
-      'Pronóstico Ridge LIVE', 'Salud de los modelos LIVE',
+      'Pronóstico Ridge LIVE', 'Detalles técnicos',
       'Pronóstico por producto', 'Pronóstico 7 días', 'Impacto de nuevos datos',
       'Preparación para próxima evaluación', 'Historial de actualizaciones ML',
       'Evaluación histórica certificada', 'Evidencia histórica y comparación de modelos',
@@ -697,12 +697,26 @@ describe('business intelligence dashboard', () => {
       dependencyStatus: { inventory: 'READY', forecast: 'READY', supplier: 'READY', healthAssembly: 'PARTIAL' }, reasonCode: null, elapsedMs: 12 } });
     render(<BusinessIntelligenceDashboard />);
     fireEvent.click(screen.getByRole('tab', { name: 'Predicción' }));
-    const diagnosticPanel = screen.getByLabelText('Estado del ML');
+    fireEvent.click(screen.getByText('Detalles técnicos'));
+    const diagnosticPanel = await screen.findByLabelText('Estado del ML');
     fireEvent.click(await within(diagnosticPanel).findByText('Ver estado de Health'));
     await waitFor(() => expect(within(diagnosticPanel).getByText('Ensamblado Health').nextElementSibling?.textContent).toBe('Parcial'));
     expect(within(diagnosticPanel).getByText('Forecast').nextElementSibling?.textContent).toBe('Listo');
     expect(within(diagnosticPanel).getByText('Inventario').nextElementSibling?.textContent).toBe('Listo');
     expect(within(diagnosticPanel).getByText('Proveedores').nextElementSibling?.textContent).toBe('Listo');
+  });
+
+  it('loads expensive Forecast and Health diagnostics only when technical details are opened', async () => {
+    render(<BusinessIntelligenceDashboard />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Predicción' }));
+    expect(apiClient.getForecastModelDiagnostics).not.toHaveBeenCalled();
+    expect(apiClient.getHealthDiagnostics).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('Detalles técnicos'));
+    await waitFor(() => {
+      expect(apiClient.getForecastModelDiagnostics).toHaveBeenCalledTimes(1);
+      expect(apiClient.getHealthDiagnostics).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('does not render unavailable LIVE risk counts as zero or as LOW', async () => {
