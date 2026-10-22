@@ -308,14 +308,14 @@ const withActionAssistant = (runtime, service, options = {}) => {
         extracted.supplierRef = supplier.id;
       }
       try { draft = updateDraft(explicit ? undefined : previous, extracted, input.message,
-        options.requireCustomerDecision === true && sourceChannel === 'assistant'); }
+        options.requireCustomerDecision === true); }
       catch (error) {
         if (error.code !== 'ACTION_VALIDATION_FAILED') throw error;
         return response('Indica una cantidad entera válida: mayor que cero para ventas/compras, o desde cero para stock, mínimo y umbral.', undefined, true);
       }
       if (extracted.direct && (explicit || !previous)) draft.direct = extracted.direct;
       const resolved = applyResolution(draft, await resolveDraft(draft, context, options), now());
-      if (options.requireCustomerDecision === true && sourceChannel === 'assistant' && skillId === 'create_sale') {
+      if (options.requireCustomerDecision === true && skillId === 'create_sale') {
         const paymentMethod = resolved.args?.paymentMethod || draft.paymentMethod;
         const hasRealCustomer = Boolean(resolved.args?.customerId || draft.customerRef);
         if (paymentMethod === 'credit' && !hasRealCustomer) {
