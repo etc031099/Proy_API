@@ -152,6 +152,24 @@ const entityWords = facts => {
 };
 const proseWords = new Set('el la los las un una no sin en para hay son si es esta este esa ese estos estas antes con su sus se seleccionado consultado observado recomendado candidato disponible nuevo existente tiene requiere necesita merece presenta podria puede del de'.split(' '));
 
+// A comparison is not a new measured duration. Authorize only this bounded,
+// single-product inventory inference; never add its threshold to numeric facts.
+const inventoryComparisonText = (text, inventory, fail, path) => {
+  const words = { un: 1, uno: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7,
+    ocho: 8, nueve: 9, diez: 10, catorce: 14 };
+  // Preserve all unrelated text, punctuation and list markers verbatim.
+  return text.replace(/\b(?:el stock cubre|(?:la )?cobertura(?: estimada)?(?: es)?(?: de)?) menos de (\d+(?:[.,]\d+)?|un|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|catorce) d[ií]as?\b/gi,
+    (match, threshold, offset) => {
+      const days = words[threshold.toLowerCase()] ?? Number(threshold.replace(',', '.'));
+      const coverage = inventory[0]?.coverage?.daysCover;
+      const sentencePrefix = text.slice(0, offset).split(/[.;!?\n]/).pop().toLowerCase();
+      if (inventory.length !== 1 || typeof coverage !== 'number' || !Number.isFinite(coverage) || coverage < 0
+        || !Number.isFinite(days) || days <= 0 || !(coverage < days) || /\b(?:no|nunca)\b/.test(sentencePrefix))
+        fail('UNSUPPORTED_SEMANTIC_CLAIM', path);
+      return '[comparacion de cobertura verificada]';
+    });
+};
+
 const validateGroundedOutput = (text, context) => {
   const fail = (reason = 'OUTPUT_SCHEMA_INVALID', validationField, diagnostic = {}) => {
     throw Object.assign(new Error('GROUNDED_INVALID_RESPONSE'), { validationReason: reason, validationLayer: 'GROUNDING', ...(validationField ? { validationField } : {}), ...diagnostic });
@@ -162,6 +180,8 @@ const validateGroundedOutput = (text, context) => {
     if (row.evidenceRefs.some(ref => !refs.has(ref))) fail('EVIDENCE_REFERENCE_INVALID', `observations[${index}].evidenceRefs`);
     const allowed = JSON.stringify(row.evidenceRefs.map(ref => refs.get(ref).facts));
     const citedFacts = row.evidenceRefs.map(ref => refs.get(ref).facts);
+    const inventory = row.evidenceRefs.flatMap(ref => refs.get(ref).skillId === 'get_inventory_intelligence'
+      ? refs.get(ref).facts?.items || [] : []);
     const names = entityWords(citedFacts);
     const numericFacts = numericEvidence(row.evidenceRefs.flatMap(ref => {
       const evidence = refs.get(ref), scope = evidence.scope || {};
@@ -179,27 +199,45 @@ const validateGroundedOutput = (text, context) => {
         || /(?:isolation forest).{0,45}(?:significa|demuestra|confirma|detecta) (?:el )?fraude|probabilidad de fraude|churn (?:predicho|confirmado)|\b(?:ejecuta|registra|confirma) (?:la |una )?(?:venta|compra)/i.test(claims)
         || /(?:asociacion|asociación|regla).{0,40}(?:demuestra|prueba|garantiza|implica).{0,20}causa/i.test(claims)
         || /(?:FP.?Growth|lift).{0,80}(?:demuestra|prueba|garantiza).{0,30}(?:causa|ventas)/i.test(claims)) fail('UNSUPPORTED_SEMANTIC_CLAIM', path);
-      if ((value.match(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/gi) || []).some(sku => !skus.has(sku.toUpperCase()))) fail('UNKNOWN_ENTITY', path);
+      const unknownEntity = entityReason => fail('UNKNOWN_ENTITY', path, { entityReason });
+      if ((value.match(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/gi) || []).some(sku => !skus.has(sku.toUpperCase()))) unknownEntity('UNKNOWN_IDENTIFIER');
       const remaining = value.replace(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/g, '')
         .replace(/\bMA28\b/g, allowed.includes('MOVING_AVERAGE_28') ? '' : 'MA28');
-      const details = unsupportedNumberDetails(remaining, numericFacts);
+      const details = unsupportedNumberDetails(inventoryComparisonText(remaining, inventory, fail, path), numericFacts);
       const rejected = [...new Set(details.map(detail => detail.value))].slice(0, 3);
       if (rejected.length) fail('UNSUPPORTED_NUMBER', path, { unsupportedNumbers: rejected,
         unsupportedNumberDetails: rejected.map(value => details.find(detail => detail.value === value)) });
       const prose = value.replace(/\b[A-Z]{2,}(?:-[A-Z0-9]+){1,5}\b/gi, '');
       const mentioned = [...prose.matchAll(/(?:^|\s)([A-ZÁÉÍÓÚÑ][\p{L}]+)(?=\s+(?:tiene|presenta|requiere|merece|necesita|vende|compra)\b)/gu),
         ...prose.matchAll(/\b(?:Revisa|Revisar|Prioriza|Priorizar|Consulta|Consultar)\s+([A-ZÁÉÍÓÚÑ][\p{L}]+)/gu)].map(match => match[1]);
-      if (mentioned.some(word => { const n = require('./domainGate').normalize(word); return !names.has(n) && !proseWords.has(n); })) fail('UNKNOWN_ENTITY', path);
+      // A generic advisory object is not a catalogue name. This narrow exception
+      // needs cited inventory support and never applies to factual entity labels.
+      const advisoryTerm = word => field === 'advisoryRecommendation' && inventory.length === 1
+        && /^(?:revisa|revisar|prioriza|priorizar|consulta|consultar)\s+(?:la\s+|el\s+)?(?:reposicion|cobertura|inventario)(?: antes de decidir)?[.!?]?$/.test(value.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().trim()) && (
+        word === 'reposicion' && typeof inventory[0].recommendation?.recommendedQty === 'number'
+          && inventory[0].recommendation.recommendedQty > 0
+        || word === 'cobertura' && typeof inventory[0].coverage?.daysCover === 'number'
+          && Number.isFinite(inventory[0].coverage.daysCover)
+        || word === 'inventario' && typeof inventory[0].stock?.onHand === 'number'
+          && Number.isFinite(inventory[0].stock.onHand));
+      if (mentioned.some(word => { const n = require('./domainGate').normalize(word);
+        return !names.has(n) && !proseWords.has(n) && !advisoryTerm(n); })) unknownEntity('UNKNOWN_NAME_AFTER_ACTION');
+      const purchaseNames = prose.matchAll(/\b(?:Compra|Comprar|compra|comprar)\s+(?:a(?:l)?\s+)([A-ZÁÉÍÓÚÑ][\p{L}]+)/gu);
+      if ([...purchaseNames].some(([, word]) => !names.has(require('./domainGate').normalize(word)))) unknownEntity('UNKNOWN_PURCHASE_ENTITY');
       const labelled = require('./domainGate').normalize(prose).matchAll(/\b(?:producto|cliente|proveedor|marca)\s+[«“"]?([\p{L}]+)/gu);
       if ([...labelled].some(([, word]) => !names.has(word) && !proseWords.has(word)
-        && !/^(?:seleccionado|consultado|observado|tiene|requiere|necesita|merece|presenta|podria|puede|con|del|de|en|es|esta|sin)$/.test(word))) fail('UNKNOWN_ENTITY', path);
-      const inventory = row.evidenceRefs.flatMap(ref => refs.get(ref).skillId === 'get_inventory_intelligence'
-        ? refs.get(ref).facts?.items || [] : []);
+        && !/^(?:seleccionado|consultado|observado|tiene|requiere|necesita|merece|presenta|podria|puede|con|del|de|en|es|esta|sin)$/.test(word))) unknownEntity('UNKNOWN_LABELLED_ENTITY');
+      // An estimated coverage/risk is not evidence of a certain future stockout.
+      if (/\b(?:te quedaras|se quedara|nos quedaremos|quedara|quedaran) sin (?:stock|existencias)\b/.test(require('./domainGate').normalize(value)))
+        fail('UNSUPPORTED_SEMANTIC_CLAIM', path);
       if (/\b(?:esta agotado|esta sin stock|no hay stock)\b/.test(require('./domainGate').normalize(value).replace(/\bno esta agotado\b/g, '[negado]'))
         && !inventory.some(item => item.stock?.onHand === 0)) fail('UNSUPPORTED_SEMANTIC_CLAIM', path);
       const levels = { alto: 'HIGH', critico: 'CRITICAL', medio: 'MEDIUM', bajo: 'LOW' };
       if (inventory.length && [...require('./domainGate').normalize(value).matchAll(/\b(?:tiene|presenta|es de) riesgo (alto|critico|medio|bajo)\b/g)]
         .some(([, level]) => !inventory.some(item => item.risk?.level === levels[level]))) fail('UNSUPPORTED_SEMANTIC_CLAIM', path);
+      const riskClaims = require('./domainGate').normalize(value).matchAll(/\b(?:el riesgo es|hay un riesgo|existe un riesgo) (alto|elevado|critico|medio|bajo)\b/g);
+      if ([...riskClaims].some(([, level]) => !inventory.some(item => item.risk?.level === (level === 'elevado' ? 'HIGH' : levels[level]))))
+        fail('UNSUPPORTED_SEMANTIC_CLAIM', path);
     }
   }
   validateLimitations(output.limitations, context);

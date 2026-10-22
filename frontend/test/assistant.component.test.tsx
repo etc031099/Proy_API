@@ -114,6 +114,15 @@ it('J3 renders a provider safe fallback as a successful response', async () => {
   render(<AssistantPage />); submit('Analiza el inventario');
   await screen.findByText(/se conservan los hechos obtenidos/); expect(send).toHaveBeenCalledTimes(1);
 });
+it('A6.2.2 displays closed entity rejection category and advisory field without generated prose', () => {
+  render(<AgentActivity response={{ ...response, grounded: { route: 'GROUNDED_LLM', responseDiagnostic: {
+    validationResult: 'REJECTED', validationReason: 'UNKNOWN_ENTITY', validationField: 'observations[0].advisoryRecommendation',
+    entityReason: 'UNKNOWN_NAME_AFTER_ACTION', finishReason: 'stop', contentPresent: true } } }} />);
+  fireEvent.click(screen.getByText('Diagnóstico de síntesis'));
+  expect(screen.getByText('UNKNOWN_ENTITY')).toBeTruthy();
+  expect(screen.getByText('UNKNOWN_NAME_AFTER_ACTION')).toBeTruthy();
+  expect(screen.getByText('observations[0].advisoryRecommendation')).toBeTruthy();
+});
 it('J2M displays safe limitation diagnostics without generated prose', () => {
   render(<AgentActivity response={{ ...response, grounded: { route: 'GROUNDED_LLM', responseDiagnostic: {
     validationResult: 'REJECTED', validationReason: 'LIMITATION_NOT_ALLOWED', validationField: 'limitations[0]',

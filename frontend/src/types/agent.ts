@@ -74,6 +74,7 @@ export interface AgentResponse {
     validationResult: 'ACCEPTED' | 'REJECTED'; validationReason: string; validationField?: string;
     validationLayer?: 'SCHEMA' | 'GROUNDING'; schemaReason?: string; schemaField?: string;
     limitationReason?: string; limitationCode?: string;
+    entityReason?: 'UNKNOWN_IDENTIFIER' | 'UNKNOWN_NAME_AFTER_ACTION' | 'UNKNOWN_LABELLED_ENTITY' | 'UNKNOWN_PURCHASE_ENTITY';
     unsupportedNumbers?: number[];
     unsupportedNumberDetails?: { value: number; pattern: string }[];
     finishReason: string | null; contentPresent: boolean | null;
