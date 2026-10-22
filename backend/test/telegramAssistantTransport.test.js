@@ -13,6 +13,7 @@ const { provisionTelegramTransportIndexes } = require('../src/services/telegramT
 const Binding = require('../src/models/TelegramAssistantBinding');
 const Receipt = require('../src/models/TelegramUpdateReceipt');
 const Conversation = require('../src/models/AgentConversation');
+const ConversationMessage = require('../src/models/AgentConversationMessage');
 
 const mapping = { chatId: '123', telegramUserId: '123', systemUserId: 'aaaaaaaaaaaaaaaaaaaaaaaa', businessId: 'DEMO', bindingGeneration: 1 };
 const environment = () => ({ AGENT_ENABLED: 'true', TELEGRAM_ASSISTANT_ENABLED: 'true', TELEGRAM_UPDATES_MODE: 'webhook',
@@ -145,6 +146,8 @@ test('client identity fields do not change server-side binding or role', async (
 test('schema isolates transport from notification binding and requires explicit index provisioning', () => {
   assert.equal(Binding.schema.options.autoCreate, false); assert.equal(Binding.schema.options.autoIndex, false);
   assert.equal(Receipt.schema.options.autoCreate, false); assert.equal(Receipt.schema.options.autoIndex, false);
+  assert.equal(Conversation.schema.options.autoCreate, false); assert.equal(Conversation.schema.options.autoIndex, false);
+  assert.equal(ConversationMessage.schema.options.autoCreate, false); assert.equal(ConversationMessage.schema.options.autoIndex, false);
   assert.ok(Binding.schema.indexes().some(([key, options]) => key.businessId === 1 && options.unique));
   assert.ok(Binding.schema.indexes().some(([key, options]) => key.chatId === 1 && options.unique));
   assert.equal(Binding.schema.path('stockRuleAlertsEnabled'), undefined);

@@ -15,7 +15,7 @@ const schema = new mongoose.Schema({
   lastAgent: { type: String, enum: AGENT_IDS },
   // Written only through the compact memory projection, never chat text or skill DTOs.
   contextSnapshot: { type: mongoose.Schema.Types.Mixed, default: {} }
-}, { timestamps: true, strict: 'throw' });
+}, { timestamps: true, strict: 'throw', autoCreate: false, autoIndex: false });
 schema.index({ userId: 1, businessId: 1, conversationId: 1 }, { unique: true });
 schema.index({ userId: 1, businessId: 1, lastMessageAt: -1, _id: -1 });
 module.exports = mongoose.model('AgentConversation', schema);
