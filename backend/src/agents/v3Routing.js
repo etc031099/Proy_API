@@ -4,7 +4,7 @@ const { V3_SKILLS } = require('./v3Skills');
 const { isObjectId, isDate, validateSkillArgs } = require('./contracts');
 const { ordinalSelection } = require('./ordinalSelection');
 const { normalize } = require('../automations/entityResolution');
-const { resolveOperationalPeriod } = require('./intentRouting');
+const { resolveOperationalPeriod, isProductCountQuery } = require('./intentRouting');
 const { addCalendarDays } = require('../utils/operationalClock');
 const { contextBinding, TTL_MS } = require('./memory');
 const { extractProductReference, isContextualProductReference } = require('../utils/productReference');
@@ -980,6 +980,9 @@ const renderV3 = (skillId, result, args, responseMode = null) => {
 };
 
 const handleV3 = async ({ message, state, context, service, run, commit, execution, deterministicProbe, onPublicResult }) => {
+  // Global catalogue counts belong to the existing active-product aggregate,
+  // before V3 can reinterpret the question using a selected product.
+  if (isProductCountQuery(clean(message)) && deterministicProbe?.()?.inventoryCountOnly === true) return null;
   let binding;
   try { binding = await service.resolveContext(context); } catch { return { answer: 'El módulo analítico no está disponible en este momento.', intent: 'v3_unavailable', agent: 'coordinator' }; }
   if (!binding) return null;
