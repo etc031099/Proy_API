@@ -297,6 +297,28 @@ test('recent transactions applies tenant/type/status/full UTC end-day filters an
   assert.equal((await f.run('get_recent_transactions', { status: 'cancelled' })).data[0].id, id(102));
   f.assertNoMutation();
 });
+
+test('T3.11D purchase reads preserve tenant, states, UTC boundaries, limits and currencies without writes', async () => {
+  const transactions = [
+    ...Array.from({ length: 7 }, (_, n) => sale(n + 20, { type: 'purchase', totalAmount: n + 1 })),
+    sale(30, { type: 'purchase', currency: 'USD', totalAmount: 10 }),
+    sale(31, { type: 'purchase', status: 'pending', totalAmount: 90 }),
+    sale(32, { type: 'purchase', status: 'cancelled', totalAmount: 80 }),
+    sale(33, { type: 'purchase', businessId: 'B', totalAmount: 777 }), sale(34, { totalAmount: 999 }),
+    sale(35, { type: 'purchase', date: new Date('2025-02-01T00:00:00Z') })
+  ];
+  const f = fixture({ transactions });
+  for (const [status, count] of [['completed', 8], ['pending', 1], ['cancelled', 1]]) {
+    const result = await f.run('get_recent_transactions', { ...dates, type: 'purchase', status, limit: 5 }, 'procurement');
+    assert.equal(result.metadata.totalMatches, count); assert.equal(result.data.length, Math.min(5, count));
+    assert.equal(result.metadata.truncated, count > 5);
+    assert.ok(result.data.every(row => row.type === 'purchase' && row.status === status && ![777, 999].includes(row.total)));
+  }
+  const summary = await f.run('get_business_summary', { period: 'current' });
+  assert.equal(summary.data.purchases.completedTransactionsCount, 8);
+  assert.deepEqual(summary.data.purchases.amountsByCurrency.map(row => [row.currency, row.amount]), [['PEN', 28], ['USD', 10]]);
+  f.assertNoMutation();
+});
 test('sales summary uses all completed tenant sales, separate currencies and units, not profit', async () => {
   const f = fixture();
   const result = await f.run('get_sales_summary', dates);

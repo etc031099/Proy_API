@@ -5,9 +5,9 @@ const { createAgentExecution } = require('./execution');
 const { classifyAgentIntent } = require('./routing');
 const { executeRequestedSkill } = require('./toolCalls');
 const { createConversationMemory } = require('./memory');
-const { routeDeterministically, routeOperationalStock, clarify, budgetPlanFollowupType, tenantScopeViolation, canonicalProductSku, explicitProductDetailQuery, routeTemporalGuard } = require('./intentRouting');
+const { routeDeterministically, routeOperationalStock, routeOperationalPurchases, clarify, budgetPlanFollowupType, tenantScopeViolation, canonicalProductSku, explicitProductDetailQuery, routeTemporalGuard } = require('./intentRouting');
 const { buildSkillAnswer, buildCheapestSupplierAnswer, llmObservation, safeText, replenishmentExplanation,
-  buildProductListSupplierComparisonAnswer, budgetPlanExplanation, budgetPlanFollowupAnswer, productCountAnswer, unsupportedClaimAnswer, salesCausalityAnswer } = require('./responses');
+  buildProductListSupplierComparisonAnswer, budgetPlanExplanation, budgetPlanFollowupAnswer, productCountAnswer, purchaseReadAnswer, unsupportedClaimAnswer, salesCausalityAnswer } = require('./responses');
 const { buildSynthesisInput, buildNarrativeSynthesisInput, validateNarrativeSynthesis, renderNarrativeSynthesis, renderNarrativeFallback } = require('./synthesis');
 const { normalizeSupplier, resolveSupplier } = require('./replenishmentPlanning');
 const { SUPPLIER_SELECTION_TTL_MS, contextBinding } = require('./memory');
@@ -212,15 +212,17 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, neutralProv
       try {
         // Access-scope requests are rejected before consulting conversation snapshots, routing LLM, or skills.
         const securityPlan = tenantScopeViolation(message);
+        const purchaseRead = !securityPlan && !require('./compositeRouting').writeClause(message)
+          && routeOperationalPurchases(message, clock());
         const operationalStock = !securityPlan && (routeOperationalStock(message, state)
           || state.lastProductSelection?.continuationIntent === 'product_details' && productCandidateSelection(message, state));
         const { isOutOfDomain, isUnsafeControlRequest, OUT_OF_DOMAIN_ANSWER } = require('./domainGate');
         const composite = require('./compositeRouting').splitRequests(message).length > 1;
-        const explanation = !securityPlan && !operationalStock && v3Service
+        const explanation = !securityPlan && !operationalStock && !purchaseRead && v3Service
           ? require('./explanationContext').explainPrevious(message, state.lastExplanation, context) : null;
         v3Response = explanation || (!securityPlan && (isUnsafeControlRequest(message) || !composite && isOutOfDomain(message))
           ? { intent: 'out_of_domain', agent: 'coordinator', answer: OUT_OF_DOMAIN_ANSWER }
-          : !securityPlan && !operationalStock && v3Service ? await execution.runAgent('coordinator', async () =>
+          : !securityPlan && !operationalStock && !purchaseRead && v3Service ? await execution.runAgent('coordinator', async () =>
             ((!composite || require('./compositeRouting').groundedCoversComposite(message))
               && !require('./specialistRouting').specialistPlan(message, state.v3Context || {})
               && await require('./grounded').handleGrounded({ message, context, service: v3Service, run, execution }))
@@ -242,7 +244,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, neutralProv
         const selectedSupplier = guardedPlan ? null : supplierSelection(message, state, Date.now());
         const selectedProduct = guardedPlan ? null : productCandidateSelection(message, state);
         const productPage = guardedPlan ? null : supplierProductPage(message, state, Date.now());
-        const deterministicPlan = await execution.runAgent('coordinator', () => guardedPlan || (selectedSupplier?.expired
+        const deterministicPlan = await execution.runAgent('coordinator', () => guardedPlan || purchaseRead || (selectedSupplier?.expired
           ? clarify('Estas opciones de proveedor ya expiraron. Repite la consulta indicando el producto y el proveedor.')
           : selectedSupplier?.noMore ? clarify('Ya estás en la última página de proveedores.')
           : selectedSupplier?.noPrevious ? clarify('Ya estás en la primera página de proveedores.')
@@ -729,6 +731,7 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, neutralProv
             answer = sections.filter(index => !(hasFinalResult && results[index].skillId === 'search_products' && results[index].result.data?.length === 1))
               .map(index => buildSkillAnswer(results[index].skillId, results[index].result, input.message)).join('\n\n');
           }
+          if (plan.purchasesOnly && sections.length) answer = purchaseReadAnswer(plan, results[sections[0]].result);
           if (plan.intent === 'compound_product_list') { answer = plan.compoundAnswer || answer; sections = []; }
           if (['unsupported_supplier_causality', 'forecast_confidence', 'unsupported_financial_impact'].includes(plan.intent)) {
             answer = unsupportedClaimAnswer(plan.intent); sections = [];
