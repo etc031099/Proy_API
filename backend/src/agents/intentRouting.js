@@ -37,6 +37,7 @@ const isLowStockQuery = text => /\b(?:stock\s+bajo|bajo\s+stock|poco\s+stock|sto
   || /\bproductos?\b.*\b(?:baj[oa]s?\s+(?:de\s+)?stock|por\s+debajo\s+(?:del\s+)?minimo)\b/.test(text)
   || /^que esta bajo de stock[?!.]*$/.test(text.replace(/[¿¡]/g, '').trim());
 const isProductCountQuery = text => {
+  if (/\b(?:unidades?|stock|existencias)\b/.test(text)) return false;
   if (/\b(?:busca|buscar|muestrame|lista|listar|categoria|sku|foods|hobbies|household)\b/.test(text)) return false;
   return /\b(?:cuantos|cantidad|total)\b.*\bproductos?\b/.test(text)
     || /\bproductos?\s+(?:activos?\s+)?(?:tengo|hay|registrados?)\b/.test(text);
@@ -810,5 +811,5 @@ const resolveOperationalPeriod = (message, operationalDate) => {
   if (period) return { period: { ...period, endDate: /este mes/.test(text) ? operationalDate : period.endDate }, explicit: true };
   return { period: rollingPeriod(now, 30), explicit: false };
 };
-module.exports = { routeDeterministically, routeCommercial, routeSupplierProducts, monthPeriod, weekPeriod, clarify, resolveOperationalPeriod,
+module.exports = { routeDeterministically, isProductCountQuery, routeCommercial, routeSupplierProducts, monthPeriod, weekPeriod, clarify, resolveOperationalPeriod,
   budgetPlanFollowupType, tenantScopeViolation, routeCompoundProductList, canonicalProductSku, explicitProductDetailQuery, routeTemporalGuard };

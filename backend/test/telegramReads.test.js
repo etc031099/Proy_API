@@ -22,6 +22,49 @@ const integrated = () => {
 const response = f => f.state.messages.filter(row => row.role === 'assistant').at(-1)?.response;
 const deliver = async (f, input, runtime) => { const transport = f.make(runtime); await transport.admit(input); await transport.recover(); };
 
+test('Telegram V3 global counts preserve durable product context and keep writes blocked', async () => {
+  const tenant = V3.businessId, reads = [];
+  const catalogue = [{ businessId: tenant, isActive: true, stock: 150 },
+    { businessId: tenant, isActive: true, stock: 21 }, { businessId: tenant, isActive: false, stock: 4 },
+    { businessId: 'OTHER', isActive: true, stock: 90 }];
+  const aggregate = data => ({ option() { return this; }, exec: async () => data });
+  const engine = engineFixture({ legacyModels: {
+    Product: { aggregate(pipeline) {
+      const filter = pipeline[0].$match; reads.push(filter);
+      assert.deepEqual(filter, { businessId: tenant, isActive: true });
+      return aggregate([{ activeProducts: catalogue.filter(row => row.businessId === filter.businessId
+        && row.isActive === filter.isActive).length, lowStockProducts: 0 }]);
+    } }, Transaction: { aggregate: () => aggregate([]) }
+  } });
+  const f = transportFixture({ runtime: engine.runtime, mappings: [{ ...mapping,
+    businessId: tenant, systemUserId: engine.request.user._id }] });
+  await deliver(f, update(1, '¿Cuántos productos tengo registrados en mi inventario?'));
+  assert.equal(response(f).answer, 'Tienes 2 productos activos.');
+  assert.equal(engine.calls.length, 0);
+  await deliver(f, update(2, 'cuánto stock tengo de BEB-GAS-001?'));
+  const conversationId = f.state.bindings[0].conversationId;
+  const before = await engine.runtime.getContextSnapshot(engine.request, conversationId);
+  const analyticalReads = engine.calls.length;
+  await deliver(f, update(3, '¿Cuántos productos diferentes hay en mi negocio?'));
+  assert.equal(response(f).answer, 'Tienes 2 productos activos.');
+  assert.equal(response(f).usage.totalLlmCalls, 0);
+  assert.equal(engine.calls.length, analyticalReads);
+  const after = await engine.runtime.getContextSnapshot(engine.request, conversationId);
+  assert.deepEqual(after.selectedProductReference, before.selectedProductReference);
+  assert.deepEqual(after.v3Context.selectedProduct, before.v3Context.selectedProduct);
+  await deliver(f, update(4, '¿Y su stock?'));
+  assert.match(response(f).answer, /BEB-GAS-001/);
+  assert.equal(response(f).requiresClarification, false);
+  await deliver(f, update(5, 'vende 2 de BEB-GAS-001'));
+  assert.match(response(f).answer, /operaciones desde Telegram.*no están habilitadas/);
+  assert.equal(engine.mutations.length, 0);
+  assert.equal(engine.prepared.length, 0);
+  assert.equal(engine.providerCalls.length, 0);
+  assert.equal(reads.length, 2);
+  assert.equal(f.state.conversations.length, 1);
+  assert.equal(f.state.messages.filter(row => row.role === 'assistant').length, 5);
+});
+
 test('authorized text uses actual Coordinator/Inventory; candidates have opaque scoped inline buttons', async () => {
   const { engine, f } = integrated();
   await deliver(f, update(1, 'cuánto stock tengo de coca cola?'));

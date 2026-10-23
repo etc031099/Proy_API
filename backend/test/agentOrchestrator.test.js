@@ -559,6 +559,53 @@ test('basic product-count phrases use the grounded inventory summary, not produc
   }
 });
 
+test('V3 global counts use the existing active catalogue aggregate, including through the web handler', async () => {
+  const tenant = require('../src/config/v3Demo').businessId;
+  const queries = ['¿Cuántos productos tengo registrados en mi inventario?', '¿Cuántos productos tengo?',
+    '¿Cuál es el total de productos registrados?', '¿Cuántos productos diferentes hay en mi negocio?',
+    '¿Cuántos productos activos tengo?'];
+  for (const query of queries) {
+    let v3Reads = 0;
+    const f = fixture({ products: [{ ...product(1, tenant), stock: 150 }, product(2, tenant),
+      { ...product(3, tenant), isActive: false }, product(4, 'OTHER')],
+      v3Service: { resolveContext: async () => { v3Reads++; assert.fail('Count must not resolve V3 context'); } } });
+    const request = req(tenant), conversationId = randomUUID();
+    await f.orchestrator.restoreContext(request, conversationId, { selectedProductReference: {
+      id: id(1), sku: 'SKU-001', name: 'Producto 1', createdAt: Date.now() } });
+    const runtime = require('../src/automations/assistant').withActionAssistant(f.orchestrator, {
+      resolvePending: async () => undefined
+    }, { requireCustomerDecision: true });
+    const handler = require('../src/controllers/agentMessagesController').createAgentMessagesHandler({ enabled: true, orchestrator: runtime });
+    let body;
+    await handler({ ...request, body: { message: query, conversationId }, get: () => undefined },
+      { json: value => { body = value; }, status() { assert.fail('Unexpected web error'); } });
+    assert.equal(body.success, true);
+    assert.equal(body.data.answer, 'Tienes 2 productos activos.', query);
+    assert.equal(body.data.usage.totalLlmCalls, 0);
+    assert.deepEqual(body.data.actions.map(row => row.skillId), ['get_business_summary']);
+    assert.equal(v3Reads, 0);
+    assert.equal((await f.orchestrator.getContextSnapshot(request, conversationId)).selectedProductReference.sku, 'SKU-001');
+    assert.deepEqual(f.reads.find(row => row.model === 'Product').pipeline[0].$match, { businessId: tenant, isActive: true });
+  }
+});
+
+test('V3 counts work without selection and with an empty catalogue', async () => {
+  const tenant = require('../src/config/v3Demo').businessId;
+  const f = fixture({ products: [], v3Service: { resolveContext: async () => assert.fail('No analytical read for count') } });
+  const result = await f.run('¿Cuántos productos tengo registrados en mi inventario?', randomUUID(), req(tenant));
+  assert.equal(result.answer, 'Tienes 0 productos activos.');
+  assert.equal(result.usage.totalLlmCalls, 0);
+});
+
+test('global count classification excludes stock, units and low-stock requests', () => {
+  const { isProductCountQuery } = require('../src/agents/intentRouting');
+  for (const query of ['cuantas unidades tengo en inventario', 'cuantos productos tengo en unidades',
+    'cuantos productos tienen stock bajo', 'cuanto stock tiene SKU-001', 'y su stock']) {
+    assert.equal(isProductCountQuery(query), false, query);
+  }
+  assert.equal(routeDeterministically('cuantos productos tienen stock bajo', {}, clock()).intent, 'low_stock');
+});
+
 test('product entity context resolves replenishment cost and cheapest supplier follow-ups deterministically', async () => {
   const sku = 'M5-FOODS_3_511';
   const selectedProduct = { ...product(1), sku };
