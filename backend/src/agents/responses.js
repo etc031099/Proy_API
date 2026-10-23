@@ -152,6 +152,17 @@ const businessAnswer = (data, metadata) => {
 };
 
 const productCountAnswer = data => `Tienes ${countLabel(data.activeProducts, 'producto activo', 'productos activos')}.`;
+const purchaseReadAnswer = (plan, result) => {
+  if (!['READY', 'NO_DATA'].includes(result.status)) return buildSkillAnswer(
+    plan.intent === 'business_summary' ? 'get_business_summary' : 'get_recent_transactions', result);
+  if (plan.intent === 'business_summary') {
+    const purchases = result.data.purchases;
+    return `Compras completadas durante ${periodLabel(result.metadata)}: ${countLabel(purchases.completedTransactionsCount, 'compra completada', 'compras completadas')}${purchases.amountsByCurrency.length ? ` por ${amounts(purchases.amountsByCurrency)}` : ''}.\nEste resumen corresponde al mes actual; no representa todo el historial ni incluye compras pendientes o canceladas.`;
+  }
+  const coverage = result.metadata.period ? `Periodo: ${periodLabel(result.metadata)}.` : 'Compras más recientes del historial disponible, sin filtro de fechas.';
+  const count = `Se muestran ${result.data.length} de ${result.metadata.totalMatches} compras coincidentes; es un listado limitado, no un total monetario del historial.`;
+  return [coverage, count, buildSkillAnswer('get_recent_transactions', result)].join('\n');
+};
 
 /** Every displayed number is taken from a verified skill DTO; no ML recalculation. */
 const buildSkillAnswer = (skillId, result, question = '') => {
@@ -394,4 +405,4 @@ const llmObservation = (skillId, result) => {
 };
 
 module.exports = { buildSkillAnswer, buildCheapestSupplierAnswer, buildProductListSupplierComparisonAnswer, llmObservation, safeText, replenishmentExplanation,
-  budgetPlanExplanation, budgetPlanFollowupAnswer, productCountAnswer, unsupportedClaimAnswer, salesCausalityAnswer };
+  budgetPlanExplanation, budgetPlanFollowupAnswer, productCountAnswer, purchaseReadAnswer, unsupportedClaimAnswer, salesCausalityAnswer };

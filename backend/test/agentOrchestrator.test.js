@@ -9,6 +9,97 @@ const { logAgentEvent } = require('../src/controllers/agentMessagesController');
 
 const id = number => number.toString(16).padStart(24, '0');
 const clock = () => new Date('2025-01-20T12:00:00Z');
+const purchaseQuestion = 'Muéstrame un resumen de las compras registradas en mi negocio.';
+const purchaseHistory = (tenant = 'A') => [
+  ['purchase', 'completed', 'PEN', 25, tenant], ['purchase', 'completed', 'USD', 10, tenant],
+  ['purchase', 'pending', 'PEN', 90, tenant], ['purchase', 'cancelled', 'PEN', 80, tenant],
+  ['sale', 'completed', 'PEN', 999, tenant], ['purchase', 'completed', 'PEN', 777, 'FOREIGN']
+].map(([type, status, currency, amount, businessId], index) => ({ _id: id(100 + index),
+  type, status, currency, amount, businessId, date: clock(), units: 2 }));
+const noPurchaseAnalytics = { resolveContext: async () => assert.fail('Purchase read must bypass V3 and ML') };
+
+for (const query of [purchaseQuestion, 'Dame un resumen de mis compras.', '¿Cuántas compras completadas tengo este mes?']) {
+  test(`T3.11D monthly purchase summary is read only and purchase only: ${query}`, async () => {
+    const f = fixture({ businessHistory: purchaseHistory(), v3Service: noPurchaseAnalytics });
+    const cid = randomUUID();
+    await f.orchestrator.restoreContext(req(), cid, { lastSupplier: { id: id(999), name: 'Proveedor anterior' },
+      v3Context: { lastFamily: 'get_supplier_intelligence', selectedSupplier: { key: 'SUP-05' } } });
+    const result = await f.run(query, cid);
+    assertNoLLM(result);
+    assert.deepEqual(result.actions.map(row => row.skillId), ['get_business_summary']);
+    assert.match(result.answer, /2 compras completadas/);
+    assert.match(result.answer, /25[.,]00/); assert.match(result.answer, /10[.,]00/);
+    assert.match(result.answer, /enero.*2025/); assert.match(result.answer, /mes actual/);
+    assert.doesNotMatch(result.answer, /999|777|90[.,]00|80[.,]00|Ventas:|riesgo|Margen|undefined/);
+    assert.equal(result.pendingAction, undefined);
+    assert.ok(f.reads.every(row => (row.match || row.pipeline[0].$match).businessId === 'A'));
+  });
+}
+for (const [query, status, period] of [
+  ['¿Cuáles fueron mis compras recientes?', undefined, undefined],
+  ['Muéstrame las compras de esta semana.', undefined, ['2025-01-20', '2025-01-20']],
+  ['Compras completadas de este mes', 'completed', ['2025-01-01', '2025-01-20']],
+  ['Transacciones de compras pendientes', 'pending', undefined], ['Compras canceladas', 'cancelled', undefined]
+]) test(`T3.11D transaction filters and coverage: ${query}`, async () => {
+  const f = fixture({ businessHistory: purchaseHistory(), v3Service: noPurchaseAnalytics });
+  const result = await f.run(query); assertNoLLM(result);
+  assert.deepEqual(result.actions.map(row => row.skillId), ['get_recent_transactions']);
+  const match = f.reads.find(row => row.model === 'Transaction').pipeline[0].$match;
+  assert.equal(match.type, 'purchase'); assert.equal(match.status, status); assert.equal(match.businessId, 'A');
+  if (period) {
+    assert.equal(match.date.$gte.toISOString().slice(0, 10), period[0]);
+    assert.equal(new Date(match.date.$lt - 86400000).toISOString().slice(0, 10), period[1]);
+    assert.match(result.answer, /Periodo:/);
+  } else { assert.equal(match.date, undefined); assert.match(result.answer, /sin filtro de fechas/); }
+  assert.doesNotMatch(result.answer, /999|777|undefined|venta completada|get_business_health/);
+  assert.match(result.answer, /listado limitado/); assert.equal(result.pendingAction, undefined);
+});
+test('T3.11D no purchases and unsupported aggregate periods are honest', async () => {
+  const f = fixture({ businessHistory: [], v3Service: noPurchaseAnalytics });
+  const summary = await f.run(purchaseQuestion);
+  assert.match(summary.answer, /0 compras completadas/);
+  assert.deepEqual(summary.actions.map(row => row.skillId), ['get_business_summary']);
+  const recent = await f.run('mis compras recientes'); assert.match(recent.answer, /0 de 0/);
+  for (const query of ['resumen de todas mis compras en todo el historial', 'resumen de compras de la semana pasada']) {
+    const result = await f.run(query);
+    assert.equal(result.requiresClarification, true); assert.equal(result.actions.length, 0);
+  }
+});
+test('T3.11D excludes mutations, orders, supplier analysis and general health', () => {
+  const { routeOperationalPurchases } = require('../src/agents/intentRouting');
+  for (const query of ['crea compras registradas en mi negocio', 'modifica mis compras', 'cancela mis compras',
+    'confirma mis compras', '¿Qué compras tengo pendientes?', 'resumen de órdenes de compras pendientes a proveedores',
+    'qué compras debería hacer', 'resume la salud de mi negocio', 'resumen de ventas y compras'])
+    assert.equal(routeOperationalPurchases(query, clock()), null, query);
+  assert.equal(require('../src/agents/groundedRouting').classifyGrounded('Resume la salud de mi negocio').skills[0], 'get_business_health');
+});
+test('T3.11D web and durable Telegram use the shared purchase read with operations disabled', async () => {
+  const { withActionAssistant } = require('../src/automations/assistant');
+  const f = fixture({ businessHistory: purchaseHistory(), v3Service: noPurchaseAnalytics });
+  const actions = { resolvePending: async () => undefined, prepare: () => assert.fail('No commercial writes'),
+    confirm: () => assert.fail('No commercial confirmation') };
+  const runtime = withActionAssistant(f.orchestrator, actions, { requireCustomerDecision: true });
+  const handler = require('../src/controllers/agentMessagesController').createAgentMessagesHandler({ enabled: true, orchestrator: runtime });
+  let body;
+  await handler({ ...req(), body: { message: purchaseQuestion, conversationId: randomUUID() }, get: () => undefined },
+    { json: value => { body = value; }, status() { assert.fail('Unexpected web error'); } });
+  assert.match(body.data.answer, /2 compras completadas/);
+  assert.deepEqual(body.data.actions.map(row => row.skillId), ['get_business_summary']);
+  const telegramFixture = require('./helpers/telegramTransportFixture');
+  const tenant = telegramFixture.mapping.businessId;
+  const g = fixture({ businessHistory: purchaseHistory(tenant), v3Service: noPurchaseAnalytics });
+  const tg = telegramFixture.fixture({ runtime: g.orchestrator, actionService: actions, operationsEnabled: false });
+  const transport = tg.make();
+  const message = text => ({ update_id: 1, message: { message_id: 1, text, chat: { id: 123, type: 'private' }, from: { id: 123, is_bot: false } } });
+  await transport.admit(message(purchaseQuestion)); await transport.recover();
+  assert.equal(tg.state.receipts[0].status, 'COMPLETED');
+  assert.match(tg.sent.map(row => row.text).join('\n'), /2 compras completadas/);
+  assert.equal(tg.state.tokens.length, 0);
+  const before = g.reads.length;
+  const write = message('compra 2 productos'); write.update_id = 2; write.message.message_id = 2;
+  await transport.admit(write); await transport.recover();
+  assert.equal(g.reads.length, before); assert.equal(tg.state.tokens.length, 0);
+});
 const req = (tenant = 'A', user = 900) => ({ businessId: tenant,
   user: { _id: id(user), businessId: tenant, role: 'user', isActive: true } });
 const usage = { usageAvailable: true, inputTokens: 10, outputTokens: 4, thoughtTokens: 3,
@@ -315,6 +406,15 @@ const fixture = ({ products = [product(1), product(2), product(3, 'B')], contact
           totalProducts: emptySalesHistory ? [] : [{ total: 1 }],
           dateRange: emptySalesHistory ? [] : [{ minDate: new Date('2019-01-01T12:00:00Z'), maxDate: new Date('2025-01-15T12:00:00Z') }] }]
           : [{ data: [{ _id: id(50), type: 'sale', status: 'completed', date: clock(), totalAmount: 63, currency: 'PEN', itemCount: 1 }], count: [{ total: 1 }] }];
+        if (!ranking && businessHistory) {
+          const match = pipeline[0].$match;
+          const rows = businessHistory.filter(row => row.businessId === match.businessId
+            && (!match.type || row.type === match.type) && (!match.status || row.status === match.status)
+            && (!match.date || row.date >= match.date.$gte && row.date < match.date.$lt))
+            .sort((a, b) => b.date - a.date);
+          const limit = facet.data.find(stage => stage.$limit)?.$limit || 5;
+          result = [{ data: rows.slice(0, limit).map(row => ({ ...row, totalAmount: row.amount, itemCount: 1 })), count: [{ total: rows.length }] }];
+        }
       } else if (businessHistory) {
         const match = pipeline[0].$match;
         const groups = new Map();

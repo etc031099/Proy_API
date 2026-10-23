@@ -483,11 +483,40 @@ const routeUnsupportedClaim = message => {
   return null;
 };
 /** High-confidence routing only. Unrecognized language is delegated, never guessed. */
+const routeOperationalPurchases = (message, now = new Date()) => {
+  const text = normalize(message);
+  if (!/\bcompras\b/.test(text)
+    || /\b(?:vende|vender|compra|comprar|crea|crear|prepara|preparar|registra|registrar|modifica|modificar|edita|editar|actualiza|actualizar|ajusta|ajustar|agrega|agregar|anade|anadir|cancela|cancelar|elimina|eliminar|borra|borrar|confirma|confirmar|confirmo|procede|hazlo)\b/.test(text)
+    || /\b(?:ventas|clientes|stock|salud|ordenes|orden|proveedores?|repon|reposicion|recomienda|deberia|pronostico|forecast|demanda|riesgo|presupuesto|plan)\b/.test(text)) return null;
+  if (!/\b(?:resumen|resume|registradas|recientes|ultimas|completadas|pendientes|canceladas|cuantas)\b/.test(text)
+    && !/\bcompras\s+de\b/.test(text)) return null;
+  if (require('./compositeRouting').splitRequests(message).length > 1) return null;
+  // Existing procurement questions use "compras pendientes" for supplier orders.
+  // Only an explicit ledger reference authorizes interpreting them as transactions.
+  if (/\bpendientes\b/.test(text) && !/\b(?:transacciones|registradas)\b/.test(text)) return null;
+  const parsed = resolveOperationalPeriod(message, now.toISOString().slice(0, 10));
+  if (parsed.clarificationQuestion) return clarify(parsed.clarificationQuestion);
+  const statuses = ['completadas', 'pendientes', 'canceladas'].filter(word => text.includes(word));
+  if (statuses.length > 1) return clarify('Indica un único estado de las compras: completadas, pendientes o canceladas.');
+  const status = ({ completadas: 'completed', pendientes: 'pending', canceladas: 'cancelled' })[statuses[0]];
+  const summary = /\b(?:resumen|resume|cuantas)\b/.test(text) && status !== 'pending' && status !== 'cancelled';
+  if (summary) {
+    if (/\b(?:historial|historico|todas|siempre)\b/.test(text)
+      || parsed.explicit && !/\b(?:este mes|mes actual)\b/.test(text))
+      return clarify('Puedo resumir las compras completadas del mes actual o listar compras por fechas; no dispongo de un agregado exclusivo de compras para todo el historial.');
+    return { intent: 'business_summary', agent: 'analyst', purchasesOnly: true, periodExplicit: true,
+      period: monthPeriod(now), limit: 5 };
+  }
+  return { intent: 'recent_transactions', agent: 'procurement', type: 'purchase', status,
+    periodRequested: parsed.explicit, periodExplicit: parsed.explicit, period: parsed.period, limit: 5, purchasesOnly: true };
+};
 const routeDeterministically = (message, memory = {}, now = new Date(), conversationId, scopeBinding, businessId) => {
   const operationalStock = routeOperationalStock(message, memory);
   if (operationalStock) return operationalStock;
   const tenantGuard = tenantScopeViolation(message);
   if (tenantGuard) return tenantGuard;
+  const purchases = routeOperationalPurchases(message, now);
+  if (purchases) return purchases;
   if (require('./domainGate').isOutOfDomain(message)) return { intent: 'unsupported', agent: 'coordinator' };
   const alertText = normalize(message);
   const recognizedRelativePeriod = relativeSalesPeriod(alertText, now);
@@ -833,5 +862,5 @@ const resolveOperationalPeriod = (message, operationalDate) => {
   if (period) return { period: { ...period, endDate: /este mes/.test(text) ? operationalDate : period.endDate }, explicit: true };
   return { period: rollingPeriod(now, 30), explicit: false };
 };
-module.exports = { routeDeterministically, routeOperationalStock, isProductCountQuery, routeCommercial, routeSupplierProducts, monthPeriod, weekPeriod, clarify, resolveOperationalPeriod,
+module.exports = { routeDeterministically, routeOperationalStock, routeOperationalPurchases, isProductCountQuery, routeCommercial, routeSupplierProducts, monthPeriod, weekPeriod, clarify, resolveOperationalPeriod,
   budgetPlanFollowupType, tenantScopeViolation, routeCompoundProductList, canonicalProductSku, explicitProductDetailQuery, routeTemporalGuard };
