@@ -51,7 +51,8 @@ test('no Function node requests dynamic external modules', () => {
 
 test('Telegram HTTP calls stop before constructing a token URL when token is absent', () => {
   assert.match(byId.get('tg_send').func, /if \(!token\)/);
-  assert.match(byId.get('tg_menu_prep').func, /if \(!token\) return null/);
+  const menu = new Function('msg', 'env', byId.get('tg_menu_prep').func);
+  assert.equal(menu({}, { get: () => { throw Error('Legacy menu must not read token'); } }), null);
 });
 
 test('Telegram HTTP errors are caught and stripped before safe logging', () => {

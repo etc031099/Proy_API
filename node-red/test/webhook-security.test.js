@@ -48,8 +48,7 @@ test('constant-time comparison handles different lengths without throwing', () =
 test('correct secret accepts each supported event', () => {
   const cases = [
     ['transaction.created', { transactionId: 'transaction-id' }],
-    ['product.low_stock', { productId: 'product-id' }],
-    ['telegram.command', { chatId: '-123456789', text: '/stock arroz' }]
+    ['product.low_stock', { productId: 'product-id' }]
   ];
 
   for (const [event, data] of cases) {
@@ -119,14 +118,14 @@ test('authenticated invalid Telegram chatId and commands are rejected', () => {
   }
 });
 
-test('only documented Telegram commands and buttons reach downstream effects', () => {
+test('even documented legacy commands cannot reach fixed-account downstream effects', () => {
   for (const text of ['/stock arroz', '/ventas', '/deudas', '/ayuda', '📦 Stock bajo', '❓ Ayuda']) {
     const result = validateWebhookRequest(request({
       payload: { event: 'telegram.command', data: { chatId: '12345', text } }
     }), SECRET);
 
-    assert.equal(result.ok, true, text);
-    assert.equal(result.data.text, text);
+    assert.equal(result.ok, false, text);
+    assert.equal(result.code, 'UNSUPPORTED_WEBHOOK_EVENT');
   }
 });
 

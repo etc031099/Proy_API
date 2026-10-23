@@ -934,6 +934,41 @@ La integración exige Mongo local replica set y genera una base `_test` aislada
 que elimina al terminar; prueba rollback, índice único, concurrencia e historial
 inmutable con fixtures sintéticos. No envía Telegram real ni escribe Atlas.
 
+## Índices del transporte Telegram (aprovisionamiento administrativo)
+
+El preflight y aprovisionamiento son operaciones explícitas, separadas del
+startup y del webhook. El script no carga `.env`, no imprime `MONGODB_URI` y
+requiere que el administrador suministre el nombre esperado de la base:
+
+```powershell
+cd backend
+node scripts/provision-telegram-transport-indexes.js --expected-db inventory_billing
+```
+
+Sin `--authorize-provision`, el comando solo consulta el nombre efectivo de la
+base, el estado PRIMARY/replica set y los índices requeridos. Informa índices
+EXISTS, MISSING y CONFLICT. Para escribir, después de revisar el preflight y
+confirmar que `MONGODB_URI` apunta al destino aprobado:
+
+```powershell
+node scripts/provision-telegram-transport-indexes.js --expected-db inventory_billing --authorize-provision
+```
+
+La opción administrativa es obligatoria para crear índices. El aprovisionador
+rechaza una base distinta, cualquier conflicto de nombre/clave/opciones, y
+colecciones ausentes. No crea colecciones; el administrador debe crearlas de
+forma explícita y volver a ejecutar el preflight. No elimina índices ni
+documentos. MongoDB no garantiza atomicidad global entre la creación de varios
+índices: si una creación falla después de otras, los índices ya creados
+permanecen y se deben volver a inspeccionar antes de reintentar.
+
+La validación local, sin `.env`, usa exclusivamente el runner desechable
+protegido de `127.0.0.1:27018`, replica set `rs0`:
+
+```powershell
+node test/integration/telegramIndexProvisioning.run.js
+```
+
 ## 📞 Support
 
 For issues and questions:

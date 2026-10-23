@@ -661,7 +661,7 @@
         "type": "function",
         "z": "tg_tab",
         "name": "Comandos del menú",
-        "func": "const token = env.get('TELEGRAM_BOT_TOKEN');\nif (!token) return null;\nmsg.url = 'https://api.telegram.org/bot' + token + '/setMyCommands';\nmsg.method = 'POST';\nmsg.headers = { 'Content-Type': 'application/json' };\nmsg.payload = { commands: [ { command: 'stock', description: '📦 Ver stock de un producto' }, { command: 'ventas', description: '💰 Ventas de hoy' }, { command: 'deudas', description: '🧾 Clientes con deuda' }, { command: 'ayuda', description: '❓ Mostrar el menú' } ] };\nreturn msg;",
+        "func": "// A.8.2A: legacy conversation and menu ownership are retired. Notifications remain enabled.\nreturn null;",
         "outputs": 1,
         "timeout": 0,
         "noerr": 0,

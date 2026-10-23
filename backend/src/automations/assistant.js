@@ -40,9 +40,72 @@ const pendingQuestionAnswer = (pending, type) => {
 // Bounded draft slots never authorize writes. Restored candidate IDs are looked up
 // again before preparation. A separate per-conversation queue serialises updates.
 const withActionAssistant = (runtime, service, options = {}) => {
+  const sourceChannel = options.sourceChannel || 'assistant';
+  if (!require('./contracts').CHANNELS.includes(sourceChannel)) require('./contracts').fail('ACTION_VALIDATION_FAILED');
   const drafts = new Map(), locks = new Map(), now = options.clock || Date.now;
   const keyFor = (req, id) => JSON.stringify([String(req.user?._id), req.businessId, id]);
+  const telegramOperations = () => sourceChannel === 'telegram' && options.telegramOperationsEnabled?.() === true;
+  const telegramAction = async (req, input, reconcile = false) => {
+    if (!telegramOperations() || !['CONFIRM_ACTION', 'CANCEL_ACTION'].includes(input.transportControl))
+      require('./contracts').fail('ACTION_NOT_ALLOWED');
+    const context = createActionContext(req, { sourceChannel, conversationId: input.conversationId });
+    let pending = await service.get(context, input.pendingActionId);
+    if (!['create_sale', 'create_purchase'].includes(pending?.action)) require('./contracts').fail('ACTION_NOT_ALLOWED');
+    if (reconcile && !['EXECUTED', 'CANCELLED', 'EXPIRED', 'FAILED'].includes(pending.status)) return null;
+    let answer;
+    if (pending.status === 'PENDING') {
+      if (req.user?.role !== 'admin' || req.user?.isActive !== true || req.user?.businessId !== req.businessId)
+        require('./contracts').fail('ACTION_NOT_ALLOWED');
+      try {
+        pending = input.transportControl === 'CONFIRM_ACTION'
+          ? await service.confirmPendingAction(context, pending.pendingActionId)
+          : await service.cancelPendingAction(context, pending.pendingActionId);
+      } catch (error) {
+        if (!(error instanceof require('./contracts').ActionError)) throw error;
+        pending = await service.get(context, input.pendingActionId);
+        answer = error.message;
+      }
+    }
+    if (pending.status === 'EXPIRED') answer = 'La operación ya expiró. Vuelve a solicitarla.';
+    else if (pending.status === 'FAILED') answer = 'No fue posible ejecutar la operación. No se reintentó automáticamente.';
+    else if (['EXECUTED', 'CANCELLED'].includes(pending.status)) {
+      answer = resultAnswer(pending);
+      const transactionId = pending.status === 'EXECUTED' && pending.result?.id;
+      if (typeof transactionId === 'string' && /^[a-f\d]{24}$/i.test(transactionId))
+        answer += ` ID de transacción: ${transactionId}.`;
+    }
+    answer ||= 'La operación cambió o está en proceso. Consulta su estado antes de volver a solicitarla.';
+    drafts.delete(keyFor(req, input.conversationId));
+    return { requestId: context.requestId, conversationId: context.conversationId, intent: 'action', agent: 'operations', answer,
+      pendingAction: pending, requiresClarification: false,
+      participants: [{ agentId: 'operations', ...zeroUsage(), skillCalls: 0, latencyMs: 0 }],
+      actions: [{ agentId: 'operations', skillId: pending.action, status: pending.status, durationMs: 0 }], evidence: [],
+      usage: { totalLlmCalls: 0, totalSkillCalls: 0, totalTokens: 0 } };
+  };
   async function handle(req, input, allowProviderExtraction = true) {
+    if (options.readOnly === true && !telegramOperations()) {
+      const context = require('../agents/contracts').createAgentRequestContext(req,
+        input.conversationId ? { conversationId: input.conversationId } : {});
+      const notice = answer => ({ requestId: context.requestId, conversationId: context.conversationId,
+        intent: 'channel_notice', agent: 'coordinator', answer, requiresClarification: false,
+        participants: [], actions: [], evidence: [], usage: { totalLlmCalls: 0, totalSkillCalls: 0, totalTokens: 0 } });
+      if (input.transportControl === 'start') return notice('Tu usuario está autorizado. Puedes consultar tu negocio; las operaciones desde Telegram aún no están habilitadas.');
+      if (input.transportControl === 'transfer') return notice('Gestiona la conexión y recuperación desde Integraciones en la web. Este comando no modifica permisos ni conexiones.');
+      if (input.transportControl === 'cancel') {
+        await runtime.clearReadSelection?.(req, input.conversationId);
+        return notice('Selección cancelada. La conversación y las operaciones no se modificaron.');
+      }
+      if (input.transportControl === 'refine') return notice('Escribe un nombre o código más específico de las opciones de la consulta pendiente.');
+      const message = require('../utils/conversationalInput').normalizeConversationalInput(input.message);
+      const requests = require('../agents/compositeRouting').splitRequests(message);
+      const write = require('../agents/domainGate').isUnsafeControlRequest(message)
+        || actionIntent(message) || saleNarrative(message) || ambiguousMovement(message) || actionDecision(message)
+        || requests.some(require('../agents/compositeRouting').writeClause);
+      if (!['candidate', 'page'].includes(input.transportControl) && write)
+        return notice('Las operaciones desde Telegram todavía no están habilitadas.');
+      const result = await runtime.handle(req, { message, conversationId: input.conversationId });
+      return result?.semanticAction ? notice('Las operaciones desde Telegram todavía no están habilitadas.') : result;
+    }
     let v3State;
     if (req.businessId === require('../services/v3IntelligenceService').V3.businessId && input.conversationId) {
       const snapshot = await runtime.getContextSnapshot?.(req, input.conversationId);
@@ -133,7 +196,7 @@ const withActionAssistant = (runtime, service, options = {}) => {
       && /^(?:quiero|quisiera)\s+registrar\s+\d+\b/.test(numericWords(normalized));
     if (!skillId && !decision && !candidateCommand && !unspecifiedRegistration && !ambiguousWrite) return runtime.handle(req, input);
     const started = performance.now(), conversationId = input.conversationId || randomUUID();
-    const context = createActionContext(req, { conversationId }), key = keyFor(req, conversationId);
+    const context = createActionContext(req, { sourceChannel, conversationId }), key = keyFor(req, conversationId);
     let pendingAction, answer, clarification = false, previewShown = false, execution, suggestions = [], suggestionsExpiresAt, suggestionsPagination, suggestionsEntityType;
     if (unspecifiedRegistration) return response('¿Quieres registrar una venta o una compra? Indica el tipo de operación junto con los productos y cantidades; no se preparó ni ejecutó ninguna operación.', undefined, true);
     if (ambiguousWrite) return response('¿Quieres registrar una venta o una compra? Indica explícitamente la operación, el producto y la cantidad para preparar un preview. No se preparó ni ejecutó ninguna operación.', undefined, true);
@@ -383,6 +446,9 @@ const withActionAssistant = (runtime, service, options = {}) => {
     }
   }
   return { ...runtime,
+    // Internal adapter methods; only validated durable callback controls call these.
+    handleTelegramAction: (req, input) => telegramAction(req, input),
+    recoverTelegramAction: (req, input) => telegramAction(req, input, true),
     async restoreContext(req, id, snapshot) {
       await runtime.restoreContext?.(req, id, snapshot);
       const key = keyFor(req, id), restored = compactDraft(snapshot.operationDraft, now());
@@ -391,6 +457,36 @@ const withActionAssistant = (runtime, service, options = {}) => {
     async getContextSnapshot(req, id) { return { ...await runtime.getContextSnapshot?.(req, id), operationDraft: compactDraft(drafts.get(keyFor(req, id)), now()) }; },
     forgetConversation(req, id) { drafts.delete(keyFor(req, id)); return runtime.forgetConversation?.(req, id); },
     async handle(req, input) {
+      if (sourceChannel === 'telegram') {
+        const context = createActionContext(req, { sourceChannel, ...(input.conversationId ? { conversationId: input.conversationId } : {}) });
+        const notice = answer => ({ requestId: context.requestId, conversationId: context.conversationId, intent: 'channel_notice', agent: 'coordinator',
+          answer, requiresClarification: false, participants: [], actions: [], evidence: [], usage: { totalLlmCalls: 0, totalSkillCalls: 0, totalTokens: 0 } });
+        if (input.transportControl === 'start') return notice(telegramOperations()
+          ? 'Tu usuario está autorizado. Puedes consultar y preparar ventas o compras; solo se ejecutan con el botón Confirmar del preview.'
+          : 'Tu usuario está autorizado. Puedes consultar tu negocio; las operaciones desde Telegram aún no están habilitadas.');
+        if (input.transportControl === 'transfer') return notice('Gestiona la conexión y recuperación desde Integraciones en la web. Este comando no transfiere permisos ni modifica conexiones.');
+        if (input.transportControl === 'cancel') {
+          await runtime.clearReadSelection?.(req, input.conversationId);
+          return notice('Selección cancelada. La conversación y las operaciones no se modificaron.');
+        }
+        if (input.transportControl === 'refine') return notice('Escribe un nombre o código más específico de las opciones de la consulta pendiente.');
+        const message = require('../utils/conversationalInput').normalizeConversationalInput(input.message);
+        const blocked = () => notice('Las operaciones desde Telegram todavía no están habilitadas.');
+        if (telegramOperations()) {
+          const intent = actionIntent(message);
+          if (intent && !['create_sale', 'create_purchase'].includes(intent)) return notice('Desde Telegram solo puedes preparar ventas y compras.');
+          if (actionDecision(message)) {
+            const draft = drafts.get(keyFor(req, input.conversationId));
+            if (!draft?.missingFields?.includes('registrationIntent')) return notice('Para ejecutar o cancelar una operación usa los botones del preview vigente.');
+          }
+        } else {
+          if (!['candidate', 'page'].includes(input.transportControl) && !require('../agents/domainGate').isUnsafeControlRequest(message)
+            && (actionIntent(message) || saleNarrative(message) || ambiguousMovement(message) || actionDecision(message)
+              || require('../agents/compositeRouting').splitRequests(message).some(require('../agents/compositeRouting').writeClause))) return blocked();
+          const result = await runtime.handle(req, { message, conversationId: input.conversationId });
+          return result.semanticAction ? blocked() : result;
+        }
+      }
       if (typeof input?.message === 'string') {
         input = { ...input, message: require('../utils/conversationalInput').normalizeConversationalInput(input.message) };
         if (require('../agents/domainGate').isUnsafeControlRequest(input.message)) return runtime.handle(req, input);

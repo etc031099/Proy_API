@@ -5,7 +5,7 @@ const { redact, publicResponse, snapshot, titleFor } = require('./agentHistoryPr
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 const summary = row => Object.fromEntries(['conversationId', 'title', 'lastMessageAt', 'messageCount', 'status', 'createdAt', 'updatedAt'].map(key => [key, row[key]]));
 
-const createAgentConversationService = ({ runtime, repository = createAgentHistoryRepository(), actionService,
+const createAgentConversationService = ({ runtime, repository = createAgentHistoryRepository(), actionService, sourceChannel = 'assistant', durableTransport = false,
   onError = () => console.error('[AgentHistoryDiagnostic] persistence_failed') }) => {
   const queues = new Map();
   const scopeFor = req => { const context = createAgentRequestContext(req); return { userId: context.userId, businessId: context.businessId }; };
@@ -25,6 +25,38 @@ const createAgentConversationService = ({ runtime, repository = createAgentHisto
     return conversation;
   };
   return Object.freeze({
+    async ensureTransportConversation(req, id, session) {
+      if (!durableTransport || !isTraceId(id)) fail('AGENT_INVALID_REQUEST');
+      return repository.ensureConversation(scopeFor(req), id, session);
+    },
+    async enqueueTransportMessage(req, id, text, key, session) {
+      if (!durableTransport || !isTraceId(id) || !isTraceId(key)) fail('AGENT_INVALID_REQUEST');
+      await repository.ensureConversation(scopeFor(req), id, session);
+      return repository.enqueue(scopeFor(req), id, redact(text), key, session);
+    },
+    async transportRequest(req, id, key) {
+      if (!durableTransport) fail('AGENT_INVALID_REQUEST');
+      const scope = scopeFor(req);
+      await owned(scope, id);
+      const user = await repository.findRequest(scope, key, 'user');
+      if (!user || user.conversationId !== id) fail('AGENT_HISTORY_CONFLICT');
+      const assistant = user.status === 'completed' ? await repository.findRequest(scope, key, 'assistant') : null;
+      return { status: user.status, text: user.text, ...(assistant?.response ? { response: publicResponse(assistant.response) } : {}) };
+    },
+    async reconcileTransportAction(req, input, requestKey) {
+      if (sourceChannel !== 'telegram' || !isTraceId(requestKey)) fail('AGENT_INVALID_REQUEST');
+      const scope = scopeFor(req), id = input.conversationId;
+      return serialized(scope, id, async () => {
+        const conversation = await owned(scope, id);
+        const user = await repository.findRequest(scope, requestKey, 'user');
+        if (!user || user.conversationId !== id || user.status !== 'pending') return false;
+        const result = await runtime.recoverTelegramAction(req, input);
+        if (!result) return false;
+        await repository.complete(scope, id, requestKey, publicResponse(result), snapshot({
+          ...conversation.contextSnapshot, operationDraft: null }), true);
+        return true;
+      });
+    },
     async send(req, input, requestKey = randomUUID()) {
       if (!isTraceId(requestKey)) fail('AGENT_INVALID_REQUEST');
       const scope = scopeFor(req);
@@ -42,7 +74,10 @@ const createAgentConversationService = ({ runtime, repository = createAgentHisto
           return publicResponse(cached.response);
         }
         if (previous?.status === 'pending') fail('AGENT_HISTORY_CONFLICT');
-        if (previous) {
+        if (durableTransport && previous && previous.status !== 'queued') fail('AGENT_HISTORY_CONFLICT');
+        if (durableTransport && previous?.status === 'queued') {
+          if (!(await repository.startQueued(scope, requestKey)).modifiedCount) fail('AGENT_HISTORY_CONFLICT');
+        } else if (previous) {
           const changed = await repository.retry(scope, requestKey);
           if (!changed.modifiedCount) fail('AGENT_HISTORY_CONFLICT');
         } else {
@@ -51,20 +86,24 @@ const createAgentConversationService = ({ runtime, repository = createAgentHisto
         }
         let result;
         try {
+          if (durableTransport) await runtime.forgetConversation?.(req, id);
           if (conversation?.contextSnapshot) await runtime.restoreContext?.(req, id, snapshot(conversation.contextSnapshot));
           req.agentActionRequestId = requestKey;
-          result = await runtime.handle(req, { message: input.message, conversationId: id });
+          result = durableTransport && sourceChannel === 'telegram' && ['CONFIRM_ACTION', 'CANCEL_ACTION'].includes(input.transportControl)
+            ? await runtime.handleTelegramAction(req, { conversationId: id, transportControl: input.transportControl, pendingActionId: input.pendingActionId })
+            : await runtime.handle(req, { message: input.message, conversationId: id,
+              ...(durableTransport && input.transportControl ? { transportControl: input.transportControl } : {}) });
           if (result.code && !['AGENT_CLARIFICATION_REQUIRED', 'AGENT_UNSUPPORTED_QUERY'].includes(result.code)) {
             fail(result.code);
           }
         } catch (error) {
-          try { await repository.fail(scope, requestKey); } catch { onError(); }
+          try { await repository.fail(scope, requestKey, durableTransport); } catch { onError(); }
           throw error;
         }
         const response = publicResponse(result);
         try {
           const state = await runtime.getContextSnapshot?.(req, id) || {};
-          await repository.complete(scope, id, requestKey, response, snapshot(state));
+          await repository.complete(scope, id, requestKey, response, snapshot(state), durableTransport);
         } catch {
           // Leave pending: replay must not regenerate an answer whose persistence is uncertain.
           onError(); fail('AGENT_HISTORY_PERSISTENCE_FAILED');
@@ -97,12 +136,17 @@ const createAgentConversationService = ({ runtime, repository = createAgentHisto
             && (!v3?.pending || v3.expiresAt !== response.suggestionsExpiresAt)) response.suggestionsExpiresAt = 0;
         }
         if (response?.pendingAction && actionService) {
-          const context = require('../automations/contracts').createActionContext(req, { conversationId: id });
-          try { response = publicResponse({ ...response, pendingAction: await actionService.get(context, response.pendingAction.pendingActionId) }); }
+          const { createActionContext } = require('../automations/contracts');
+          try {
+            const lookupContext = createActionContext(req, { conversationId: id });
+            const origin = await actionService.historySourceChannel(lookupContext, response.pendingAction.pendingActionId);
+            const context = createActionContext(req, { conversationId: id, sourceChannel: origin });
+            response = publicResponse({ ...response, pendingAction: await actionService.get(context, response.pendingAction.pendingActionId) });
+          }
           catch { fail('AGENT_HISTORY_PERSISTENCE_FAILED'); } // Do not invent a terminal state when authoritative lookup fails.
         }
         return ({
-        id: row._id.toString(), role: row.role, text: redact(row.text), status: row.status, createdAt: row.createdAt,
+        id: row._id.toString(), role: row.role, text: redact(row.text), status: row.status === 'queued' ? 'pending' : row.status, createdAt: row.createdAt,
         ...(response ? { response } : {})
       }); }));
       return { conversation: summary(conversation), ...result, messages };

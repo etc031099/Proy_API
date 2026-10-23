@@ -29,6 +29,9 @@ const createActionRepository = ({ pendingModel = PendingAction, conversationMode
     if (context.conversationId && !await Conversation.exists({ ...scopeOf(context), conversationId: context.conversationId, status: 'active' }).maxTimeMS(5000)) fail('ACTION_NOT_ALLOWED');
   },
   get: (context, id) => PendingAction.findOne({ ...filterFor(context), pendingActionId: id }).lean().maxTimeMS(5000).exec(),
+  // Resolve persisted origin for history reads only; never used by a transition.
+  historyOrigin: (context, id) => PendingAction.findOne({ ...scopeOf(context), conversationId: context.conversationId, pendingActionId: id })
+    .select('sourceChannel').lean().maxTimeMS(5000).exec(),
   findExternal: (context, externalRequestId) => PendingAction.findOne({ ...filterFor(context), externalRequestId }).lean().maxTimeMS(5000).exec(),
   recent: context => PendingAction.find({ ...filterFor(context), status: 'PENDING', expiresAt: { $gt: new Date() } })
     .sort({ createdAt: -1 }).limit(2).lean().maxTimeMS(5000).exec(),

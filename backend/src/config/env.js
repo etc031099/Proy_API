@@ -182,6 +182,9 @@ const validateEnvironment = (environment = process.env, options = {}) => {
     issues.push('GEMINI_API_KEY is required when AGENT_ENABLED is true');
   }
 
+  try { require('./telegramAssistant').readTelegramConfig(environment); }
+  catch { issues.push('Telegram assistant configuration is invalid'); }
+
   if (issues.length > 0) {
     throw new EnvironmentConfigurationError(issues);
   }
