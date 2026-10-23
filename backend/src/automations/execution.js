@@ -82,6 +82,13 @@ const createActionService = ({ repository = createActionRepository(), executors 
     },
     confirmPendingAction: (context, id) => diagnostics.run(id, () => transition(context, id, 'confirm', true)),
     cancelPendingAction: (context, id) => transition(context, id, 'cancel'),
+    async historySourceChannel(context, id) {
+      scopeOf(context);
+      if (!isTraceId(id) || !isTraceId(context.conversationId)) fail('ACTION_VALIDATION_FAILED');
+      const origin = await repository.historyOrigin(context, id);
+      if (!['assistant', 'telegram'].includes(origin?.sourceChannel)) fail('ACTION_NOT_ALLOWED');
+      return origin.sourceChannel;
+    },
     async get(context, id) { scopeOf(context); if (!isTraceId(id)) fail('ACTION_VALIDATION_FAILED'); const row = await repository.get(context, id); if (!row) fail('ACTION_NOT_ALLOWED');
       return view(row.status === 'PENDING' && new Date(row.expiresAt) <= clock() ? { ...row, status: 'EXPIRED' } : row); },
     async resolvePending(context) { scopeOf(context); const rows = await repository.recent(context); return rows.length === 1 ? view(rows[0]) : null; }

@@ -136,8 +136,13 @@ const createAgentConversationService = ({ runtime, repository = createAgentHisto
             && (!v3?.pending || v3.expiresAt !== response.suggestionsExpiresAt)) response.suggestionsExpiresAt = 0;
         }
         if (response?.pendingAction && actionService) {
-          const context = require('../automations/contracts').createActionContext(req, { conversationId: id });
-          try { response = publicResponse({ ...response, pendingAction: await actionService.get(context, response.pendingAction.pendingActionId) }); }
+          const { createActionContext } = require('../automations/contracts');
+          try {
+            const lookupContext = createActionContext(req, { conversationId: id });
+            const origin = await actionService.historySourceChannel(lookupContext, response.pendingAction.pendingActionId);
+            const context = createActionContext(req, { conversationId: id, sourceChannel: origin });
+            response = publicResponse({ ...response, pendingAction: await actionService.get(context, response.pendingAction.pendingActionId) });
+          }
           catch { fail('AGENT_HISTORY_PERSISTENCE_FAILED'); } // Do not invent a terminal state when authoritative lookup fails.
         }
         return ({

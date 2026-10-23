@@ -12,6 +12,10 @@ const Conversation = require('../src/models/AgentConversation');
 const Message = require('../src/models/AgentConversationMessage');
 const mongoose = require('mongoose');
 const { createAgentHistoryRepository } = require('../src/services/agentHistoryRepository');
+const { createActionRepository } = require('../src/automations/repository');
+const { createActionService } = require('../src/automations/execution');
+const { createActionContext } = require('../src/automations/contracts');
+const { withActionAssistant } = require('../src/automations/assistant');
 const req = (user = 'aaaaaaaaaaaaaaaaaaaaaaaa', business = 'TENANT-A') => ({
   user: { _id: user, businessId: business, role: 'user', isActive: true }, businessId: business });
 const response = id => ({ requestId: randomUUID(), conversationId: id, answer: 'Hay productos con stock bajo.',
@@ -408,4 +412,107 @@ test('history HTTP requires auth/flag, validates pagination and rejects identity
   assert.equal((await loaded.json()).data.messages.length, 2);
   const deleted = await fetch(`${base}/api/agent/conversations/${data.conversationId}`, { method: 'DELETE' }); assert.equal(deleted.status, 200);
   assert.equal((await fetch(`${base}/api/agent/conversations/${data.conversationId}`)).status, 404);
+});
+
+// Use the production action repository/gateway with persisted rows in memory.
+const historyChannelFixture = (sourceChannel = 'telegram', status = 'PENDING') => {
+  const conversationId = randomUUID(), pendingActionId = randomUUID(), auth = req();
+  auth.user.role = 'admin';
+  const row = { userId: auth.user._id, businessId: auth.businessId, conversationId, pendingActionId, sourceChannel,
+    actionSkillId: 'create_sale', preview: { fields: { total: 2, currency: 'PEN' } }, validatedArgs: {},
+    summary: 'Preview persistido', expiresAt: new Date(Date.now() + 60000), requiresConfirmation: true, status,
+    result: { id: 'cccccccccccccccccccccccc', type: 'sale', total: 2, currency: 'PEN' } };
+  const storedResponse = { ...response(conversationId), pendingAction: { pendingActionId, action: 'create_sale',
+    status: 'PENDING', requiresConfirmation: true } };
+  const filters = [];
+  const matches = filter => Object.entries(filter).every(([key, value]) => row[key] === value);
+  const pendingModel = { findOne(filter) {
+    filters.push(filter);
+    let selection;
+    const read = () => !matches(filter) ? null : selection
+      ? Object.fromEntries(selection.split(' ').filter(key => Object.hasOwn(row, key)).map(key => [key, row[key]]))
+      : structuredClone(row);
+    const query = { select(value) { selection = value; return query; }, lean: () => query, session: () => query,
+      maxTimeMS: () => query, exec: async () => read(), then: (resolve, reject) => Promise.resolve(read()).then(resolve, reject) };
+    return query;
+  } };
+  const actionRepository = createActionRepository({ pendingModel,
+    conversationModel: { exists: () => ({ maxTimeMS: async () => true }) },
+    startSession: async () => ({ startTransaction() {}, inTransaction: () => true,
+      async abortTransaction() {}, async endSession() {}, async commitTransaction() { assert.fail('History cannot commit writes'); } }),
+    audit: () => assert.fail('History cannot write an action audit') });
+  const actionService = createActionService({ repository: actionRepository, executors: {} });
+  const history = createAgentConversationService({ runtime: {}, actionService, repository: {
+    findConversation: async (scope, id) => scope.userId === auth.user._id && scope.businessId === auth.businessId
+      && id === conversationId ? { conversationId, status: 'active' } : null,
+    messages: async () => ({ messages: [{ _id: 'synthetic-message', role: 'assistant', text: storedResponse.answer,
+      status: 'completed', response: storedResponse }], pagination: { page: 1, total: 1 } })
+  } });
+  return { auth, row, conversationId, pendingActionId, storedResponse, filters, history, actionService };
+};
+
+for (const channel of ['assistant', 'telegram']) for (const status of ['PENDING', 'EXECUTED']) {
+  test(`web history refreshes ${channel} ${status} action from its persisted origin without channel metadata in old responses`, async () => {
+    const f = historyChannelFixture(channel, status);
+    const detail = await f.history.get(f.auth, f.conversationId, 1, 50);
+    assert.equal(detail.messages[0].response.pendingAction.status, status);
+    assert.equal(detail.messages[0].response.pendingAction.pendingActionId, f.pendingActionId);
+    assert.deepEqual(f.filters[0], { userId: f.auth.user._id, businessId: f.auth.businessId,
+      conversationId: f.conversationId, pendingActionId: f.pendingActionId });
+    assert.equal(f.filters[1].sourceChannel, channel);
+    assert.equal(detail.messages[0].response.pendingAction.sourceChannel, undefined);
+    if (status === 'EXECUTED') assert.equal(detail.messages[0].response.pendingAction.result.id, f.row.result.id);
+  });
+}
+
+for (const field of ['userId', 'businessId', 'conversationId']) {
+  test(`history action origin lookup cannot cross persisted ${field}, even with a forged response reference`, async () => {
+    const f = historyChannelFixture();
+    f.row[field] = field === 'userId' ? 'bbbbbbbbbbbbbbbbbbbbbbbb' : field === 'conversationId' ? randomUUID() : 'TENANT-B';
+    await assert.rejects(f.history.get(f.auth, f.conversationId, 1, 50), { code: 'AGENT_HISTORY_PERSISTENCE_FAILED' });
+    assert.equal(f.filters.length, 1);
+  });
+}
+
+test('history ignores forged channel metadata and rejects untrusted contexts or missing persisted origin', async () => {
+  const f = historyChannelFixture();
+  f.storedResponse.pendingAction.sourceChannel = 'assistant';
+  f.auth.body = { channel: 'assistant', sourceChannel: 'assistant' };
+  await f.history.get(f.auth, f.conversationId, 1, 50);
+  assert.equal(f.filters[1].sourceChannel, 'telegram');
+  const context = createActionContext(f.auth, { conversationId: f.conversationId });
+  await assert.rejects(f.actionService.historySourceChannel({ ...context }, f.pendingActionId), { code: 'ACTION_NOT_ALLOWED' });
+  delete f.row.sourceChannel;
+  await assert.rejects(f.history.get(f.auth, f.conversationId, 1, 50), { code: 'AGENT_HISTORY_PERSISTENCE_FAILED' });
+});
+
+test('web HTTP reads Telegram history but cannot confirm/cancel it or supply a channel; Telegram cannot act on web actions', async t => {
+  const f = historyChannelFixture(), app = express();
+  app.use(express.json());
+  app.use('/api/agent', createRoutes({ enabled: true, historyService: f.history, actionService: f.actionService,
+    authenticateMiddleware: (request, res, next) => { request.user = f.auth.user; request.businessId = f.auth.businessId; next(); },
+    businessAccessMiddleware: (request, res, next) => next() }));
+  const server = await new Promise(resolve => { const value = app.listen(0, '127.0.0.1', () => resolve(value)); });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const base = `http://127.0.0.1:${server.address().port}/api/agent`;
+  const loaded = await fetch(`${base}/conversations/${f.conversationId}`);
+  assert.equal(loaded.status, 200);
+  assert.equal((await loaded.json()).data.messages[0].response.pendingAction.pendingActionId, f.pendingActionId);
+  assert.equal((await fetch(`${base}/conversations/${f.conversationId}?channel=telegram`)).status, 400);
+  for (const decision of ['confirm', 'cancel']) {
+    const post = body => fetch(`${base}/actions/${f.pendingActionId}/${decision}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const denied = await post({ conversationId: f.conversationId });
+    assert.equal(denied.status, 403);
+    assert.equal((await denied.json()).code, 'ACTION_NOT_ALLOWED');
+    assert.equal((await post({ conversationId: f.conversationId, sourceChannel: 'telegram' })).status, 400);
+  }
+  assert.equal(f.row.status, 'PENDING');
+  const web = historyChannelFixture('assistant');
+  const telegram = withActionAssistant({}, web.actionService, { sourceChannel: 'telegram', telegramOperationsEnabled: () => true });
+  for (const transportControl of ['CONFIRM_ACTION', 'CANCEL_ACTION']) {
+    await assert.rejects(telegram.handleTelegramAction(web.auth, { conversationId: web.conversationId,
+      pendingActionId: web.pendingActionId, transportControl }), { code: 'ACTION_NOT_ALLOWED' });
+  }
+  assert.equal(web.row.status, 'PENDING');
 });
