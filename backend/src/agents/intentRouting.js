@@ -160,6 +160,26 @@ const explicitProductDetailQuery = message => {
     || /^(?:esta|este|la|el|proxima|proximo|pasada|pasado)\s+(?:semana|mes|ano)\b/.test(cleaned)) return null;
   return cleaned;
 };
+// Only single-purpose, current-stock reads bypass analytical routing.
+const routeOperationalStock = (message, memory = {}) => {
+  const text = normalize(message).replace(/[¿?¡!]/g, '').trim();
+  if (/\d{4}-\d{2}-\d{2}|[;\n]|\b(?:fecha|desde|hasta|entre|semana|mes|ano|periodo|ultim\w*|corte)\b/.test(text)) return null;
+  if (tenantScopeViolation(message) || /\b(?:y|ademas|riesgos?|agot\w*|cobertura|dias|repon\w*|reposicion|escenario|v3|pronostic\w*|prediccion|demanda|forecast|analisis|minimo|bajo|ayer|hoy|manana|historic\w*|venta\w*|vend\w*|compra\w*|precio|costo|proveedor\w*|entradas?|pendientes?)\b/.test(text.replace(/^y\s+/, ''))) return null;
+  const input = text.replace(/^y\s+/, '');
+  const target = input.match(/^(?:cuantas?\s+unidades?|que\s+cantidad)(?:\s+disponibles?)?\s+(?:tengo|hay|quedan?|tiene)(?:\s+disponibles?)?\s+(?:(?:del|de)\s+)?(.+?)\.?$/)?.[1]
+    || input.match(/^(?:(?:cual|cuanto|que)\s+(?:es\s+)?(?:el\s+)?stock(?:\s+actual)?\s+(?:de|del|tiene)|cuanto\s+stock(?:\s+actual)?\s+tengo\s+(?:de|del)|(?:dime|muestrame)\s+(?:el\s+)?stock(?:\s+actual)?\s+(?:de|del))\s+(.+?)\.?$/)?.[1];
+  const contextual = /^(?:su\s+stock|(?:el\s+)?stock\s+actual|cuantas?\s+unidades?\s+quedan?)\.?$/.test(input);
+  if (!target && !contextual) return null;
+  const reference = target?.replace(/^(?:el\s+)?producto\s+/, '').replace(/^el\s+/, '').trim();
+  const usesContext = contextual || /^(?:(?:este|ese|el mismo)\s+producto|(?:el\s+)?producto que consulte antes|que consulte antes)$/.test(target || '');
+  if (!usesContext && /\b(?:este|ese|anterior|antes|su)\b/.test(reference || '')) return null;
+  const plan = { intent: 'product_details', agent: 'operations', limit: 1 };
+  const sku = !usesContext && canonicalProductSku(message);
+  if (sku) return { ...plan, selector: { sku } };
+  if (!usesContext && /\d/.test(reference || '') && /^[a-z]{2,}(?:-[a-z0-9]+){1,5}$/i.test(reference || ''))
+    return { ...plan, selector: { sku: reference.toUpperCase() } };
+  return scopeReadProduct(plan, usesContext ? undefined : reference, memory, usesContext);
+};
 const productReferenceFollowup = (message, memory = {}) => {
   const text = normalize(message).replace(/[¿?¡!]/g, '').trim();
   if (canonicalProductSku(message) || /\bSKU-[\w.-]{1,100}\b/i.test(message)) return null;
@@ -464,6 +484,8 @@ const routeUnsupportedClaim = message => {
 };
 /** High-confidence routing only. Unrecognized language is delegated, never guessed. */
 const routeDeterministically = (message, memory = {}, now = new Date(), conversationId, scopeBinding, businessId) => {
+  const operationalStock = routeOperationalStock(message, memory);
+  if (operationalStock) return operationalStock;
   const tenantGuard = tenantScopeViolation(message);
   if (tenantGuard) return tenantGuard;
   if (require('./domainGate').isOutOfDomain(message)) return { intent: 'unsupported', agent: 'coordinator' };
@@ -811,5 +833,5 @@ const resolveOperationalPeriod = (message, operationalDate) => {
   if (period) return { period: { ...period, endDate: /este mes/.test(text) ? operationalDate : period.endDate }, explicit: true };
   return { period: rollingPeriod(now, 30), explicit: false };
 };
-module.exports = { routeDeterministically, isProductCountQuery, routeCommercial, routeSupplierProducts, monthPeriod, weekPeriod, clarify, resolveOperationalPeriod,
+module.exports = { routeDeterministically, routeOperationalStock, isProductCountQuery, routeCommercial, routeSupplierProducts, monthPeriod, weekPeriod, clarify, resolveOperationalPeriod,
   budgetPlanFollowupType, tenantScopeViolation, routeCompoundProductList, canonicalProductSku, explicitProductDetailQuery, routeTemporalGuard };

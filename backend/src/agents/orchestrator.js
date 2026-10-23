@@ -5,7 +5,7 @@ const { createAgentExecution } = require('./execution');
 const { classifyAgentIntent } = require('./routing');
 const { executeRequestedSkill } = require('./toolCalls');
 const { createConversationMemory } = require('./memory');
-const { routeDeterministically, clarify, budgetPlanFollowupType, tenantScopeViolation, canonicalProductSku, explicitProductDetailQuery, routeTemporalGuard } = require('./intentRouting');
+const { routeDeterministically, routeOperationalStock, clarify, budgetPlanFollowupType, tenantScopeViolation, canonicalProductSku, explicitProductDetailQuery, routeTemporalGuard } = require('./intentRouting');
 const { buildSkillAnswer, buildCheapestSupplierAnswer, llmObservation, safeText, replenishmentExplanation,
   buildProductListSupplierComparisonAnswer, budgetPlanExplanation, budgetPlanFollowupAnswer, productCountAnswer, unsupportedClaimAnswer, salesCausalityAnswer } = require('./responses');
 const { buildSynthesisInput, buildNarrativeSynthesisInput, validateNarrativeSynthesis, renderNarrativeSynthesis, renderNarrativeFallback } = require('./synthesis');
@@ -212,13 +212,15 @@ const createAgentOrchestrator = ({ memory = defaultMemory, provider, neutralProv
       try {
         // Access-scope requests are rejected before consulting conversation snapshots, routing LLM, or skills.
         const securityPlan = tenantScopeViolation(message);
+        const operationalStock = !securityPlan && (routeOperationalStock(message, state)
+          || state.lastProductSelection?.continuationIntent === 'product_details' && productCandidateSelection(message, state));
         const { isOutOfDomain, isUnsafeControlRequest, OUT_OF_DOMAIN_ANSWER } = require('./domainGate');
         const composite = require('./compositeRouting').splitRequests(message).length > 1;
-        const explanation = !securityPlan && v3Service
+        const explanation = !securityPlan && !operationalStock && v3Service
           ? require('./explanationContext').explainPrevious(message, state.lastExplanation, context) : null;
         v3Response = explanation || (!securityPlan && (isUnsafeControlRequest(message) || !composite && isOutOfDomain(message))
           ? { intent: 'out_of_domain', agent: 'coordinator', answer: OUT_OF_DOMAIN_ANSWER }
-          : !securityPlan && v3Service ? await execution.runAgent('coordinator', async () =>
+          : !securityPlan && !operationalStock && v3Service ? await execution.runAgent('coordinator', async () =>
             ((!composite || require('./compositeRouting').groundedCoversComposite(message))
               && !require('./specialistRouting').specialistPlan(message, state.v3Context || {})
               && await require('./grounded').handleGrounded({ message, context, service: v3Service, run, execution }))

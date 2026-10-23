@@ -267,7 +267,7 @@ test('F.5A forecast today goes LIVE for the total approved horizon; frozen cutof
 });
 test('F.5A same-product inventory, forecast and supplier continuations retain entity context in LIVE mode', async () => {
   const f = fixture({ clock: () => new Date('2026-10-14T17:30:00.000Z') }), cid = randomUUID();
-  const first = await f.run('¿Cuánto stock tiene BEB-GAS-004?', cid); assert.equal(first.code, null, JSON.stringify({ answer: first.answer, calls: f.calls, events: f.events })); zero(first);
+  const first = await f.run('¿Cuál es el riesgo de agotamiento de BEB-GAS-004?', cid); assert.equal(first.code, null, JSON.stringify({ answer: first.answer, calls: f.calls, events: f.events })); zero(first);
   zero(await f.run('¿Y cuánto venderé en 7 días?', cid));
   zero(await f.run('¿Qué proveedor lo vende?', cid));
   assert.deepEqual(f.calls.map(row => row.domain), ['inventory', 'forecast', 'suppliers']);
@@ -313,11 +313,11 @@ test('F.5A each READ rebuilds against the latest revision rather than reusing th
     return { mode: 'LIVE', dataVersion: String(revision), snapshot: { metadata: { snapshotVersion: 'v3-operational-snapshot-v2',
       businessId, scenarioId: V3.scenarioId, asOfDate, dataVersion: String(revision), snapshotHash: String(revision).padStart(64, 'b') } } };
   } });
-  const first = await f.run('¿Cuánto stock tiene PAN-FRE-001?'); zero(first);
+  const first = await f.run('¿Cuál es el riesgo de agotamiento de PAN-FRE-001?'); zero(first);
   const firstVersion = f.calls.at(-1).payload.operationalSnapshot.metadata.dataVersion;
   assert.equal(first.v3Views[0].items[0].metrics.find(metric => metric.label === 'Stock').value, 20);
   revision = 2; // Simulated successful WRITE bumps the authoritative revision.
-  const second = await f.run('¿Cuánto stock tiene PAN-FRE-001?'); zero(second);
+  const second = await f.run('¿Cuál es el riesgo de agotamiento de PAN-FRE-001?'); zero(second);
   const secondVersion = f.calls.at(-1).payload.operationalSnapshot.metadata.dataVersion;
   assert.equal(second.v3Views[0].items[0].metrics.find(metric => metric.label === 'Stock').value, 19);
   assert.notEqual(firstVersion, secondVersion);
@@ -582,7 +582,7 @@ test('LIVE inventory accepts explicit partial null recommendation but rejects an
     return result;
   };
   const partial = fixture({ clock: () => new Date('2026-10-14T17:30:00.000Z'), corrupt: markPartial });
-  const accepted = await partial.run('¿Cuánto stock tiene PAN-FRE-001?');
+  const accepted = await partial.run('¿Cuál es el riesgo de agotamiento de PAN-FRE-001?');
   zero(accepted);
   assert.equal(accepted.v3Views[0].kind, 'inventory');
 
@@ -597,7 +597,7 @@ test('LIVE inventory accepts explicit partial null recommendation but rejects an
     }
     return result;
   } });
-  const rejected = await unjustified.run('¿Cuánto stock tiene PAN-FRE-001?');
+  const rejected = await unjustified.run('¿Cuál es el riesgo de agotamiento de PAN-FRE-001?');
   assert.equal(invalidEnvelopeInjected, true);
   assert.equal(unjustified.calls.at(-1).domain, 'inventory');
   assert.equal(unjustified.calls.at(-1).payload.dataMode, 'LIVE');
@@ -848,7 +848,7 @@ test('H.1 READ ML routing leaves WRITE preview and confirmation protocol untouch
 
 test('H.2 six-turn domain switching follows the latest explicit customer and supplier context', async () => {
   const f = fixture(), conversationId = randomUUID(), callsPerTurn = [];
-  const first = await f.run('¿Qué stock tiene PAN-FRE-001?', conversationId); zero(first); callsPerTurn.push(f.calls.length);
+  const first = await f.run('¿Cuál es el riesgo de agotamiento de PAN-FRE-001?', conversationId); zero(first); callsPerTurn.push(f.calls.length);
   const second = await f.run('Detalle del cliente CLI-001', conversationId); zero(second); callsPerTurn.push(f.calls.length);
   const third = await f.run('¿Y su riesgo?', conversationId); zero(third); callsPerTurn.push(f.calls.length);
   assert.equal(f.calls.at(-1).domain, 'customers'); assert.equal(f.calls.at(-1).payload.customerCode, 'CLI-001');

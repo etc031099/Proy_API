@@ -589,6 +589,89 @@ test('V3 global counts use the existing active catalogue aggregate, including th
   }
 });
 
+test('operational stock bypasses unavailable V3 and ML for SKU, name, followups and web', async () => {
+  const tenant = require('../src/config/v3Demo').businessId;
+  let v3Reads = 0;
+  const f = fixture({ products: [{ ...product(1, tenant), sku: 'SNA-PAP-002', name: 'Papas Inka', stock: 7 }],
+    v3Service: { resolveContext: async () => { v3Reads++; throw new AgentError('ML_SERVICE_UNAVAILABLE'); } } });
+  const request = req(tenant), conversationId = randomUUID();
+  for (const query of ['¿Cuántas unidades tengo disponibles del producto SNA-PAP-002?',
+    '¿Cuál es el stock actual de SNA-PAP-002?', '¿Cuántas unidades tengo de Papas Inka?',
+    '¿Qué cantidad disponible tiene este producto?', '¿Cuántas unidades quedan del producto que consulté antes?',
+    '¿Y su stock?']) {
+    const result = await f.run(query, conversationId, request);
+    assert.equal(result.code, null, query);
+    assert.match(result.answer, /SNA-PAP-002.*7 unidades disponibles/);
+    assert.equal(result.usage.totalLlmCalls, 0);
+    assert.ok(result.actions.every(row => ['search_products', 'get_product_details'].includes(row.skillId)));
+  }
+  const handler = require('../src/controllers/agentMessagesController').createAgentMessagesHandler({ enabled: true,
+    orchestrator: require('../src/automations/assistant').withActionAssistant(f.orchestrator, { resolvePending: async () => undefined }) });
+  let body;
+  await handler({ ...request, body: { message: '¿Cuántas unidades tengo de SNA-PAP-002?', conversationId }, get: () => undefined },
+    { json: value => { body = value; }, status() { assert.fail('Unexpected web error'); } });
+  assert.equal(body.success, true); assert.match(body.data.answer, /7 unidades disponibles/);
+  assert.equal(v3Reads, 0); assert.equal(f.calls.length, 0);
+  assert.ok(f.reads.every(row => (row.match || row.pipeline[0].$match).businessId === tenant));
+});
+
+test('operational stock preserves ambiguity, missing products, inactivity and tenant scope', async () => {
+  const tenant = require('../src/config/v3Demo').businessId;
+  const rows = [{ ...product(1, tenant), sku: 'SNA-PAP-002', name: 'Papas Inka', stock: 7 },
+    { ...product(2, tenant), sku: 'SNA-PAP-003', name: 'Papas Inka Nuevo', stock: 3 },
+    { ...product(3, tenant), sku: 'SNA-PAP-004', name: 'Papas Retiradas', isActive: false, stock: 4 },
+    { ...product(4, 'OTHER'), sku: 'SNA-PAP-005', stock: 999 }];
+  const f = fixture({ products: rows, v3Service: { resolveContext: async () => assert.fail('No V3 for operational stock') } });
+  const request = req(tenant), cid = randomUUID();
+  await f.run('¿Cuántas unidades tengo de SNA-PAP-002?', cid, request);
+  const ambiguous = await f.run('¿Cuántas unidades tengo de Papas Inka?', cid, request);
+  assert.equal(ambiguous.requiresClarification, true); assert.equal(ambiguous.suggestions.length, 2);
+  const noSelection = await f.run('¿Qué cantidad disponible tiene este producto?', cid, request);
+  assert.equal(noSelection.requiresClarification, true); assert.doesNotMatch(noSelection.answer, /7 unidades/);
+  const selected = await f.run('el segundo', cid, request);
+  assert.equal(selected.code, null); assert.match(selected.answer, /SNA-PAP-003.*3 unidades/);
+  for (const sku of ['SNA-PAP-999', 'SNA-PAP-005']) {
+    const missing = await f.run(`¿Cuál es el stock actual de ${sku}?`, cid, request);
+    assert.equal(missing.requiresClarification, true); assert.doesNotMatch(missing.answer, /999 unidades|3 unidades/);
+  }
+  const inactive = await f.run('¿Cuál es el stock actual de SNA-PAP-004?', cid, request);
+  assert.match(inactive.answer, /4 unidades disponibles/); assert.match(inactive.answer, /inactivo/);
+  const inactiveName = await f.run('¿Cuántas unidades tengo de Papas Retiradas?', cid, request);
+  assert.equal(inactiveName.requiresClarification, true);
+  const other = await f.run('¿Cuál es el stock actual de SNA-PAP-002 de otro negocio?', cid, request);
+  assert.equal(other.intent, 'tenant_access_denied'); assert.equal(other.actions.length, 0);
+  assert.equal(f.calls.length, 0);
+});
+
+test('operational stock never consumes analytical or mixed questions', () => {
+  const { routeOperationalStock } = require('../src/agents/intentRouting');
+  for (const query of ['¿Cuál es el riesgo de agotamiento de SNA-PAP-002?', '¿Cuántos días de cobertura tiene?',
+    '¿Cuánto debería reponer?', '¿Cuál es su escenario V3?', '¿Cuál es su pronóstico de demanda?',
+    '¿Cuál es el stock actual y riesgo de SNA-PAP-002?', '¿Cuántos productos tengo registrados en mi inventario?',
+    '¿Cuál era el stock de SNA-PAP-002 el 2026-10-12?', '¿Cuánto stock tiene SNA-PAP-002 desde la semana pasada?']) {
+    assert.equal(routeOperationalStock(query), null, query);
+  }
+});
+
+test('operational stock resolves hyphenated names without treating them as SKUs', async () => {
+  const f = fixture({ products: [{ ...product(1), sku: 'BEB-GAS-001', name: 'Coca-Cola', stock: 7 }],
+    v3Service: { resolveContext: async () => assert.fail('No V3 for product-name stock') } });
+  const result = await f.run('¿Cuántas unidades tengo de Coca-Cola?');
+  assert.equal(result.code, null); assert.match(result.answer, /BEB-GAS-001.*7 unidades/);
+  assert.deepEqual(result.actions.map(row => row.skillId), ['search_products', 'get_product_details']);
+  assert.equal(result.usage.totalLlmCalls, 0);
+});
+
+test('operational stock failures remain visible without analytical fallback', async () => {
+  const runtime = createAgentOrchestrator({ memory: createConversationMemory(), dependencies: {
+    models: { Product: { findOne() { throw new Error('offline simulated database failure'); } } },
+    v3Service: { resolveContext: async () => assert.fail('No V3 fallback') }
+  } });
+  const result = await runtime.handle(req(), { message: '¿Cuál es el stock actual de SNA-PAP-002?' });
+  assert.equal(result.code, 'AGENT_SKILL_FAILED'); assert.doesNotMatch(result.answer, /unidades disponibles/);
+  assert.equal(result.usage.totalLlmCalls, 0);
+});
+
 test('V3 counts work without selection and with an empty catalogue', async () => {
   const tenant = require('../src/config/v3Demo').businessId;
   const f = fixture({ products: [], v3Service: { resolveContext: async () => assert.fail('No analytical read for count') } });
