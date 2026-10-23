@@ -41,7 +41,7 @@ test('Telegram V3 global counts preserve durable product context and keep writes
   await deliver(f, update(1, '¿Cuántos productos tengo registrados en mi inventario?'));
   assert.equal(response(f).answer, 'Tienes 2 productos activos.');
   assert.equal(engine.calls.length, 0);
-  await deliver(f, update(2, 'cuánto stock tengo de BEB-GAS-001?'));
+  await deliver(f, update(2, '¿Cuál es el riesgo de agotamiento de BEB-GAS-001?'));
   const conversationId = f.state.bindings[0].conversationId;
   const before = await engine.runtime.getContextSnapshot(engine.request, conversationId);
   const analyticalReads = engine.calls.length;
@@ -52,7 +52,7 @@ test('Telegram V3 global counts preserve durable product context and keep writes
   const after = await engine.runtime.getContextSnapshot(engine.request, conversationId);
   assert.deepEqual(after.selectedProductReference, before.selectedProductReference);
   assert.deepEqual(after.v3Context.selectedProduct, before.v3Context.selectedProduct);
-  await deliver(f, update(4, '¿Y su stock?'));
+  await deliver(f, update(4, '¿Y su stock y riesgo?'));
   assert.match(response(f).answer, /BEB-GAS-001/);
   assert.equal(response(f).requiresClarification, false);
   await deliver(f, update(5, 'vende 2 de BEB-GAS-001'));
@@ -65,9 +65,86 @@ test('Telegram V3 global counts preserve durable product context and keep writes
   assert.equal(f.state.messages.filter(row => row.role === 'assistant').length, 5);
 });
 
+test('Telegram operational stock is independent of ML and retains analytical reads and write guards', async () => {
+  const tenant = V3.businessId;
+  const product = { _id: '000000000000000000000001', businessId: tenant, scenarioId: V3.scenarioId,
+    sku: 'SNA-PAP-002', name: 'Papas Inka Chips', stock: 7, minStockLevel: 2, price: 4, currency: 'PEN', isActive: true };
+  let offline = true, registryReads = 0;
+  const query = value => ({ select() { return this; }, maxTimeMS() { return this; }, lean() { return this; },
+    option() { return this; }, exec: async () => value });
+  const engine = engineFixture({ productRows: [product], forecastRegistryService: {
+    getActiveModelArtifact: async () => { registryReads++; return null; }
+  }, legacyModels: { Product: {
+    findOne(filter) {
+      assert.equal(filter.businessId, tenant);
+      return query((filter.sku === product.sku || String(filter._id) === product._id) ? product : null);
+    },
+    aggregate(pipeline) {
+      assert.equal(pipeline[0].$match.businessId, tenant);
+      return query([{ data: [product], count: [{ total: 1 }] }]);
+    }
+  } }, mlTransform: (domain, payload, result) => {
+    if (offline) throw Object.assign(new Error('simulated ML unavailable'), { code: 'ML_SERVICE_UNAVAILABLE' });
+    return result;
+  } });
+  const f = transportFixture({ runtime: engine.runtime, mappings: [{ ...mapping,
+    businessId: tenant, systemUserId: engine.request.user._id }] });
+  let next = 1;
+  for (const message of ['¿Cuántas unidades tengo disponibles del producto SNA-PAP-002?',
+    '¿Cuántas unidades tengo de Papas Inka Chips?', '¿Qué cantidad disponible tiene este producto?',
+    '¿Cuántas unidades quedan del producto que consulté antes?']) {
+    await deliver(f, update(next++, message));
+    assert.match(response(f).answer, /SNA-PAP-002.*7 unidades disponibles/);
+    assert.equal(response(f).requiresClarification, false); assert.equal(response(f).usage.totalLlmCalls, 0);
+    assert.ok(response(f).actions.every(row => ['search_products', 'get_product_details'].includes(row.skillId)));
+  }
+  assert.equal(engine.calls.length, 0); assert.equal(engine.catalogReads.length, 0); assert.equal(registryReads, 0);
+  await deliver(f, update(next++, '¿Cuál es el riesgo de agotamiento de SNA-PAP-002?'));
+  assert.match(response(f).answer, /no está disponible/); assert.equal(engine.calls.length, 1);
+  await deliver(f, update(next++, '¿Cuál es el stock actual de SNA-PAP-002?'));
+  assert.match(response(f).answer, /7 unidades disponibles/); assert.equal(engine.calls.length, 1);
+  offline = false;
+  await deliver(f, update(next++, '¿Cuál es el stock y riesgo de SNA-PAP-002?'));
+  assert.ok(response(f).actions.some(row => row.skillId === 'get_inventory_intelligence'));
+  assert.match(response(f).answer, /riesgo|Riesgo/); assert.equal(engine.calls.length, 2);
+  offline = true;
+  await deliver(f, update(next++, '¿Cuántas unidades quedan del producto que consulté antes?'));
+  assert.match(response(f).answer, /7 unidades disponibles/); assert.equal(engine.calls.length, 2);
+  await deliver(f, update(next++, 'vende 2 de SNA-PAP-002'));
+  assert.match(response(f).answer, /operaciones desde Telegram.*no están habilitadas/);
+  assert.equal(engine.mutations.length, 0); assert.equal(engine.prepared.length, 0); assert.equal(engine.providerCalls.length, 0);
+});
+
+test('Telegram operational stock candidate callback keeps the direct read without ML', async () => {
+  const tenant = V3.businessId;
+  const products = [1, 2].map(n => ({ _id: `00000000000000000000000${n}`, businessId: tenant,
+    sku: `SNA-PAP-00${n}`, name: `Papas Inka ${n}`, stock: n + 5, minStockLevel: 2, isActive: true }));
+  const query = value => ({ select() { return this; }, maxTimeMS() { return this; }, lean() { return this; },
+    option() { return this; }, exec: async () => value });
+  const engine = engineFixture({ legacyModels: { Product: {
+    aggregate(pipeline) {
+      assert.equal(pipeline[0].$match.businessId, tenant);
+      return query([{ data: products, count: [{ total: 2 }] }]);
+    },
+    findOne(filter) {
+      assert.equal(filter.businessId, tenant);
+      return query(products.find(row => row._id === String(filter._id) || row.sku === filter.sku) || null);
+    }
+  } } });
+  const f = transportFixture({ runtime: engine.runtime, mappings: [{ ...mapping,
+    businessId: tenant, systemUserId: engine.request.user._id }] });
+  await deliver(f, update(1, '¿Cuántas unidades tengo de Papas Inka?'));
+  assert.equal(response(f).requiresClarification, true); assert.equal(response(f).suggestions.length, 2);
+  const pick = f.state.tokens.find(row => row.selectionMessage === 'el segundo'); assert.ok(pick);
+  await deliver(f, callback(2, pick.token, pick.messageId));
+  assert.match(response(f).answer, /SNA-PAP-002.*7 unidades/);
+  assert.ok(response(f).actions.every(row => row.skillId === 'get_product_details'));
+  assert.equal(engine.calls.length, 0); assert.equal(engine.catalogReads.length, 0); assert.equal(engine.providerCalls.length, 0);
+});
+
 test('authorized text uses actual Coordinator/Inventory; candidates have opaque scoped inline buttons', async () => {
   const { engine, f } = integrated();
-  await deliver(f, update(1, 'cuánto stock tengo de coca cola?'));
+  await deliver(f, update(1, '¿Cuánto stock tengo de coca cola y su riesgo?'));
   assert.ok(response(f).suggestions.length >= 2); assert.equal(f.state.conversations.length, 1);
   assert.equal(f.state.messages.filter(row => row.role === 'user').length, 1);
   const buttons = f.sent.at(-1).reply_markup.inline_keyboard.flat();
@@ -78,7 +155,7 @@ test('authorized text uses actual Coordinator/Inventory; candidates have opaque 
 
 test('candidate double click resolves once, preserves entity through Forecast and Procurement follow-ups', async () => {
   const { engine, f } = integrated();
-  await deliver(f, update(1, 'cuánto stock tengo de coca cola?'));
+  await deliver(f, update(1, '¿Cuánto stock tengo de coca cola y su riesgo?'));
   const token = f.state.tokens.find(row => row.selectionMessage === 'BEB-GAS-001'); assert.ok(token);
   const transport = f.make();
   await Promise.all([transport.admit(callback(2, token.token, token.messageId)), transport.admit(callback(3, token.token, token.messageId))]);
@@ -106,7 +183,7 @@ test('composition selects product once and retains Inventory + Forecast tasks', 
 });
 
 test('callback tampering, another actor/chat, expiry, message and old generation fail before motor/ack', async () => {
-  const { f } = integrated(); await deliver(f, update(1, 'cuánto stock tengo de coca cola?'));
+  const { f } = integrated(); await deliver(f, update(1, '¿Cuánto stock tengo de coca cola y su riesgo?'));
   const token = f.state.tokens[0], transport = f.make(), before = f.state.messages.length;
   await assert.rejects(transport.admit(callback(2, `t1:${'a'.repeat(22)}`, token.messageId)), { code: 'TELEGRAM_CALLBACK_INVALID' });
   await assert.rejects(transport.admit(callback(3, token.token, token.messageId, 456)), { code: 'TELEGRAM_UNAUTHORIZED' });
@@ -179,7 +256,7 @@ test('/start and /transfer give safe instructions; transfer challenge is not per
 });
 
 test('restart reloads persisted context using a new runtime; queued work is not lost', async () => {
-  const { f } = integrated(); await deliver(f, update(1, 'cuánto stock tengo de BEB-GAS-001?'));
+  const { f } = integrated(); await deliver(f, update(1, '¿Cuál es el riesgo de agotamiento de BEB-GAS-001?'));
   const next = readEngine(); await deliver(f, update(2, 'y cuánto venderé de esta en dos semanas?'), next.runtime);
   assert.ok(response(f).participants.some(row => row.agentId === 'forecast')); assert.equal(next.calls.length, 1);
 });
@@ -258,7 +335,7 @@ test('actual Coordinator pagination retains the pending inventory task and page 
     sku: `BEB-GAS-00${index + 1}`, name: `Coca-Cola Variante ${index + 1}` }));
   const engine = engineFixture({ productRows });
   const f = transportFixture({ runtime: engine.runtime, mappings: [{ ...mapping, businessId: V3.businessId, systemUserId: engine.request.user._id }] });
-  await deliver(f, update(1, 'cuánto stock tengo de coca cola?'));
+  await deliver(f, update(1, '¿Cuánto stock tengo de coca cola y su riesgo?'));
   const next = f.state.tokens.find(row => row.purpose === 'page' && row.selectionMessage === 'ver mas'); assert.ok(next);
   await deliver(f, callback(2, next.token, next.messageId));
   assert.ok(response(f).suggestionsPagination.hasPrevious);

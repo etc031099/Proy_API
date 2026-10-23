@@ -280,7 +280,7 @@ const buildSkillAnswer = (skillId, result, question = '') => {
       if (/minimo|\bmin\b/.test(text)) return `El stock mínimo de ${name(data)} es ${units(data.minStockLevel)}.`;
       if (/precio|cuanto (?:cuesta|vale)|a cuanto esta/.test(text)) return `El precio de ${name(data)} es ${currencyMoney(data.price, data.currency)}.`;
       if (/activ[oa]|estado/.test(text)) return `${name(data)} está ${data.isActive ? 'activo' : 'inactivo'}.`;
-      if (/stock|disponib/.test(text)) return `${name(data)} tiene ${availableUnits(data.stock)}. Stock mínimo: ${units(data.minStockLevel)}.`;
+      if (/stock|disponib|unidades|quedan/.test(text)) return `${name(data)} tiene ${availableUnits(data.stock)}. Stock mínimo: ${units(data.minStockLevel)}.${data.isActive === false ? ' El producto está inactivo.' : ''}`;
     }
     return `${name(data)} tiene ${availableUnits(data.stock)} y un mínimo configurado de ${units(data.minStockLevel)}. Su precio es ${currencyMoney(data.price, data.currency)}. El producto está ${data.isActive ? 'activo' : 'inactivo'}.`;
   }
